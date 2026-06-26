@@ -1223,8 +1223,54 @@ function renderEnv(envValue: Dict) {
       h('strong', { class: item?.ok ? 'ok' : 'warn' }, item?.ok ? '正常' : '待处理'),
       h('small', item?.path || item?.base_url || item?.model || '')
     ]))),
+    renderProjectQuality(envValue?.project_quality || {}),
     renderPlatformDiagnostics(envValue?.platform_diagnostics || [])
   ])
+}
+
+function renderProjectQuality(quality: Dict) {
+  const summary = quality.summary || {}
+  const sections = quality.sections || []
+  const issues = quality.issues || []
+  return h('div', { class: 'project-quality' }, [
+    h('div', { class: 'section-title compact' }, [
+      h('h2', '项目数据质量'),
+      h('span', summary.status === 'ok' ? '关键字段完整' : `${summary.issues || 0} 项需要关注`)
+    ]),
+    h('div', { class: 'quality-summary' }, [
+      renderQualityMetric('账号', summary.accounts || 0),
+      renderQualityMetric('内容', summary.contents || 0),
+      renderQualityMetric('评论', summary.comments || 0),
+      renderQualityMetric('线索', summary.leads || 0)
+    ]),
+    h('div', { class: 'quality-sections' }, sections.map((section: Dict) => h('div', { class: 'quality-section' }, [
+      h('div', { class: 'quality-section-head' }, [
+        h('strong', section.label),
+        h('span', `${section.total || 0} 条`)
+      ]),
+      h('div', { class: 'quality-fields' }, (section.fields || []).map((field: Dict) => renderQualityField(field)))
+    ]))),
+    issues.length
+      ? h('ul', { class: 'quality-issues' }, issues.map((issue: Dict) => h('li', { class: `issue-${issue.severity || 'warning'}` }, [
+        h('strong', issue.title),
+        h('span', issue.detail)
+      ])))
+      : h('div', { class: 'diagnostic-empty' }, '项目库关键字段当前没有明显缺口')
+  ])
+}
+
+function renderQualityMetric(label: string, value: number) {
+  return h('div', [
+    h('span', label),
+    h('strong', String(value))
+  ])
+}
+
+function renderQualityField(field: Dict) {
+  const total = Number(field.total || 0)
+  const nonEmpty = Number(field.non_empty || 0)
+  const missing = total > 0 && nonEmpty < total
+  return h('span', { class: missing ? 'field-warn' : '' }, `${field.label} ${nonEmpty}/${total}`)
 }
 
 function renderPlatformDiagnostics(platforms: Dict[]) {
@@ -2368,12 +2414,110 @@ input[type='checkbox'] {
 }
 
 .env-stack,
+.project-quality,
+.quality-sections,
 .platform-diagnostics,
 .diagnostic-panel {
   display: grid;
   gap: 10px;
   min-width: 0;
   width: 100%;
+}
+
+.project-quality {
+  padding: 12px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.quality-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(70px, 1fr));
+  gap: 8px;
+}
+
+.quality-summary > div {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 7px;
+  background: #f4f8f6;
+}
+
+.quality-summary span,
+.quality-section-head span,
+.quality-fields span,
+.quality-issues span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.quality-summary strong {
+  color: #0f3d3a;
+  font-size: 16px;
+}
+
+.quality-section {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #edf2ef;
+  border-radius: 7px;
+  background: #fbfdfc;
+}
+
+.quality-section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.quality-fields,
+.quality-issues {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.quality-fields span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #eef6f3;
+}
+
+.quality-fields .field-warn {
+  color: #9a3412;
+  background: #fff7ed;
+}
+
+.quality-issues {
+  margin: 0;
+  padding: 0;
+}
+
+.quality-issues li {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 8px;
+  border-radius: 7px;
+  background: #fff7ed;
+  list-style: none;
+}
+
+.quality-issues .issue-danger {
+  background: #fef2f2;
+}
+
+.quality-issues strong {
+  color: #7c2d12;
+  font-size: 13px;
+}
+
+.quality-issues .issue-danger strong {
+  color: #991b1b;
 }
 
 .diagnostic-panel {

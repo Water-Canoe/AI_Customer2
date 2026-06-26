@@ -498,6 +498,37 @@ def test_env_check_reports_platform_raw_data_diagnostics(tmp_path: Path) -> None
     ks = diagnostics["ks"]
     assert ks["tables"]["creator"]["supported"] is False
     assert any("creator" in warning for warning in ks["warnings"])
+    assert payload["project_quality"]["summary"]["contents"] == 0
+    assert any(issue["title"] == "项目库还没有内容" for issue in payload["project_quality"]["issues"])
+
+
+def test_env_check_reports_project_quality_after_import(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    import_for_task(str(task["id"]))
+
+    client = TestClient(app)
+    payload = client.get("/api/settings/env-check").json()
+    quality = payload["project_quality"]
+    sections = {section["key"]: section for section in quality["sections"]}
+    account_fields = {field["label"]: field for field in sections["accounts"]["fields"]}
+    content_fields = {field["label"]: field for field in sections["contents"]["fields"]}
+    comment_fields = {field["label"]: field for field in sections["comments"]["fields"]}
+
+    assert quality["summary"]["contents"] == 1
+    assert quality["summary"]["comments"] == 1
+    assert quality["summary"]["leads"] == 1
+    assert account_fields["昵称"]["non_empty"] >= 1
+    assert account_fields["主页简介"]["non_empty"] >= 1
+    assert content_fields["作者账号"]["non_empty"] == 1
+    assert comment_fields["评论内容"]["non_empty"] == 1
 
 
 def test_clear_all_data_clears_project_and_media_crawler_databases(tmp_path: Path) -> None:

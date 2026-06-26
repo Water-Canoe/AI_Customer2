@@ -83,8 +83,137 @@ def environment_check() -> dict[str, Any]:
             "base_url": settings.get("ai_base_url", ""),
             "model": settings.get("ai_model", ""),
         },
+        "project_quality": _project_quality(),
         "platform_diagnostics": _platform_diagnostics(raw_db) if raw_db_exists else [],
     }
+
+
+def _project_quality() -> dict[str, Any]:
+    with database.connect() as conn:
+        accounts_total = _scalar_count(conn, "SELECT COUNT(*) AS count FROM user_accounts")
+        contents_total = _scalar_count(conn, "SELECT COUNT(*) AS count FROM contents")
+        comments_total = _scalar_count(conn, "SELECT COUNT(*) AS count FROM comments")
+        leads_total = _scalar_count(conn, "SELECT COUNT(*) AS count FROM lead_user_accounts")
+        tasks_with_comments = _scalar_count(conn, "SELECT COUNT(*) AS count FROM crawl_jobs WHERE collect_comments = 1")
+        active_lead_sources = _scalar_count(conn, "SELECT COUNT(DISTINCT lead_account_id) AS count FROM lead_sources WHERE active = 1")
+
+        sections = [
+            {
+                "key": "accounts",
+                "label": "账号",
+                "total": accounts_total,
+                "fields": [
+                    _project_field(conn, "昵称", accounts_total, "user_accounts", "COALESCE(nickname, '') <> ''"),
+                    _project_field(conn, "主页链接", accounts_total, "user_accounts", "COALESCE(profile_url, '') <> ''"),
+                    _project_field(conn, "主页简介", accounts_total, "user_accounts", "COALESCE(signature, '') <> ''"),
+                    _project_field(conn, "粉丝数", accounts_total, "user_accounts", "fans IS NOT NULL"),
+                ],
+            },
+            {
+                "key": "contents",
+                "label": "内容",
+                "total": contents_total,
+                "fields": [
+                    _project_field(conn, "标题/文案", contents_total, "contents", "COALESCE(title, '') <> '' OR COALESCE(description, '') <> ''"),
+                    _project_field(conn, "内容链接", contents_total, "contents", "COALESCE(content_url, '') <> ''"),
+                    _project_field(conn, "来源关键词", contents_total, "contents", "COALESCE(source_keyword, '') <> ''"),
+                    _project_field(conn, "作者账号", contents_total, "contents", "author_account_id IS NOT NULL"),
+                ],
+            },
+            {
+                "key": "comments",
+                "label": "评论",
+                "total": comments_total,
+                "fields": [
+                    _project_field(conn, "评论内容", comments_total, "comments", "COALESCE(body, '') <> ''"),
+                    _project_field(conn, "所属内容", comments_total, "comments", "content_id IS NOT NULL"),
+                    _project_field(conn, "评论账号", comments_total, "comments", "author_account_id IS NOT NULL"),
+                ],
+            },
+            {
+                "key": "leads",
+                "label": "线索",
+                "total": leads_total,
+                "fields": [
+                    {"label": "证据来源", "non_empty": active_lead_sources, "total": leads_total},
+                    _project_field(conn, "跟进状态", leads_total, "lead_user_accounts", "COALESCE(follow_status, '') <> ''"),
+                    _project_field(conn, "AI话术", leads_total, "lead_user_accounts", "COALESCE(script, '') <> ''"),
+                ],
+            },
+        ]
+
+    issues = _project_quality_issues(sections, tasks_with_comments)
+    return {
+        "summary": {
+            "accounts": accounts_total,
+            "contents": contents_total,
+            "comments": comments_total,
+            "leads": leads_total,
+            "issues": len(issues),
+            "status": "warning" if issues else "ok",
+        },
+        "sections": sections,
+        "issues": issues,
+    }
+
+
+def _project_field(conn: sqlite3.Connection, label: str, total: int, table: str, condition: str) -> dict[str, Any]:
+    return {
+        "label": label,
+        "non_empty": _scalar_count(conn, f"SELECT COUNT(*) AS count FROM {table} WHERE {condition}"),
+        "total": total,
+    }
+
+
+def _project_quality_issues(sections: list[dict[str, Any]], tasks_with_comments: int) -> list[dict[str, str]]:
+    section_map = {section["key"]: section for section in sections}
+    field_map = {
+        (section["key"], field["label"]): field
+        for section in sections
+        for field in section.get("fields", [])
+    }
+    issues: list[dict[str, str]] = []
+    if int(section_map["contents"]["total"]) == 0:
+        issues.append({
+            "severity": "warning",
+            "title": "项目库还没有内容",
+            "detail": "采集任务成功不等于业务数据已入库；先检查任务日志和 MediaCrawler 原始表。",
+        })
+    signature = field_map[("accounts", "主页简介")]
+    if int(section_map["accounts"]["total"]) > 0 and int(signature["non_empty"]) < int(signature["total"]):
+        issues.append({
+            "severity": "warning",
+            "title": "账号主页简介缺失",
+            "detail": f"{signature['total'] - signature['non_empty']} 个账号缺主页简介，会影响竞品关键词复判和 AI判断。",
+        })
+    keyword = field_map[("contents", "来源关键词")]
+    if int(section_map["contents"]["total"]) > 0 and int(keyword["non_empty"]) == 0:
+        issues.append({
+            "severity": "danger",
+            "title": "内容缺少来源关键词",
+            "detail": "关键词任务如果没有 source_keyword，后续总览树和竞品候选来源会不清晰。",
+        })
+    content_author = field_map[("contents", "作者账号")]
+    if int(section_map["contents"]["total"]) > 0 and int(content_author["non_empty"]) < int(content_author["total"]):
+        issues.append({
+            "severity": "danger",
+            "title": "部分内容没有作者账号",
+            "detail": "缺少作者账号会导致主页、竞品候选、线索归因无法串起来。",
+        })
+    if tasks_with_comments > 0 and int(section_map["comments"]["total"]) == 0:
+        issues.append({
+            "severity": "warning",
+            "title": "任务要求采评论但评论库为空",
+            "detail": "检查平台登录状态、内容ID/账号主页、评论开关和 MediaCrawler 原始评论表。",
+        })
+    lead_sources = field_map[("leads", "证据来源")]
+    if int(section_map["leads"]["total"]) > 0 and int(lead_sources["non_empty"]) < int(lead_sources["total"]):
+        issues.append({
+            "severity": "danger",
+            "title": "部分线索缺少证据来源",
+            "detail": "缺证据的线索不能可靠追溯到内容或评论，删除和复盘都会受影响。",
+        })
+    return issues
 
 
 def _quote_identifier(identifier: str) -> str:
