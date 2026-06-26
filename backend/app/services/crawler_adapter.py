@@ -230,14 +230,114 @@ def create_profile_enrichment_task(account_id: int) -> dict[str, object]:
 def get_task(task_id: str) -> dict[str, object] | None:
     with database.connect() as conn:
         row = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
-        return database.row_to_dict(row)
+        if not row:
+            return None
+        task = database.row_to_dict(row)
+        task["outcome"] = _task_outcome(conn, task)
+        return task
 
 
 def list_tasks(include_archived: bool = False) -> list[dict[str, object]]:
     with database.connect() as conn:
         where = "" if include_archived else "WHERE archived = 0"
         rows = conn.execute(f"SELECT * FROM crawl_jobs {where} ORDER BY created_at DESC").fetchall()
-        return database.rows_to_dicts(rows)
+        tasks = database.rows_to_dicts(rows)
+        for task in tasks:
+            task["outcome"] = _task_outcome(conn, task)
+        return tasks
+
+
+def _count(conn, sql: str, params: tuple[object, ...]) -> int:
+    row = conn.execute(sql, params).fetchone()
+    return int(row["count"] or 0) if row else 0
+
+
+def _task_outcome(conn, task: dict[str, object]) -> dict[str, object]:
+    task_id = str(task["id"])
+    counts = {
+        "raw_refs": _count(conn, "SELECT COUNT(*) AS count FROM raw_source_refs WHERE task_id = ?", (task_id,)),
+        "contents": _count(conn, "SELECT COUNT(*) AS count FROM contents WHERE task_id = ?", (task_id,)),
+        "comments": _count(conn, "SELECT COUNT(*) AS count FROM comments WHERE task_id = ?", (task_id,)),
+        "competitor_candidates": _count(
+            conn,
+            "SELECT COUNT(DISTINCT account_id) AS count FROM account_sources WHERE task_id = ? AND active = 1",
+            (task_id,),
+        ),
+        "leads": _count(
+            conn,
+            "SELECT COUNT(DISTINCT lead_account_id) AS count FROM lead_sources WHERE task_id = ? AND active = 1",
+            (task_id,),
+        ),
+        "target_customers": _count(
+            conn,
+            """
+            SELECT COUNT(DISTINCT lua.id) AS count
+            FROM lead_sources ls
+            JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+            WHERE ls.task_id = ? AND ls.active = 1 AND lua.hidden = 0
+              AND lua.follow_status NOT IN ('待筛选', '无需跟进')
+            """,
+            (task_id,),
+        ),
+        "profile_enrichment_needed": _count(
+            conn,
+            """
+            SELECT COUNT(*) AS count
+            FROM (
+                SELECT author_account_id AS account_id FROM contents WHERE task_id = ? AND author_account_id IS NOT NULL
+                UNION
+                SELECT author_account_id AS account_id FROM comments WHERE task_id = ? AND author_account_id IS NOT NULL
+                UNION
+                SELECT account_id FROM account_sources WHERE task_id = ? AND active = 1
+                UNION
+                SELECT lua.account_id
+                FROM lead_sources ls
+                JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+                WHERE ls.task_id = ? AND ls.active = 1
+            ) related
+            JOIN user_accounts ua ON ua.id = related.account_id
+            WHERE ua.platform IN ('dy', 'xhs') AND COALESCE(ua.signature, '') = ''
+            """,
+            (task_id, task_id, task_id, task_id),
+        ),
+    }
+    return {
+        "counts": counts,
+        "health": _task_outcome_health(str(task.get("status") or ""), counts),
+        "next_actions": _task_next_actions(str(task.get("status") or ""), counts),
+    }
+
+
+def _task_outcome_health(status: str, counts: dict[str, int]) -> str:
+    business_total = counts["contents"] + counts["comments"] + counts["competitor_candidates"] + counts["leads"]
+    if status == "failed":
+        return "failed"
+    if status == "succeeded" and business_total == 0:
+        return "empty"
+    if counts["target_customers"] or counts["leads"] or counts["competitor_candidates"]:
+        return "actionable"
+    if counts["contents"] or counts["comments"]:
+        return "collected"
+    return "pending"
+
+
+def _task_next_actions(status: str, counts: dict[str, int]) -> list[str]:
+    if status == "failed":
+        return ["查看错误日志，修正登录、路径、关键词或平台限制后重新创建任务"]
+    if status == "succeeded" and counts["contents"] + counts["comments"] + counts["raw_refs"] == 0:
+        return ["没有导入有效数据，先检查设置页的平台诊断、任务关键词/ID、登录状态和采集时间窗口"]
+    actions: list[str] = []
+    if counts["competitor_candidates"]:
+        actions.append("进入 AI分析，批量筛选竞品候选")
+    if counts["leads"]:
+        actions.append("进入 AI分析，筛选线索客户并生成私信话术")
+    if counts["target_customers"]:
+        actions.append("进入数据表的目标客户库，继续跟进状态流转")
+    if counts["profile_enrichment_needed"]:
+        actions.append("账号主页简介为空，可在数据表点击补资料")
+    if not actions and (counts["contents"] or counts["comments"]):
+        actions.append("查看数据表或总览树，确认内容和评论来源")
+    return actions
 
 
 def list_task_logs(task_id: str) -> list[dict[str, object]]:

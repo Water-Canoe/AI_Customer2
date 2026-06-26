@@ -101,6 +101,14 @@ def test_task_command_mapping_and_import(tmp_path: Path) -> None:
     result = import_for_task(str(task["id"]))
     assert result["contents"] == 1
     assert result["comments"] == 1
+    task_detail = crawler_adapter.get_task(str(task["id"]))
+    assert task_detail is not None
+    outcome = task_detail["outcome"]
+    assert outcome["counts"]["contents"] == 1
+    assert outcome["counts"]["comments"] == 1
+    assert outcome["counts"]["leads"] == 1
+    assert outcome["health"] == "actionable"
+    assert "线索客户" in outcome["next_actions"][0]
 
     leads = views.list_library("lead_customers")["rows"]
     assert len(leads) == 1
@@ -141,6 +149,10 @@ def test_competitor_discovery_matches_profile_signature(tmp_path: Path) -> None:
     assert len(candidates) == 1
     assert candidates[0]["nickname"] == "普通作者"
     assert "AI客服" in candidates[0]["signature"]
+    task_detail = crawler_adapter.get_task(str(task["id"]))
+    assert task_detail is not None
+    assert task_detail["outcome"]["counts"]["competitor_candidates"] == 1
+    assert task_detail["outcome"]["health"] == "actionable"
 
 
 def test_search_task_sanitizes_irrelevant_ids_and_requires_keywords(tmp_path: Path) -> None:
@@ -343,10 +355,24 @@ def test_hard_delete_requires_raw_mapping(tmp_path: Path) -> None:
 
 def test_api_health_and_settings(tmp_path: Path) -> None:
     prepare_project(tmp_path)
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
     from app.main import app
+
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    import_for_task(str(task["id"]))
 
     client = TestClient(app)
     assert client.get("/api/health").json()["status"] == "ok"
+    task_response = client.get(f"/api/tasks/{task['id']}")
+    assert task_response.status_code == 200
+    assert task_response.json()["outcome"]["counts"]["leads"] == 1
+    list_response = client.get("/api/tasks")
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["outcome"]["counts"]["comments"] == 1
     response = client.put("/api/settings", json={"values": {"ai_model": "deepseek-chat"}})
     assert response.status_code == 200
     assert response.json()["ai_model"] == "deepseek-chat"

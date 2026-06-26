@@ -805,6 +805,7 @@ const LogsView = defineComponent({
       default: () => [
       h('section', { class: 'pane primary-pane log-pane' }, [
         h('div', { class: 'section-title' }, [h('h2', props.selectedTask ? `${props.selectedTask.id} · ${props.selectedTask.name}` : '任务详情'), h('span', props.selectedTask?.status || '请选择任务')]),
+        props.selectedTask ? renderTaskOutcome(props.selectedTask as Dict) : h('div', { class: 'empty-state compact' }, '请选择左侧任务查看产出和日志'),
         h('div', { class: 'log-console' }, (props.selectedTask?.logs || []).map((log: Dict) => h('p', [h('time', log.created_at), h('span', log.message)])))
       ])
       ],
@@ -814,6 +815,7 @@ const LogsView = defineComponent({
         (props.tasks as Dict[]).map(task => h('button', { class: 'task-row', onClick: () => emit('select-task', task.id) }, [
           h('strong', `${task.id} · ${task.name}`),
           h('span', task.command || task.mode),
+          h('span', { class: 'task-row-outcome' }, taskOutcomeSummary(task)),
           h('em', { class: `status ${task.status}` }, task.status)
         ])),
         props.selectedTask ? h('div', { class: 'button-pair' }, [
@@ -825,6 +827,48 @@ const LogsView = defineComponent({
     })
   }
 })
+
+function renderTaskOutcome(task: Dict) {
+  const outcome = task.outcome || {}
+  const counts = outcome.counts || {}
+  const actions = outcome.next_actions || []
+  const metrics = [
+    ['内容', counts.contents || 0],
+    ['评论', counts.comments || 0],
+    ['候选竞品', counts.competitor_candidates || 0],
+    ['线索', counts.leads || 0],
+    ['目标客户', counts.target_customers || 0],
+    ['需补资料', counts.profile_enrichment_needed || 0]
+  ]
+  return h('div', { class: 'task-outcome' }, [
+    h('div', { class: 'task-outcome-head' }, [
+      h('strong', '任务产出'),
+      h('span', { class: `outcome-health ${outcome.health || 'pending'}` }, outcomeHealthLabel(outcome.health))
+    ]),
+    h('div', { class: 'task-outcome-grid' }, metrics.map(([label, value]) => h('div', [
+      h('small', String(label)),
+      h('strong', String(value))
+    ]))),
+    actions.length
+      ? h('ul', { class: 'task-next-actions' }, actions.map((action: string) => h('li', action)))
+      : h('p', { class: 'task-next-actions empty' }, '暂无下一步动作，等待任务完成或查看日志')
+  ])
+}
+
+function taskOutcomeSummary(task: Dict) {
+  const counts = task.outcome?.counts || {}
+  return `内容 ${counts.contents || 0} / 评论 ${counts.comments || 0} / 线索 ${counts.leads || 0}`
+}
+
+function outcomeHealthLabel(health: string) {
+  return ({
+    actionable: '可处理',
+    collected: '已采集',
+    empty: '无有效数据',
+    failed: '失败',
+    pending: '等待结果'
+  } as Record<string, string>)[health] || '等待结果'
+}
 
 const TablesView = defineComponent({
   props: { library: { type: String, required: true }, rows: { type: Array, required: true }, loading: { type: Boolean, required: true } },
@@ -1845,6 +1889,99 @@ input[type='checkbox'] {
   color: #d1fae5;
   padding: 14px;
   overflow: auto;
+}
+
+.task-outcome {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.task-outcome-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.task-outcome-head strong {
+  color: #0f3d3a;
+}
+
+.outcome-health {
+  display: inline-flex;
+  width: fit-content;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #475569;
+  background: #e2e8f0;
+  font-size: 12px;
+}
+
+.outcome-health.actionable {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.outcome-health.collected {
+  color: #075985;
+  background: #e0f2fe;
+}
+
+.outcome-health.empty {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.outcome-health.failed {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.task-outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(72px, 1fr));
+  gap: 8px;
+}
+
+.task-outcome-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border-radius: 7px;
+  background: #f6faf8;
+}
+
+.task-outcome-grid small,
+.task-row-outcome {
+  color: #64748b;
+}
+
+.task-outcome-grid strong {
+  color: #1f2937;
+  font-size: 18px;
+}
+
+.task-next-actions {
+  margin: 0;
+  padding-left: 18px;
+  color: #31524c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.task-next-actions.empty {
+  padding-left: 0;
+  color: #64748b;
+}
+
+.empty-state.compact {
+  min-height: 120px;
+  margin-bottom: 14px;
 }
 
 .log-console p {
