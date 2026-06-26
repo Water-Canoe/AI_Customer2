@@ -1,0 +1,20 @@
+# Python local environment and caches
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime databases and logs
+backend/runtime/
+*.log
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Local browser/test artifacts
+.playwright-cli/
+.playwright-mcp/
+
+# Local document previews and temporary exports
+lark_whiteboard_preview_*.png

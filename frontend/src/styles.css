@@ -1,0 +1,35 @@
+:root {
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
+  color: #1f2937;
+  background: #f4f7f6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: #0f766e;
+  text-decoration: none;
+}
+
+.el-button {
+  border-radius: 6px;
+}
+
+.el-card {
+  border-radius: 8px;
+}
