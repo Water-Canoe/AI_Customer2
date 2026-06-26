@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 from app import database
+from app.services.importer import COMMENT_TABLES, CONTENT_TABLES, CREATOR_TABLES
 
 
 LIBRARY_LABELS = {
@@ -14,6 +16,32 @@ LIBRARY_LABELS = {
     "competitors": "竞品账号库",
     "lead_customers": "线索客户库",
     "target_customers": "目标客户库",
+}
+
+PLATFORM_LABELS = {"dy": "抖音", "xhs": "小红书", "ks": "快手"}
+PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
+DIAGNOSTIC_FIELDS = {
+    "content": [
+        ("id", "内容ID"),
+        ("author_id", "作者ID"),
+        ("nickname", "作者昵称"),
+        ("url", "内容链接"),
+        ("keyword", "来源关键词"),
+        ("signature", "主页简介"),
+    ],
+    "comment": [
+        ("id", "评论ID"),
+        ("content_id", "所属内容ID"),
+        ("author_id", "评论者ID"),
+        ("nickname", "评论者昵称"),
+        ("body", "评论内容"),
+    ],
+    "creator": [
+        ("id", "账号ID"),
+        ("nickname", "账号昵称"),
+        ("signature", "主页简介"),
+        ("fans", "粉丝数"),
+    ],
 }
 
 
@@ -45,16 +73,109 @@ def environment_check() -> dict[str, Any]:
     settings = get_settings()
     media_path = Path(str(settings.get("media_crawler_path", "")).strip().strip('"').strip("'"))
     raw_db = Path(str(settings.get("media_crawler_db_path", "")).strip().strip('"').strip("'"))
+    raw_db_exists = raw_db.exists()
     return {
         "project_db": {"path": str(database.get_db_path()), "ok": database.get_db_path().exists()},
         "media_crawler_path": {"path": str(media_path), "ok": media_path.exists()},
-        "media_crawler_db": {"path": str(raw_db), "ok": raw_db.exists()},
+        "media_crawler_db": {"path": str(raw_db), "ok": raw_db_exists},
         "ai_config": {
             "ok": bool(settings.get("ai_base_url") and settings.get("ai_api_key") and settings.get("ai_model")),
             "base_url": settings.get("ai_base_url", ""),
             "model": settings.get("ai_model", ""),
         },
+        "platform_diagnostics": _platform_diagnostics(raw_db) if raw_db_exists else [],
     }
+
+
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _platform_diagnostics(raw_db: Path) -> list[dict[str, Any]]:
+    raw_conn = sqlite3.connect(raw_db)
+    raw_conn.row_factory = sqlite3.Row
+    try:
+        return [_platform_diagnostic(raw_conn, platform) for platform in PLATFORM_LABELS]
+    finally:
+        raw_conn.close()
+
+
+def _platform_diagnostic(raw_conn: sqlite3.Connection, platform: str) -> dict[str, Any]:
+    content = _table_diagnostic(raw_conn, CONTENT_TABLES[platform], DIAGNOSTIC_FIELDS["content"])
+    comment = _table_diagnostic(raw_conn, COMMENT_TABLES[platform], DIAGNOSTIC_FIELDS["comment"])
+    creator_mapping = CREATOR_TABLES.get(platform)
+    creator = (
+        _table_diagnostic(raw_conn, creator_mapping, DIAGNOSTIC_FIELDS["creator"])
+        if creator_mapping
+        else {"supported": False, "exists": False, "row_count": 0, "fields": []}
+    )
+    warnings: list[str] = []
+    if not content["exists"]:
+        warnings.append(f"{PLATFORM_LABELS[platform]}内容表不存在，无法导入内容")
+    if content["exists"] and content["row_count"] == 0:
+        warnings.append(f"{PLATFORM_LABELS[platform]}内容表暂无原始行")
+    if comment["exists"] and comment["row_count"] == 0:
+        warnings.append(f"{PLATFORM_LABELS[platform]}评论表暂无原始行")
+    if platform not in PROFILE_ENRICHMENT_PLATFORMS:
+        warnings.append("MediaCrawler SQLite 当前不写入该平台 creator 主页资料，补资料不可用")
+    elif not creator["exists"]:
+        warnings.append(f"{PLATFORM_LABELS[platform]}creator 表不存在，主页简介和粉丝数无法补全")
+    return {
+        "platform": platform,
+        "label": PLATFORM_LABELS[platform],
+        "ok": bool(content["exists"]),
+        "warnings": warnings,
+        "tables": {
+            "content": content,
+            "comment": comment,
+            "creator": creator,
+        },
+    }
+
+
+def _table_diagnostic(
+    raw_conn: sqlite3.Connection,
+    mapping: dict[str, str],
+    fields: list[tuple[str, str]],
+) -> dict[str, Any]:
+    table = mapping["table"]
+    table_row = raw_conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    if not table_row:
+        return {"table": table, "supported": True, "exists": False, "row_count": 0, "fields": []}
+    columns = {str(row["name"]) for row in raw_conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()}
+    row_count = int(raw_conn.execute(f"SELECT COUNT(*) AS c FROM {_quote_identifier(table)}").fetchone()["c"])
+    return {
+        "table": table,
+        "supported": True,
+        "exists": True,
+        "row_count": row_count,
+        "fields": [_field_diagnostic(raw_conn, table, columns, mapping, key, label, row_count) for key, label in fields],
+    }
+
+
+def _field_diagnostic(
+    raw_conn: sqlite3.Connection,
+    table: str,
+    columns: set[str],
+    mapping: dict[str, str],
+    key: str,
+    label: str,
+    row_count: int,
+) -> dict[str, Any]:
+    column = mapping.get(key, "")
+    if not column:
+        return {"key": key, "label": label, "column": "", "supported": False, "non_empty": 0, "row_count": row_count}
+    if column not in columns:
+        return {"key": key, "label": label, "column": column, "supported": False, "missing_column": True, "non_empty": 0, "row_count": row_count}
+    non_empty = int(
+        raw_conn.execute(
+            f"SELECT COUNT(*) AS c FROM {_quote_identifier(table)} WHERE COALESCE(CAST({_quote_identifier(column)} AS TEXT), '') <> ''"
+        ).fetchone()["c"]
+    )
+    return {"key": key, "label": label, "column": column, "supported": True, "non_empty": non_empty, "row_count": row_count}
 
 
 def list_library(library: str, status: str = "", keyword: str = "") -> dict[str, Any]:

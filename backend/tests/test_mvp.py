@@ -352,6 +352,29 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     assert response.json()["ai_model"] == "deepseek-chat"
 
 
+def test_env_check_reports_platform_raw_data_diagnostics(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/settings/env-check")
+    assert response.status_code == 200
+    payload = response.json()
+    diagnostics = {item["platform"]: item for item in payload["platform_diagnostics"]}
+
+    dy = diagnostics["dy"]
+    assert dy["ok"] is True
+    assert dy["tables"]["content"]["table"] == "douyin_aweme"
+    assert dy["tables"]["content"]["row_count"] == 1
+    dy_content_fields = {field["key"]: field for field in dy["tables"]["content"]["fields"]}
+    assert dy_content_fields["author_id"]["non_empty"] == 1
+    assert dy_content_fields["signature"]["non_empty"] == 1
+
+    ks = diagnostics["ks"]
+    assert ks["tables"]["creator"]["supported"] is False
+    assert any("creator" in warning for warning in ks["warnings"])
+
+
 def test_clear_all_data_clears_project_and_media_crawler_databases(tmp_path: Path) -> None:
     _, raw_db = prepare_project(tmp_path)
     from app import database

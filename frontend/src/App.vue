@@ -1015,11 +1015,61 @@ function renderEnv(envValue: Dict) {
     ['底层SQLite', envValue?.media_crawler_db],
     ['AI配置', envValue?.ai_config]
   ]
-  return h('div', { class: 'env-list' }, items.map(([label, item]: any) => h('div', { class: 'env-item' }, [
+  return h('div', { class: 'env-stack' }, [
+    h('div', { class: 'env-list' }, items.map(([label, item]: any) => h('div', { class: 'env-item' }, [
+      h('span', label),
+      h('strong', { class: item?.ok ? 'ok' : 'warn' }, item?.ok ? '正常' : '待处理'),
+      h('small', item?.path || item?.base_url || item?.model || '')
+    ]))),
+    renderPlatformDiagnostics(envValue?.platform_diagnostics || [])
+  ])
+}
+
+function renderPlatformDiagnostics(platforms: Dict[]) {
+  if (!platforms.length) {
+    return h('div', { class: 'diagnostic-empty' }, '底层 SQLite 不存在或尚未完成检查')
+  }
+  return h('div', { class: 'platform-diagnostics' }, [
+    h('div', { class: 'section-title compact' }, [h('h2', '平台数据诊断'), h('span', '原始表与关键字段')]),
+    ...platforms.map(platform => h('div', { class: 'diagnostic-panel' }, [
+      h('div', { class: 'diagnostic-head' }, [
+        h('strong', platform.label || platform.platform),
+        h('span', { class: platform.ok ? 'ok' : 'warn' }, platform.ok ? '可导入' : '缺内容表')
+      ]),
+      h('div', { class: 'diagnostic-tables' }, [
+        renderRawTableMetric('内容', platform.tables?.content),
+        renderRawTableMetric('评论', platform.tables?.comment),
+        renderRawTableMetric('主页', platform.tables?.creator)
+      ]),
+      h('div', { class: 'field-quality' }, importantDiagnosticFields(platform).map(field => h('span', {
+        class: field.supported && field.row_count && field.non_empty === 0 ? 'field-warn' : ''
+      }, `${field.label} ${field.supported ? `${field.non_empty}/${field.row_count}` : '不支持'}`))),
+      platform.warnings?.length ? h('ul', { class: 'diagnostic-warnings' }, platform.warnings.map((warning: string) => h('li', warning))) : null
+    ]))
+  ])
+}
+
+function renderRawTableMetric(label: string, table: Dict = {}) {
+  return h('div', [
     h('span', label),
-    h('strong', { class: item?.ok ? 'ok' : 'warn' }, item?.ok ? '正常' : '待处理'),
-    h('small', item?.path || item?.base_url || item?.model || '')
-  ])))
+    h('strong', table.exists ? `${table.row_count || 0}` : '缺失'),
+    h('small', table.table || '无映射')
+  ])
+}
+
+function importantDiagnosticFields(platform: Dict) {
+  const contentFields = platform.tables?.content?.fields || []
+  const commentFields = platform.tables?.comment?.fields || []
+  const creatorFields = platform.tables?.creator?.fields || []
+  const pick = (fields: Dict[], key: string) => fields.find(field => field.key === key)
+  return [
+    pick(contentFields, 'author_id'),
+    pick(contentFields, 'nickname'),
+    pick(contentFields, 'signature'),
+    pick(commentFields, 'body'),
+    pick(creatorFields, 'signature'),
+    pick(creatorFields, 'fans')
+  ].filter((field): field is Dict => Boolean(field))
 }
 </script>
 
@@ -1068,6 +1118,7 @@ function renderEnv(envValue: Dict) {
 .data-table small,
 .env-item small {
   color: #64748b;
+  overflow-wrap: anywhere;
 }
 
 .nav {
@@ -1844,6 +1895,7 @@ input[type='checkbox'] {
 
 .env-item {
   display: grid;
+  min-width: 0;
   gap: 4px;
   padding: 12px;
   border: 1px solid #dbe7e2;
@@ -1856,6 +1908,94 @@ input[type='checkbox'] {
 
 .env-item .warn {
   color: #b45309;
+}
+
+.env-stack,
+.platform-diagnostics,
+.diagnostic-panel {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  width: 100%;
+}
+
+.diagnostic-panel {
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.diagnostic-head,
+.diagnostic-tables,
+.field-quality {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.diagnostic-head {
+  justify-content: space-between;
+}
+
+.diagnostic-head strong {
+  color: #0f3d3a;
+}
+
+.diagnostic-tables > div {
+  display: grid;
+  min-width: 78px;
+  gap: 2px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: #f4f8f6;
+}
+
+.diagnostic-tables span,
+.field-quality span {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.diagnostic-tables strong {
+  color: #1f2937;
+  font-size: 14px;
+}
+
+.diagnostic-tables small {
+  color: #8a9a93;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.field-quality span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #eef6f3;
+}
+
+.field-quality .field-warn {
+  color: #9a3412;
+  background: #fff7ed;
+}
+
+.diagnostic-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.diagnostic-empty {
+  padding: 12px;
+  border: 1px dashed #cbd5d1;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 13px;
 }
 
 .danger-zone {
