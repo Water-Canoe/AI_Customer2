@@ -218,6 +218,10 @@ async function changeTableFilter(filters: Dict) {
 }
 
 async function openWorkbenchAction(action: Dict) {
+  if (action.action === 'batch_profile_enrichment') {
+    await batchEnrichProfiles(action)
+    return
+  }
   if (action.view === 'tables') {
     activeLibrary.value = action.library || activeLibrary.value
     tableStatus.value = action.status || ''
@@ -235,6 +239,32 @@ async function openWorkbenchAction(action: Dict) {
     activeView.value = 'overview'
     await loadOverview()
   }
+}
+
+async function batchEnrichProfiles(action: Dict) {
+  // 后端负责筛选和串行执行，前端只发起一个受限批量动作。
+  if (!Number(action.count || 0)) {
+    activeView.value = action.view || 'overview'
+    await loadOverview()
+    return
+  }
+  const limit = Number(action.limit || 10)
+  await ElMessageBox.confirm(
+    `将为最多 ${limit} 个缺少主页简介的抖音/小红书账号创建补资料任务，并按顺序执行。确认继续？`,
+    '批量补资料',
+    { type: 'warning' }
+  )
+  const { data } = await api.post('/accounts/profile-enrichment/batch', null, { params: { limit } })
+  if (!data.created) {
+    ElMessage.warning('没有可创建的补资料任务，可能已有任务在等待执行')
+    await Promise.allSettled([loadWorkbenchActions(), loadTasks()])
+    return
+  }
+  ElMessage.success(`已创建 ${data.created} 个补资料任务`)
+  await Promise.allSettled([loadTasks(), loadWorkbenchActions(), loadOverview()])
+  const firstTaskId = data.task_ids?.[0]
+  if (firstTaskId) selectedTask.value = await fetchTask(firstTaskId)
+  activeView.value = 'logs'
 }
 
 async function createTask(payload: Dict) {

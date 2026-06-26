@@ -303,6 +303,64 @@ def test_profile_enrichment_rejects_platform_without_sqlite_creator_store(tmp_pa
         crawler_adapter.create_profile_enrichment_task(int(account_id))
 
 
+def test_batch_profile_enrichment_creates_limited_deduped_tasks(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.main import app
+    from app.services import crawler_adapter
+
+    with database.connect() as conn:
+        dy_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, sec_uid, nickname, signature, profile_url)
+            VALUES('dy', 'batch-dy', 'batch-sec', '批量抖音', '', 'https://www.douyin.com/user/batch-sec')
+            """
+        ).lastrowid
+        xhs_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, signature, profile_url)
+            VALUES('xhs', 'batch-xhs', '批量小红书', '', 'https://www.xiaohongshu.com/user/profile/batch-xhs')
+            """
+        ).lastrowid
+        ks_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, signature, profile_url)
+            VALUES('ks', 'batch-ks', '批量快手', '', 'https://www.kuaishou.com/profile/batch-ks')
+            """
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword) VALUES('dy', 'dy-batch-content', ?, '批量内容', '批量')",
+            (dy_id,),
+        )
+        conn.execute(
+            "INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword) VALUES('xhs', 'xhs-batch-content', ?, '批量内容', '批量')",
+            (xhs_id,),
+        )
+        conn.execute(
+            "INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword) VALUES('ks', 'ks-batch-content', ?, '批量内容', '批量')",
+            (ks_id,),
+        )
+
+    first = crawler_adapter.create_profile_enrichment_batch(limit=1)
+    assert first["created"] == 1
+    created_task = crawler_adapter.get_task(first["task_ids"][0])
+    assert created_task is not None
+    assert created_task["mode"] == "profile_enrichment"
+    assert created_task["platform"] in {"dy", "xhs"}
+
+    second = crawler_adapter.create_profile_enrichment_batch(limit=10)
+    assert second["created"] == 1
+    assert set(first["task_ids"]).isdisjoint(second["task_ids"])
+
+    no_more = crawler_adapter.create_profile_enrichment_batch(limit=10)
+    assert no_more["created"] == 0
+
+    client = TestClient(app)
+    response = client.post("/api/accounts/profile-enrichment/batch", params={"limit": 5, "run_now": False})
+    assert response.status_code == 200
+    assert response.json()["created"] == 0
+
+
 def test_real_crawler_import_ignores_raw_rows_before_task_start(tmp_path: Path) -> None:
     _, raw_db = prepare_project(tmp_path)
     from app.schemas import TaskCreate

@@ -227,6 +227,59 @@ def create_profile_enrichment_task(account_id: int) -> dict[str, object]:
     return task
 
 
+def create_profile_enrichment_batch(limit: int = 10) -> dict[str, object]:
+    """Create a small serial queue for accounts that can actually be enriched."""
+    safe_limit = max(1, min(int(limit), 50))
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT ua.id
+            FROM user_accounts ua
+            WHERE ua.platform IN ('dy', 'xhs')
+              AND COALESCE(ua.signature, '') = ''
+              AND (
+                COALESCE(ua.profile_url, '') <> ''
+                OR COALESCE(ua.platform_user_id, '') <> ''
+                OR (ua.platform = 'dy' AND COALESCE(ua.sec_uid, '') <> '')
+              )
+              AND (
+                EXISTS (SELECT 1 FROM contents c WHERE c.author_account_id = ua.id)
+                OR EXISTS (SELECT 1 FROM comments cm WHERE cm.author_account_id = ua.id)
+                OR EXISTS (SELECT 1 FROM account_sources ac WHERE ac.account_id = ua.id AND ac.active = 1)
+                OR EXISTS (SELECT 1 FROM lead_user_accounts lua WHERE lua.account_id = ua.id)
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM crawl_jobs j
+                WHERE j.mode = 'profile_enrichment'
+                  AND j.platform = ua.platform
+                  AND j.status IN ('pending', 'running')
+                  AND (
+                    j.creator_id = ua.profile_url
+                    OR j.creator_id = ua.platform_user_id
+                    OR j.creator_id = ua.sec_uid
+                  )
+              )
+            ORDER BY ua.updated_at DESC, ua.id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    tasks = [create_profile_enrichment_task(int(row["id"])) for row in rows]
+    return {
+        "created": len(tasks),
+        "limit": safe_limit,
+        "task_ids": [str(task["id"]) for task in tasks],
+        "tasks": tasks,
+    }
+
+
+def run_tasks_serially(task_ids: list[str]) -> None:
+    # 批量补资料串行执行，避免同时启动多个 MediaCrawler 子进程。
+    for task_id in task_ids:
+        run_task(str(task_id))
+
+
 def get_task(task_id: str) -> dict[str, object] | None:
     with database.connect() as conn:
         row = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()

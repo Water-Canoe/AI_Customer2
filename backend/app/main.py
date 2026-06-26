@@ -54,6 +54,21 @@ def create_profile_enrichment_task(account_id: int, background_tasks: Background
     return task
 
 
+@app.post("/api/accounts/profile-enrichment/batch")
+def create_profile_enrichment_batch(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(default=10, ge=1, le=50),
+    run_now: bool = True,
+) -> dict[str, object]:
+    try:
+        result = crawler_adapter.create_profile_enrichment_batch(limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run_now and result["task_ids"]:
+        background_tasks.add_task(crawler_adapter.run_tasks_serially, result["task_ids"])
+    return result
+
+
 @app.get("/api/tasks")
 def list_tasks(include_archived: bool = False) -> list[dict[str, object]]:
     return crawler_adapter.list_tasks(include_archived)

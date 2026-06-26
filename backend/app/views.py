@@ -524,7 +524,9 @@ def workbench_actions() -> dict[str, Any]:
             "library": "",
             "status": "",
             "hint": "补齐主页简介和粉丝数后，竞品关键词会自动复判。",
-            "action_label": "去补资料",
+            "action": "batch_profile_enrichment",
+            "limit": min(profile_needed, 10),
+            "action_label": "一键补资料" if profile_needed else "查看",
         },
         {
             "key": "competitors_to_analyze",
