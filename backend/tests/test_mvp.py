@@ -228,6 +228,66 @@ def test_profile_enrichment_task_uses_creator_mode_and_imports_signature(tmp_pat
     assert row["signature"] == "profile bio from creator mode"
 
 
+def test_profile_enrichment_rechecks_competitor_keyword_match(tmp_path: Path) -> None:
+    _, raw_db = prepare_project(tmp_path)
+
+    from app import views
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        raw_conn.execute(
+            "UPDATE douyin_aweme SET nickname = ?, user_signature = ?, source_keyword = ?",
+            ("Plain Author", "", "EV"),
+        )
+        raw_conn.execute("UPDATE dy_creator SET nickname = ?, desc = ?", ("Plain Author", ""))
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    discovery = crawler_adapter.create_task(
+        TaskCreate(
+            mode="competitor_discovery",
+            platform="dy",
+            keywords="EV",
+            execute_crawler=False,
+        )
+    )
+    import_for_task(str(discovery["id"]))
+    assert views.list_library("competitor_candidates")["rows"] == []
+
+    account = views.list_library("contents")["rows"][0]
+    profile_task = crawler_adapter.create_profile_enrichment_task(int(account["author_account_id"]))
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        profile_ts = int(profile_task["raw_started_ts_ms"]) + 1000
+        raw_conn.execute(
+            "UPDATE dy_creator SET nickname = ?, desc = ?, add_ts = ?, last_modify_ts = ? WHERE user_id = ?",
+            (
+                "Plain Author",
+                "EV scooter shop profile",
+                profile_ts,
+                profile_ts,
+                "creator-1",
+            ),
+        )
+        raw_conn.execute("UPDATE douyin_aweme SET add_ts = ?, last_modify_ts = ?", (profile_ts, profile_ts))
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    result = import_for_task(str(profile_task["id"]))
+    assert result["competitor_candidates"] == 1
+    candidates = views.list_library("competitor_candidates")["rows"]
+    assert len(candidates) == 1
+    assert candidates[0]["nickname"] == "Plain Author"
+    assert candidates[0]["signature"] == "EV scooter shop profile"
+    content = views.list_library("contents")["rows"][0]
+    assert content["task_id"] == discovery["id"]
+
+
 def test_profile_enrichment_rejects_platform_without_sqlite_creator_store(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database

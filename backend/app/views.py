@@ -385,7 +385,7 @@ def overview_tree() -> list[dict[str, Any]]:
 def _keyword_node(conn, platform: str, keyword: str, metrics: dict[str, Any]) -> dict[str, Any]:
     accounts = conn.execute(
         """
-        SELECT ua.id, ua.nickname, ua.profile_url, ua.fans, ua.signature,
+        SELECT ua.id, ua.platform, ua.nickname, ua.profile_url, ua.fans, ua.signature,
                ua.account_role, ua.competitor_status,
                COUNT(DISTINCT c.id) AS content_count,
                COUNT(DISTINCT cm.id) AS comment_count,

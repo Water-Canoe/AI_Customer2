@@ -55,7 +55,7 @@
           @create-task="createTask"
           @open-logs="openTaskLogs"
         />
-        <OverviewView v-else-if="activeView === 'overview'" :tree="overviewTree" />
+        <OverviewView v-else-if="activeView === 'overview'" :tree="overviewTree" @enrich-profile="enrichProfile" />
         <AiView v-else-if="activeView === 'ai'" :jobs="aiJobs" :lead-rows="leadRows" :competitor-rows="competitorRows" @create-job="createAiJob" @retry-job="retryAiJob" />
         <LogsView v-else-if="activeView === 'logs'" :tasks="tasks" :selected-task="selectedTask || undefined" @select-task="selectTask" @archive-task="archiveTask" @delete-task="deleteTask" />
         <TablesView
@@ -262,7 +262,7 @@ async function enrichProfile(library: string, row: Dict) {
   try {
     const { data } = await api.post(`/accounts/${accountId}/profile-enrichment`)
     ElMessage.success(`补资料任务 ${data.id} 已创建`)
-    await loadTasks()
+    await Promise.all([loadTasks(), loadOverview()])
     selectedTask.value = await fetchTask(data.id)
     activeView.value = 'logs'
   } catch (error: any) {
@@ -667,22 +667,30 @@ const TaskView = defineComponent({
 
 const OverviewView = defineComponent({
   props: { tree: { type: Array, required: true } },
-  setup(props) {
+  emits: ['enrich-profile'],
+  setup(props, { emit }) {
     const expanded = reactive<Record<string, boolean>>({})
     const isExpanded = (node: Dict) => expanded[node.id] ?? false
     const toggle = (node: Dict) => {
       expanded[node.id] = !isExpanded(node)
     }
+    const enrich = (node: Dict) => emit('enrich-profile', 'overview', { id: node.metrics?.id })
     return () => h('section', { class: 'pane overview-pane' }, [
       h('div', { class: 'section-title' }, [h('h2', '关系总览'), h('span', '平台 / 关键词 / 账号层级表')]),
       (props.tree as Dict[]).length
-        ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle)))
+        ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, enrich)))
         : h('div', { class: 'empty-state' }, '暂无总览数据，请先创建采集任务')
     ])
   }
 })
 
-function renderOverviewRow(node: Dict, level: number, isExpanded: (node: Dict) => boolean, toggle: (node: Dict) => void): any[] {
+function renderOverviewRow(
+  node: Dict,
+  level: number,
+  isExpanded: (node: Dict) => boolean,
+  toggle: (node: Dict) => void,
+  enrich: (node: Dict) => void
+): any[] {
   const children = node.children || []
   const opened = isExpanded(node)
   const rows = [
@@ -696,11 +704,14 @@ function renderOverviewRow(node: Dict, level: number, isExpanded: (node: Dict) =
           h('small', overviewSubtitle(node))
         ])
       ]),
-      h('div', { class: 'overview-metrics' }, overviewMetricChips(node).map(chip => h('span', { class: 'metric-chip' }, chip)))
+      h('div', { class: 'overview-metrics' }, [
+        ...overviewMetricChips(node).map(chip => h('span', { class: 'metric-chip' }, chip)),
+        ...overviewActions(node, enrich)
+      ])
     ])
   ]
   if (opened) {
-    children.forEach((child: Dict) => rows.push(...renderOverviewRow(child, level + 1, isExpanded, toggle)))
+    children.forEach((child: Dict) => rows.push(...renderOverviewRow(child, level + 1, isExpanded, toggle, enrich)))
   }
   return rows
 }
@@ -722,8 +733,24 @@ function displayOverviewLabel(node: Dict) {
 function overviewSubtitle(node: Dict) {
   if (node.kind === 'platform') return node.label
   if (node.kind === 'keyword') return '关键词分组'
-  if (node.kind === 'account') return node.metrics?.signature || '暂无主页简介'
+  if (node.kind === 'account') return node.metrics?.signature || '主页简介未采集，可补资料'
   return '账号'
+}
+
+function overviewActions(node: Dict, enrich: (node: Dict) => void) {
+  const metrics = node.metrics || {}
+  if (node.kind !== 'account') return []
+  if (metrics.signature) return []
+  if (!['dy', 'xhs'].includes(metrics.platform)) return []
+  return [
+    h('button', {
+      class: 'overview-action',
+      onClick: (event: MouseEvent) => {
+        event.stopPropagation()
+        enrich(node)
+      }
+    }, '补资料')
+  ]
 }
 
 function platformName(platform: string) {
@@ -1832,6 +1859,7 @@ input[type='checkbox'] {
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .metric-chip {
@@ -1855,6 +1883,23 @@ input[type='checkbox'] {
   color: #2563eb;
   font-size: 12px;
   cursor: pointer;
+}
+
+.overview-action {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #0f766e;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.overview-action:hover {
+  border-color: #0f766e;
+  background: #ecfdf5;
 }
 
 .overview-spacer {
