@@ -175,12 +175,6 @@ def test_search_task_sanitizes_irrelevant_ids_and_requires_keywords(tmp_path: Pa
 
 def test_profile_enrichment_task_uses_creator_mode_and_imports_signature(tmp_path: Path) -> None:
     _, raw_db = prepare_project(tmp_path)
-    raw_conn = sqlite3.connect(raw_db)
-    try:
-        raw_conn.execute("UPDATE dy_creator SET nickname = ?, desc = ? WHERE user_id = ?", ("Profile Test", "profile bio from creator mode", "creator-1"))
-        raw_conn.commit()
-    finally:
-        raw_conn.close()
 
     from app import database
     from app.services import crawler_adapter
@@ -205,6 +199,16 @@ def test_profile_enrichment_task_uses_creator_mode_and_imports_signature(tmp_pat
     assert "--creator_id https://www.douyin.com/user/sec-1" in command
     assert "--get_comment false" in command
 
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        raw_conn.execute(
+            "UPDATE dy_creator SET nickname = ?, desc = ?, add_ts = ?, last_modify_ts = ? WHERE user_id = ?",
+            ("Profile Test", "profile bio from creator mode", int(task["raw_started_ts_ms"]) + 1000, int(task["raw_started_ts_ms"]) + 1000, "creator-1"),
+        )
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
     result = import_for_task(str(task["id"]))
     assert result["accounts"] == 1
     with database.connect() as conn:
@@ -225,6 +229,52 @@ def test_profile_enrichment_rejects_platform_without_sqlite_creator_store(tmp_pa
 
     with pytest.raises(ValueError, match="MediaCrawler SQLite"):
         crawler_adapter.create_profile_enrichment_task(int(account_id))
+
+
+def test_real_crawler_import_ignores_raw_rows_before_task_start(tmp_path: Path) -> None:
+    _, raw_db = prepare_project(tmp_path)
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+    from app import views
+
+    task = crawler_adapter.create_task(
+        TaskCreate(
+            mode="competitor_discovery",
+            platform="dy",
+            keywords="新关键词",
+            execute_crawler=True,
+        )
+    )
+    started = int(task["raw_started_ts_ms"])
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        raw_conn.execute("UPDATE douyin_aweme SET add_ts = ?, last_modify_ts = ?", (started - 1000, started - 1000))
+        raw_conn.execute("UPDATE dy_creator SET add_ts = ?, last_modify_ts = ?", (started - 1000, started - 1000))
+        raw_conn.execute(
+            """
+            INSERT INTO douyin_aweme VALUES (
+                'fresh-creator', 'fresh-sec', '', 'fresh-unique', '新关键词账号',
+                '', '新关键词主页简介', '', ?, ?, 10002, 'video',
+                '新关键词内容', '只应该导入这一条新内容', 1, '8', '0',
+                '0', '0', 'https://douyin.example/video/10002', '', '', '', '', '新关键词'
+            )
+            """,
+            (started + 1000, started + 1000),
+        )
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    result = import_for_task(str(task["id"]))
+    assert result["contents"] == 1
+
+    rows = views.list_library("competitor_candidates", keyword="新关键词")["rows"]
+    assert len(rows) == 1
+    assert rows[0]["nickname"] == "新关键词账号"
+
+    old_rows = views.list_library("competitor_candidates", keyword="AI客服")["rows"]
+    assert old_rows == []
 
 
 def test_ai_missing_key_fails_explicitly(tmp_path: Path) -> None:

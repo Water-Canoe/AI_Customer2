@@ -136,7 +136,7 @@ def _import_with_connections(raw_conn: sqlite3.Connection, task_id: str) -> dict
         task = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
         assert task is not None
         platform = task["platform"]
-        _import_creators(raw_conn, conn, platform, task_id, counts)
+        _import_creators(raw_conn, conn, platform, task, counts)
         _import_contents(raw_conn, conn, platform, task, counts)
         if task["collect_comments"]:
             _import_comments(raw_conn, conn, platform, task, counts)
@@ -144,14 +144,38 @@ def _import_with_connections(raw_conn: sqlite3.Connection, task_id: str) -> dict
     return counts
 
 
-def _safe_select_all(raw_conn: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+def _quote_identifier(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _table_columns(raw_conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = raw_conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def _raw_time_clause(raw_conn: sqlite3.Connection, table: str, task: sqlite3.Row | None) -> tuple[str, list[int]]:
+    if not task or not int(task["execute_crawler"]):
+        return "", []
+    raw_started_ts_ms = int(task["raw_started_ts_ms"] or 0)
+    if raw_started_ts_ms <= 0:
+        return "", []
+    columns = _table_columns(raw_conn, table)
+    timestamp_columns = [column for column in ("last_modify_ts", "add_ts") if column in columns]
+    if not timestamp_columns:
+        return "", []
+    clause = " WHERE " + " OR ".join(f"CAST({_quote_identifier(column)} AS INTEGER) >= ?" for column in timestamp_columns)
+    return clause, [raw_started_ts_ms] * len(timestamp_columns)
+
+
+def _safe_select_rows(raw_conn: sqlite3.Connection, table: str, task: sqlite3.Row | None = None) -> list[sqlite3.Row]:
     exists = raw_conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
         (table,),
     ).fetchone()
     if not exists:
         return []
-    return raw_conn.execute(f"SELECT rowid AS __raw_pk, * FROM {table}").fetchall()
+    where_clause, params = _raw_time_clause(raw_conn, table, task)
+    return raw_conn.execute(f"SELECT rowid AS __raw_pk, * FROM {_quote_identifier(table)}{where_clause}", params).fetchall()
 
 
 def _value(row: sqlite3.Row, column: str, default: Any = "") -> Any:
@@ -273,13 +297,13 @@ def _import_creators(
     raw_conn: sqlite3.Connection,
     conn: sqlite3.Connection,
     platform: str,
-    task_id: str,
+    task: sqlite3.Row,
     counts: dict[str, int],
 ) -> None:
     mapping = CREATOR_TABLES.get(platform)
     if not mapping:
         return
-    for row in _safe_select_all(raw_conn, mapping["table"]):
+    for row in _safe_select_rows(raw_conn, mapping["table"], task):
         account_id = _upsert_account(
             conn,
             platform,
@@ -290,7 +314,7 @@ def _import_creators(
             fans=_int_or_none(_value(row, mapping["fans"])),
             raw_payload=dict(row),
         )
-        _add_raw_ref(conn, "account", account_id, platform, mapping["table"], row["__raw_pk"], task_id)
+        _add_raw_ref(conn, "account", account_id, platform, mapping["table"], row["__raw_pk"], task["id"])
         counts["accounts"] += 1
 
 
@@ -302,7 +326,7 @@ def _import_contents(
     counts: dict[str, int],
 ) -> None:
     mapping = CONTENT_TABLES[platform]
-    for row in _safe_select_all(raw_conn, mapping["table"]):
+    for row in _safe_select_rows(raw_conn, mapping["table"], task):
         content_native_id = str(_value(row, mapping["id"]))
         if not content_native_id:
             continue
@@ -402,7 +426,7 @@ def _import_comments(
     counts: dict[str, int],
 ) -> None:
     mapping = COMMENT_TABLES[platform]
-    for row in _safe_select_all(raw_conn, mapping["table"]):
+    for row in _safe_select_rows(raw_conn, mapping["table"], task):
         comment_native_id = str(_value(row, mapping["id"]))
         if not comment_native_id:
             continue

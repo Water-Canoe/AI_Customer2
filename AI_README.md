@@ -27,6 +27,8 @@
 
 账号主页简介不是所有采集模式都会带回。抖音关键词搜索当前常见结果只会写内容作者字段，`user_signature` 可能为空；需要在“数据表”的账号类库中点击“补资料”，后端会为该账号创建 `profile_enrichment` 任务，使用 MediaCrawler creator 模式补采主页资料，并在导入时把 `dy_creator.desc` / `xhs_creator.desc` 写回账号的 `signature`。该模式下 creator 表是主页简介的权威来源，随账号视频一起导入的内容作者字段不会反向覆盖主页简介。
 
+真实执行 MediaCrawler 的任务会记录启动时的 `raw_started_ts_ms`，归一化导入时只读取底层表中 `last_modify_ts` 或 `add_ts` 不早于该时间的原始行，避免把历史采集数据挂到当前任务证据链。`execute_crawler=false` 的模拟验证任务保留全量导入行为，方便使用 SQLite fixture 做闭环测试。
+
 ## 启动方式
 
 后端：
