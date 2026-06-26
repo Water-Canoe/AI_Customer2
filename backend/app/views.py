@@ -194,6 +194,122 @@ def list_library(library: str, status: str = "", keyword: str = "") -> dict[str,
     raise KeyError(library)
 
 
+def workbench_actions() -> dict[str, Any]:
+    """Return actionable queues that guide the next user step."""
+    with database.connect() as conn:
+        profile_needed = _scalar_count(
+            conn,
+            """
+            SELECT COUNT(DISTINCT ua.id) AS count
+            FROM user_accounts ua
+            WHERE ua.platform IN ('dy', 'xhs')
+              AND COALESCE(ua.signature, '') = ''
+              AND (
+                EXISTS (SELECT 1 FROM contents c WHERE c.author_account_id = ua.id)
+                OR EXISTS (SELECT 1 FROM comments cm WHERE cm.author_account_id = ua.id)
+                OR EXISTS (SELECT 1 FROM account_sources ac WHERE ac.account_id = ua.id AND ac.active = 1)
+                OR EXISTS (SELECT 1 FROM lead_user_accounts lua WHERE lua.account_id = ua.id)
+              )
+            """,
+        )
+        competitor_pending = _scalar_count(
+            conn,
+            """
+            SELECT COUNT(*) AS count
+            FROM user_accounts
+            WHERE account_role = 'competitor_candidate' AND competitor_status = '未分析'
+            """,
+        )
+        leads_pending = _scalar_count(
+            conn,
+            """
+            SELECT COUNT(*) AS count
+            FROM lead_user_accounts
+            WHERE hidden = 0 AND follow_status = '待筛选'
+            """,
+        )
+        targets_pending = _scalar_count(
+            conn,
+            """
+            SELECT COUNT(*) AS count
+            FROM lead_user_accounts
+            WHERE hidden = 0 AND follow_status IN ('未私信', '未回复', '已回复', '未成交')
+            """,
+        )
+        ai_failed = _scalar_count(conn, "SELECT COUNT(*) AS count FROM analysis_jobs WHERE status = 'failed'")
+
+    queues = [
+        {
+            "key": "profile_enrichment",
+            "title": "需补资料账号",
+            "count": profile_needed,
+            "priority": "warning",
+            "view": "overview",
+            "library": "",
+            "status": "",
+            "hint": "补齐主页简介和粉丝数后，竞品关键词会自动复判。",
+            "action_label": "去补资料",
+        },
+        {
+            "key": "competitors_to_analyze",
+            "title": "竞品候选待分析",
+            "count": competitor_pending,
+            "priority": "primary",
+            "view": "tables",
+            "library": "competitor_candidates",
+            "status": "未分析",
+            "hint": "先用 AI 判断是否真竞品，再进入竞品库。",
+            "action_label": "筛选竞品",
+        },
+        {
+            "key": "leads_to_screen",
+            "title": "线索待筛选",
+            "count": leads_pending,
+            "priority": "primary",
+            "view": "tables",
+            "library": "lead_customers",
+            "status": "待筛选",
+            "hint": "判断是否目标客户，并生成后续私信话术。",
+            "action_label": "筛选线索",
+        },
+        {
+            "key": "targets_to_follow",
+            "title": "目标待跟进",
+            "count": targets_pending,
+            "priority": "success",
+            "view": "tables",
+            "library": "target_customers",
+            "status": "",
+            "hint": "把目标客户按白板状态继续推进。",
+            "action_label": "进入跟进",
+        },
+        {
+            "key": "ai_failed",
+            "title": "AI失败待重试",
+            "count": ai_failed,
+            "priority": "danger",
+            "view": "ai",
+            "library": "",
+            "status": "failed",
+            "hint": "通常来自模型配置、网络或 JSON 解析失败。",
+            "action_label": "查看失败",
+        },
+    ]
+    actionable_total = sum(int(queue["count"]) for queue in queues)
+    return {
+        "queues": queues,
+        "summary": {
+            "total": actionable_total,
+            "ready": sum(1 for queue in queues if int(queue["count"]) > 0),
+        },
+    }
+
+
+def _scalar_count(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> int:
+    row = conn.execute(sql, params).fetchone()
+    return int(row["count"] or 0) if row else 0
+
+
 def _library_response(library: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"library": library, "label": LIBRARY_LABELS[library], "rows": rows}
 

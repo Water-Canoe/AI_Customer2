@@ -48,6 +48,8 @@
           </div>
         </section>
 
+        <WorkbenchActions :queues="actionQueues" :summary="actionSummary" @open="openWorkbenchAction" />
+
         <TaskView
           v-if="activeView === 'tasks'"
           :tasks="tasks"
@@ -63,7 +65,10 @@
           :library="activeLibrary"
           :rows="tableRows"
           :loading="tableLoading"
+          :status-filter="tableStatus"
+          :keyword-filter="tableKeyword"
           @change-library="changeLibrary"
+          @change-filter="changeTableFilter"
           @update-row="updateRow"
           @delete-row="deleteRow"
           @analyze-row="analyzeTableRow"
@@ -101,11 +106,15 @@ type Dict = Record<string, any>
 
 const activeView = ref('tasks')
 const activeLibrary = ref('contents')
+const tableStatus = ref('')
+const tableKeyword = ref('')
 const tasks = ref<Dict[]>([])
 const tableRows = ref<Dict[]>([])
 const tableLoading = ref(false)
 const overviewTree = ref<Dict[]>([])
 const aiJobs = ref<Dict[]>([])
+const actionQueues = ref<Dict[]>([])
+const actionSummary = ref<Dict>({})
 const selectedTask = ref<Dict | null>(null)
 const leadRows = ref<Dict[]>([])
 const competitorRows = ref<Dict[]>([])
@@ -136,7 +145,7 @@ const envReady = computed(() => Boolean(env.value?.media_crawler_path?.ok && env
 
 async function refreshAll() {
   // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
-  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadTable(activeLibrary.value)])
+  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadWorkbenchActions(), loadTable(activeLibrary.value)])
 }
 
 async function loadTasks() {
@@ -170,10 +179,16 @@ async function loadOverview() {
   overviewTree.value = data
 }
 
+async function loadWorkbenchActions() {
+  const { data } = await api.get('/workbench/actions')
+  actionQueues.value = data.queues || []
+  actionSummary.value = data.summary || {}
+}
+
 async function loadTable(library: string) {
   tableLoading.value = true
   try {
-    const { data } = await api.get(`/tables/${library}`)
+    const { data } = await api.get(`/tables/${library}`, { params: { status: tableStatus.value, keyword: tableKeyword.value } })
     tableRows.value = data.rows
     if (library === 'lead_customers') leadRows.value = data.rows
     if (library === 'competitor_candidates') competitorRows.value = data.rows
@@ -184,14 +199,42 @@ async function loadTable(library: string) {
 
 async function changeLibrary(library: string) {
   activeLibrary.value = library
+  tableStatus.value = ''
+  tableKeyword.value = ''
   await loadTable(library)
+}
+
+async function changeTableFilter(filters: Dict) {
+  tableStatus.value = filters.status || ''
+  tableKeyword.value = filters.keyword || ''
+  await loadTable(activeLibrary.value)
+}
+
+async function openWorkbenchAction(action: Dict) {
+  if (action.view === 'tables') {
+    activeLibrary.value = action.library || activeLibrary.value
+    tableStatus.value = action.status || ''
+    tableKeyword.value = action.keyword || ''
+    activeView.value = 'tables'
+    await loadTable(activeLibrary.value)
+    return
+  }
+  if (action.view === 'ai') {
+    activeView.value = 'ai'
+    await loadAiJobs()
+    return
+  }
+  if (action.view === 'overview') {
+    activeView.value = 'overview'
+    await loadOverview()
+  }
 }
 
 async function createTask(payload: Dict) {
   try {
     const { data } = await api.post('/tasks', payload)
     ElMessage.success(`任务 ${data.id} 已创建`)
-    await loadTasks()
+    await Promise.all([loadTasks(), loadWorkbenchActions()])
     selectedTask.value = await fetchTask(data.id)
     activeView.value = 'logs'
   } catch (error: any) {
@@ -237,15 +280,25 @@ async function deleteRow(library: string, row: Dict, hard?: boolean) {
 }
 
 async function createAiJob(targetType: string, targetId: number) {
-  await api.post('/ai/jobs', { target_type: targetType, target_id: targetId, run_now: true })
-  ElMessage.success('AI分析完成')
-  await Promise.all([loadAiJobs(), loadTable(activeLibrary.value)])
+  try {
+    await api.post('/ai/jobs', { target_type: targetType, target_id: targetId, run_now: true })
+    ElMessage.success('AI分析完成')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || 'AI分析失败')
+  } finally {
+    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadWorkbenchActions()])
+  }
 }
 
 async function retryAiJob(jobId: string) {
-  await api.post(`/ai/jobs/${jobId}/retry`)
-  ElMessage.success('重试完成')
-  await loadAiJobs()
+  try {
+    await api.post(`/ai/jobs/${jobId}/retry`)
+    ElMessage.success('重试完成')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '重试失败')
+  } finally {
+    await Promise.allSettled([loadAiJobs(), loadWorkbenchActions()])
+  }
 }
 
 async function analyzeTableRow(library: string, row: Dict) {
@@ -262,7 +315,7 @@ async function enrichProfile(library: string, row: Dict) {
   try {
     const { data } = await api.post(`/accounts/${accountId}/profile-enrichment`)
     ElMessage.success(`补资料任务 ${data.id} 已创建`)
-    await Promise.all([loadTasks(), loadOverview()])
+    await Promise.all([loadTasks(), loadOverview(), loadWorkbenchActions()])
     selectedTask.value = await fetchTask(data.id)
     activeView.value = 'logs'
   } catch (error: any) {
@@ -485,6 +538,41 @@ const TagInput = defineComponent({
           onKeydown,
           onBlur: commitDraft
         })
+      ])
+    }
+  }
+})
+
+const WorkbenchActions = defineComponent({
+  props: {
+    queues: { type: Array, required: true },
+    summary: { type: Object, required: true }
+  },
+  emits: ['open'],
+  setup(props, { emit }) {
+    return () => {
+      const queues = props.queues as Dict[]
+      const ready = Number((props.summary as Dict).ready || 0)
+      return h('section', { class: 'action-queue' }, [
+        h('div', { class: 'action-queue-head' }, [
+          h('div', [
+            h('strong', '待处理队列'),
+            h('small', ready ? `${ready} 类事项需要处理` : '当前没有阻塞下一步的事项')
+          ]),
+          h('span', { class: ready ? 'queue-total active' : 'queue-total' }, String((props.summary as Dict).total || 0))
+        ]),
+        h('div', { class: 'action-queue-list' }, queues.map(queue => h('button', {
+          class: ['action-item', `priority-${queue.priority || 'normal'}`, Number(queue.count || 0) > 0 ? 'has-count' : ''],
+          type: 'button',
+          onClick: () => emit('open', queue)
+        }, [
+          h('span', { class: 'action-count' }, String(queue.count || 0)),
+          h('span', { class: 'action-copy' }, [
+            h('strong', queue.title),
+            h('small', queue.hint)
+          ]),
+          h('em', queue.action_label || '查看')
+        ])))
       ])
     }
   }
@@ -898,8 +986,14 @@ function outcomeHealthLabel(health: string) {
 }
 
 const TablesView = defineComponent({
-  props: { library: { type: String, required: true }, rows: { type: Array, required: true }, loading: { type: Boolean, required: true } },
-  emits: ['change-library', 'update-row', 'delete-row', 'analyze-row', 'enrich-profile'],
+  props: {
+    library: { type: String, required: true },
+    rows: { type: Array, required: true },
+    loading: { type: Boolean, required: true },
+    statusFilter: { type: String, default: '' },
+    keywordFilter: { type: String, default: '' }
+  },
+  emits: ['change-library', 'change-filter', 'update-row', 'delete-row', 'analyze-row', 'enrich-profile'],
   setup(props, { emit }) {
     const libraries = [
       ['contents', '内容库'],
@@ -913,10 +1007,28 @@ const TablesView = defineComponent({
     const headers = ['名称/内容', '状态', '来源任务', '证据/链接', '操作']
     const defaultWidths = [360, 140, 190, 170, 180]
     const widthsByLibrary = reactive<Record<string, number[]>>({})
+    const filterDraft = reactive({ status: props.statusFilter, keyword: props.keywordFilter })
     let stopColumnResize: (() => void) | null = null
+    watch(() => [props.statusFilter, props.keywordFilter], ([status, keyword]) => {
+      filterDraft.status = String(status || '')
+      filterDraft.keyword = String(keyword || '')
+    })
     function columnWidths() {
       if (!widthsByLibrary[props.library]) widthsByLibrary[props.library] = [...defaultWidths]
       return widthsByLibrary[props.library]
+    }
+    function statusOptions() {
+      if (['competitor_candidates', 'competitors'].includes(props.library)) return ['未分析', '竞品', '非竞品']
+      if (['lead_customers', 'target_customers'].includes(props.library)) return ['待筛选', '未私信', '未回复', '已回复', '未成交', '已成交', '无需跟进']
+      return []
+    }
+    function applyFilters() {
+      emit('change-filter', { status: filterDraft.status, keyword: filterDraft.keyword })
+    }
+    function resetFilters() {
+      filterDraft.status = ''
+      filterDraft.keyword = ''
+      emit('change-filter', { status: '', keyword: '' })
     }
     function startColumnResize(index: number, event: PointerEvent) {
       event.preventDefault()
@@ -943,7 +1055,26 @@ const TablesView = defineComponent({
     return () => h('section', { class: 'pane table-workspace' }, [
       h('div', { class: 'table-library-bar' }, [
         h('div', { class: 'section-title' }, [h('h2', '数据表'), h('span', '选择一个业务库')]),
-        h('div', { class: 'library-list' }, libraries.map(([key, label]) => h('button', { class: props.library === key ? 'selected' : '', onClick: () => emit('change-library', key) }, label)))
+        h('div', { class: 'library-list' }, libraries.map(([key, label]) => h('button', { class: props.library === key ? 'selected' : '', onClick: () => emit('change-library', key) }, label))),
+        h('div', { class: 'table-filters' }, [
+          statusOptions().length ? h('select', {
+            value: filterDraft.status,
+            onChange: (event: Event) => filterDraft.status = (event.target as HTMLSelectElement).value
+          }, [
+            h('option', { value: '' }, '全部状态'),
+            ...statusOptions().map(status => h('option', { value: status }, status))
+          ]) : null,
+          h('input', {
+            value: filterDraft.keyword,
+            placeholder: '搜索名称、内容、简介或来源',
+            onInput: (event: Event) => filterDraft.keyword = (event.target as HTMLInputElement).value,
+            onKeydown: (event: KeyboardEvent) => {
+              if (event.key === 'Enter') applyFilters()
+            }
+          }),
+          h('button', { type: 'button', onClick: applyFilters }, '筛选'),
+          h('button', { type: 'button', class: 'ghost-button', onClick: resetFilters }, '清空')
+        ])
       ]),
       h('div', { class: 'table-content' }, [
         h('div', { class: 'section-title' }, [h('h2', libraries.find(([key]) => key === props.library)?.[1] || '数据'), h('span', `${(props.rows as Dict[]).length} 条记录`)]),
@@ -1280,6 +1411,121 @@ function importantDiagnosticFields(platform: Dict) {
   display: block;
 }
 
+.action-queue {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.action-queue-head,
+.action-item {
+  display: flex;
+  align-items: center;
+}
+
+.action-queue-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.action-queue-head strong,
+.action-queue-head small,
+.action-copy strong,
+.action-copy small {
+  display: block;
+}
+
+.action-queue-head small,
+.action-copy small {
+  color: #64748b;
+}
+
+.queue-total {
+  display: grid;
+  min-width: 34px;
+  min-height: 28px;
+  place-items: center;
+  border-radius: 7px;
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 700;
+}
+
+.queue-total.active {
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.action-queue-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.action-item {
+  min-height: 76px;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfdfc;
+  color: #334155;
+  text-align: left;
+}
+
+.action-item.has-count {
+  border-color: #cbd5e1;
+  background: #ffffff;
+}
+
+.action-count {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 800;
+}
+
+.priority-primary.has-count .action-count {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.priority-success.has-count .action-count {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.priority-warning.has-count .action-count {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.priority-danger.has-count .action-count {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.action-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.action-item em {
+  color: #0f766e;
+  font-size: 12px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
 .split-pane {
   display: grid;
   gap: 0;
@@ -1359,6 +1605,8 @@ function importantDiagnosticFields(platform: Dict) {
 
 .mode-option,
 .task-row,
+.action-item,
+.table-filters button,
 .library-list button,
 .wide-action,
 .primary-action,
@@ -1773,6 +2021,33 @@ input[type='checkbox'] {
   border-color: #0f766e;
   color: #0f766e;
   background: #ecfdf5;
+}
+
+.table-filters {
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) minmax(220px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.table-filters select,
+.table-filters input,
+.table-filters button {
+  min-height: 36px;
+  border: 1px solid #dbe7e2;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 0 10px;
+}
+
+.table-filters button {
+  color: #ffffff;
+  background: #0f766e;
+}
+
+.table-filters .ghost-button {
+  color: #334155;
+  background: #f8fafc;
 }
 
 .overview-pane {
@@ -2204,10 +2479,12 @@ input[type='checkbox'] {
   }
 
   .workflow-strip,
+  .action-queue-list,
   .split-pane,
   .mode-grid,
   .form-grid,
-  .icp-grid {
+  .icp-grid,
+  .table-filters {
     grid-template-columns: 1fr;
   }
 

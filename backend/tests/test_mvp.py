@@ -413,6 +413,45 @@ def test_hard_delete_requires_raw_mapping(tmp_path: Path) -> None:
     assert exc.value.status_code == 409
 
 
+def test_workbench_actions_reports_next_steps(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.schemas import TaskCreate
+    from app.services import ai_service, crawler_adapter
+    from app.services.importer import import_for_task
+    from app import views
+
+    discovery = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_discovery", platform="dy", keywords="AI客服", execute_crawler=False)
+    )
+    import_for_task(str(discovery["id"]))
+
+    crawl = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    import_for_task(str(crawl["id"]))
+
+    lead_id = views.list_library("lead_customers")["rows"][0]["id"]
+    with pytest.raises(HTTPException):
+        ai_service.create_ai_job("lead", int(lead_id), run_now=True)
+
+    client = TestClient(app)
+    response = client.get("/api/workbench/actions")
+    assert response.status_code == 200
+    payload = response.json()
+    queues = {queue["key"]: queue for queue in payload["queues"]}
+
+    assert queues["competitors_to_analyze"]["count"] >= 1
+    assert queues["competitors_to_analyze"]["library"] == "competitor_candidates"
+    assert queues["competitors_to_analyze"]["status"] == "未分析"
+    assert queues["leads_to_screen"]["count"] >= 1
+    assert queues["leads_to_screen"]["library"] == "lead_customers"
+    assert queues["ai_failed"]["count"] >= 1
+    assert queues["ai_failed"]["view"] == "ai"
+    assert queues["profile_enrichment"]["view"] == "overview"
+    assert payload["summary"]["ready"] >= 3
+
+
 def test_api_health_and_settings(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TaskCreate

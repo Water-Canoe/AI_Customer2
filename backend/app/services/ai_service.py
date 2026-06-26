@@ -51,6 +51,8 @@ def retry_ai_job(job_id: str) -> dict[str, Any]:
 
 
 def run_ai_job(job_id: str) -> dict[str, Any]:
+    # 配置缺失也要先落库为 failed，再返回明确错误，便于页面重试。
+    missing_config_error = ""
     with database.connect() as conn:
         job = conn.execute("SELECT * FROM analysis_jobs WHERE id = ?", (job_id,)).fetchone()
         if not job:
@@ -62,16 +64,20 @@ def run_ai_job(job_id: str) -> dict[str, Any]:
         api_key = database.get_setting(conn, "ai_api_key")
         model = database.get_setting(conn, "ai_model")
         if not base_url or not api_key or not model:
+            missing_config_error = "请先配置 AI Base URL、API Key 和模型名"
             _mark_failed(conn, job_id, "请先在设置中配置 OpenAI 兼容 Base URL、API Key 和模型名")
-            raise HTTPException(status_code=400, detail="请先配置 AI Base URL、API Key 和模型名")
-        conn.execute(
-            """
-            UPDATE analysis_jobs
-            SET status = 'running', error = '', input_payload = ?, updated_at = datetime('now', 'localtime')
-            WHERE id = ?
-            """,
-            (json.dumps(payload, ensure_ascii=False), job_id),
-        )
+        else:
+            conn.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'running', error = '', input_payload = ?, updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+                """,
+                (json.dumps(payload, ensure_ascii=False), job_id),
+            )
+
+    if missing_config_error:
+        raise HTTPException(status_code=400, detail=missing_config_error)
 
     try:
         output = call_openai_compatible(base_url, api_key, model, target_type, payload)

@@ -114,6 +114,11 @@ def overview_tree() -> list[dict[str, object]]:
     return views.overview_tree()
 
 
+@app.get("/api/workbench/actions")
+def workbench_actions() -> dict[str, object]:
+    return views.workbench_actions()
+
+
 @app.get("/api/overview/node/{node_id:path}")
 def overview_node(node_id: str) -> dict[str, object]:
     return views.overview_node(node_id)
