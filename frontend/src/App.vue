@@ -67,6 +67,7 @@
           @update-row="updateRow"
           @delete-row="deleteRow"
           @analyze-row="analyzeTableRow"
+          @enrich-profile="enrichProfile"
         />
         <SettingsView v-else :settings="settings" :env="env" @save="saveSettings" @check-env="checkEnv" @clear-data="clearAllData" />
       </el-main>
@@ -250,6 +251,23 @@ async function retryAiJob(jobId: string) {
 async function analyzeTableRow(library: string, row: Dict) {
   if (library === 'competitor_candidates') await createAiJob('competitor', row.id)
   if (library === 'lead_customers') await createAiJob('lead', row.id)
+}
+
+async function enrichProfile(library: string, row: Dict) {
+  const accountId = row.account_id || row.id
+  if (!accountId) {
+    ElMessage.error('当前记录缺少账号ID，无法补资料')
+    return
+  }
+  try {
+    const { data } = await api.post(`/accounts/${accountId}/profile-enrichment`)
+    ElMessage.success(`补资料任务 ${data.id} 已创建`)
+    await loadTasks()
+    selectedTask.value = await fetchTask(data.id)
+    activeView.value = 'logs'
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '补资料任务创建失败')
+  }
 }
 
 async function saveSettings(values: Dict) {
@@ -810,7 +828,7 @@ const LogsView = defineComponent({
 
 const TablesView = defineComponent({
   props: { library: { type: String, required: true }, rows: { type: Array, required: true }, loading: { type: Boolean, required: true } },
-  emits: ['change-library', 'update-row', 'delete-row', 'analyze-row'],
+  emits: ['change-library', 'update-row', 'delete-row', 'analyze-row', 'enrich-profile'],
   setup(props, { emit }) {
     const libraries = [
       ['contents', '内容库'],
@@ -820,8 +838,9 @@ const TablesView = defineComponent({
       ['lead_customers', '线索客户库'],
       ['target_customers', '目标客户库']
     ]
+    const accountLibraries = ['competitor_candidates', 'competitors', 'lead_customers', 'target_customers']
     const headers = ['名称/内容', '状态', '来源任务', '证据/链接', '操作']
-    const defaultWidths = [360, 140, 190, 170, 150]
+    const defaultWidths = [360, 140, 190, 170, 180]
     const widthsByLibrary = reactive<Record<string, number[]>>({})
     let stopColumnResize: (() => void) | null = null
     function columnWidths() {
@@ -871,6 +890,12 @@ const TablesView = defineComponent({
             h('td', row.profile_url || row.content_url ? h('a', { href: row.profile_url || row.content_url, target: '_blank' }, '打开链接') : '-'),
             h('td', { class: 'row-actions' }, [
               ['competitor_candidates', 'lead_customers'].includes(props.library) ? h('button', { class: 'icon-button', title: 'AI分析', onClick: () => emit('analyze-row', props.library, row) }, [h(MagicStick)]) : null,
+              accountLibraries.includes(props.library) ? h('button', {
+                class: ['icon-button', row.platform === 'ks' ? 'is-disabled' : ''],
+                disabled: row.platform === 'ks',
+                title: row.platform === 'ks' ? '快手主页资料暂不能从 SQLite 补回' : '补资料',
+                onClick: () => emit('enrich-profile', props.library, row)
+              }, [h(Refresh)]) : null,
               props.library === 'target_customers' && row.script ? h('button', { class: 'icon-button', title: '复制话术', onClick: () => navigator.clipboard.writeText(row.script) }, [h(CopyDocument)]) : null,
               h('button', { class: 'icon-button danger', title: '删除', onClick: () => emit('delete-row', props.library, row) }, [h(Delete)])
             ])
@@ -1579,6 +1604,14 @@ input[type='checkbox'] {
   border: 1px solid #dbe7e2;
   border-radius: 6px;
   background: #ffffff;
+}
+
+.icon-button:disabled,
+.icon-button.is-disabled {
+  cursor: not-allowed;
+  color: #9aa8a0;
+  background: #f3f6f4;
+  border-color: #e4ebe7;
 }
 
 .danger,

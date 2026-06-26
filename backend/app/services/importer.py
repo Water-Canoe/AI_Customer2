@@ -307,7 +307,7 @@ def _import_contents(
         if not content_native_id:
             continue
         author_nickname = str(_value(row, mapping["nickname"]))
-        author_signature = str(_value(row, mapping["signature"]))
+        author_signature = "" if task["mode"] == "profile_enrichment" else str(_value(row, mapping["signature"]))
         account_id = _upsert_account(
             conn,
             platform,

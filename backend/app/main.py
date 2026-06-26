@@ -44,6 +44,16 @@ def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict[
     return task
 
 
+@app.post("/api/accounts/{account_id}/profile-enrichment")
+def create_profile_enrichment_task(account_id: int, background_tasks: BackgroundTasks) -> dict[str, object]:
+    try:
+        task = crawler_adapter.create_profile_enrichment_task(account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background_tasks.add_task(crawler_adapter.run_task, str(task["id"]))
+    return task
+
+
 @app.get("/api/tasks")
 def list_tasks(include_archived: bool = False) -> list[dict[str, object]]:
     return crawler_adapter.list_tasks(include_archived)

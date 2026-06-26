@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 Platform = Literal["dy", "xhs", "ks"]
-TaskMode = Literal["competitor_discovery", "competitor_crawl", "demand_content", "own_account"]
+TaskMode = Literal["competitor_discovery", "competitor_crawl", "demand_content", "own_account", "profile_enrichment"]
 LoginType = Literal["qrcode", "phone", "cookie"]
 
 

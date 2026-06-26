@@ -25,6 +25,8 @@
 
 任务管理页的“关键词”“创作者主页/ID”和“指定内容ID/链接”使用标签输入：输入一项后按回车生成独立标签，粘贴逗号或换行分隔的内容会自动拆成多个标签；这三个长输入各占一整行，提交任务时前端会把标签拼接为后端和 MediaCrawler CLI 使用的字符串参数。
 
+账号主页简介不是所有采集模式都会带回。抖音关键词搜索当前常见结果只会写内容作者字段，`user_signature` 可能为空；需要在“数据表”的账号类库中点击“补资料”，后端会为该账号创建 `profile_enrichment` 任务，使用 MediaCrawler creator 模式补采主页资料，并在导入时把 `dy_creator.desc` / `xhs_creator.desc` 写回账号的 `signature`。该模式下 creator 表是主页简介的权威来源，随账号视频一起导入的内容作者字段不会反向覆盖主页简介。
+
 ## 启动方式
 
 后端：
@@ -71,6 +73,7 @@ npm run dev
 - `GET /api/overview/tree`：查看平台、关键词、账号、内容、客户的总览树。
 - `GET /api/settings/env-check`：检查项目库、MediaCrawler 路径、底层库和 AI 配置。
 - `POST /api/settings/clear-data`：清空项目业务库和当前设置指向的 MediaCrawler SQLite 业务表，必须输入确认文本 `清空所有数据`。
+- `POST /api/accounts/{account_id}/profile-enrichment`：为抖音/小红书账号创建主页资料补全任务。快手当前不会创建该任务，因为 MediaCrawler SQLite store 未写入快手 creator 资料。
 
 ## 删除规则
 
@@ -101,3 +104,4 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 - 首版只覆盖文档要求的平台：抖音、小红书、快手。
 - 自动测试默认使用模拟 MediaCrawler SQLite，不会触发真实采集。
 - 如果真实采集失败，应先看“任务与日志”的控制台输出，不会使用假数据兜底。
+- 快手上游 SQLite store 目前没有保存 creator 主页资料，因此“补资料”只支持抖音和小红书；快手账号的主页简介不会被伪造。

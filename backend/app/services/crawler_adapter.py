@@ -18,7 +18,9 @@ MODE_LABELS = {
     "competitor_crawl": "竞品账号爬取",
     "demand_content": "找需求内容",
     "own_account": "自家账号互动",
+    "profile_enrichment": "账号资料补全",
 }
+PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
 
 RUNNING_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 
@@ -173,6 +175,56 @@ def create_task(payload: TaskCreate) -> dict[str, object]:
         )
         log_task(conn, task_id, "info", "任务已创建，等待执行")
     return get_task(task_id) or {}
+
+
+def _account_profile_identifier(account: dict[str, object]) -> str:
+    # creator 模式优先使用主页链接；抖音主页链接内含 sec_uid，跨平台也更贴近 MediaCrawler 的解析入口。
+    platform = str(account.get("platform") or "")
+    profile_url = str(account.get("profile_url") or "").strip()
+    sec_uid = str(account.get("sec_uid") or "").strip()
+    platform_user_id = str(account.get("platform_user_id") or "").strip()
+    if profile_url:
+        return profile_url
+    if platform == "dy" and sec_uid:
+        return sec_uid
+    return platform_user_id
+
+
+def create_profile_enrichment_task(account_id: int) -> dict[str, object]:
+    with database.connect() as conn:
+        row = conn.execute("SELECT * FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
+        if not row:
+            raise ValueError("账号不存在，无法补资料")
+        account = database.row_to_dict(row)
+        platform = str(account.get("platform") or "")
+        if platform not in PROFILE_ENRICHMENT_PLATFORMS:
+            raise ValueError("MediaCrawler SQLite 目前仅支持抖音/小红书账号资料补全，快手主页资料不会写入 SQLite")
+        creator_id = _account_profile_identifier(account)
+        if not creator_id:
+            raise ValueError("账号缺少主页链接或平台ID，无法补资料")
+        login_type = database.get_setting(conn, "login_type", "qrcode")
+        headless = database.get_setting(conn, "headless", "false") == "true"
+
+    nickname = str(account.get("nickname") or account_id)
+    task = create_task(
+        TaskCreate(
+            name=f"账号资料补全-{nickname}",
+            mode="profile_enrichment",
+            platform=platform,
+            login_type=login_type if login_type in ("qrcode", "phone", "cookie") else "qrcode",
+            creator_id=creator_id,
+            content_count=1,
+            comment_count=0,
+            collect_comments=False,
+            collect_sub_comments=False,
+            max_concurrency=1,
+            headless=headless,
+            execute_crawler=True,
+        )
+    )
+    with database.connect() as conn:
+        log_task(conn, str(task["id"]), "info", f"补资料来源账号：{nickname}（ID={account_id}）")
+    return task
 
 
 def get_task(task_id: str) -> dict[str, object] | None:

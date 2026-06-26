@@ -173,6 +173,60 @@ def test_search_task_sanitizes_irrelevant_ids_and_requires_keywords(tmp_path: Pa
         )
 
 
+def test_profile_enrichment_task_uses_creator_mode_and_imports_signature(tmp_path: Path) -> None:
+    _, raw_db = prepare_project(tmp_path)
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        raw_conn.execute("UPDATE dy_creator SET nickname = ?, desc = ? WHERE user_id = ?", ("Profile Test", "profile bio from creator mode", "creator-1"))
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    from app import database
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+
+    with database.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, sec_uid, nickname, signature, profile_url)
+            VALUES('dy', 'creator-1', 'sec-1', 'Profile Test', '', 'https://www.douyin.com/user/sec-1')
+            """
+        )
+        account_id = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'creator-1'").fetchone()["id"]
+
+    task = crawler_adapter.create_profile_enrichment_task(int(account_id))
+    command = str(task["command"])
+
+    assert task["mode"] == "profile_enrichment"
+    assert task["crawler_type"] == "creator"
+    assert task["creator_id"] == "https://www.douyin.com/user/sec-1"
+    assert "--type creator" in command
+    assert "--creator_id https://www.douyin.com/user/sec-1" in command
+    assert "--get_comment false" in command
+
+    result = import_for_task(str(task["id"]))
+    assert result["accounts"] == 1
+    with database.connect() as conn:
+        row = conn.execute("SELECT signature FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
+    assert row["signature"] == "profile bio from creator mode"
+
+
+def test_profile_enrichment_rejects_platform_without_sqlite_creator_store(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import crawler_adapter
+
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO user_accounts(platform, platform_user_id, nickname) VALUES('ks', 'ks-user-1', 'KS User')"
+        )
+        account_id = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'ks-user-1'").fetchone()["id"]
+
+    with pytest.raises(ValueError, match="MediaCrawler SQLite"):
+        crawler_adapter.create_profile_enrichment_task(int(account_id))
+
+
 def test_ai_missing_key_fails_explicitly(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
