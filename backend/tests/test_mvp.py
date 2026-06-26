@@ -502,6 +502,34 @@ def test_env_check_reports_platform_raw_data_diagnostics(tmp_path: Path) -> None
     assert any(issue["title"] == "项目库还没有内容" for issue in payload["project_quality"]["issues"])
 
 
+def test_platform_capabilities_explain_field_limits(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/platform-capabilities")
+    assert response.status_code == 200
+    capabilities = {item["platform"]: item for item in response.json()}
+
+    dy = capabilities["dy"]
+    assert dy["profile_enrichment_supported"] is True
+    assert dy["fields"]["content_signature"]["column"] == "user_signature"
+    assert dy["fields"]["content_signature"]["status"] == "partial"
+    assert dy["fields"]["creator_signature"]["column"] == "desc"
+    assert any("补资料" in warning for warning in dy["modes"]["competitor_discovery"]["warnings"])
+
+    xhs = capabilities["xhs"]
+    assert xhs["profile_enrichment_supported"] is True
+    assert xhs["fields"]["content_signature"]["supported"] is False
+    assert xhs["fields"]["creator_signature"]["table"] == "xhs_creator"
+
+    ks = capabilities["ks"]
+    assert ks["profile_enrichment_supported"] is False
+    assert ks["fields"]["creator_signature"]["supported"] is False
+    assert any("不能通过补资料" in warning for warning in ks["warnings"])
+    assert ks["modes"]["competitor_crawl"]["comments_default"] is True
+
+
 def test_env_check_reports_project_quality_after_import(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.main import app

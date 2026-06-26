@@ -54,6 +54,7 @@
           v-if="activeView === 'tasks'"
           :tasks="tasks"
           :settings="settings"
+          :capabilities="platformCapabilities"
           @create-task="createTask"
           @open-logs="openTaskLogs"
         />
@@ -120,6 +121,7 @@ const leadRows = ref<Dict[]>([])
 const competitorRows = ref<Dict[]>([])
 const settings = ref<Dict>({})
 const env = ref<Dict>({})
+const platformCapabilities = ref<Dict[]>([])
 
 const workflowSteps = [
   { index: '01', title: '配置画像', note: 'AI模型、ICP、默认采集参数', view: 'settings' },
@@ -145,7 +147,7 @@ const envReady = computed(() => Boolean(env.value?.media_crawler_path?.ok && env
 
 async function refreshAll() {
   // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
-  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadWorkbenchActions(), loadTable(activeLibrary.value)])
+  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadPlatformCapabilities(), loadAiJobs(), loadOverview(), loadWorkbenchActions(), loadTable(activeLibrary.value)])
 }
 
 async function loadTasks() {
@@ -167,6 +169,11 @@ async function loadSettings() {
 async function checkEnv() {
   const { data } = await api.get('/settings/env-check')
   env.value = data
+}
+
+async function loadPlatformCapabilities() {
+  const { data } = await api.get('/platform-capabilities')
+  platformCapabilities.value = data
 }
 
 async function loadAiJobs() {
@@ -608,8 +615,46 @@ function buildIcpPayload(value: Dict) {
   return result
 }
 
+function renderCapabilityPanel(capability: Dict, modeCapability: Dict) {
+  // 能力提示只解释平台字段限制，不直接修改任务参数。
+  if (!capability?.platform || !modeCapability?.mode) {
+    return h('section', { class: 'capability-panel muted' }, [
+      h('strong', '平台能力读取中'),
+      h('small', '刷新后会显示当前平台和模式的数据字段限制')
+    ])
+  }
+  const fields = capability.fields || {}
+  const fieldItems = [
+    fields.content_signature,
+    fields.creator_signature,
+    fields.comment_signature,
+    fields.creator_fans
+  ].filter(Boolean)
+  const warnings = Array.from(new Set<string>([
+    ...(modeCapability.warnings || []),
+    ...(capability.warnings || [])
+  ])).slice(0, 5)
+  return h('section', { class: 'capability-panel' }, [
+    h('div', { class: 'capability-head' }, [
+      h('div', [
+        h('small', `${platformName(capability.platform)} · ${modeCapability.label}`),
+        h('strong', `${modeCapability.required_input} → ${(modeCapability.expected_outputs || []).join(' / ')}`)
+      ]),
+      h('span', { class: 'capability-type' }, `MediaCrawler: ${modeCapability.crawler_type}`)
+    ]),
+    h('div', { class: 'capability-fields' }, fieldItems.map((field: Dict) => h('span', {
+      class: ['capability-chip', field.supported ? `status-${field.status}` : 'status-unsupported'],
+      title: field.note
+    }, [
+      h('em', field.label),
+      h('strong', field.status_label)
+    ]))),
+    warnings.length ? h('ul', { class: 'capability-warnings' }, warnings.map(warning => h('li', warning))) : null
+  ])
+}
+
 const TaskView = defineComponent({
-  props: { tasks: { type: Array, required: true }, settings: { type: Object, required: true } },
+  props: { tasks: { type: Array, required: true }, settings: { type: Object, required: true }, capabilities: { type: Array, required: true } },
   emits: ['create-task', 'open-logs'],
   setup(props, { emit }) {
     const modes = [
@@ -636,6 +681,8 @@ const TaskView = defineComponent({
     })
     const modeNeedsCreator = computed(() => ['competitor_crawl', 'own_account'].includes(form.mode))
     const modeUsesKeywords = computed(() => ['competitor_discovery', 'demand_content'].includes(form.mode))
+    const activeCapability = computed(() => (props.capabilities as Dict[]).find(item => item.platform === form.platform) || {})
+    const activeModeCapability = computed(() => activeCapability.value?.modes?.[form.mode] || {})
     function applyMode(modeKey: string) {
       form.mode = modeKey
       form.collect_comments = ['competitor_crawl', 'own_account'].includes(modeKey)
@@ -695,6 +742,7 @@ const TaskView = defineComponent({
           class: ['mode-option', form.mode === mode.key ? 'selected' : ''],
           onClick: () => applyMode(mode.key)
         }, [h('small', mode.badge), h('strong', mode.title), h('span', mode.note)]))),
+        renderCapabilityPanel(activeCapability.value, activeModeCapability.value),
         h('div', { class: 'form-grid' }, [
           h('label', ['平台', h('select', { value: form.platform, onChange: (event: Event) => form.platform = (event.target as HTMLSelectElement).value }, [
             h('option', { value: 'dy' }, '抖音'),
@@ -1689,6 +1737,108 @@ function importantDiagnosticFields(platform: Dict) {
   margin: 8px 0;
 }
 
+.capability-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #cfe4dc;
+  border-radius: 8px;
+  background: #f6fbf8;
+}
+
+.capability-panel.muted {
+  color: #64748b;
+}
+
+.capability-panel.muted strong,
+.capability-panel.muted small {
+  display: block;
+}
+
+.capability-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.capability-head small,
+.capability-head strong {
+  display: block;
+}
+
+.capability-head small {
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.capability-head strong {
+  margin-top: 4px;
+  color: #1f2937;
+  font-size: 14px;
+}
+
+.capability-type {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #075985;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.capability-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.capability-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  border: 1px solid #dbe7e2;
+  background: #ffffff;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.capability-chip em {
+  color: #475569;
+  font-style: normal;
+}
+
+.capability-chip strong {
+  color: #1f2937;
+}
+
+.capability-chip.status-supported {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.capability-chip.status-partial {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.capability-chip.status-unsupported {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.capability-warnings {
+  display: grid;
+  gap: 5px;
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
@@ -2638,6 +2788,15 @@ input[type='checkbox'] {
     grid-column: auto;
   }
 
+  .capability-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .capability-type {
+    white-space: normal;
+  }
+
   .sidebar {
     display: none;
   }
@@ -2662,6 +2821,7 @@ input[type='checkbox'] {
   }
 
   .split-pane {
+    grid-template-columns: 1fr !important;
     row-gap: 16px;
   }
 

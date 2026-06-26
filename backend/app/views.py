@@ -85,7 +85,154 @@ def environment_check() -> dict[str, Any]:
         },
         "project_quality": _project_quality(),
         "platform_diagnostics": _platform_diagnostics(raw_db) if raw_db_exists else [],
+        "platform_capabilities": platform_capabilities(),
     }
+
+
+def platform_capabilities() -> list[dict[str, Any]]:
+    """Describe platform field limits before users start a crawl task."""
+    return [_platform_capability(platform) for platform in PLATFORM_LABELS]
+
+
+def _platform_capability(platform: str) -> dict[str, Any]:
+    content_mapping = CONTENT_TABLES[platform]
+    comment_mapping = COMMENT_TABLES[platform]
+    creator_mapping = CREATOR_TABLES.get(platform, {})
+    profile_supported = platform in PROFILE_ENRICHMENT_PLATFORMS and bool(creator_mapping)
+    return {
+        "platform": platform,
+        "label": PLATFORM_LABELS[platform],
+        "profile_enrichment_supported": profile_supported,
+        "warnings": _platform_capability_warnings(platform),
+        "fields": {
+            "content_signature": _field_capability(
+                content_mapping,
+                "signature",
+                "内容作者主页简介",
+                status="partial" if platform == "dy" else "unsupported",
+                note="抖音搜索结果有 user_signature 字段，但真实采集时可能为空。"
+                if platform == "dy"
+                else "该平台内容表没有作者主页简介映射。",
+            ),
+            "comment_signature": _field_capability(
+                comment_mapping,
+                "signature",
+                "评论者主页简介",
+                status="partial" if platform == "dy" else "unsupported",
+                note="只有原始评论表 user_signature 非空时才会导入。"
+                if platform == "dy"
+                else "该平台评论表没有评论者主页简介映射。",
+            ),
+            "creator_signature": _field_capability(
+                creator_mapping,
+                "signature",
+                "账号主页简介补资料",
+                status="supported" if profile_supported else "unsupported",
+                note="补资料任务会从 creator 表导入主页简介。"
+                if profile_supported
+                else "MediaCrawler SQLite 当前没有该平台 creator 主页资料表。",
+            ),
+            "creator_fans": _field_capability(
+                creator_mapping,
+                "fans",
+                "粉丝数补资料",
+                status="supported" if profile_supported else "unsupported",
+                note="补资料任务会从 creator 表导入粉丝数。"
+                if profile_supported
+                else "MediaCrawler SQLite 当前没有该平台 creator 粉丝数字段。",
+            ),
+        },
+        "modes": {mode: _mode_capability(mode, profile_supported) for mode in (
+            "competitor_discovery",
+            "competitor_crawl",
+            "demand_content",
+            "own_account",
+        )},
+    }
+
+
+def _field_capability(
+    mapping: dict[str, str],
+    key: str,
+    label: str,
+    status: str,
+    note: str,
+) -> dict[str, Any]:
+    column = mapping.get(key, "")
+    supported = bool(column) and status != "unsupported"
+    return {
+        "label": label,
+        "table": mapping.get("table", ""),
+        "column": column,
+        "supported": supported,
+        "status": status if supported else "unsupported",
+        "status_label": _field_status_label(status if supported else "unsupported"),
+        "note": note,
+    }
+
+
+def _field_status_label(status: str) -> str:
+    return {
+        "supported": "可导入",
+        "partial": "可能为空",
+        "unsupported": "无字段",
+    }.get(status, status)
+
+
+def _platform_capability_warnings(platform: str) -> list[str]:
+    if platform == "dy":
+        return [
+            "关键词搜索常见结果会有作者账号和主页链接，但主页简介 user_signature 可能为空。",
+            "缺主页简介时请对账号执行补资料，系统会用 dy_creator.desc 回写并复判竞品关键词。",
+        ]
+    if platform == "xhs":
+        return [
+            "内容和评论表没有主页简介映射，主页简介依赖 xhs_creator.desc 补资料。",
+            "小红书线索判断应优先看内容、评论和昵称，不要假设评论者简介可用。",
+        ]
+    return [
+        "快手当前没有 creator 主页资料表，主页简介和粉丝数不能通过补资料回填。",
+        "快手候选筛选只能依赖昵称、内容和评论证据，不会伪造主页简介。",
+    ]
+
+
+def _mode_capability(mode: str, profile_supported: bool) -> dict[str, Any]:
+    base = {
+        "mode": mode,
+        "label": {
+            "competitor_discovery": "竞品账号采集",
+            "competitor_crawl": "竞品账号爬取",
+            "demand_content": "找需求内容",
+            "own_account": "自家账号互动",
+        }[mode],
+        "crawler_type": "search" if mode in ("competitor_discovery", "demand_content") else "creator/detail",
+        "required_input": "关键词" if mode in ("competitor_discovery", "demand_content") else "创作者主页/ID或指定内容ID/链接",
+        "comments_default": mode in ("competitor_crawl", "own_account"),
+        "expected_outputs": _mode_expected_outputs(mode),
+        "warnings": [],
+    }
+    warnings = list(base["warnings"])
+    if mode == "competitor_discovery":
+        warnings.append("候选规则只使用作者昵称和已导入主页简介；简介为空时可能漏掉只在简介命中的账号。")
+        warnings.append("该平台支持补资料，补齐简介后会自动复判竞品关键词。" if profile_supported else "该平台不支持补资料，后续只能依赖昵称和内容证据判断。")
+    elif mode in ("competitor_crawl", "own_account"):
+        warnings.append("评论入库取决于评论开关、登录状态和原始评论表是否真的产生新行。")
+        warnings.append("线索客户来自评论作者；如果评论表为空，任务成功也不会产生线索。")
+    else:
+        warnings.append("该模式优先分析内容中的需求、吐槽和讨论，不依赖账号主页简介作为主要证据。")
+        if not profile_supported:
+            warnings.append("该平台无法补齐作者主页简介，AI判断时应降低对主页资料的依赖。")
+    return {**base, "warnings": warnings}
+
+
+def _mode_expected_outputs(mode: str) -> list[str]:
+    if mode == "competitor_discovery":
+        return ["内容", "作者账号", "竞品候选"]
+    if mode == "competitor_crawl":
+        return ["竞品内容", "评论", "线索客户"]
+    if mode == "demand_content":
+        return ["需求内容", "作者账号", "目标客户候选"]
+    return ["自家内容", "评论", "线索客户"]
 
 
 def _project_quality() -> dict[str, Any]:

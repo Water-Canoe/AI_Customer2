@@ -119,6 +119,11 @@ def workbench_actions() -> dict[str, object]:
     return views.workbench_actions()
 
 
+@app.get("/api/platform-capabilities")
+def platform_capabilities() -> list[dict[str, object]]:
+    return views.platform_capabilities()
+
+
 @app.get("/api/overview/node/{node_id:path}")
 def overview_node(node_id: str) -> dict[str, object]:
     return views.overview_node(node_id)
