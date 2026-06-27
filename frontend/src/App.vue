@@ -48,8 +48,6 @@
           </div>
         </section>
 
-        <WorkbenchActions :queues="actionQueues" :summary="actionSummary" @open="openWorkbenchAction" />
-
         <TaskView
           v-if="activeView === 'tasks'"
           :tasks="tasks"
@@ -114,8 +112,6 @@ const tableRows = ref<Dict[]>([])
 const tableLoading = ref(false)
 const overviewTree = ref<Dict[]>([])
 const aiJobs = ref<Dict[]>([])
-const actionQueues = ref<Dict[]>([])
-const actionSummary = ref<Dict>({})
 const selectedTask = ref<Dict | null>(null)
 const leadRows = ref<Dict[]>([])
 const competitorRows = ref<Dict[]>([])
@@ -147,7 +143,7 @@ const envReady = computed(() => Boolean(env.value?.media_crawler_path?.ok && env
 
 async function refreshAll() {
   // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
-  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadPlatformCapabilities(), loadAiJobs(), loadOverview(), loadWorkbenchActions(), loadTable(activeLibrary.value)])
+  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadPlatformCapabilities(), loadAiJobs(), loadOverview(), loadTable(activeLibrary.value)])
 }
 
 async function loadTasks() {
@@ -186,12 +182,6 @@ async function loadOverview() {
   overviewTree.value = data
 }
 
-async function loadWorkbenchActions() {
-  const { data } = await api.get('/workbench/actions')
-  actionQueues.value = data.queues || []
-  actionSummary.value = data.summary || {}
-}
-
 async function loadTable(library: string) {
   tableLoading.value = true
   try {
@@ -217,61 +207,11 @@ async function changeTableFilter(filters: Dict) {
   await loadTable(activeLibrary.value)
 }
 
-async function openWorkbenchAction(action: Dict) {
-  if (action.action === 'batch_profile_enrichment') {
-    await batchEnrichProfiles(action)
-    return
-  }
-  if (action.view === 'tables') {
-    activeLibrary.value = action.library || activeLibrary.value
-    tableStatus.value = action.status || ''
-    tableKeyword.value = action.keyword || ''
-    activeView.value = 'tables'
-    await loadTable(activeLibrary.value)
-    return
-  }
-  if (action.view === 'ai') {
-    activeView.value = 'ai'
-    await loadAiJobs()
-    return
-  }
-  if (action.view === 'overview') {
-    activeView.value = 'overview'
-    await loadOverview()
-  }
-}
-
-async function batchEnrichProfiles(action: Dict) {
-  // 后端负责筛选和串行执行，前端只发起一个受限批量动作。
-  if (!Number(action.count || 0)) {
-    activeView.value = action.view || 'overview'
-    await loadOverview()
-    return
-  }
-  const limit = Number(action.limit || 10)
-  await ElMessageBox.confirm(
-    `将为最多 ${limit} 个缺少主页简介的抖音/小红书账号创建补资料任务，并按顺序执行。确认继续？`,
-    '批量补资料',
-    { type: 'warning' }
-  )
-  const { data } = await api.post('/accounts/profile-enrichment/batch', null, { params: { limit } })
-  if (!data.created) {
-    ElMessage.warning('没有可创建的补资料任务，可能已有任务在等待执行')
-    await Promise.allSettled([loadWorkbenchActions(), loadTasks()])
-    return
-  }
-  ElMessage.success(`已创建 ${data.created} 个补资料任务`)
-  await Promise.allSettled([loadTasks(), loadWorkbenchActions(), loadOverview()])
-  const firstTaskId = data.task_ids?.[0]
-  if (firstTaskId) selectedTask.value = await fetchTask(firstTaskId)
-  activeView.value = 'logs'
-}
-
 async function createTask(payload: Dict) {
   try {
     const { data } = await api.post('/tasks', payload)
     ElMessage.success(`任务 ${data.id} 已创建`)
-    await Promise.all([loadTasks(), loadWorkbenchActions()])
+    await loadTasks()
     selectedTask.value = await fetchTask(data.id)
     activeView.value = 'logs'
   } catch (error: any) {
@@ -323,7 +263,7 @@ async function createAiJob(targetType: string, targetId: number) {
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || 'AI分析失败')
   } finally {
-    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadWorkbenchActions()])
+    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value)])
   }
 }
 
@@ -334,7 +274,7 @@ async function retryAiJob(jobId: string) {
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '重试失败')
   } finally {
-    await Promise.allSettled([loadAiJobs(), loadWorkbenchActions()])
+    await loadAiJobs()
   }
 }
 
@@ -352,7 +292,7 @@ async function enrichProfile(library: string, row: Dict) {
   try {
     const { data } = await api.post(`/accounts/${accountId}/profile-enrichment`)
     ElMessage.success(`补资料任务 ${data.id} 已创建`)
-    await Promise.all([loadTasks(), loadOverview(), loadWorkbenchActions()])
+    await Promise.all([loadTasks(), loadOverview()])
     selectedTask.value = await fetchTask(data.id)
     activeView.value = 'logs'
   } catch (error: any) {
@@ -575,41 +515,6 @@ const TagInput = defineComponent({
           onKeydown,
           onBlur: commitDraft
         })
-      ])
-    }
-  }
-})
-
-const WorkbenchActions = defineComponent({
-  props: {
-    queues: { type: Array, required: true },
-    summary: { type: Object, required: true }
-  },
-  emits: ['open'],
-  setup(props, { emit }) {
-    return () => {
-      const queues = props.queues as Dict[]
-      const ready = Number((props.summary as Dict).ready || 0)
-      return h('section', { class: 'action-queue' }, [
-        h('div', { class: 'action-queue-head' }, [
-          h('div', [
-            h('strong', '待处理队列'),
-            h('small', ready ? `${ready} 类事项需要处理` : '当前没有阻塞下一步的事项')
-          ]),
-          h('span', { class: ready ? 'queue-total active' : 'queue-total' }, String((props.summary as Dict).total || 0))
-        ]),
-        h('div', { class: 'action-queue-list' }, queues.map(queue => h('button', {
-          class: ['action-item', `priority-${queue.priority || 'normal'}`, Number(queue.count || 0) > 0 ? 'has-count' : ''],
-          type: 'button',
-          onClick: () => emit('open', queue)
-        }, [
-          h('span', { class: 'action-count' }, String(queue.count || 0)),
-          h('span', { class: 'action-copy' }, [
-            h('strong', queue.title),
-            h('small', queue.hint)
-          ]),
-          h('em', queue.action_label || '查看')
-        ])))
       ])
     }
   }
@@ -1632,121 +1537,6 @@ function importantDiagnosticFields(platform: Dict) {
   display: block;
 }
 
-.action-queue {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 12px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.action-queue-head,
-.action-item {
-  display: flex;
-  align-items: center;
-}
-
-.action-queue-head {
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.action-queue-head strong,
-.action-queue-head small,
-.action-copy strong,
-.action-copy small {
-  display: block;
-}
-
-.action-queue-head small,
-.action-copy small {
-  color: #64748b;
-}
-
-.queue-total {
-  display: grid;
-  min-width: 34px;
-  min-height: 28px;
-  place-items: center;
-  border-radius: 7px;
-  background: #f1f5f9;
-  color: #475569;
-  font-weight: 700;
-}
-
-.queue-total.active {
-  background: #ecfdf5;
-  color: #0f766e;
-}
-
-.action-queue-list {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(160px, 1fr));
-  gap: 10px;
-}
-
-.action-item {
-  min-height: 76px;
-  gap: 10px;
-  padding: 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fbfdfc;
-  color: #334155;
-  text-align: left;
-}
-
-.action-item.has-count {
-  border-color: #cbd5e1;
-  background: #ffffff;
-}
-
-.action-count {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
-  place-items: center;
-  border-radius: 8px;
-  background: #f1f5f9;
-  color: #334155;
-  font-weight: 800;
-}
-
-.priority-primary.has-count .action-count {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.priority-success.has-count .action-count {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.priority-warning.has-count .action-count {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.priority-danger.has-count .action-count {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.action-copy {
-  min-width: 0;
-  flex: 1;
-}
-
-.action-item em {
-  color: #0f766e;
-  font-size: 12px;
-  font-style: normal;
-  white-space: nowrap;
-}
-
 .split-pane {
   display: grid;
   gap: 0;
@@ -1826,7 +1616,6 @@ function importantDiagnosticFields(platform: Dict) {
 
 .mode-option,
 .task-row,
-.action-item,
 .table-filters button,
 .library-list button,
 .wide-action,
@@ -3013,7 +2802,6 @@ input[type='checkbox'] {
   }
 
   .workflow-strip,
-  .action-queue-list,
   .split-pane,
   .mode-grid,
   .form-grid,
