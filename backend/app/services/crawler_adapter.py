@@ -123,6 +123,65 @@ def build_command(task: dict[str, object], media_crawler_path: str) -> list[str]
     return command
 
 
+def preview_task(payload: TaskCreate) -> dict[str, object]:
+    """Return the exact normalized command without creating a task."""
+    task = normalize_task_defaults(payload)
+    crawler_type = infer_crawler_type(task)
+    with database.connect() as conn:
+        media_path = normalize_path(database.get_setting(conn, "media_crawler_path"))
+    normalized = task.model_dump()
+    command = build_command({**normalized, "crawler_type": crawler_type}, media_path)
+    sanitized = _sanitized_fields(payload, task)
+    return {
+        "name": task.name,
+        "mode": task.mode,
+        "platform": task.platform,
+        "crawler_type": crawler_type,
+        "normalized": normalized,
+        "sanitized": sanitized,
+        "warnings": _preview_warnings(task, crawler_type, sanitized),
+        "media_crawler_path": media_path,
+        "command": command,
+        "command_text": " ".join(command),
+    }
+
+
+def _sanitized_fields(original: TaskCreate, normalized: TaskCreate) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    for field in ("keywords", "creator_id", "specified_id"):
+        before = str(getattr(original, field) or "")
+        after = str(getattr(normalized, field) or "")
+        if before != after:
+            result[field] = {"before": before, "after": after}
+    return result
+
+
+def _preview_warnings(task: TaskCreate, crawler_type: str, sanitized: dict[str, dict[str, str]]) -> list[str]:
+    warnings: list[str] = []
+    if sanitized:
+        cleaned = "、".join(_task_field_label(field) for field in sanitized)
+        warnings.append(f"已按采集类型净化参数：{cleaned}")
+    if crawler_type == "search":
+        warnings.append("搜索型任务只会向 MediaCrawler 传递关键词，不会传递创作者主页或内容ID。")
+    elif crawler_type == "detail":
+        warnings.append("详情任务只会向 MediaCrawler 传递指定内容ID/链接，不会传递关键词或创作者主页。")
+    else:
+        warnings.append("账号任务只会向 MediaCrawler 传递创作者主页/ID，不会传递关键词或内容ID。")
+    if task.mode in ("competitor_crawl", "own_account") and not task.collect_comments:
+        warnings.append("该模式会自动打开评论采集，因为线索客户来自评论区。")
+    if task.platform == "ks" and task.mode == "competitor_discovery":
+        warnings.append("快手不能补齐主页简介，竞品候选更依赖昵称和内容证据。")
+    return warnings
+
+
+def _task_field_label(field: str) -> str:
+    return {
+        "keywords": "关键词",
+        "creator_id": "创作者主页/ID",
+        "specified_id": "指定内容ID/链接",
+    }.get(field, field)
+
+
 def create_task(payload: TaskCreate) -> dict[str, object]:
     task = normalize_task_defaults(payload)
     task_id = next_task_id()

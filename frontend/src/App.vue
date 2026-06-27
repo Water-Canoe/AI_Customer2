@@ -683,6 +683,37 @@ function renderCapabilityPanel(capability: Dict, modeCapability: Dict) {
   ])
 }
 
+function renderTaskPreviewPanel(preview: Dict | null, error: string, loading: boolean) {
+  const normalized = preview?.normalized || {}
+  const mainInput = normalized.keywords || normalized.creator_id || normalized.specified_id || '-'
+  return h('section', { class: ['task-preview', error ? 'has-error' : ''] }, [
+    h('div', { class: 'preview-head' }, [
+      h('div', [
+        h('small', '执行预览'),
+        h('strong', loading ? '正在计算实际参数...' : (error || '确认后会按以下命令启动 MediaCrawler'))
+      ]),
+      preview ? h('span', { class: 'preview-status' }, `${platformName(preview.platform)} / ${preview.crawler_type}`) : null
+    ]),
+    preview ? h('div', { class: 'preview-grid' }, [
+      previewItem('任务名', preview.name),
+      previewItem('输入', mainInput),
+      previewItem('内容数', normalized.content_count),
+      previewItem('单条评论', normalized.comment_count),
+      previewItem('采评论', normalized.collect_comments ? '是' : '否'),
+      previewItem('立即运行', normalized.execute_crawler ? '是' : '否')
+    ]) : null,
+    preview?.command_text ? h('pre', { class: 'command-line' }, preview.command_text) : null,
+    preview?.warnings?.length ? h('ul', { class: 'preview-warnings' }, preview.warnings.map((warning: string) => h('li', warning))) : null
+  ])
+}
+
+function previewItem(label: string, value: unknown) {
+  return h('span', { class: 'preview-field' }, [
+    h('em', label),
+    h('strong', String(value ?? '-'))
+  ])
+}
+
 const TaskView = defineComponent({
   props: { tasks: { type: Array, required: true }, settings: { type: Object, required: true }, capabilities: { type: Array, required: true } },
   emits: ['create-task', 'open-logs'],
@@ -713,6 +744,10 @@ const TaskView = defineComponent({
     const modeUsesKeywords = computed(() => ['competitor_discovery', 'demand_content'].includes(form.mode))
     const activeCapability = computed(() => (props.capabilities as Dict[]).find(item => item.platform === form.platform) || {})
     const activeModeCapability = computed(() => activeCapability.value?.modes?.[form.mode] || {})
+    const taskPreview = ref<Dict | null>(null)
+    const previewError = ref('')
+    const previewLoading = ref(false)
+    let previewTimer: ReturnType<typeof setTimeout> | null = null
     function applyMode(modeKey: string) {
       form.mode = modeKey
       form.collect_comments = ['competitor_crawl', 'own_account'].includes(modeKey)
@@ -752,6 +787,63 @@ const TaskView = defineComponent({
       }
       return payload
     }
+    async function refreshPreview() {
+      previewLoading.value = true
+      const payload = buildTaskPayload()
+      const localError = previewInputError(payload)
+      if (localError) {
+        taskPreview.value = null
+        previewError.value = localError
+        previewLoading.value = false
+        return
+      }
+      try {
+        const { data } = await api.post('/tasks/preview', payload)
+        taskPreview.value = data
+        previewError.value = ''
+      } catch (error: any) {
+        taskPreview.value = null
+        previewError.value = error?.response?.data?.detail || '任务参数还不完整'
+      } finally {
+        previewLoading.value = false
+      }
+    }
+    function previewInputError(payload: Dict) {
+      if (['competitor_discovery', 'demand_content'].includes(payload.mode) && !payload.keywords) {
+        return '搜索型任务必须填写关键词，避免使用 MediaCrawler 默认关键词'
+      }
+      if (!['competitor_discovery', 'demand_content'].includes(payload.mode) && !payload.creator_id && !payload.specified_id) {
+        return '账号/详情采集任务必须填写创作者主页/ID或指定内容ID'
+      }
+      return ''
+    }
+    function schedulePreview() {
+      if (previewTimer) clearTimeout(previewTimer)
+      previewTimer = setTimeout(refreshPreview, 250)
+    }
+    watch(
+      () => [
+        form.mode,
+        form.platform,
+        form.login_type,
+        form.keyword_tags.join('|'),
+        form.creator_id_tags.join('|'),
+        form.specified_id_tags.join('|'),
+        form.content_count,
+        form.comment_count,
+        form.max_concurrency,
+        form.collect_comments,
+        form.collect_sub_comments,
+        form.headless,
+        form.tcp_mode,
+        form.execute_crawler
+      ],
+      schedulePreview,
+      { immediate: true }
+    )
+    onBeforeUnmount(() => {
+      if (previewTimer) clearTimeout(previewTimer)
+    })
     function submit() {
       const payload = buildTaskPayload()
       if (modeUsesKeywords.value && !payload.keywords) {
@@ -812,6 +904,7 @@ const TaskView = defineComponent({
           h('label', [h('input', { type: 'checkbox', checked: form.headless, onChange: (event: Event) => form.headless = (event.target as HTMLInputElement).checked }), '无头模式']),
           h('label', [h('input', { type: 'checkbox', checked: form.execute_crawler, onChange: (event: Event) => form.execute_crawler = (event.target as HTMLInputElement).checked }), '立即运行'])
         ]),
+        renderTaskPreviewPanel(taskPreview.value, previewError.value, previewLoading.value),
         h('div', { class: 'action-row' }, [
           h('button', { class: 'primary-action', onClick: submit }, [h(VideoPlay, { class: 'inline-icon' }), '开始采集并导入'])
         ])
@@ -1869,6 +1962,111 @@ function importantDiagnosticFields(platform: Dict) {
   line-height: 1.55;
 }
 
+.task-preview {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0 0;
+  padding: 14px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.task-preview.has-error {
+  border-color: #fed7aa;
+  background: #fffaf2;
+}
+
+.preview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.preview-head small,
+.preview-head strong {
+  display: block;
+}
+
+.preview-head small {
+  color: #64748b;
+  font-weight: 700;
+}
+
+.preview-head strong {
+  margin-top: 3px;
+  color: #1f2937;
+  font-size: 14px;
+}
+
+.task-preview.has-error .preview-head strong {
+  color: #9a3412;
+}
+
+.preview-status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #eef6f3;
+  color: #0f766e;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.preview-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.preview-field em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.preview-field strong {
+  min-width: 0;
+  color: #1f2937;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-line {
+  max-width: 100%;
+  margin: 0;
+  padding: 10px;
+  overflow-x: auto;
+  border-radius: 7px;
+  background: #10201d;
+  color: #d1fae5;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.preview-warnings {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
@@ -2825,6 +3023,15 @@ input[type='checkbox'] {
 
   .capability-type {
     white-space: normal;
+  }
+
+  .preview-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .preview-grid {
+    grid-template-columns: 1fr;
   }
 
   .sidebar {

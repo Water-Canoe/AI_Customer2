@@ -185,6 +185,44 @@ def test_search_task_sanitizes_irrelevant_ids_and_requires_keywords(tmp_path: Pa
         )
 
 
+def test_task_preview_uses_same_parameter_normalization(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+
+    preview = crawler_adapter.preview_task(
+        TaskCreate(
+            mode="competitor_discovery",
+            platform="dy",
+            keywords="  AI客服  ",
+            creator_id="stale-creator",
+            specified_id="stale-content",
+            execute_crawler=False,
+        )
+    )
+    assert preview["crawler_type"] == "search"
+    assert preview["normalized"]["keywords"] == "AI客服"
+    assert preview["normalized"]["creator_id"] == ""
+    assert preview["normalized"]["specified_id"] == ""
+    assert preview["sanitized"]["creator_id"]["before"] == "stale-creator"
+    assert "--keywords AI客服" in preview["command_text"]
+    assert "--creator_id" not in preview["command_text"]
+    assert "--specified_id" not in preview["command_text"]
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/tasks/preview",
+        json={
+            "mode": "competitor_discovery",
+            "platform": "dy",
+            "keywords": "  ",
+        },
+    )
+    assert response.status_code == 400
+    assert "必须填写关键词" in response.json()["detail"]
+
+
 def test_profile_enrichment_task_uses_creator_mode_and_imports_signature(tmp_path: Path) -> None:
     _, raw_db = prepare_project(tmp_path)
 
