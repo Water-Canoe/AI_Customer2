@@ -114,7 +114,7 @@ def build_input_payload(conn, target_type: str, target_id: int) -> dict[str, Any
             FROM contents
             WHERE author_account_id = ?
             ORDER BY updated_at DESC
-            LIMIT 10
+            LIMIT 5
             """,
             (target_id,),
         ).fetchall()

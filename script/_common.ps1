@@ -74,6 +74,20 @@ function Test-ProjectOwnedProcess {
     return $false
 }
 
+function Stop-ProcessTree {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$ProcessId
+    )
+
+    # Stop the explicit process tree so child Python/browser processes do not survive a restart.
+    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        & taskkill.exe /PID $ProcessId /T /F | Out-Null
+        return
+    }
+    Stop-Process -Id $ProcessId -Force
+}
+
 function Stop-ProjectProcessesOnPort {
     param(
         [Parameter(Mandatory = $true)]
@@ -96,7 +110,7 @@ function Stop-ProjectProcessesOnPort {
 
         $processId = [int]$process.ProcessId
         Write-Host "Stopping old $ServiceName process. PID=$processId, Port=$Port"
-        Stop-Process -Id $processId -Force
+        Stop-ProcessTree -ProcessId $processId
     }
 
     # Wait briefly until Windows releases the port.

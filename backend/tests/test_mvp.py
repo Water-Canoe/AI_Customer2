@@ -357,19 +357,76 @@ def test_account_analysis_task_imports_profile_and_recent_contents(tmp_path: Pat
             ("Analysis Test", "analysis profile bio", "3000", ts, ts, "creator-1"),
         )
         raw_conn.execute("UPDATE douyin_aweme SET add_ts = ?, last_modify_ts = ? WHERE user_id = ?", (ts, ts, "creator-1"))
+        for index in range(2, 8):
+            raw_conn.execute(
+                """
+                INSERT INTO douyin_aweme VALUES (
+                    'creator-1', 'sec-1', '', 'unique-1', 'Analysis Test',
+                    '', '', '', ?, ?, ?, 'video',
+                    ?, ?, 1, '8', '0',
+                    '0', '0', ?, '', '', '', '', 'AI客服'
+                )
+                """,
+                (
+                    ts + index,
+                    ts + index,
+                    20000 + index,
+                    f"analysis title {index}",
+                    f"analysis desc {index}",
+                    f"https://douyin.example/video/{20000 + index}",
+                ),
+            )
         raw_conn.commit()
     finally:
         raw_conn.close()
 
     result = import_for_task(str(task["id"]))
     assert result["accounts"] == 1
-    assert result["contents"] == 1
+    assert result["contents"] == 5
     with database.connect() as conn:
         account = conn.execute("SELECT signature, fans FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
-        content = conn.execute("SELECT task_id FROM contents WHERE author_account_id = ?", (account_id,)).fetchone()
+        content_count = conn.execute("SELECT COUNT(*) AS c FROM contents WHERE author_account_id = ?", (account_id,)).fetchone()["c"]
+        content = conn.execute("SELECT task_id FROM contents WHERE author_account_id = ? LIMIT 1", (account_id,)).fetchone()
     assert account["signature"] == "analysis profile bio"
     assert account["fans"] == 3000
+    assert content_count == 5
     assert content["task_id"] == task["id"]
+
+
+def test_account_analysis_progress_stops_after_target_content_count(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="account_analysis", platform="dy", creator_id="creator-1", content_count=2, execute_crawler=False)
+    )
+    progress = {"creator": False, "contents": 0}
+    assert crawler_adapter._should_stop_account_analysis(task, "MediaCrawler INFO [store.douyin.save_creator] creator:{}", progress) is False
+    assert crawler_adapter._should_stop_account_analysis(task, "MediaCrawler INFO [store.douyin.update_douyin_aweme] douyin aweme id:1", progress) is False
+    assert crawler_adapter._should_stop_account_analysis(task, "MediaCrawler INFO [store.douyin.update_douyin_aweme] douyin aweme id:2", progress) is True
+
+
+def test_recover_interrupted_running_tasks_marks_failed(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="account_analysis", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    with database.connect() as conn:
+        conn.execute("UPDATE crawl_jobs SET status = 'running', process_id = 999999 WHERE id = ?", (task["id"],))
+
+    recovered = crawler_adapter.recover_interrupted_running_tasks()
+    assert recovered == 1
+    with database.connect() as conn:
+        row = conn.execute("SELECT status, error FROM crawl_jobs WHERE id = ?", (task["id"],)).fetchone()
+        log_count = conn.execute("SELECT COUNT(*) AS c FROM task_logs WHERE task_id = ? AND level = 'error'", (task["id"],)).fetchone()["c"]
+    assert row["status"] == "failed"
+    assert "running" in row["error"]
+    assert log_count >= 1
 
 
 def test_profile_enrichment_rejects_platform_without_sqlite_creator_store(tmp_path: Path) -> None:

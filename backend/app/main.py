@@ -15,6 +15,7 @@ from app import views
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.init_db()
+    crawler_adapter.recover_interrupted_running_tasks()
     yield
 
 

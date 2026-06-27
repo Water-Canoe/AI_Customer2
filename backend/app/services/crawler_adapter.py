@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from app import database
 from app.schemas import TaskCreate
@@ -24,6 +25,15 @@ MODE_LABELS = {
 PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
 
 RUNNING_PROCESSES: dict[str, subprocess.Popen[str]] = {}
+
+ACCOUNT_ANALYSIS_AWEME_LOG_MARKERS = (
+    "store.douyin.update_douyin_aweme",
+    "store.xhs.update_xhs_note",
+)
+ACCOUNT_ANALYSIS_CREATOR_LOG_MARKERS = (
+    "store.douyin.save_creator",
+    "store.xhs.save_creator",
+)
 
 
 def normalize_path(value: str) -> str:
@@ -530,6 +540,8 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         conn.execute("UPDATE crawl_jobs SET process_id = ? WHERE id = ?", (process.pid, task_id))
         log_task(conn, task_id, "info", f"MediaCrawler 进程已启动，PID={process.pid}")
 
+    controlled_stop = False
+    analysis_progress: dict[str, Any] = {"creator": False, "contents": 0}
     assert process.stdout is not None
     for line in process.stdout:
         message = line.rstrip()
@@ -539,10 +551,16 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
             log_task(conn, task_id, "info", message)
         if after_log:
             after_log(message)
+        if _should_stop_account_analysis(task, message, analysis_progress):
+            controlled_stop = True
+            with database.connect() as conn:
+                log_task(conn, task_id, "info", f"账号分析已采集到 {analysis_progress['contents']} 条视频，提前结束 MediaCrawler 子进程")
+            _terminate_process_tree(process)
+            break
 
     return_code = process.wait()
     RUNNING_PROCESSES.pop(task_id, None)
-    if return_code != 0:
+    if return_code != 0 and not controlled_stop:
         _fail_task(task_id, f"MediaCrawler 退出码异常：{return_code}")
         return
 
@@ -597,10 +615,55 @@ def _fail_task(task_id: str, error: str) -> None:
         )
 
 
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    # Kill the explicit subprocess tree so uv/python/browser children do not keep running.
+    if process.poll() is not None:
+        return
+    if platform.system().lower() == "windows":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+    process.terminate()
+
+
+def _should_stop_account_analysis(task: dict[str, object], message: str, progress: dict[str, Any]) -> bool:
+    if task.get("mode") != "account_analysis":
+        return False
+    if any(marker in message for marker in ACCOUNT_ANALYSIS_CREATOR_LOG_MARKERS):
+        progress["creator"] = True
+    if any(marker in message for marker in ACCOUNT_ANALYSIS_AWEME_LOG_MARKERS):
+        progress["contents"] = int(progress.get("contents") or 0) + 1
+    target_count = max(1, int(task.get("content_count") or 5))
+    return bool(progress.get("creator")) and int(progress.get("contents") or 0) >= target_count
+
+
+def recover_interrupted_running_tasks() -> int:
+    """Mark tasks left running by a backend restart as failed."""
+    with database.connect() as conn:
+        rows = conn.execute("SELECT id FROM crawl_jobs WHERE status = 'running'").fetchall()
+        for row in rows:
+            task_id = str(row["id"])
+            message = "服务启动时发现任务仍处于 running；上一次后端可能重启或中断，任务已标记失败，请重新执行"
+            log_task(conn, task_id, "error", message)
+            conn.execute(
+                """
+                UPDATE crawl_jobs
+                SET status = 'failed', error = ?, finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+                """,
+                (message, task_id),
+            )
+    return len(rows)
+
+
 def cancel_task(task_id: str) -> dict[str, object]:
     process = RUNNING_PROCESSES.get(task_id)
     if process and process.poll() is None:
-        process.terminate()
+        _terminate_process_tree(process)
     with database.connect() as conn:
         log_task(conn, task_id, "warning", "用户请求取消任务")
         conn.execute(

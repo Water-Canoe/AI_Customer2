@@ -169,7 +169,7 @@ def _raw_time_clause(raw_conn: sqlite3.Connection, table: str, task: sqlite3.Row
     return clause, [raw_started_ts_ms] * len(timestamp_columns)
 
 
-def _safe_select_rows(raw_conn: sqlite3.Connection, table: str, task: sqlite3.Row | None = None) -> list[sqlite3.Row]:
+def _safe_select_rows(raw_conn: sqlite3.Connection, table: str, task: sqlite3.Row | None = None, limit: int | None = None) -> list[sqlite3.Row]:
     exists = raw_conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
         (table,),
@@ -177,7 +177,11 @@ def _safe_select_rows(raw_conn: sqlite3.Connection, table: str, task: sqlite3.Ro
     if not exists:
         return []
     where_clause, params = _raw_time_clause(raw_conn, table, task)
-    return raw_conn.execute(f"SELECT rowid AS __raw_pk, * FROM {_quote_identifier(table)}{where_clause}", params).fetchall()
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = " ORDER BY rowid DESC LIMIT ?"
+        params = [*params, max(1, int(limit))]
+    return raw_conn.execute(f"SELECT rowid AS __raw_pk, * FROM {_quote_identifier(table)}{where_clause}{limit_clause}", params).fetchall()
 
 
 def _value(row: sqlite3.Row, column: str, default: Any = "") -> Any:
@@ -328,7 +332,8 @@ def _import_contents(
     counts: dict[str, int],
 ) -> None:
     mapping = CONTENT_TABLES[platform]
-    for row in _safe_select_rows(raw_conn, mapping["table"], task):
+    content_limit = int(task["content_count"] or 5) if task["mode"] == "account_analysis" else None
+    for row in _safe_select_rows(raw_conn, mapping["table"], task, limit=content_limit):
         content_native_id = str(_value(row, mapping["id"]))
         if not content_native_id:
             continue
