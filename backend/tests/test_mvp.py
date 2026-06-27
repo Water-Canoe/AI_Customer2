@@ -326,6 +326,52 @@ def test_profile_enrichment_rechecks_competitor_keyword_match(tmp_path: Path) ->
     assert content["task_id"] == discovery["id"]
 
 
+def test_account_analysis_task_imports_profile_and_recent_contents(tmp_path: Path) -> None:
+    _, raw_db = prepare_project(tmp_path)
+    from app import database
+    from app.services import account_actions
+    from app.services.importer import import_for_task
+
+    with database.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, sec_uid, nickname, signature, profile_url)
+            VALUES('dy', 'creator-1', 'sec-1', 'Analysis Test', '', 'https://www.douyin.com/user/sec-1')
+            """
+        )
+        account_id = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'creator-1'").fetchone()["id"]
+
+    task = account_actions.create_account_analysis_task(int(account_id))
+    command = str(task["command"])
+    assert task["mode"] == "account_analysis"
+    assert task["crawler_type"] == "creator"
+    assert task["content_count"] == 5
+    assert "--type creator" in command
+    assert "--crawler_max_notes_count 5" in command
+
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        ts = int(task["raw_started_ts_ms"]) + 1000
+        raw_conn.execute(
+            "UPDATE dy_creator SET nickname = ?, desc = ?, fans = ?, add_ts = ?, last_modify_ts = ? WHERE user_id = ?",
+            ("Analysis Test", "analysis profile bio", "3000", ts, ts, "creator-1"),
+        )
+        raw_conn.execute("UPDATE douyin_aweme SET add_ts = ?, last_modify_ts = ? WHERE user_id = ?", (ts, ts, "creator-1"))
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    result = import_for_task(str(task["id"]))
+    assert result["accounts"] == 1
+    assert result["contents"] == 1
+    with database.connect() as conn:
+        account = conn.execute("SELECT signature, fans FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
+        content = conn.execute("SELECT task_id FROM contents WHERE author_account_id = ?", (account_id,)).fetchone()
+    assert account["signature"] == "analysis profile bio"
+    assert account["fans"] == 3000
+    assert content["task_id"] == task["id"]
+
+
 def test_profile_enrichment_rejects_platform_without_sqlite_creator_store(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
@@ -397,6 +443,41 @@ def test_batch_profile_enrichment_creates_limited_deduped_tasks(tmp_path: Path) 
     response = client.post("/api/accounts/profile-enrichment/batch", params={"limit": 5, "run_now": False})
     assert response.status_code == 200
     assert response.json()["created"] == 0
+
+
+def test_delete_keyword_non_competitors_hard_deletes_accounts_and_raw_rows(tmp_path: Path) -> None:
+    _, raw_db = prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import account_actions, crawler_adapter
+    from app.services.importer import import_for_task
+
+    discovery = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_discovery", platform="dy", keywords="AI客服", execute_crawler=False)
+    )
+    import_for_task(str(discovery["id"]))
+    with database.connect() as conn:
+        account_id = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'creator-1'").fetchone()["id"]
+        conn.execute("UPDATE user_accounts SET competitor_status = '非竞品' WHERE id = ?", (account_id,))
+
+    result = account_actions.delete_keyword_non_competitors("dy", "AI客服")
+    assert result["deleted"] == 1
+    assert result["raw_refs"] >= 1
+
+    with database.connect() as conn:
+        account_count = conn.execute("SELECT COUNT(*) AS c FROM user_accounts WHERE id = ?", (account_id,)).fetchone()["c"]
+        audit_count = conn.execute("SELECT COUNT(*) AS c FROM deletion_audit WHERE entity_type = 'keyword_non_competitors'").fetchone()["c"]
+    assert account_count == 0
+    assert audit_count == 1
+
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        creator_raw_count = raw_conn.execute("SELECT COUNT(*) FROM dy_creator WHERE user_id = 'creator-1'").fetchone()[0]
+        content_raw_count = raw_conn.execute("SELECT COUNT(*) FROM douyin_aweme WHERE user_id = 'creator-1'").fetchone()[0]
+    finally:
+        raw_conn.close()
+    assert creator_raw_count == 0
+    assert content_raw_count == 1
 
 
 def test_real_crawler_import_ignores_raw_rows_before_task_start(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import database
 from app.schemas import AiBatchCreate, AiJobCreate, ClearDataRequest, SettingsUpdate, TableUpdate, TaskCreate
-from app.services import ai_service, crawler_adapter, deletion, maintenance
+from app.services import account_actions, ai_service, crawler_adapter, deletion, maintenance
 from app import views
 
 
@@ -77,6 +77,21 @@ def create_profile_enrichment_batch(
     return result
 
 
+@app.post("/api/accounts/{account_id}/analysis")
+def create_account_analysis_task(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    run_now: bool = True,
+) -> dict[str, object]:
+    try:
+        task = account_actions.create_account_analysis_task(account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run_now:
+        background_tasks.add_task(account_actions.run_account_analysis, account_id, str(task["id"]))
+    return task
+
+
 @app.get("/api/tasks")
 def list_tasks(include_archived: bool = False) -> list[dict[str, object]]:
     return crawler_adapter.list_tasks(include_archived)
@@ -135,6 +150,14 @@ def delete_table_row(
 @app.get("/api/overview/tree")
 def overview_tree() -> list[dict[str, object]]:
     return views.overview_tree()
+
+
+@app.post("/api/overview/keywords/non-competitors/delete")
+def delete_keyword_non_competitors(
+    platform: str = Query(...),
+    keyword: str = Query(...),
+) -> dict[str, object]:
+    return account_actions.delete_keyword_non_competitors(platform, keyword)
 
 
 @app.get("/api/workbench/actions")

@@ -5,7 +5,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from app import database
 from app.schemas import TaskCreate
@@ -19,6 +19,7 @@ MODE_LABELS = {
     "demand_content": "找需求内容",
     "own_account": "自家账号互动",
     "profile_enrichment": "账号资料补全",
+    "account_analysis": "账号分析",
 }
 PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
 
@@ -249,30 +250,36 @@ def _account_profile_identifier(account: dict[str, object]) -> str:
     return platform_user_id
 
 
-def create_profile_enrichment_task(account_id: int) -> dict[str, object]:
+def create_profile_enrichment_task(
+    account_id: int,
+    *,
+    mode: Literal["profile_enrichment", "account_analysis"] = "profile_enrichment",
+    name_prefix: str = "账号资料补全",
+    content_count: int = 1,
+) -> dict[str, object]:
     with database.connect() as conn:
         row = conn.execute("SELECT * FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
         if not row:
-            raise ValueError("账号不存在，无法补资料")
+            raise ValueError("账号不存在，无法采集主页资料")
         account = database.row_to_dict(row)
         platform = str(account.get("platform") or "")
         if platform not in PROFILE_ENRICHMENT_PLATFORMS:
-            raise ValueError("MediaCrawler SQLite 目前仅支持抖音/小红书账号资料补全，快手主页资料不会写入 SQLite")
+            raise ValueError("MediaCrawler SQLite 目前仅支持抖音/小红书账号主页资料采集，快手主页资料不会写入 SQLite")
         creator_id = _account_profile_identifier(account)
         if not creator_id:
-            raise ValueError("账号缺少主页链接或平台ID，无法补资料")
+            raise ValueError("账号缺少主页链接或平台ID，无法采集主页资料")
         login_type = database.get_setting(conn, "login_type", "qrcode")
         headless = database.get_setting(conn, "headless", "false") == "true"
 
     nickname = str(account.get("nickname") or account_id)
     task = create_task(
         TaskCreate(
-            name=f"账号资料补全-{nickname}",
-            mode="profile_enrichment",
+            name=f"{name_prefix}-{nickname}",
+            mode=mode,
             platform=platform,
             login_type=login_type if login_type in ("qrcode", "phone", "cookie") else "qrcode",
             creator_id=creator_id,
-            content_count=1,
+            content_count=content_count,
             comment_count=0,
             collect_comments=False,
             collect_sub_comments=False,
@@ -282,7 +289,7 @@ def create_profile_enrichment_task(account_id: int) -> dict[str, object]:
         )
     )
     with database.connect() as conn:
-        log_task(conn, str(task["id"]), "info", f"补资料来源账号：{nickname}（ID={account_id}）")
+        log_task(conn, str(task["id"]), "info", f"{name_prefix}来源账号：{nickname}（ID={account_id}）")
     return task
 
 

@@ -56,7 +56,14 @@
           @create-task="createTask"
           @open-logs="openTaskLogs"
         />
-        <OverviewView v-else-if="activeView === 'overview'" :tree="overviewTree" @enrich-profile="enrichProfile" />
+        <OverviewView
+          v-else-if="activeView === 'overview'"
+          :tree="overviewTree"
+          @account-analyze="analyzeOverviewAccount"
+          @delete-account="deleteOverviewAccount"
+          @delete-keyword-noncompetitors="deleteKeywordNonCompetitors"
+          @find-customers="reserveFindCustomers"
+        />
         <AiView v-else-if="activeView === 'ai'" :jobs="aiJobs" :lead-rows="leadRows" :competitor-rows="competitorRows" @create-job="createAiJob" @retry-job="retryAiJob" />
         <LogsView v-else-if="activeView === 'logs'" :tasks="tasks" :selected-task="selectedTask || undefined" @select-task="selectTask" @archive-task="archiveTask" @delete-task="deleteTask" />
         <TablesView
@@ -298,6 +305,64 @@ async function enrichProfile(library: string, row: Dict) {
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '补资料任务创建失败')
   }
+}
+
+async function analyzeOverviewAccount(node: Dict) {
+  const accountId = node.metrics?.id
+  if (!accountId) {
+    ElMessage.error('当前账号缺少ID，无法分析')
+    return
+  }
+  try {
+    const { data } = await api.post(`/accounts/${accountId}/analysis`)
+    ElMessage.success(`账号分析任务 ${data.id} 已创建，采集完成后会自动执行AI判断`)
+    await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
+    selectedTask.value = await fetchTask(data.id)
+    activeView.value = 'logs'
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '账号分析任务创建失败')
+  }
+}
+
+async function deleteOverviewAccount(node: Dict) {
+  const accountId = node.metrics?.id
+  if (!accountId) {
+    ElMessage.error('当前账号缺少ID，无法删除')
+    return
+  }
+  const library = node.metrics?.competitor_status === '竞品' ? 'competitors' : 'competitor_candidates'
+  try {
+    await ElMessageBox.confirm('此操作会同步删除项目库和 MediaCrawler 底层映射数据。确认删除该账号？', '删除账号确认', { type: 'warning' })
+    await api.delete(`/tables/${library}/${accountId}`)
+    ElMessage.success('账号已删除')
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value)])
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '账号删除失败')
+  }
+}
+
+async function deleteKeywordNonCompetitors(node: Dict) {
+  const platform = node.metrics?.platform
+  const keyword = node.label
+  if (!platform || !keyword) {
+    ElMessage.error('当前关键词缺少平台或关键词信息，无法删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`将硬删除“${platformName(platform)} / ${keyword}”下所有非竞品账号，并同步 MediaCrawler 底层映射。确认继续？`, '一键删除非竞品', { type: 'warning' })
+    const { data } = await api.post('/overview/keywords/non-competitors/delete', null, { params: { platform, keyword } })
+    if (data.deleted) ElMessage.success(`已删除 ${data.deleted} 个非竞品账号`)
+    else ElMessage.info('当前关键词下没有可删除的非竞品账号')
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value)])
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '一键删除非竞品失败')
+  }
+}
+
+function reserveFindCustomers() {
+  ElMessage.info('“找客户”功能已预留，后续会从竞品账号内容和评论区采集客户')
 }
 
 async function saveSettings(values: Dict) {
@@ -809,10 +874,10 @@ const TaskView = defineComponent({
           h('label', [h('input', { type: 'checkbox', checked: form.headless, onChange: (event: Event) => form.headless = (event.target as HTMLInputElement).checked }), '无头模式']),
           h('label', [h('input', { type: 'checkbox', checked: form.execute_crawler, onChange: (event: Event) => form.execute_crawler = (event.target as HTMLInputElement).checked }), '立即运行'])
         ]),
-        renderTaskPreviewPanel(taskPreview.value, previewError.value, previewLoading.value),
         h('div', { class: 'action-row' }, [
           h('button', { class: 'primary-action', onClick: submit }, [h(VideoPlay, { class: 'inline-icon' }), '开始采集并导入'])
-        ])
+        ]),
+        renderTaskPreviewPanel(taskPreview.value, previewError.value, previewLoading.value)
       ])
       ],
       side: () => [
@@ -831,18 +896,23 @@ const TaskView = defineComponent({
 
 const OverviewView = defineComponent({
   props: { tree: { type: Array, required: true } },
-  emits: ['enrich-profile'],
+  emits: ['account-analyze', 'delete-account', 'delete-keyword-noncompetitors', 'find-customers'],
   setup(props, { emit }) {
     const expanded = reactive<Record<string, boolean>>({})
     const isExpanded = (node: Dict) => expanded[node.id] ?? false
     const toggle = (node: Dict) => {
       expanded[node.id] = !isExpanded(node)
     }
-    const enrich = (node: Dict) => emit('enrich-profile', 'overview', { id: node.metrics?.id })
+    const handlers = {
+      analyzeAccount: (node: Dict) => emit('account-analyze', node),
+      deleteAccount: (node: Dict) => emit('delete-account', node),
+      deleteKeywordNonCompetitors: (node: Dict) => emit('delete-keyword-noncompetitors', node),
+      findCustomers: (node: Dict) => emit('find-customers', node)
+    }
     return () => h('section', { class: 'pane overview-pane' }, [
       h('div', { class: 'section-title' }, [h('h2', '关系总览'), h('span', '平台 / 关键词 / 账号层级表')]),
       (props.tree as Dict[]).length
-        ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, enrich)))
+        ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, handlers)))
         : h('div', { class: 'empty-state' }, '暂无总览数据，请先创建采集任务')
     ])
   }
@@ -853,7 +923,7 @@ function renderOverviewRow(
   level: number,
   isExpanded: (node: Dict) => boolean,
   toggle: (node: Dict) => void,
-  enrich: (node: Dict) => void
+  handlers: Record<string, (node: Dict) => void>
 ): any[] {
   const children = node.children || []
   const opened = isExpanded(node)
@@ -870,12 +940,12 @@ function renderOverviewRow(
       ]),
       h('div', { class: 'overview-metrics' }, [
         ...overviewMetricChips(node).map(chip => h('span', { class: 'metric-chip' }, chip)),
-        ...overviewActions(node, enrich)
+        ...overviewActions(node, handlers)
       ])
     ])
   ]
   if (opened) {
-    children.forEach((child: Dict) => rows.push(...renderOverviewRow(child, level + 1, isExpanded, toggle, enrich)))
+    children.forEach((child: Dict) => rows.push(...renderOverviewRow(child, level + 1, isExpanded, toggle, handlers)))
   }
   return rows
 }
@@ -897,23 +967,52 @@ function displayOverviewLabel(node: Dict) {
 function overviewSubtitle(node: Dict) {
   if (node.kind === 'platform') return node.label
   if (node.kind === 'keyword') return '关键词分组'
-  if (node.kind === 'account') return node.metrics?.signature || '主页简介未采集，可补资料'
+  if (node.kind === 'account') return node.metrics?.signature || '主页简介未采集，需账号分析'
   return '账号'
 }
 
-function overviewActions(node: Dict, enrich: (node: Dict) => void) {
+function overviewActions(node: Dict, handlers: Record<string, (node: Dict) => void>) {
   const metrics = node.metrics || {}
+  if (node.kind === 'keyword') {
+    return [
+      h('button', {
+        class: 'overview-action danger',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation()
+          handlers.deleteKeywordNonCompetitors(node)
+        }
+      }, '一键删除非竞品')
+    ]
+  }
   if (node.kind !== 'account') return []
-  if (metrics.signature) return []
-  if (!['dy', 'xhs'].includes(metrics.platform)) return []
-  return [
-    h('button', {
-      class: 'overview-action',
+  const isCompetitor = metrics.competitor_status === '竞品'
+  const canAnalyze = ['dy', 'xhs'].includes(metrics.platform)
+  const primary = isCompetitor
+    ? h('button', {
+      class: 'overview-action reserved',
       onClick: (event: MouseEvent) => {
         event.stopPropagation()
-        enrich(node)
+        handlers.findCustomers(node)
       }
-    }, '补资料')
+    }, '找客户')
+    : h('button', {
+      class: 'overview-action',
+      disabled: !canAnalyze,
+      title: canAnalyze ? '采集主页和少量视频后交给AI判断竞品' : '当前平台不支持主页资料采集',
+      onClick: (event: MouseEvent) => {
+        event.stopPropagation()
+        if (canAnalyze) handlers.analyzeAccount(node)
+      }
+    }, '账号分析')
+  return [
+    primary,
+    h('button', {
+      class: 'overview-action danger',
+      onClick: (event: MouseEvent) => {
+        event.stopPropagation()
+        handlers.deleteAccount(node)
+      }
+    }, '删除')
   ]
 }
 
@@ -2400,6 +2499,33 @@ input[type='checkbox'] {
 .overview-action:hover {
   border-color: #0f766e;
   background: #ecfdf5;
+}
+
+.overview-action.danger {
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+.overview-action.danger:hover {
+  border-color: #dc2626;
+  background: #fff1f2;
+}
+
+.overview-action.reserved {
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+
+.overview-action.reserved:hover {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.overview-action:disabled {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
 }
 
 .overview-spacer {
