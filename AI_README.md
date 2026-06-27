@@ -38,6 +38,26 @@
 
 ## 启动方式
 
+推荐使用根目录 `script` 下的 PowerShell 脚本。启动脚本会先检查对应端口上的旧项目进程；如果存在旧前端或后端任务，会先关闭旧任务，再启动新任务。关闭脚本会停止当前项目的前后端服务。
+
+```powershell
+# 一键启动后端和前端
+.\script\start_all.ps1
+
+# 只启动后端，默认地址为 http://127.0.0.1:8000
+.\script\start_backend.ps1
+
+# 只启动前端，默认地址为 http://127.0.0.1:5173
+.\script\start_frontend.ps1
+
+# 一键关闭前端和后端
+.\script\stop_all.ps1
+```
+
+脚本日志写入 `script/logs/`。如果端口被非本项目进程占用，脚本会停止并提示对应 PID，不会强行关闭不明进程。
+
+手动启动方式如下：
+
 后端：
 
 ```powershell
