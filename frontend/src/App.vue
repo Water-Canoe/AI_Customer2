@@ -1257,7 +1257,7 @@ const TablesView = defineComponent({
             h('button', { class: 'column-resizer', type: 'button', title: '拖动调整列宽', onPointerdown: (event: PointerEvent) => startColumnResize(index, event) })
           ])))]),
           h('tbody', (props.rows as Dict[]).map(row => h('tr', [
-            h('td', [renderTablePrimaryCell(props.library, row), h('small', row.description || row.body || row.comment_samples || row.signature || '')]),
+            h('td', [renderTablePrimaryCell(props.library, row)]),
             h('td', row.follow_status || row.competitor_status || row.status || '-'),
             h('td', row.task_name || row.task_id || '-'),
             h('td', row.profile_url || row.content_url ? h('a', { href: row.profile_url || row.content_url, target: '_blank' }, '打开链接') : '-'),
@@ -1281,10 +1281,15 @@ const TablesView = defineComponent({
 })
 
 function renderTablePrimaryCell(library: string, row: Dict) {
-  const label = row.nickname || row.title || row.commenter_nickname || row.body || row.id
+  const label = tablePrimaryText(row)
   const href = tablePrimaryHref(library, row)
-  if (!href) return h('strong', label)
-  return h('a', { class: 'table-primary-link', href, target: '_blank', rel: 'noreferrer' }, label)
+  const attrs = { class: 'table-primary-text', title: label }
+  if (!href) return h('strong', attrs, label)
+  return h('a', { ...attrs, class: 'table-primary-link table-primary-text', href, target: '_blank', rel: 'noreferrer' }, label)
+}
+
+function tablePrimaryText(row: Dict) {
+  return String(row.nickname || row.title || row.commenter_nickname || row.body || row.description || row.comment_samples || row.signature || row.id || '-')
 }
 
 function tablePrimaryHref(library: string, row: Dict) {
@@ -1534,7 +1539,6 @@ function importantDiagnosticFields(platform: Dict) {
 .workflow-step small,
 .section-title span,
 .task-row span,
-.data-table small,
 .env-item small {
   color: #64748b;
   overflow-wrap: anywhere;
@@ -2369,8 +2373,7 @@ input[type='checkbox'] {
   background: #0f766e;
 }
 
-.data-table td strong,
-.data-table td small {
+.data-table td strong {
   display: block;
 }
 
@@ -2379,11 +2382,20 @@ input[type='checkbox'] {
 }
 
 .table-primary-link {
-  display: block;
+  color: #0f4fb3;
+  text-decoration: none;
+}
+
+.table-primary-text {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
   color: #0f4fb3;
   font-weight: 700;
-  text-decoration: none;
+  line-height: 1.55;
   overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .table-primary-link:hover {
