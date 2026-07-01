@@ -111,8 +111,10 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     signature TEXT NOT NULL DEFAULT '',
     profile_url TEXT NOT NULL DEFAULT '',
     fans INTEGER,
+    content_total_count INTEGER,
     account_role TEXT NOT NULL DEFAULT 'unknown',
     competitor_status TEXT NOT NULL DEFAULT '未分析',
+    competitor_reason TEXT NOT NULL DEFAULT '',
     is_own_account INTEGER NOT NULL DEFAULT 0,
     raw_payload TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -179,6 +181,7 @@ CREATE TABLE IF NOT EXISTS lead_user_accounts (
     account_id INTEGER NOT NULL UNIQUE,
     screening_status TEXT NOT NULL DEFAULT '待筛选',
     follow_status TEXT NOT NULL DEFAULT '待筛选',
+    manual_follow_status INTEGER NOT NULL DEFAULT 0,
     intention TEXT NOT NULL DEFAULT '',
     reason TEXT NOT NULL DEFAULT '',
     pain_points TEXT NOT NULL DEFAULT '[]',
@@ -232,6 +235,22 @@ CREATE TABLE IF NOT EXISTS raw_source_refs (
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS deleted_identities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    identifier_type TEXT NOT NULL,
+    identifier_value TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    snapshot TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(entity_type, platform, identifier_type, identifier_value)
+);
+
+CREATE INDEX IF NOT EXISTS idx_deleted_identities_lookup
+ON deleted_identities(entity_type, platform, identifier_type, identifier_value);
+
 CREATE TABLE IF NOT EXISTS analysis_jobs (
     id TEXT PRIMARY KEY,
     target_type TEXT NOT NULL,
@@ -240,6 +259,12 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
     error TEXT NOT NULL DEFAULT '',
     input_payload TEXT NOT NULL DEFAULT '{}',
     output_payload TEXT NOT NULL DEFAULT '{}',
+    raw_output TEXT NOT NULL DEFAULT '',
+    prompt_version TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    user_prompt TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    base_url TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -263,10 +288,18 @@ DEFAULT_SETTINGS = {
     "ai_model": "deepseek-chat",
     "default_content_count": "20",
     "default_comment_count": "20",
+    "content_cutoff_days": "0",
+    "comment_cutoff_days": "0",
+    "account_analysis_content_count": "5",
+    "ai_analysis_concurrency": "3",
+    "unreplied_reminder_days": "3",
+    "douyin_detail_sleep_seconds": "2",
     "max_concurrency": "1",
     "headless": "false",
     "auto_analyze_competitors": "false",
+    "auto_delete_non_competitors": "false",
     "auto_analyze_leads": "false",
+    "auto_delete_non_customers": "false",
     "icp_profile": json.dumps(
         {
             "product": "",
@@ -287,11 +320,26 @@ def init_db() -> None:
     """Create all tables and seed default settings."""
     with connect() as conn:
         conn.executescript(SCHEMA_SQL)
+        _ensure_column(conn, "user_accounts", "competitor_reason", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "user_accounts", "content_total_count", "INTEGER")
+        _ensure_column(conn, "lead_user_accounts", "manual_follow_status", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "analysis_jobs", "raw_output", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "analysis_jobs", "prompt_version", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "analysis_jobs", "system_prompt", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "analysis_jobs", "user_prompt", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "analysis_jobs", "model", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "analysis_jobs", "base_url", "TEXT NOT NULL DEFAULT ''")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
                 (key, value),
             )
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:

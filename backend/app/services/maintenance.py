@@ -12,6 +12,7 @@ CONFIRM_TEXT = "清空所有数据"
 PROJECT_DATA_TABLES = [
     "deletion_audit",
     "analysis_jobs",
+    "deleted_identities",
     "raw_source_refs",
     "lead_status_events",
     "lead_sources",

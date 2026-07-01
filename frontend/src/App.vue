@@ -8,10 +8,11 @@
           <span>采集 · 筛选 · 跟进</span>
         </div>
       </div>
-      <el-menu :default-active="activeView" class="nav" @select="activeView = $event">
+      <el-menu :default-active="activeView" class="nav" @select="goToView">
         <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
         <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
         <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
+        <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>私信工作台</span></el-menu-item>
         <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
         <el-menu-item index="tables"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
         <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
@@ -29,88 +30,67 @@
           <p>{{ viewSubtitle }}</p>
         </div>
         <div class="topbar-actions">
+          <el-tag type="info" effect="plain">
+            {{ autoSyncHint }}
+          </el-tag>
           <el-tag :type="envReady ? 'success' : 'warning'" effect="light">
             {{ envReady ? '环境就绪' : '需要检查环境' }}
           </el-tag>
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
-          <el-button type="primary" :icon="Plus" @click="activeView = 'tasks'">新建任务</el-button>
+          <el-button type="primary" :icon="Plus" @click="router.push('/tasks')">新建任务</el-button>
         </div>
       </el-header>
 
-      <el-main class="main">
+      <el-main class="main" :class="`view-${activeView}`">
         <section class="workflow-strip">
-          <div v-for="step in workflowSteps" :key="step.title" class="workflow-step" :class="{ active: step.view === activeView }">
+          <button
+            v-for="step in workflowSteps"
+            :key="step.title"
+            class="workflow-step"
+            :class="{ active: step.view === activeView }"
+            type="button"
+            @click="router.push(step.route)"
+          >
             <span>{{ step.index }}</span>
             <div>
               <strong>{{ step.title }}</strong>
               <small>{{ step.note }}</small>
             </div>
-          </div>
+          </button>
         </section>
 
-        <TaskView
-          v-if="activeView === 'tasks'"
-          :tasks="tasks"
-          :settings="settings"
-          :capabilities="platformCapabilities"
-          @create-task="createTask"
-          @open-logs="openTaskLogs"
-        />
-        <OverviewView
-          v-else-if="activeView === 'overview'"
-          :tree="overviewTree"
-          @account-analyze="analyzeOverviewAccount"
-          @delete-account="deleteOverviewAccount"
-          @delete-keyword-noncompetitors="deleteKeywordNonCompetitors"
-          @find-customers="reserveFindCustomers"
-        />
-        <AiView v-else-if="activeView === 'ai'" :jobs="aiJobs" :lead-rows="leadRows" :competitor-rows="competitorRows" @create-job="createAiJob" @retry-job="retryAiJob" />
-        <LogsView v-else-if="activeView === 'logs'" :tasks="tasks" :selected-task="selectedTask || undefined" @select-task="selectTask" @archive-task="archiveTask" @delete-task="deleteTask" />
-        <TablesView
-          v-else-if="activeView === 'tables'"
-          :library="activeLibrary"
-          :rows="tableRows"
-          :loading="tableLoading"
-          :status-filter="tableStatus"
-          :keyword-filter="tableKeyword"
-          @change-library="changeLibrary"
-          @change-filter="changeTableFilter"
-          @update-row="updateRow"
-          @delete-row="deleteRow"
-          @analyze-row="analyzeTableRow"
-          @enrich-profile="enrichProfile"
-        />
-        <SettingsView v-else :settings="settings" :env="env" @save="saveSettings" @check-env="checkEnv" @clear-data="clearAllData" />
+        <RouterView v-slot="{ Component }">
+          <component :is="Component" v-bind="routeProps" v-on="routeListeners" />
+        </RouterView>
       </el-main>
     </el-container>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import axios from 'axios'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
-  Check,
-  Close,
-  CopyDocument,
-  Delete,
   Grid,
   MagicStick,
+  Message,
   Operation,
   Plus,
   Refresh,
   Setting,
   Share,
   Tickets,
-  VideoPlay
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-const api = axios.create({ baseURL: '/api' })
+import { api } from './shared/api'
+import type { Dict } from './shared/types'
+import { competitorStatusLabel, platformName } from './shared/format'
+import { workflowSteps } from './router'
 
-type Dict = Record<string, any>
+const router = useRouter()
+const route = useRoute()
 
-const activeView = ref('tasks')
 const activeLibrary = ref('contents')
 const tableStatus = ref('')
 const tableKeyword = ref('')
@@ -119,38 +99,143 @@ const tableRows = ref<Dict[]>([])
 const tableLoading = ref(false)
 const overviewTree = ref<Dict[]>([])
 const aiJobs = ref<Dict[]>([])
+const aiWorkbench = ref<Dict>({})
 const selectedTask = ref<Dict | null>(null)
+const taskDiagnostics = ref<Dict>({})
+const taskDedupSummary = ref<Dict>({})
+const retryDraft = ref<Dict | null>(null)
 const leadRows = ref<Dict[]>([])
 const competitorRows = ref<Dict[]>([])
 const settings = ref<Dict>({})
 const env = ref<Dict>({})
 const platformCapabilities = ref<Dict[]>([])
+const messageKeywords = ref<Dict[]>([])
+const messageCustomers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
+const messageDetail = ref<Dict>({})
+const messageLoading = ref(false)
+const messageFilters = ref<Dict>({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 })
+const tombstoneSummary = ref<Dict>({})
+const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
+const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
+const autoSyncing = ref(false)
+const lastAutoSyncAt = ref(0)
 
-const workflowSteps = [
-  { index: '01', title: '配置画像', note: 'AI模型、ICP、默认采集参数', view: 'settings' },
-  { index: '02', title: '创建任务', note: '四种模式，一次选择', view: 'tasks' },
-  { index: '03', title: '观察入库', note: '日志、数量、失败原因', view: 'logs' },
-  { index: '04', title: '理解来源', note: '数据表与总览树交叉查看', view: 'tables' },
-  { index: '05', title: 'AI筛选跟进', note: '批量分析、私信话术、状态流转', view: 'ai' }
-]
+const AUTO_SYNC_ACTIVE_MS = 3000
+const AUTO_SYNC_IDLE_MS = 12000
+let autoSyncTimer: ReturnType<typeof window.setInterval> | null = null
 
-const viewMeta: Record<string, { title: string; subtitle: string; hint: string }> = {
-  tasks: { title: '任务管理', subtitle: '选择拓客模式，生成 MediaCrawler 参数，并自动导入项目库。', hint: '选择模式后直接开始采集' },
-  overview: { title: '总览树', subtitle: '按平台、关键词、账号、内容和客户查看证据链。', hint: '从业务关系理解数据' },
-  ai: { title: 'AI分析', subtitle: '集中处理竞品筛选、目标客户筛选、失败重试和私信话术。', hint: '把线索变成可跟进客户' },
-  logs: { title: '任务与日志', subtitle: '查看任务运行状态、控制台输出、归档和硬删除。', hint: '先确认任务是否正确完成' },
-  tables: { title: '数据表', subtitle: '维护内容、评论、竞品、线索和目标客户。', hint: '直接处理具体数据' },
-  settings: { title: '设置', subtitle: '配置 AI 模型、MediaCrawler 路径、自动化和 ICP 画像。', hint: '开始前先把基础环境配好' }
-}
-
-const viewTitle = computed(() => viewMeta[activeView.value].title)
-const viewSubtitle = computed(() => viewMeta[activeView.value].subtitle)
-const workflowHint = computed(() => viewMeta[activeView.value].hint)
+const activeView = computed(() => String(route.name || 'tasks'))
+const viewTitle = computed(() => String(route.meta.title || '任务管理'))
+const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
+const workflowHint = computed(() => String(route.meta.hint || ''))
 const envReady = computed(() => Boolean(env.value?.media_crawler_path?.ok && env.value?.media_crawler_db?.ok))
+const hasActiveAsyncWork = computed(() => {
+  return tasks.value.some(task => isActiveStatus(task.status)) || aiJobs.value.some(job => isActiveStatus(job.status))
+})
+const autoSyncHint = computed(() => {
+  const seconds = Math.round((hasActiveAsyncWork.value ? AUTO_SYNC_ACTIVE_MS : AUTO_SYNC_IDLE_MS) / 1000)
+  return autoSyncing.value ? '同步中' : `自动同步 ${seconds}s`
+})
+
+const routeProps = computed(() => {
+  if (activeView.value === 'tasks') {
+    return {
+      tasks: tasks.value,
+      settings: settings.value,
+      capabilities: platformCapabilities.value,
+      retryDraft: retryDraft.value || undefined,
+    }
+  }
+  if (activeView.value === 'overview') return { tree: overviewTree.value }
+  if (activeView.value === 'ai') return { workbench: aiWorkbench.value, jobs: aiJobs.value, leadRows: leadRows.value, competitorRows: competitorRows.value }
+  if (activeView.value === 'message-workbench') {
+    return {
+      keywords: messageKeywords.value,
+      customers: messageCustomers.value,
+      detail: messageDetail.value,
+      filters: messageFilters.value,
+      loading: messageLoading.value,
+    }
+  }
+  if (activeView.value === 'logs') {
+    return {
+      tasks: tasks.value,
+      selectedTask: selectedTask.value || undefined,
+      diagnostics: taskDiagnostics.value,
+      dedupSummary: taskDedupSummary.value,
+    }
+  }
+  if (activeView.value === 'tables') {
+    return {
+      library: activeLibrary.value,
+      rows: tableRows.value,
+      loading: tableLoading.value,
+      statusFilter: tableStatus.value,
+      keywordFilter: tableKeyword.value,
+    }
+  }
+  return {
+    settings: settings.value,
+    env: env.value,
+    tombstoneSummary: tombstoneSummary.value,
+    tombstones: tombstones.value,
+    tombstoneFilters: tombstoneFilters.value,
+  }
+})
+
+const routeListeners = computed(() => ({
+  'create-task': createTask,
+  'open-logs': openTaskLogs,
+  'consume-retry-draft': consumeRetryDraft,
+  'account-analyze': analyzeOverviewAccount,
+  'keyword-analyze': analyzeKeywordCompetitors,
+  'customer-intent-analyze': analyzeOverviewCustomerIntent,
+  'account-customers-analyze': analyzeAccountCustomersIntent,
+  'customer-message': messageOverviewCustomer,
+  'customer-follow-update': updateOverviewCustomerFollowStatus,
+  'delete-account': deleteOverviewAccount,
+  'delete-customer': deleteOverviewCustomer,
+  'delete-account-noncustomers': deleteAccountNonCustomers,
+  'delete-platform': deleteOverviewPlatform,
+  'delete-keyword': deleteOverviewKeyword,
+  'delete-keyword-noncompetitors': deleteKeywordNonCompetitors,
+  'find-customers': findCustomers,
+  'create-job': createAiJob,
+  'create-batch-jobs': createBatchAiJobs,
+  'delete-non-competitors': deleteAiWorkbenchNonCompetitors,
+  'delete-non-customers': deleteAiWorkbenchNonCustomers,
+  'filter-change': changeMessageWorkbenchFilter,
+  'select-customer': selectMessageWorkbenchCustomer,
+  'message-customer': messageWorkbenchCustomer,
+  'update-follow-status': updateMessageWorkbenchFollowStatus,
+  'close-detail': closeMessageWorkbenchDetail,
+  'retry-job': retryAiJob,
+  'retry-jobs': retryAiJobs,
+  'select-task': selectTask,
+  'retry-task': retryTask,
+  'cancel-task': cancelTask,
+  'archive-task': archiveTask,
+  'delete-task': deleteTask,
+  'change-library': changeLibrary,
+  'change-filter': changeTableFilter,
+  'update-row': updateRow,
+  'delete-row': deleteRow,
+  'analyze-row': analyzeTableRow,
+  'enrich-profile': enrichProfile,
+  save: saveSettings,
+  'check-env': checkEnv,
+  'load-tombstones': loadTombstones,
+  'clear-data': clearAllData,
+}))
+
+function goToView(view: string) {
+  router.push(`/${view}`)
+}
 
 async function refreshAll() {
   // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
-  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadPlatformCapabilities(), loadAiJobs(), loadOverview(), loadTable(activeLibrary.value)])
+  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadPlatformCapabilities(), loadAiJobs(), loadOverview(), loadMessageWorkbench(true), loadTombstoneSummary(), loadTombstones(), loadTable(activeLibrary.value)])
+  lastAutoSyncAt.value = Date.now()
 }
 
 async function loadTasks() {
@@ -182,6 +267,8 @@ async function loadPlatformCapabilities() {
 async function loadAiJobs() {
   const { data } = await api.get('/ai/jobs')
   aiJobs.value = data
+  const workbench = await api.get('/ai/workbench')
+  aiWorkbench.value = workbench.data
 }
 
 async function loadOverview() {
@@ -189,15 +276,133 @@ async function loadOverview() {
   overviewTree.value = data
 }
 
-async function loadTable(library: string) {
-  tableLoading.value = true
+async function loadSelectedTaskDiagnostics(id?: string) {
+  const taskId = id || selectedTask.value?.id
+  if (!taskId) {
+    taskDiagnostics.value = {}
+    taskDedupSummary.value = {}
+    return
+  }
+  const [diagnosticResult, dedupResult] = await Promise.allSettled([
+    api.get(`/tasks/${taskId}/diagnostics`),
+    api.get(`/tasks/${taskId}/dedup-summary`),
+  ])
+  taskDiagnostics.value = diagnosticResult.status === 'fulfilled' ? diagnosticResult.value.data : {}
+  taskDedupSummary.value = dedupResult.status === 'fulfilled' ? dedupResult.value.data : {}
+}
+
+async function loadTombstoneSummary() {
+  const { data } = await api.get('/tombstones/summary')
+  tombstoneSummary.value = data
+}
+
+async function loadTombstones(filters: Dict = {}) {
+  tombstoneFilters.value = { ...tombstoneFilters.value, ...filters }
+  const { data } = await api.get('/tombstones', { params: tombstoneFilters.value })
+  tombstones.value = data
+}
+
+async function loadMessageWorkbench(silent = false) {
+  if (!silent) messageLoading.value = true
+  try {
+    const [keywords, customers] = await Promise.all([
+      api.get('/message-workbench/keywords'),
+      api.get('/message-workbench/customers', { params: messageFilters.value })
+    ])
+    messageKeywords.value = keywords.data
+    messageCustomers.value = customers.data
+    const detailLeadId = messageDetail.value?.customer?.lead_id
+    if (detailLeadId) {
+      try {
+        const detail = await api.get(`/message-workbench/customers/${detailLeadId}`)
+        messageDetail.value = detail.data
+      } catch (error: any) {
+        if (error?.response?.status === 404) messageDetail.value = {}
+        else throw error
+      }
+    }
+  } finally {
+    if (!silent) messageLoading.value = false
+  }
+}
+
+async function loadTable(library: string, silent = false) {
+  if (!silent) tableLoading.value = true
   try {
     const { data } = await api.get(`/tables/${library}`, { params: { status: tableStatus.value, keyword: tableKeyword.value } })
     tableRows.value = data.rows
     if (library === 'lead_customers') leadRows.value = data.rows
     if (library === 'competitor_candidates') competitorRows.value = data.rows
   } finally {
-    tableLoading.value = false
+    if (!silent) tableLoading.value = false
+  }
+}
+
+async function refreshSelectedTask() {
+  const taskId = selectedTask.value?.id
+  if (!taskId) return
+  try {
+    selectedTask.value = await fetchTask(String(taskId))
+    await loadSelectedTaskDiagnostics(String(taskId))
+  } catch (error: any) {
+    if (error?.response?.status === 404) {
+      selectedTask.value = null
+      taskDiagnostics.value = {}
+      taskDedupSummary.value = {}
+    }
+    else throw error
+  }
+}
+
+function isActiveStatus(status: unknown) {
+  return ['pending', 'running'].includes(String(status || ''))
+}
+
+function startAutoSync() {
+  if (autoSyncTimer) window.clearInterval(autoSyncTimer)
+  autoSyncTimer = window.setInterval(() => {
+    void syncCurrentView('auto')
+  }, 1000)
+}
+
+function stopAutoSync() {
+  if (!autoSyncTimer) return
+  window.clearInterval(autoSyncTimer)
+  autoSyncTimer = null
+}
+
+function handleVisibilityChange() {
+  if (!document.hidden) void syncCurrentView('visible')
+}
+
+async function syncCurrentView(reason: 'auto' | 'route' | 'visible') {
+  if (autoSyncing.value) return
+  if (document.hidden) return
+  const interval = hasActiveAsyncWork.value ? AUTO_SYNC_ACTIVE_MS : AUTO_SYNC_IDLE_MS
+  if (reason === 'auto' && Date.now() - lastAutoSyncAt.value < interval) return
+
+  autoSyncing.value = true
+  try {
+    const loaders = new Map<string, () => Promise<unknown>>()
+    // 任务和 AI job 是全局运行态来源，当前页面之外的异步变化也要持续感知。
+    loaders.set('tasks', loadTasks)
+    loaders.set('ai', loadAiJobs)
+
+    if (activeView.value === 'logs') loaders.set('selected-task', refreshSelectedTask)
+    if (activeView.value === 'overview') loaders.set('overview', loadOverview)
+    if (activeView.value === 'message-workbench') loaders.set('message-workbench', () => loadMessageWorkbench(true))
+    if (activeView.value === 'tables') loaders.set('table', () => loadTable(activeLibrary.value, true))
+    if (activeView.value === 'settings') {
+      loaders.set('settings', loadSettings)
+      loaders.set('env', checkEnv)
+      loaders.set('tombstones-summary', loadTombstoneSummary)
+      loaders.set('tombstones', () => loadTombstones())
+    }
+
+    await Promise.allSettled(Array.from(loaders.values()).map(loader => loader()))
+  } finally {
+    lastAutoSyncAt.value = Date.now()
+    autoSyncing.value = false
   }
 }
 
@@ -220,7 +425,8 @@ async function createTask(payload: Dict) {
     ElMessage.success(`任务 ${data.id} 已创建`)
     await loadTasks()
     selectedTask.value = await fetchTask(data.id)
-    activeView.value = 'logs'
+    await loadSelectedTaskDiagnostics(data.id)
+    await router.push('/logs')
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '任务创建失败')
   }
@@ -228,11 +434,13 @@ async function createTask(payload: Dict) {
 
 async function openTaskLogs(id: string) {
   selectedTask.value = await fetchTask(id)
-  activeView.value = 'logs'
+  await loadSelectedTaskDiagnostics(id)
+  await router.push('/logs')
 }
 
 async function selectTask(id: string) {
   selectedTask.value = await fetchTask(id)
+  await loadSelectedTaskDiagnostics(id)
 }
 
 async function archiveTask(id: string) {
@@ -241,12 +449,32 @@ async function archiveTask(id: string) {
   await loadTasks()
 }
 
+async function cancelTask(id: string) {
+  await api.post(`/tasks/${id}/cancel`)
+  ElMessage.success('任务已取消')
+  await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
+  selectedTask.value = await fetchTask(id)
+  await loadSelectedTaskDiagnostics(id)
+}
+
+function retryTask(task: Dict) {
+  retryDraft.value = { ...task, retry_token: Date.now() }
+  router.push('/tasks')
+  ElMessage.success('已带入失败任务参数，请确认后重新启动')
+}
+
+function consumeRetryDraft() {
+  retryDraft.value = null
+}
+
 async function deleteTask(id: string) {
   await ElMessageBox.confirm('任务删除会同步删除项目库和 MediaCrawler 底层映射数据。确认继续？', '硬删除确认', { type: 'warning' })
   await api.delete(`/tasks/${id}`)
   ElMessage.success('任务已硬删除')
   selectedTask.value = null
-  await loadTasks()
+  taskDiagnostics.value = {}
+  taskDedupSummary.value = {}
+  await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
 }
 
 async function updateRow(library: string, row: Dict) {
@@ -256,7 +484,7 @@ async function updateRow(library: string, row: Dict) {
 }
 
 async function deleteRow(library: string, row: Dict, hard?: boolean) {
-  const message = library === 'target_customers' && !hard ? '目标客户会先隐藏并记录状态事件。确认删除？' : '此操作会同步删除底层映射数据。确认继续？'
+  const message = library === 'target_customers' && !hard ? '目标客户会先隐藏并记录状态事件。确认删除？' : '此操作会删除项目库数据，并记录防重复墓碑。确认继续？'
   await ElMessageBox.confirm(message, '删除确认', { type: 'warning' })
   await api.delete(`/tables/${library}/${row.id}`, { params: { hard } })
   ElMessage.success('删除完成')
@@ -270,7 +498,95 @@ async function createAiJob(targetType: string, targetId: number) {
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || 'AI分析失败')
   } finally {
-    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value)])
+    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadOverview()])
+  }
+}
+
+async function confirmBulkPreview(payload: Dict, title = '批量操作预览') {
+  const { data } = await api.post('/bulk-actions/preview', payload)
+  const affected = Object.entries(data.affected_counts || {})
+    .map(([key, value]) => `${key} ${value}`)
+    .join(' / ') || '无'
+  const tombstonesText = Object.entries(data.tombstone_counts || {})
+    .map(([key, value]) => `${key} ${value}`)
+    .join(' / ') || '无'
+  const samples = (data.sample_rows || [])
+    .map((row: Dict) => `- ${row.name || row.id || '-'}${row.status ? `（${row.status}）` : ''}`)
+    .join('\n')
+  const warnings = (data.warnings || []).map((item: string) => `- ${item}`).join('\n')
+  const message = [
+    data.confirm_text || '确认执行当前批量操作？',
+    `符合条件：${data.eligible_count || 0}`,
+    `跳过：${data.skipped_count || 0}`,
+    `预计影响：${affected}`,
+    `预计写入墓碑：${tombstonesText}`,
+    samples ? `样例：\n${samples}` : '',
+    warnings ? `注意：\n${warnings}` : '',
+  ].filter(Boolean).join('\n\n')
+  await ElMessageBox.confirm(message, title, {
+    type: (data.tombstone_counts && Object.keys(data.tombstone_counts).length) ? 'warning' : 'info',
+    confirmButtonText: '确认执行',
+    cancelButtonText: '取消',
+  })
+  return data
+}
+
+async function createBatchAiJobs(targetType: string, targetIds: number[]) {
+  const ids = Array.from(new Set(targetIds.map(Number).filter(Boolean)))
+  if (!ids.length) {
+    ElMessage.info('当前筛选范围没有可分析对象')
+    return
+  }
+  try {
+    await confirmBulkPreview({ action: 'ai_analyze', target_type: targetType, target_ids: ids }, 'AI批量分析预览')
+    const { data } = await api.post('/ai/jobs/batch', { target_type: targetType, target_ids: ids, run_now: true })
+    ElMessage.success(`已完成 ${data.length} 个AI分析任务`)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '批量AI分析失败')
+  } finally {
+    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadOverview()])
+  }
+}
+
+async function deleteAiWorkbenchNonCompetitors(targetIds: number[]) {
+  const ids = Array.from(new Set(targetIds.map(Number).filter(Boolean)))
+  if (!ids.length) {
+    ElMessage.info('当前筛选范围没有可删除的非竞品')
+    return
+  }
+  try {
+    await confirmBulkPreview({ action: 'delete_non_competitors', target_type: 'competitor', target_ids: ids }, '删除非竞品预览')
+    const { data } = await api.post('/ai/workbench/non-competitors/delete', { target_ids: ids })
+    if (data.deleted) ElMessage.success(`已删除 ${data.deleted} 个非竞品账号`)
+    else ElMessage.info('没有删除任何非竞品账号')
+    if (data.skipped?.length) ElMessage.warning(`已跳过 ${data.skipped.length} 个不符合删除条件的账号`)
+    if (data.failed?.length) ElMessage.error(`有 ${data.failed.length} 个账号删除失败`)
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '删除非竞品失败')
+  } finally {
+    await Promise.allSettled([loadAiJobs(), loadOverview(), loadTable(activeLibrary.value)])
+  }
+}
+
+async function deleteAiWorkbenchNonCustomers(targetIds: number[]) {
+  const ids = Array.from(new Set(targetIds.map(Number).filter(Boolean)))
+  if (!ids.length) {
+    ElMessage.info('当前筛选范围没有可删除的非客户')
+    return
+  }
+  try {
+    await confirmBulkPreview({ action: 'delete_non_customers', target_type: 'lead', target_ids: ids }, '删除非客户预览')
+    const { data } = await api.post('/ai/workbench/non-customers/delete', { target_ids: ids })
+    if (data.deleted) ElMessage.success(`已删除 ${data.deleted} 个非客户`)
+    else ElMessage.info('没有删除任何非客户')
+    if (data.skipped?.length) ElMessage.warning(`已跳过 ${data.skipped.length} 个不符合删除条件的客户`)
+    if (data.failed?.length) ElMessage.error(`有 ${data.failed.length} 个客户删除失败`)
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '删除非客户失败')
+  } finally {
+    await Promise.allSettled([loadAiJobs(), loadOverview(), loadTable(activeLibrary.value)])
   }
 }
 
@@ -281,7 +597,24 @@ async function retryAiJob(jobId: string) {
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '重试失败')
   } finally {
-    await loadAiJobs()
+    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadOverview()])
+  }
+}
+
+async function retryAiJobs(jobIds: string[]) {
+  const ids = Array.from(new Set(jobIds.map(String).filter(Boolean)))
+  if (!ids.length) {
+    ElMessage.info('当前没有可重试的失败任务')
+    return
+  }
+  try {
+    await confirmBulkPreview({ action: 'retry_failed_ai', target_type: 'ai_job', target_ids: ids }, 'AI失败重试预览')
+    await Promise.all(ids.map(id => api.post(`/ai/jobs/${id}/retry`)))
+    ElMessage.success(`已重试 ${ids.length} 个AI任务`)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '批量重试失败')
+  } finally {
+    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadOverview()])
   }
 }
 
@@ -301,7 +634,7 @@ async function enrichProfile(library: string, row: Dict) {
     ElMessage.success(`补资料任务 ${data.id} 已创建`)
     await Promise.all([loadTasks(), loadOverview()])
     selectedTask.value = await fetchTask(data.id)
-    activeView.value = 'logs'
+    await router.push('/logs')
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '补资料任务创建失败')
   }
@@ -318,9 +651,234 @@ async function analyzeOverviewAccount(node: Dict) {
     ElMessage.success(`账号分析任务 ${data.id} 已创建，采集完成后会自动执行AI判断`)
     await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
     selectedTask.value = await fetchTask(data.id)
-    activeView.value = 'logs'
+    await router.push('/logs')
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '账号分析任务创建失败')
+  }
+}
+
+async function analyzeOverviewCustomerIntent(node: Dict) {
+  const leadId = node.metrics?.lead_id || String(node.id || '').split(':')[1]
+  if (!leadId) {
+    ElMessage.error('当前客户缺少线索ID，无法意向分析')
+    return
+  }
+  try {
+    await api.post(`/overview/customers/${leadId}/intent-analysis`)
+    ElMessage.success('客户意向分析完成')
+    await Promise.allSettled([loadOverview(), loadAiJobs(), loadTable(activeLibrary.value)])
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '客户意向分析失败')
+  }
+}
+
+async function updateOverviewCustomerFollowStatus(node: Dict, status: string) {
+  const leadId = node.metrics?.lead_id || node.metrics?.id || String(node.id || '').split(':')[1]
+  if (!leadId) {
+    ElMessage.error('当前客户缺少线索ID，无法修改跟进状态')
+    return
+  }
+  const currentStatus = String(node.metrics?.follow_status || node.metrics?.screening_status || '待筛选')
+  if (currentStatus === status) return
+  try {
+    if (['已成交', '未成交'].includes(currentStatus)) {
+      await ElMessageBox.confirm(`当前客户已经是“${currentStatus}”，确认改为“${status}”？`, '修改跟进状态', { type: 'warning' })
+    }
+    const note = `人工修改跟进状态：${currentStatus} -> ${status}`
+    await api.patch(`/overview/customers/${leadId}/follow-status`, { follow_status: status, note })
+    ElMessage.success(`跟进状态已更新为“${status}”`)
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadAiJobs()])
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '跟进状态修改失败')
+  }
+}
+
+async function messageOverviewCustomer(node: Dict) {
+  const leadId = node.metrics?.lead_id || node.metrics?.id || String(node.id || '').split(':')[1]
+  const script = String(node.metrics?.script || '').trim()
+  const profileUrl = String(node.metrics?.profile_url || '').trim()
+  if (!leadId) {
+    ElMessage.error('当前客户缺少线索ID，无法标记私信')
+    return
+  }
+  if (!script) {
+    ElMessage.error('当前客户暂无AI话术，请先做意向分析')
+    return
+  }
+  if (!profileUrl) {
+    ElMessage.error('当前客户缺少主页链接，无法打开主页')
+    return
+  }
+  try {
+    const homepage = window.open(profileUrl, '_blank')
+    if (!homepage) {
+      ElMessage.warning('浏览器拦截了主页窗口，未复制话术，也未修改跟进状态')
+      return
+    }
+    homepage.opener = null
+    await navigator.clipboard.writeText(script)
+
+    const currentStatus = String(node.metrics?.follow_status || node.metrics?.screening_status || '待筛选')
+    const shouldMarkMessaged = ['待筛选', '未分析', '目标客户', '未私信'].includes(currentStatus)
+    if (shouldMarkMessaged) {
+      await api.patch(`/overview/customers/${leadId}/follow-status`, {
+        follow_status: '已私信',
+        note: '点击私信按钮：复制AI话术并打开客户主页'
+      })
+      ElMessage.success('AI话术已复制，客户主页已打开，跟进状态已更新为“已私信”')
+    } else {
+      ElMessage.success(`AI话术已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
+    }
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadAiJobs()])
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '私信操作失败')
+  }
+}
+
+async function changeMessageWorkbenchFilter(filters: Dict) {
+  messageFilters.value = {
+    ...messageFilters.value,
+    ...filters,
+    page: Number(filters.page || 1),
+  }
+  await loadMessageWorkbench()
+}
+
+async function selectMessageWorkbenchCustomer(leadId: number | string) {
+  const { data } = await api.get(`/message-workbench/customers/${leadId}`)
+  messageDetail.value = data
+}
+
+function closeMessageWorkbenchDetail() {
+  messageDetail.value = {}
+}
+
+async function updateMessageWorkbenchFollowStatus(row: Dict, status: string) {
+  const leadId = row.lead_id || row.id
+  if (!leadId) {
+    ElMessage.error('当前客户缺少线索ID，无法修改状态')
+    return
+  }
+  try {
+    await api.patch(`/overview/customers/${leadId}/follow-status`, {
+      follow_status: status,
+      note: '私信工作台修改跟进状态'
+    })
+    ElMessage.success(`已更新为“${status}”`)
+    await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '修改跟进状态失败')
+  }
+}
+
+async function messageWorkbenchCustomer(row: Dict) {
+  const leadId = row.lead_id || row.id
+  const script = String(row.script || '').trim()
+  const profileUrl = String(row.profile_url || '').trim()
+  if (!leadId) {
+    ElMessage.error('当前客户缺少线索ID，无法标记私信')
+    return
+  }
+  if (!script) {
+    ElMessage.error('当前客户暂无AI话术，请先做意向分析')
+    return
+  }
+  if (!profileUrl) {
+    ElMessage.error('当前客户缺少主页链接，无法打开主页')
+    return
+  }
+  try {
+    const homepage = window.open(profileUrl, '_blank')
+    if (!homepage) {
+      ElMessage.warning('浏览器拦截了主页窗口，未复制话术，也未修改跟进状态')
+      return
+    }
+    homepage.opener = null
+    await navigator.clipboard.writeText(script)
+
+    const currentStatus = String(row.follow_status || row.screening_status || '未私信')
+    const shouldMarkMessaged = ['待筛选', '未分析', '目标客户', '未私信'].includes(currentStatus)
+    if (shouldMarkMessaged) {
+      await api.patch(`/overview/customers/${leadId}/follow-status`, {
+        follow_status: '已私信',
+        note: '私信工作台：复制AI话术并打开客户主页'
+      })
+      ElMessage.success('AI话术已复制，客户主页已打开，跟进状态已更新为“已私信”')
+    } else {
+      ElMessage.success(`AI话术已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
+    }
+    await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '私信操作失败')
+  }
+}
+
+async function analyzeAccountCustomersIntent(node: Dict) {
+  const accountId = node.metrics?.id
+  if (!accountId) {
+    ElMessage.error('当前竞品账号缺少ID，无法一键意向分析')
+    return
+  }
+  try {
+    const { data } = await api.post(`/overview/accounts/${accountId}/customers/analyze`)
+    const runnableCount = Number(data.created || 0) + Number(data.resumed || 0)
+    if (runnableCount) {
+      ElMessage.success(`已创建 ${data.created || 0} 个、恢复 ${data.resumed || 0} 个客户意向分析任务，并行数 ${data.concurrency || 1}`)
+    } else if (data.lead_count) {
+      ElMessage.info(`客户账号暂无可启动的意向分析任务，跳过 ${data.skipped?.length || 0} 个运行中任务`)
+    } else {
+      ElMessage.info('当前竞品账号下没有可分析的客户账号')
+    }
+    await Promise.allSettled([loadOverview(), loadAiJobs(), loadTable(activeLibrary.value)])
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '一键意向分析失败')
+  }
+}
+
+async function analyzeKeywordCompetitors(node: Dict) {
+  const { platform, keyword } = overviewKeywordScope(node)
+  if (!platform || !keyword) {
+    ElMessage.error('当前关键词缺少平台或关键词信息，无法分析')
+    return
+  }
+  if (!['dy', 'xhs'].includes(platform)) {
+    ElMessage.error('当前平台不支持主页资料采集，无法批量账号分析')
+    return
+  }
+  const pendingCount = (node.children || []).filter((child: Dict) => competitorStatusLabel(child.metrics?.competitor_status) === '未分析').length
+  try {
+    await confirmBulkPreview({ action: 'keyword_analyze', target_type: 'keyword', filters: { platform, keyword } }, '一键竞品分析预览')
+    const { data } = await api.post('/overview/keywords/analyze', null, { params: { platform, keyword } })
+    if (data.created) ElMessage.success(`已创建 1 个账号分析任务，包含 ${data.account_count || 0} 个未分析账号`)
+    else if (pendingCount) ElMessage.info('未分析账号已有运行中的账号分析任务')
+    else ElMessage.info('当前关键词下没有未分析账号')
+    await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
+    if (data.task_ids?.length) {
+      selectedTask.value = await fetchTask(data.task_ids[0])
+      await router.push('/logs')
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '一键竞品分析失败')
+  }
+}
+
+async function deleteAccountNonCustomers(node: Dict) {
+  const accountId = node.metrics?.id
+  if (!accountId) {
+    ElMessage.error('当前竞品账号缺少ID，无法删除非客户')
+    return
+  }
+  try {
+    await confirmBulkPreview({ action: 'delete_non_customers', target_type: 'lead', filters: { source_account_id: accountId } }, '删除非客户预览')
+    const { data } = await api.post(`/overview/accounts/${accountId}/customers/non-customers/delete`)
+    if (data.deleted) ElMessage.success(`已删除 ${data.deleted} 个非客户`)
+    else ElMessage.info('当前竞品账号下没有可删除的非客户')
+    if (data.failed) ElMessage.warning(`有 ${data.failed} 个非客户删除失败，请查看返回错误`)
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks(), loadAiJobs()])
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '删除非客户失败')
   }
 }
 
@@ -330,27 +888,45 @@ async function deleteOverviewAccount(node: Dict) {
     ElMessage.error('当前账号缺少ID，无法删除')
     return
   }
-  const library = node.metrics?.competitor_status === '竞品' ? 'competitors' : 'competitor_candidates'
   try {
-    await ElMessageBox.confirm('此操作会同步删除项目库和 MediaCrawler 底层映射数据。确认删除该账号？', '删除账号确认', { type: 'warning' })
-    await api.delete(`/tables/${library}/${accountId}`)
-    ElMessage.success('账号已删除')
-    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value)])
+    await ElMessageBox.confirm('此操作会删除该账号相关内容、评论、线索来源和可清理账号，并同步 MediaCrawler 底层映射。确认删除该账号？', '删除账号确认', { type: 'warning' })
+    const { data } = await api.delete(`/overview/accounts/${accountId}`)
+    ElMessage.success(scopeDeleteMessage('账号数据已删除', data))
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks()])
   } catch (error: any) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(error?.response?.data?.detail || '账号删除失败')
   }
 }
 
+async function deleteOverviewCustomer(node: Dict) {
+  const leadId = node.metrics?.id
+  if (!leadId) {
+    ElMessage.error('当前客户缺少线索ID，无法删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm('此操作会删除该客户账号、评论证据和相关线索来源，并记录防重复墓碑。确认删除该客户？', '删除客户确认', { type: 'warning' })
+    const sourceAccountId = node.metrics?.source_account_id
+    const { data } = await api.delete(`/overview/customers/${leadId}`, {
+      params: sourceAccountId ? { source_account_id: sourceAccountId } : {}
+    })
+    ElMessage.success(scopeDeleteMessage('客户数据已删除', data))
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks()])
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '客户删除失败')
+  }
+}
+
 async function deleteKeywordNonCompetitors(node: Dict) {
-  const platform = node.metrics?.platform
-  const keyword = node.label
+  const { platform, keyword } = overviewKeywordScope(node)
   if (!platform || !keyword) {
     ElMessage.error('当前关键词缺少平台或关键词信息，无法删除')
     return
   }
   try {
-    await ElMessageBox.confirm(`将硬删除“${platformName(platform)} / ${keyword}”下所有非竞品账号，并同步 MediaCrawler 底层映射。确认继续？`, '一键删除非竞品', { type: 'warning' })
+    await confirmBulkPreview({ action: 'delete_non_competitors', target_type: 'competitor', filters: { platform, keyword } }, '一键删除非竞品预览')
     const { data } = await api.post('/overview/keywords/non-competitors/delete', null, { params: { platform, keyword } })
     if (data.deleted) ElMessage.success(`已删除 ${data.deleted} 个非竞品账号`)
     else ElMessage.info('当前关键词下没有可删除的非竞品账号')
@@ -361,8 +937,90 @@ async function deleteKeywordNonCompetitors(node: Dict) {
   }
 }
 
-function reserveFindCustomers() {
-  ElMessage.info('“找客户”功能已预留，后续会从竞品账号内容和评论区采集客户')
+async function deleteOverviewPlatform(node: Dict) {
+  const platform = node.metrics?.platform || node.label
+  if (!platform) {
+    ElMessage.error('当前平台缺少平台信息，无法删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`将硬删除“${platformName(platform)}”平台下的内容、评论、线索、账号来源，并同步 MediaCrawler 底层映射。确认继续？`, '删除平台数据', { type: 'warning' })
+    const { data } = await api.delete(`/overview/platforms/${encodeURIComponent(platform)}`)
+    ElMessage.success(scopeDeleteMessage('平台数据已删除', data))
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks()])
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '平台数据删除失败')
+  }
+}
+
+async function deleteOverviewKeyword(node: Dict) {
+  const { platform, keyword } = overviewKeywordScope(node)
+  if (!platform || !keyword) {
+    ElMessage.error('当前关键词缺少平台或关键词信息，无法删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`将硬删除“${platformName(platform)} / ${keyword}”关键词下的内容、评论、线索、账号来源，并同步 MediaCrawler 底层映射。确认继续？`, '删除关键词数据', { type: 'warning' })
+    const { data } = await api.delete('/overview/keywords', { params: { platform, keyword } })
+    ElMessage.success(scopeDeleteMessage('关键词数据已删除', data))
+    await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks()])
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '关键词数据删除失败')
+  }
+}
+
+function overviewKeywordScope(node: Dict) {
+  const idParts = String(node.id || '').split(':')
+  const idPlatform = idParts[0] === 'keyword' ? idParts[1] || '' : ''
+  const idKeyword = idParts[0] === 'keyword' ? idParts.slice(2).join(':') : ''
+  return {
+    platform: String(node.metrics?.platform || idPlatform || '').trim(),
+    keyword: String(node.metrics?.keyword || node.label || idKeyword || '').trim(),
+  }
+}
+
+function scopeDeleteMessage(prefix: string, data: Dict) {
+  const counts = data.counts || {}
+  return `${prefix}：内容 ${counts.contents || 0} / 评论 ${counts.comments || 0} / 账号 ${counts.accounts || 0} / 线索 ${counts.leads || 0}`
+}
+
+async function findCustomers(target: Dict) {
+  try {
+    let data: Dict
+    if (target.kind === 'keyword') {
+      const { platform, keyword } = overviewKeywordScope(target)
+      if (!platform || !keyword) {
+        ElMessage.error('当前关键词缺少平台或关键词信息，无法找客户')
+        return
+      }
+      await confirmBulkPreview({ action: 'keyword_find_customers', target_type: 'keyword', filters: { platform, keyword } }, '一键找客户预览')
+      const response = await api.post('/overview/keywords/find-customers', null, { params: { platform, keyword } })
+      data = response.data
+    } else {
+      const accountId = target.metrics?.id || target.id
+      if (!accountId) {
+        ElMessage.error('当前账号缺少ID，无法找客户')
+        return
+      }
+      const response = await api.post(`/accounts/${accountId}/find-customers`)
+      data = response.data
+    }
+
+    if (data.created) {
+      ElMessage.success(`已创建找客户任务，包含 ${data.account_count || 0} 个竞品账号`)
+    } else {
+      ElMessage.info(data.skipped?.length ? '相关竞品账号已有运行中的找客户任务' : '没有可用于找客户的竞品账号')
+    }
+    await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
+    if (data.task_ids?.length) {
+      selectedTask.value = await fetchTask(data.task_ids[0])
+      await router.push('/logs')
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '找客户任务创建失败')
+  }
 }
 
 async function saveSettings(values: Dict) {
@@ -382,2652 +1040,38 @@ async function clearAllData() {
         confirmButtonText: '清空',
         cancelButtonText: '取消',
         inputPlaceholder: '清空所有数据',
-        inputValidator: (input) => input === '清空所有数据' || '请输入：清空所有数据',
-        type: 'warning'
-      }
+        inputPattern: /^清空所有数据$/,
+        inputErrorMessage: '必须输入“清空所有数据”',
+        type: 'warning',
+      },
     )
-    value = result.value
-  } catch (error) {
-    // 取消或关闭弹窗是正常路径，不请求清空接口。
+    value = String(result.value || '')
+  } catch (error: any) {
     if (error === 'cancel' || error === 'close') return
     throw error
   }
-  const { data } = await api.post('/settings/clear-data', { confirm: value })
-  ElMessage.success(`已清空项目库 ${data.project.rows} 行，MediaCrawler ${data.media_crawler.rows} 行`)
-  selectedTask.value = null
-  overviewTree.value = []
-  tableRows.value = []
-  aiJobs.value = []
-  leadRows.value = []
-  competitorRows.value = []
+  try {
+    const { data } = await api.post('/settings/clear-data', { confirm: value })
+    ElMessage.success(`已清空数据：项目表 ${data.project_tables || 0} 个，底层表 ${data.raw_tables || 0} 个`)
+    selectedTask.value = null
+    await refreshAll()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '清空所有数据失败')
+  }
+}
+
+watch(activeView, () => {
+  void syncCurrentView('route')
+})
+
+onMounted(async () => {
   await refreshAll()
-}
-
-onMounted(refreshAll)
-
-const splitWidths = reactive<Record<string, number>>({})
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value))
-}
-
-const SplitPane = defineComponent({
-  props: {
-    storageKey: { type: String, required: true },
-    side: { type: String, default: 'right' },
-    defaultSideWidth: { type: Number, default: 360 },
-    minSideWidth: { type: Number, default: 240 },
-    maxSideWidth: { type: Number, default: 680 }
-  },
-  setup(props, { slots }) {
-    if (!splitWidths[props.storageKey]) splitWidths[props.storageKey] = props.defaultSideWidth
-    const dragging = ref(false)
-    let startX = 0
-    let startWidth = 0
-
-    function setWidth(nextWidth: number) {
-      splitWidths[props.storageKey] = clamp(nextWidth, props.minSideWidth, props.maxSideWidth)
-    }
-
-    function stopDrag() {
-      dragging.value = false
-      window.removeEventListener('pointermove', onPointerMove)
-      window.removeEventListener('pointerup', stopDrag)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-
-    function onPointerMove(event: PointerEvent) {
-      const deltaX = event.clientX - startX
-      setWidth(props.side === 'left' ? startWidth + deltaX : startWidth - deltaX)
-    }
-
-    function startDrag(event: PointerEvent) {
-      event.preventDefault()
-      dragging.value = true
-      startX = event.clientX
-      startWidth = splitWidths[props.storageKey]
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-      window.addEventListener('pointermove', onPointerMove)
-      window.addEventListener('pointerup', stopDrag)
-    }
-
-    function onKeydown(event: KeyboardEvent) {
-      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return
-      event.preventDefault()
-      const direction = event.key === 'ArrowRight' ? 1 : -1
-      const step = event.shiftKey ? 40 : 16
-      setWidth(splitWidths[props.storageKey] + (props.side === 'left' ? direction * step : -direction * step))
-    }
-
-    onBeforeUnmount(stopDrag)
-
-    return () => {
-      const sideWidth = splitWidths[props.storageKey]
-      const gridTemplateColumns = props.side === 'left'
-        ? `${sideWidth}px 10px minmax(0, 1fr)`
-        : `minmax(0, 1fr) 10px ${sideWidth}px`
-      const mainSlot = slots.default?.() || []
-      const sideSlot = slots.side?.() || []
-      const resizer = h('button', {
-        class: 'split-resizer',
-        type: 'button',
-        title: '拖动调整左右宽度',
-        'aria-label': '拖动调整左右宽度',
-        onPointerdown: startDrag,
-        onKeydown
-      })
-      return h('div', { class: ['split-pane', `side-${props.side}`, dragging.value ? 'dragging' : ''], style: { gridTemplateColumns } },
-        props.side === 'left' ? [...sideSlot, resizer, ...mainSlot] : [...mainSlot, resizer, ...sideSlot]
-      )
-    }
-  }
+  startAutoSync()
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
-function splitTagText(text: string) {
-  return text.split(/[\n\r,，;；]+/).map(item => item.trim()).filter(Boolean)
-}
-
-function mergeTags(current: string[], incoming: string[]) {
-  const next = [...current]
-  incoming.forEach(item => {
-    if (!next.includes(item)) next.push(item)
-  })
-  return next
-}
-
-function joinTags(tags: string[]) {
-  return tags.map(item => item.trim()).filter(Boolean).join(',')
-}
-
-const TagInput = defineComponent({
-  props: {
-    modelValue: { type: Array, required: true },
-    disabled: { type: Boolean, default: false },
-    placeholder: { type: String, default: '' }
-  },
-  emits: ['update:modelValue'],
-  setup(props, { emit }) {
-    const draft = ref('')
-    const inputRef = ref<HTMLInputElement | null>(null)
-    const currentTags = () => (props.modelValue as string[]).map(item => String(item))
-    function updateTags(tags: string[]) {
-      emit('update:modelValue', tags)
-    }
-    function commitDraft() {
-      const incoming = splitTagText(draft.value)
-      if (!incoming.length) return
-      updateTags(mergeTags(currentTags(), incoming))
-      draft.value = ''
-    }
-    function removeTag(index: number) {
-      const next = currentTags()
-      next.splice(index, 1)
-      updateTags(next)
-    }
-    function onInput(event: Event) {
-      const value = (event.target as HTMLInputElement).value
-      if (/[\n\r,，;；]/.test(value)) {
-        updateTags(mergeTags(currentTags(), splitTagText(value)))
-        draft.value = ''
-        return
-      }
-      draft.value = value
-    }
-    function onPaste(event: ClipboardEvent) {
-      const text = event.clipboardData?.getData('text') || ''
-      if (!/[\n\r,，;；]/.test(text)) return
-      event.preventDefault()
-      updateTags(mergeTags(currentTags(), splitTagText(text)))
-      draft.value = ''
-    }
-    function onKeydown(event: KeyboardEvent) {
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        commitDraft()
-      }
-      if (event.key === 'Backspace' && !draft.value && currentTags().length) {
-        removeTag(currentTags().length - 1)
-      }
-    }
-    return () => {
-      const tags = currentTags()
-      return h('div', {
-        class: ['tag-input', props.disabled ? 'disabled' : ''],
-        onClick: () => inputRef.value?.focus()
-      }, [
-        ...tags.map((tag, index) => h('span', { class: 'tag-chip' }, [
-          h('span', { class: 'tag-chip-text' }, tag),
-          h('button', {
-            type: 'button',
-            class: 'tag-remove',
-            title: `移除 ${tag}`,
-            disabled: props.disabled,
-            onClick: (event: MouseEvent) => {
-              event.stopPropagation()
-              removeTag(index)
-            }
-          }, [h(Close, { class: 'tag-remove-icon' })])
-        ])),
-        h('input', {
-          ref: inputRef,
-          value: draft.value,
-          disabled: props.disabled,
-          placeholder: tags.length ? '' : props.placeholder,
-          onInput,
-          onPaste,
-          onKeydown,
-          onBlur: commitDraft
-        })
-      ])
-    }
-  }
+onBeforeUnmount(() => {
+  stopAutoSync()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
-
-const icpFields = [
-  { key: 'product', label: '产品/服务', placeholder: '例如：AI客服、获客工具' },
-  { key: 'industry', label: '目标行业', placeholder: '例如：跨境电商、教育培训' },
-  { key: 'roles', label: '目标角色', placeholder: '例如：老板、运营负责人、销售主管' },
-  { key: 'pain_points', label: '典型痛点', placeholder: '用户常见问题、需求或抱怨', multiline: true },
-  { key: 'high_intent_words', label: '高意向词', placeholder: '例如：求推荐、怎么选、多少钱', multiline: true },
-  { key: 'value_proposition', label: '价值主张', placeholder: '产品能解决什么问题，适合什么客户', multiline: true },
-  { key: 'excluded_audience', label: '排除人群', placeholder: '不需要跟进的人群或场景', multiline: true }
-]
-
-function defaultIcpProfile() {
-  return Object.fromEntries(icpFields.map(field => [field.key, '']))
-}
-
-function normalizeIcpProfile(value: any) {
-  let source = value
-  if (typeof value === 'string') {
-    try { source = JSON.parse(value) } catch { source = {} }
-  }
-  return { ...defaultIcpProfile(), ...(source && typeof source === 'object' ? source : {}) }
-}
-
-function buildIcpPayload(value: Dict) {
-  const result: Dict = {}
-  icpFields.forEach(field => {
-    result[field.key] = String(value?.[field.key] || '').trim()
-  })
-  return result
-}
-
-function renderCapabilityPanel(capability: Dict, modeCapability: Dict) {
-  // 能力提示只解释平台字段限制，不直接修改任务参数。
-  if (!capability?.platform || !modeCapability?.mode) {
-    return h('section', { class: 'capability-panel muted' }, [
-      h('strong', '平台能力读取中'),
-      h('small', '刷新后会显示当前平台和模式的数据字段限制')
-    ])
-  }
-  const fields = capability.fields || {}
-  const fieldItems = [
-    fields.content_signature,
-    fields.creator_signature,
-    fields.comment_signature,
-    fields.creator_fans
-  ].filter(Boolean)
-  const warnings = Array.from(new Set<string>([
-    ...(modeCapability.warnings || []),
-    ...(capability.warnings || [])
-  ])).slice(0, 5)
-  return h('section', { class: 'capability-panel' }, [
-    h('div', { class: 'capability-head' }, [
-      h('div', [
-        h('small', `${platformName(capability.platform)} · ${modeCapability.label}`),
-        h('strong', `${modeCapability.required_input} → ${(modeCapability.expected_outputs || []).join(' / ')}`)
-      ]),
-      h('span', { class: 'capability-type' }, `MediaCrawler: ${modeCapability.crawler_type}`)
-    ]),
-    h('div', { class: 'capability-fields' }, fieldItems.map((field: Dict) => h('span', {
-      class: ['capability-chip', field.supported ? `status-${field.status}` : 'status-unsupported'],
-      title: field.note
-    }, [
-      h('em', field.label),
-      h('strong', field.status_label)
-    ]))),
-    warnings.length ? h('ul', { class: 'capability-warnings' }, warnings.map(warning => h('li', warning))) : null
-  ])
-}
-
-function renderTaskPreviewPanel(preview: Dict | null, error: string, loading: boolean) {
-  const normalized = preview?.normalized || {}
-  const mainInput = normalized.keywords || normalized.creator_id || normalized.specified_id || '-'
-  return h('section', { class: ['task-preview', error ? 'has-error' : ''] }, [
-    h('div', { class: 'preview-head' }, [
-      h('div', [
-        h('small', '执行预览'),
-        h('strong', loading ? '正在计算实际参数...' : (error || '确认后会按以下命令启动 MediaCrawler'))
-      ]),
-      preview ? h('span', { class: 'preview-status' }, `${platformName(preview.platform)} / ${preview.crawler_type}`) : null
-    ]),
-    preview ? h('div', { class: 'preview-grid' }, [
-      previewItem('任务名', preview.name),
-      previewItem('输入', mainInput),
-      previewItem('内容数', normalized.content_count),
-      previewItem('单条评论', normalized.comment_count),
-      previewItem('采评论', normalized.collect_comments ? '是' : '否'),
-      previewItem('立即运行', normalized.execute_crawler ? '是' : '否')
-    ]) : null,
-    preview?.command_text ? h('pre', { class: 'command-line' }, preview.command_text) : null,
-    preview?.warnings?.length ? h('ul', { class: 'preview-warnings' }, preview.warnings.map((warning: string) => h('li', warning))) : null
-  ])
-}
-
-function previewItem(label: string, value: unknown) {
-  return h('span', { class: 'preview-field' }, [
-    h('em', label),
-    h('strong', String(value ?? '-'))
-  ])
-}
-
-const TaskView = defineComponent({
-  props: { tasks: { type: Array, required: true }, settings: { type: Object, required: true }, capabilities: { type: Array, required: true } },
-  emits: ['create-task', 'open-logs'],
-  setup(props, { emit }) {
-    const modes = [
-      { key: 'competitor_discovery', title: '竞品账号采集', note: '关键词找竞品候选，再用AI确认', badge: '找账号' },
-      { key: 'competitor_crawl', title: '竞品账号爬取', note: '爬评论区，把评论用户转为线索', badge: '找线索' },
-      { key: 'demand_content', title: '找需求内容', note: '关键词找吐槽/需求内容，作者进入客户池', badge: '找需求' },
-      { key: 'own_account', title: '自家账号互动', note: '监控自家评论区，筛出高意向用户', badge: '自有流量' }
-    ]
-    const form = reactive({
-      mode: 'competitor_discovery',
-      platform: 'dy',
-      login_type: 'qrcode',
-      keyword_tags: [] as string[],
-      creator_id_tags: [] as string[],
-      specified_id_tags: [] as string[],
-      content_count: 20,
-      comment_count: 20,
-      max_concurrency: 1,
-      collect_comments: false,
-      collect_sub_comments: false,
-      headless: false,
-      tcp_mode: true,
-      execute_crawler: true
-    })
-    const modeNeedsCreator = computed(() => ['competitor_crawl', 'own_account'].includes(form.mode))
-    const modeUsesKeywords = computed(() => ['competitor_discovery', 'demand_content'].includes(form.mode))
-    const activeCapability = computed(() => (props.capabilities as Dict[]).find(item => item.platform === form.platform) || {})
-    const activeModeCapability = computed(() => activeCapability.value?.modes?.[form.mode] || {})
-    const taskPreview = ref<Dict | null>(null)
-    const previewError = ref('')
-    const previewLoading = ref(false)
-    let previewTimer: ReturnType<typeof setTimeout> | null = null
-    function applyMode(modeKey: string) {
-      form.mode = modeKey
-      form.collect_comments = ['competitor_crawl', 'own_account'].includes(modeKey)
-      form.collect_sub_comments = form.collect_comments
-      if (['competitor_discovery', 'demand_content'].includes(modeKey)) {
-        form.creator_id_tags = []
-        form.specified_id_tags = []
-      } else {
-        form.keyword_tags = []
-      }
-    }
-    function buildTaskPayload() {
-      const payload = {
-        mode: form.mode,
-        platform: form.platform,
-        login_type: form.login_type,
-        keywords: joinTags(form.keyword_tags),
-        creator_id: joinTags(form.creator_id_tags),
-        specified_id: joinTags(form.specified_id_tags),
-        content_count: form.content_count,
-        comment_count: form.comment_count,
-        max_concurrency: form.max_concurrency,
-        collect_comments: form.collect_comments,
-        collect_sub_comments: form.collect_sub_comments,
-        headless: form.headless,
-        tcp_mode: form.tcp_mode,
-        execute_crawler: form.execute_crawler
-      }
-      if (['competitor_discovery', 'demand_content'].includes(payload.mode)) {
-        payload.creator_id = ''
-        payload.specified_id = ''
-      } else if (payload.specified_id) {
-        payload.keywords = ''
-        payload.creator_id = ''
-      } else {
-        payload.keywords = ''
-      }
-      return payload
-    }
-    async function refreshPreview() {
-      previewLoading.value = true
-      const payload = buildTaskPayload()
-      const localError = previewInputError(payload)
-      if (localError) {
-        taskPreview.value = null
-        previewError.value = localError
-        previewLoading.value = false
-        return
-      }
-      try {
-        const { data } = await api.post('/tasks/preview', payload)
-        taskPreview.value = data
-        previewError.value = ''
-      } catch (error: any) {
-        taskPreview.value = null
-        previewError.value = error?.response?.data?.detail || '任务参数还不完整'
-      } finally {
-        previewLoading.value = false
-      }
-    }
-    function previewInputError(payload: Dict) {
-      if (['competitor_discovery', 'demand_content'].includes(payload.mode) && !payload.keywords) {
-        return '搜索型任务必须填写关键词，避免使用 MediaCrawler 默认关键词'
-      }
-      if (!['competitor_discovery', 'demand_content'].includes(payload.mode) && !payload.creator_id && !payload.specified_id) {
-        return '账号/详情采集任务必须填写创作者主页/ID或指定内容ID'
-      }
-      return ''
-    }
-    function schedulePreview() {
-      if (previewTimer) clearTimeout(previewTimer)
-      previewTimer = setTimeout(refreshPreview, 250)
-    }
-    watch(
-      () => [
-        form.mode,
-        form.platform,
-        form.login_type,
-        form.keyword_tags.join('|'),
-        form.creator_id_tags.join('|'),
-        form.specified_id_tags.join('|'),
-        form.content_count,
-        form.comment_count,
-        form.max_concurrency,
-        form.collect_comments,
-        form.collect_sub_comments,
-        form.headless,
-        form.tcp_mode,
-        form.execute_crawler
-      ],
-      schedulePreview,
-      { immediate: true }
-    )
-    onBeforeUnmount(() => {
-      if (previewTimer) clearTimeout(previewTimer)
-    })
-    function submit() {
-      const payload = buildTaskPayload()
-      if (modeUsesKeywords.value && !payload.keywords) {
-        ElMessage.error('搜索型任务必须填写关键词')
-        return
-      }
-      if (!modeUsesKeywords.value && !payload.creator_id && !payload.specified_id) {
-        ElMessage.error('账号/详情采集任务必须填写创作者主页/ID或指定内容ID')
-        return
-      }
-      emit('create-task', payload)
-    }
-    return () => h(SplitPane, { storageKey: 'tasks', side: 'right', defaultSideWidth: 360 }, {
-      default: () => [
-      h('section', { class: 'pane primary-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', '选择拓客模式'), h('span', '先选目标，再填必要参数')]),
-        h('div', { class: 'mode-grid' }, modes.map(mode => h('button', {
-          class: ['mode-option', form.mode === mode.key ? 'selected' : ''],
-          onClick: () => applyMode(mode.key)
-        }, [h('small', mode.badge), h('strong', mode.title), h('span', mode.note)]))),
-        renderCapabilityPanel(activeCapability.value, activeModeCapability.value),
-        h('div', { class: 'form-grid' }, [
-          h('label', ['平台', h('select', { value: form.platform, onChange: (event: Event) => form.platform = (event.target as HTMLSelectElement).value }, [
-            h('option', { value: 'dy' }, '抖音'),
-            h('option', { value: 'xhs' }, '小红书'),
-            h('option', { value: 'ks' }, '快手')
-          ])]),
-          h('label', ['登录方式', h('select', { value: form.login_type, onChange: (event: Event) => form.login_type = (event.target as HTMLSelectElement).value }, [
-            h('option', { value: 'qrcode' }, '二维码'),
-            h('option', { value: 'phone' }, '手机号'),
-            h('option', { value: 'cookie' }, 'Cookie')
-          ])]),
-          h('label', { class: 'form-field field-full' }, ['关键词', h(TagInput, {
-            modelValue: form.keyword_tags,
-            disabled: !modeUsesKeywords.value,
-            placeholder: modeUsesKeywords.value ? '输入关键词后按回车，例如：AI客服' : '账号/详情任务不使用关键词',
-            'onUpdate:modelValue': (value: string[]) => form.keyword_tags = value
-          })]),
-          h('label', { class: 'form-field field-full' }, ['创作者主页/ID', h(TagInput, {
-            modelValue: form.creator_id_tags,
-            disabled: modeUsesKeywords.value,
-            placeholder: modeNeedsCreator.value ? '输入账号主页或ID后按回车' : '详情任务可不填',
-            'onUpdate:modelValue': (value: string[]) => form.creator_id_tags = value
-          })]),
-          h('label', { class: 'form-field field-full' }, ['指定内容ID/链接', h(TagInput, {
-            modelValue: form.specified_id_tags,
-            disabled: modeUsesKeywords.value,
-            placeholder: modeUsesKeywords.value ? '搜索任务不使用内容ID' : '输入内容ID或链接后按回车',
-            'onUpdate:modelValue': (value: string[]) => form.specified_id_tags = value
-          })]),
-          h('label', ['内容数量', h('input', { type: 'number', value: form.content_count, min: 1, onInput: (event: Event) => form.content_count = Number((event.target as HTMLInputElement).value) })]),
-          h('label', ['单条评论数', h('input', { type: 'number', value: form.comment_count, min: 0, onInput: (event: Event) => form.comment_count = Number((event.target as HTMLInputElement).value) })]),
-          h('label', ['并发数', h('input', { type: 'number', value: form.max_concurrency, min: 1, max: 10, onInput: (event: Event) => form.max_concurrency = Number((event.target as HTMLInputElement).value) })])
-        ]),
-        h('div', { class: 'toggles' }, [
-          h('label', [h('input', { type: 'checkbox', checked: form.collect_comments, onChange: (event: Event) => form.collect_comments = (event.target as HTMLInputElement).checked }), '采集评论']),
-          h('label', [h('input', { type: 'checkbox', checked: form.collect_sub_comments, onChange: (event: Event) => form.collect_sub_comments = (event.target as HTMLInputElement).checked }), '二级评论']),
-          h('label', [h('input', { type: 'checkbox', checked: form.headless, onChange: (event: Event) => form.headless = (event.target as HTMLInputElement).checked }), '无头模式']),
-          h('label', [h('input', { type: 'checkbox', checked: form.execute_crawler, onChange: (event: Event) => form.execute_crawler = (event.target as HTMLInputElement).checked }), '立即运行'])
-        ]),
-        h('div', { class: 'action-row' }, [
-          h('button', { class: 'primary-action', onClick: submit }, [h(VideoPlay, { class: 'inline-icon' }), '开始采集并导入'])
-        ]),
-        renderTaskPreviewPanel(taskPreview.value, previewError.value, previewLoading.value)
-      ])
-      ],
-      side: () => [
-      h('aside', { class: 'pane side-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', '最近任务'), h('span', '确认采集是否跑通')]),
-        h('div', { class: 'task-list' }, (props.tasks as Dict[]).slice(0, 8).map(task => h('button', { class: 'task-row', onClick: () => emit('open-logs', task.id) }, [
-          h('strong', `${task.id} · ${task.name}`),
-          h('span', `${task.platform} / ${task.mode}`),
-          h('em', { class: `status ${task.status}` }, task.status)
-        ])))
-      ])
-      ]
-    })
-  }
-})
-
-const OverviewView = defineComponent({
-  props: { tree: { type: Array, required: true } },
-  emits: ['account-analyze', 'delete-account', 'delete-keyword-noncompetitors', 'find-customers'],
-  setup(props, { emit }) {
-    const expanded = reactive<Record<string, boolean>>({})
-    const isExpanded = (node: Dict) => expanded[node.id] ?? false
-    const toggle = (node: Dict) => {
-      expanded[node.id] = !isExpanded(node)
-    }
-    const handlers = {
-      analyzeAccount: (node: Dict) => emit('account-analyze', node),
-      deleteAccount: (node: Dict) => emit('delete-account', node),
-      deleteKeywordNonCompetitors: (node: Dict) => emit('delete-keyword-noncompetitors', node),
-      findCustomers: (node: Dict) => emit('find-customers', node)
-    }
-    return () => h('section', { class: 'pane overview-pane' }, [
-      h('div', { class: 'section-title' }, [h('h2', '关系总览'), h('span', '平台 / 关键词 / 账号层级表')]),
-      (props.tree as Dict[]).length
-        ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, handlers)))
-        : h('div', { class: 'empty-state' }, '暂无总览数据，请先创建采集任务')
-    ])
-  }
-})
-
-function renderOverviewRow(
-  node: Dict,
-  level: number,
-  isExpanded: (node: Dict) => boolean,
-  toggle: (node: Dict) => void,
-  handlers: Record<string, (node: Dict) => void>
-): any[] {
-  const children = node.children || []
-  const opened = isExpanded(node)
-  const rows = [
-    h('div', { class: ['overview-row', `level-${level}`, node.kind] }, [
-      h('div', { class: 'overview-main', style: { paddingLeft: `${level * 34}px` } }, [
-        children.length
-          ? h('button', { class: 'outline-button', onClick: () => toggle(node) }, opened ? '收起' : '展开')
-          : h('span', { class: 'overview-spacer' }),
-      h('div', { class: 'overview-title' }, [
-          renderOverviewTitle(node),
-          h('small', overviewSubtitle(node))
-        ])
-      ]),
-      h('div', { class: 'overview-metrics' }, [
-        ...overviewMetricChips(node).map(chip => h('span', { class: 'metric-chip' }, chip)),
-        ...overviewActions(node, handlers)
-      ])
-    ])
-  ]
-  if (opened) {
-    children.forEach((child: Dict) => rows.push(...renderOverviewRow(child, level + 1, isExpanded, toggle, handlers)))
-  }
-  return rows
-}
-
-function renderOverviewTitle(node: Dict) {
-  const label = displayOverviewLabel(node)
-  if (node.kind === 'account' && node.metrics?.profile_url) {
-    return h('a', { class: 'overview-link', href: node.metrics.profile_url, target: '_blank', rel: 'noreferrer' }, label)
-  }
-  return h('strong', label)
-}
-
-function displayOverviewLabel(node: Dict) {
-  if (node.kind === 'platform') return platformName(node.label)
-  if (node.kind === 'keyword') return `关键词：${node.label}`
-  return node.label || `账号 ${node.metrics?.id || ''}`
-}
-
-function overviewSubtitle(node: Dict) {
-  if (node.kind === 'platform') return node.label
-  if (node.kind === 'keyword') return '关键词分组'
-  if (node.kind === 'account') return node.metrics?.signature || '主页简介未采集，需账号分析'
-  return '账号'
-}
-
-function overviewActions(node: Dict, handlers: Record<string, (node: Dict) => void>) {
-  const metrics = node.metrics || {}
-  if (node.kind === 'keyword') {
-    return [
-      h('button', {
-        class: 'overview-action danger',
-        onClick: (event: MouseEvent) => {
-          event.stopPropagation()
-          handlers.deleteKeywordNonCompetitors(node)
-        }
-      }, '一键删除非竞品')
-    ]
-  }
-  if (node.kind !== 'account') return []
-  const isCompetitor = metrics.competitor_status === '竞品'
-  const canAnalyze = ['dy', 'xhs'].includes(metrics.platform)
-  const primary = isCompetitor
-    ? h('button', {
-      class: 'overview-action reserved',
-      onClick: (event: MouseEvent) => {
-        event.stopPropagation()
-        handlers.findCustomers(node)
-      }
-    }, '找客户')
-    : h('button', {
-      class: 'overview-action',
-      disabled: !canAnalyze,
-      title: canAnalyze ? '采集主页和少量视频后交给AI判断竞品' : '当前平台不支持主页资料采集',
-      onClick: (event: MouseEvent) => {
-        event.stopPropagation()
-        if (canAnalyze) handlers.analyzeAccount(node)
-      }
-    }, '账号分析')
-  return [
-    primary,
-    h('button', {
-      class: 'overview-action danger',
-      onClick: (event: MouseEvent) => {
-        event.stopPropagation()
-        handlers.deleteAccount(node)
-      }
-    }, '删除')
-  ]
-}
-
-function platformName(platform: string) {
-  return ({ dy: '抖音', xhs: '小红书', ks: '快手' } as Record<string, string>)[platform] || platform
-}
-
-function overviewMetricChips(node: Dict) {
-  const metrics = node.metrics || {}
-  if (node.kind === 'account') {
-    return [
-      accountRoleLabel(metrics.account_role) ? `角色 ${accountRoleLabel(metrics.account_role)}` : '',
-      metrics.competitor_status ? `竞品 ${metrics.competitor_status}` : '',
-      metrics.fans !== null && metrics.fans !== undefined ? `粉丝 ${metrics.fans}` : '',
-      `内容 ${metrics.content_count || 0}`,
-      `评论 ${metrics.comment_count || 0}`,
-      `线索 ${metrics.customer_count || 0}`,
-      metrics.latest ? `最近 ${metrics.latest}` : ''
-    ].filter(Boolean)
-  }
-  return [
-    `竞品 ${metrics.competitors || 0}`,
-    `内容 ${metrics.contents || 0}`,
-    `评论 ${metrics.comments || 0}`,
-    `线索用户 ${metrics.customers || 0}`,
-    metrics.latest ? `最近 ${metrics.latest}` : ''
-  ].filter(Boolean)
-}
-
-function accountRoleLabel(role: string) {
-  return ({
-    competitor_candidate: '候选竞品',
-    competitor: '竞品',
-    own_account: '自家账号',
-    lead: '线索账号'
-  } as Record<string, string>)[role] || ''
-}
-
-const AiView = defineComponent({
-  props: { jobs: { type: Array, required: true }, leadRows: { type: Array, required: true }, competitorRows: { type: Array, required: true } },
-  emits: ['create-job', 'retry-job'],
-  setup(props, { emit }) {
-    return () => h(SplitPane, { storageKey: 'ai', side: 'right', defaultSideWidth: 340 }, {
-      default: () => [
-      h('section', { class: 'pane primary-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', '待分析队列'), h('span', '失败项可直接重试')]),
-        h('div', { class: 'metric-row' }, [
-          h('div', { class: 'metric-tile accent-green' }, [h('small', '待筛选线索'), h('strong', String((props.leadRows as Dict[]).length))]),
-          h('div', { class: 'metric-tile accent-amber' }, [h('small', '竞品候选'), h('strong', String((props.competitorRows as Dict[]).length))]),
-          h('div', { class: 'metric-tile accent-blue' }, [h('small', 'AI任务'), h('strong', String((props.jobs as Dict[]).length))])
-        ]),
-        h('table', { class: 'data-table' }, [
-          h('thead', [h('tr', [h('th', '任务'), h('th', '对象'), h('th', '状态'), h('th', '错误'), h('th', '操作')])]),
-          h('tbody', (props.jobs as Dict[]).map(job => h('tr', [
-            h('td', job.id),
-            h('td', `${job.target_type} #${job.target_id}`),
-            h('td', h('span', { class: `status ${job.status}` }, job.status)),
-            h('td', job.error || '-'),
-            h('td', h('button', { class: 'icon-button', onClick: () => emit('retry-job', job.id), title: '重试AI分析' }, [h(Refresh)]))
-          ])))
-        ])
-      ])
-      ],
-      side: () => [
-      h('aside', { class: 'pane side-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', '快速入口'), h('span', '从业务对象发起分析')]),
-        h('button', { class: 'wide-action', onClick: () => (props.competitorRows as Dict[])[0] && emit('create-job', 'competitor', (props.competitorRows as Dict[])[0].id) }, [h(MagicStick, { class: 'inline-icon' }), '分析第一个竞品候选']),
-        h('button', { class: 'wide-action', onClick: () => (props.leadRows as Dict[])[0] && emit('create-job', 'lead', (props.leadRows as Dict[])[0].id) }, [h(MagicStick, { class: 'inline-icon' }), '分析第一个线索客户'])
-      ])
-      ]
-    })
-  }
-})
-
-const LogsView = defineComponent({
-  props: { tasks: { type: Array, required: true }, selectedTask: { type: Object, default: null } },
-  emits: ['select-task', 'archive-task', 'delete-task'],
-  setup(props, { emit }) {
-    return () => h(SplitPane, { storageKey: 'logs', side: 'right', defaultSideWidth: 390 }, {
-      default: () => [
-      h('section', { class: 'pane primary-pane log-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', props.selectedTask ? `${props.selectedTask.id} · ${props.selectedTask.name}` : '任务详情'), h('span', props.selectedTask?.status || '请选择任务')]),
-        props.selectedTask ? renderTaskOutcome(props.selectedTask as Dict) : h('div', { class: 'empty-state compact' }, '请选择左侧任务查看产出和日志'),
-        h('div', { class: 'log-console' }, (props.selectedTask?.logs || []).map((log: Dict) => h('p', [h('time', log.created_at), h('span', log.message)])))
-      ])
-      ],
-      side: () => [
-      h('aside', { class: 'pane side-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', '任务列表'), h('span', '归档前先看日志')]),
-        (props.tasks as Dict[]).map(task => h('button', { class: 'task-row', onClick: () => emit('select-task', task.id) }, [
-          h('strong', `${task.id} · ${task.name}`),
-          h('span', task.command || task.mode),
-          h('span', { class: 'task-row-outcome' }, taskOutcomeSummary(task)),
-          h('em', { class: `status ${task.status}` }, task.status)
-        ])),
-        props.selectedTask ? h('div', { class: 'button-pair' }, [
-          h('button', { onClick: () => emit('archive-task', props.selectedTask.id) }, '归档'),
-          h('button', { class: 'danger', onClick: () => emit('delete-task', props.selectedTask.id) }, '硬删除')
-        ]) : null
-      ])
-      ]
-    })
-  }
-})
-
-function renderTaskOutcome(task: Dict) {
-  const outcome = task.outcome || {}
-  const counts = outcome.counts || {}
-  const actions = outcome.next_actions || []
-  const metrics = [
-    ['内容', counts.contents || 0],
-    ['评论', counts.comments || 0],
-    ['候选竞品', counts.competitor_candidates || 0],
-    ['线索', counts.leads || 0],
-    ['目标客户', counts.target_customers || 0],
-    ['需补资料', counts.profile_enrichment_needed || 0]
-  ]
-  return h('div', { class: 'task-outcome' }, [
-    h('div', { class: 'task-outcome-head' }, [
-      h('strong', '任务产出'),
-      h('span', { class: `outcome-health ${outcome.health || 'pending'}` }, outcomeHealthLabel(outcome.health))
-    ]),
-    h('div', { class: 'task-outcome-grid' }, metrics.map(([label, value]) => h('div', [
-      h('small', String(label)),
-      h('strong', String(value))
-    ]))),
-    actions.length
-      ? h('ul', { class: 'task-next-actions' }, actions.map((action: string) => h('li', action)))
-      : h('p', { class: 'task-next-actions empty' }, '暂无下一步动作，等待任务完成或查看日志')
-  ])
-}
-
-function taskOutcomeSummary(task: Dict) {
-  const counts = task.outcome?.counts || {}
-  return `内容 ${counts.contents || 0} / 评论 ${counts.comments || 0} / 线索 ${counts.leads || 0}`
-}
-
-function outcomeHealthLabel(health: string) {
-  return ({
-    actionable: '可处理',
-    collected: '已采集',
-    empty: '无有效数据',
-    failed: '失败',
-    pending: '等待结果'
-  } as Record<string, string>)[health] || '等待结果'
-}
-
-const TablesView = defineComponent({
-  props: {
-    library: { type: String, required: true },
-    rows: { type: Array, required: true },
-    loading: { type: Boolean, required: true },
-    statusFilter: { type: String, default: '' },
-    keywordFilter: { type: String, default: '' }
-  },
-  emits: ['change-library', 'change-filter', 'update-row', 'delete-row', 'analyze-row', 'enrich-profile'],
-  setup(props, { emit }) {
-    const libraries = [
-      ['contents', '内容库'],
-      ['comments', '评论库'],
-      ['competitor_candidates', '竞品候选库'],
-      ['competitors', '竞品库'],
-      ['lead_customers', '线索客户库'],
-      ['target_customers', '目标客户库']
-    ]
-    const accountLibraries = ['competitor_candidates', 'competitors', 'lead_customers', 'target_customers']
-    const headers = ['名称/内容', '状态', '来源任务', '证据/链接', '操作']
-    const defaultWidths = [360, 140, 190, 170, 180]
-    const widthsByLibrary = reactive<Record<string, number[]>>({})
-    const filterDraft = reactive({ status: props.statusFilter, keyword: props.keywordFilter })
-    let stopColumnResize: (() => void) | null = null
-    watch(() => [props.statusFilter, props.keywordFilter], ([status, keyword]) => {
-      filterDraft.status = String(status || '')
-      filterDraft.keyword = String(keyword || '')
-    })
-    function columnWidths() {
-      if (!widthsByLibrary[props.library]) widthsByLibrary[props.library] = [...defaultWidths]
-      return widthsByLibrary[props.library]
-    }
-    function statusOptions() {
-      if (['competitor_candidates', 'competitors'].includes(props.library)) return ['未分析', '竞品', '非竞品']
-      if (['lead_customers', 'target_customers'].includes(props.library)) return ['待筛选', '未私信', '未回复', '已回复', '未成交', '已成交', '无需跟进']
-      return []
-    }
-    function applyFilters() {
-      emit('change-filter', { status: filterDraft.status, keyword: filterDraft.keyword })
-    }
-    function resetFilters() {
-      filterDraft.status = ''
-      filterDraft.keyword = ''
-      emit('change-filter', { status: '', keyword: '' })
-    }
-    function startColumnResize(index: number, event: PointerEvent) {
-      event.preventDefault()
-      const widths = columnWidths()
-      const startX = event.clientX
-      const startWidth = widths[index]
-      const onMove = (moveEvent: PointerEvent) => {
-        widths[index] = clamp(startWidth + moveEvent.clientX - startX, 90, 680)
-      }
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        stopColumnResize = null
-      }
-      stopColumnResize = onUp
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
-    }
-    onBeforeUnmount(() => stopColumnResize?.())
-    return () => h('section', { class: 'pane table-workspace' }, [
-      h('div', { class: 'table-library-bar' }, [
-        h('div', { class: 'section-title' }, [h('h2', '数据表'), h('span', '选择一个业务库')]),
-        h('div', { class: 'library-list' }, libraries.map(([key, label]) => h('button', { class: props.library === key ? 'selected' : '', onClick: () => emit('change-library', key) }, label))),
-        h('div', { class: 'table-filters' }, [
-          statusOptions().length ? h('select', {
-            value: filterDraft.status,
-            onChange: (event: Event) => filterDraft.status = (event.target as HTMLSelectElement).value
-          }, [
-            h('option', { value: '' }, '全部状态'),
-            ...statusOptions().map(status => h('option', { value: status }, status))
-          ]) : null,
-          h('input', {
-            value: filterDraft.keyword,
-            placeholder: '搜索名称、内容、简介或来源',
-            onInput: (event: Event) => filterDraft.keyword = (event.target as HTMLInputElement).value,
-            onKeydown: (event: KeyboardEvent) => {
-              if (event.key === 'Enter') applyFilters()
-            }
-          }),
-          h('button', { type: 'button', onClick: applyFilters }, '筛选'),
-          h('button', { type: 'button', class: 'ghost-button', onClick: resetFilters }, '清空')
-        ])
-      ]),
-      h('div', { class: 'table-content' }, [
-        h('div', { class: 'section-title' }, [h('h2', libraries.find(([key]) => key === props.library)?.[1] || '数据'), h('span', `${(props.rows as Dict[]).length} 条记录`)]),
-        h('div', { class: 'table-scroll' }, [
-        h('table', { class: 'data-table resizable-table', style: { minWidth: `${columnWidths().reduce((total, width) => total + width, 0)}px` } }, [
-          h('colgroup', columnWidths().map(width => h('col', { style: { width: `${width}px` } }))),
-          h('thead', [h('tr', headers.map((label, index) => h('th', [
-            h('span', label),
-            h('button', { class: 'column-resizer', type: 'button', title: '拖动调整列宽', onPointerdown: (event: PointerEvent) => startColumnResize(index, event) })
-          ])))]),
-          h('tbody', (props.rows as Dict[]).map(row => h('tr', [
-            h('td', [renderTablePrimaryCell(props.library, row)]),
-            h('td', row.follow_status || row.competitor_status || row.status || '-'),
-            h('td', row.task_name || row.task_id || '-'),
-            h('td', row.profile_url || row.content_url ? h('a', { href: row.profile_url || row.content_url, target: '_blank' }, '打开链接') : '-'),
-            h('td', { class: 'row-actions' }, [
-              ['competitor_candidates', 'lead_customers'].includes(props.library) ? h('button', { class: 'icon-button', title: 'AI分析', onClick: () => emit('analyze-row', props.library, row) }, [h(MagicStick)]) : null,
-              accountLibraries.includes(props.library) ? h('button', {
-                class: ['icon-button', row.platform === 'ks' ? 'is-disabled' : ''],
-                disabled: row.platform === 'ks',
-                title: row.platform === 'ks' ? '快手主页资料暂不能从 SQLite 补回' : '补资料',
-                onClick: () => emit('enrich-profile', props.library, row)
-              }, [h(Refresh)]) : null,
-              props.library === 'target_customers' && row.script ? h('button', { class: 'icon-button', title: '复制话术', onClick: () => navigator.clipboard.writeText(row.script) }, [h(CopyDocument)]) : null,
-              h('button', { class: 'icon-button danger', title: '删除', onClick: () => emit('delete-row', props.library, row) }, [h(Delete)])
-            ])
-          ])))
-        ])
-        ])
-      ])
-    ])
-  }
-})
-
-function renderTablePrimaryCell(library: string, row: Dict) {
-  const label = tablePrimaryText(row)
-  const href = tablePrimaryHref(library, row)
-  const attrs = { class: 'table-primary-text', title: label }
-  if (!href) return h('strong', attrs, label)
-  return h('a', { ...attrs, class: 'table-primary-link table-primary-text', href, target: '_blank', rel: 'noreferrer' }, label)
-}
-
-function tablePrimaryText(row: Dict) {
-  return String(row.nickname || row.title || row.commenter_nickname || row.body || row.description || row.comment_samples || row.signature || row.id || '-')
-}
-
-function tablePrimaryHref(library: string, row: Dict) {
-  if (library === 'contents') return row.content_url || row.author_url || ''
-  if (library === 'comments') return row.content_url || row.commenter_url || ''
-  return row.profile_url || row.content_url || row.commenter_url || row.author_url || ''
-}
-
-const SettingsView = defineComponent({
-  props: { settings: { type: Object, required: true }, env: { type: Object, required: true } },
-  emits: ['save', 'check-env', 'clear-data'],
-  setup(props, { emit }) {
-    const local = reactive<Dict>({})
-    function sync() {
-      Object.keys(local).forEach(key => delete local[key])
-      Object.assign(local, JSON.parse(JSON.stringify(props.settings || {})))
-      local.icp_profile = normalizeIcpProfile(local.icp_profile)
-    }
-    watch(() => props.settings, sync, { immediate: true, deep: true })
-    return () => {
-      if (!local.icp_profile || typeof local.icp_profile !== 'object') {
-        local.icp_profile = normalizeIcpProfile(local.icp_profile)
-      }
-      const icpProfile = local.icp_profile as Dict
-      return h(SplitPane, { storageKey: 'settings', side: 'right', defaultSideWidth: 360 }, {
-        default: () => [
-        h('section', { class: 'pane primary-pane' }, [
-          h('div', { class: 'section-title' }, [h('h2', '基础配置'), h('span', '没有配置时 AI 分析会明确失败')]),
-          h('div', { class: 'form-grid' }, [
-            inputField(local, 'media_crawler_path', 'MediaCrawler路径'),
-            inputField(local, 'media_crawler_db_path', '底层SQLite路径'),
-            inputField(local, 'ai_base_url', 'AI Base URL'),
-            inputField(local, 'ai_api_key', 'API Key', 'password'),
-            inputField(local, 'ai_model', '模型名'),
-            inputField(local, 'default_content_count', '默认内容数', 'number'),
-            inputField(local, 'default_comment_count', '默认评论数', 'number'),
-            inputField(local, 'max_concurrency', '默认并发', 'number')
-          ]),
-          h('div', { class: 'toggles' }, [
-            toggleField(local, 'headless', '默认无头模式'),
-            toggleField(local, 'auto_analyze_competitors', '自动分析竞品账号'),
-            toggleField(local, 'auto_analyze_leads', '自动分析线索用户')
-          ]),
-          h('div', { class: 'section-title compact' }, [h('h2', 'ICP画像'), h('span', 'AI筛选时会带入这些信息')]),
-          h('div', { class: 'icp-grid' }, icpFields.map(field => renderIcpField(icpProfile, field))),
-          h('div', { class: 'action-row' }, [
-            h('button', {
-              class: 'primary-action',
-              onClick: () => emit('save', { ...local, icp_profile: buildIcpPayload(icpProfile) })
-            }, [h(Check, { class: 'inline-icon' }), '保存设置'])
-          ])
-        ])
-        ],
-        side: () => [
-        h('aside', { class: 'pane side-pane' }, [
-          h('div', { class: 'section-title' }, [h('h2', '环境状态'), h('span', '运行前先检查')]),
-          renderEnv(props.env),
-          h('button', { class: 'wide-action', onClick: () => emit('check-env') }, [h(Refresh, { class: 'inline-icon' }), '重新检查']),
-          h('div', { class: 'danger-zone' }, [
-            h('div', { class: 'section-title compact' }, [h('h2', '危险操作'), h('span', '不可恢复')]),
-            h('p', '清空项目库和 MediaCrawler 底层库中的所有采集、线索、AI、日志数据。'),
-            h('button', { class: 'wide-action danger-action', onClick: () => emit('clear-data') }, [h(Delete, { class: 'inline-icon' }), '清空所有数据'])
-          ])
-        ])
-        ]
-      })
-    }
-  }
-})
-
-function renderIcpField(profile: Dict, field: Dict) {
-  const control = field.multiline
-    ? h('textarea', {
-        value: profile[field.key] || '',
-        placeholder: field.placeholder,
-        onInput: (event: Event) => profile[field.key] = (event.target as HTMLTextAreaElement).value
-      })
-    : h('input', {
-        value: profile[field.key] || '',
-        placeholder: field.placeholder,
-        onInput: (event: Event) => profile[field.key] = (event.target as HTMLInputElement).value
-      })
-  return h('label', { class: ['icp-field', field.multiline ? 'icp-field-wide' : ''] }, [
-    h('span', field.label),
-    control
-  ])
-}
-
-function inputField(local: Dict, key: string, label: string, type = 'text') {
-  return h('label', [label, h('input', { type, value: local[key] || '', onInput: (event: Event) => local[key] = (event.target as HTMLInputElement).value })])
-}
-
-function toggleField(local: Dict, key: string, label: string) {
-  return h('label', [h('input', { type: 'checkbox', checked: Boolean(local[key]), onChange: (event: Event) => local[key] = (event.target as HTMLInputElement).checked }), label])
-}
-
-function renderEnv(envValue: Dict) {
-  const items = [
-    ['项目库', envValue?.project_db],
-    ['MediaCrawler路径', envValue?.media_crawler_path],
-    ['底层SQLite', envValue?.media_crawler_db],
-    ['AI配置', envValue?.ai_config]
-  ]
-  return h('div', { class: 'env-stack' }, [
-    h('div', { class: 'env-list' }, items.map(([label, item]: any) => h('div', { class: 'env-item' }, [
-      h('span', label),
-      h('strong', { class: item?.ok ? 'ok' : 'warn' }, item?.ok ? '正常' : '待处理'),
-      h('small', item?.path || item?.base_url || item?.model || '')
-    ]))),
-    renderProjectQuality(envValue?.project_quality || {}),
-    renderPlatformDiagnostics(envValue?.platform_diagnostics || [])
-  ])
-}
-
-function renderProjectQuality(quality: Dict) {
-  const summary = quality.summary || {}
-  const sections = quality.sections || []
-  const issues = quality.issues || []
-  return h('div', { class: 'project-quality' }, [
-    h('div', { class: 'section-title compact' }, [
-      h('h2', '项目数据质量'),
-      h('span', summary.status === 'ok' ? '关键字段完整' : `${summary.issues || 0} 项需要关注`)
-    ]),
-    h('div', { class: 'quality-summary' }, [
-      renderQualityMetric('账号', summary.accounts || 0),
-      renderQualityMetric('内容', summary.contents || 0),
-      renderQualityMetric('评论', summary.comments || 0),
-      renderQualityMetric('线索', summary.leads || 0)
-    ]),
-    h('div', { class: 'quality-sections' }, sections.map((section: Dict) => h('div', { class: 'quality-section' }, [
-      h('div', { class: 'quality-section-head' }, [
-        h('strong', section.label),
-        h('span', `${section.total || 0} 条`)
-      ]),
-      h('div', { class: 'quality-fields' }, (section.fields || []).map((field: Dict) => renderQualityField(field)))
-    ]))),
-    issues.length
-      ? h('ul', { class: 'quality-issues' }, issues.map((issue: Dict) => h('li', { class: `issue-${issue.severity || 'warning'}` }, [
-        h('strong', issue.title),
-        h('span', issue.detail)
-      ])))
-      : h('div', { class: 'diagnostic-empty' }, '项目库关键字段当前没有明显缺口')
-  ])
-}
-
-function renderQualityMetric(label: string, value: number) {
-  return h('div', [
-    h('span', label),
-    h('strong', String(value))
-  ])
-}
-
-function renderQualityField(field: Dict) {
-  const total = Number(field.total || 0)
-  const nonEmpty = Number(field.non_empty || 0)
-  const missing = total > 0 && nonEmpty < total
-  return h('span', { class: missing ? 'field-warn' : '' }, `${field.label} ${nonEmpty}/${total}`)
-}
-
-function renderPlatformDiagnostics(platforms: Dict[]) {
-  if (!platforms.length) {
-    return h('div', { class: 'diagnostic-empty' }, '底层 SQLite 不存在或尚未完成检查')
-  }
-  return h('div', { class: 'platform-diagnostics' }, [
-    h('div', { class: 'section-title compact' }, [h('h2', '平台数据诊断'), h('span', '原始表与关键字段')]),
-    ...platforms.map(platform => h('div', { class: 'diagnostic-panel' }, [
-      h('div', { class: 'diagnostic-head' }, [
-        h('strong', platform.label || platform.platform),
-        h('span', { class: platform.ok ? 'ok' : 'warn' }, platform.ok ? '可导入' : '缺内容表')
-      ]),
-      h('div', { class: 'diagnostic-tables' }, [
-        renderRawTableMetric('内容', platform.tables?.content),
-        renderRawTableMetric('评论', platform.tables?.comment),
-        renderRawTableMetric('主页', platform.tables?.creator)
-      ]),
-      h('div', { class: 'field-quality' }, importantDiagnosticFields(platform).map(field => h('span', {
-        class: field.supported && field.row_count && field.non_empty === 0 ? 'field-warn' : ''
-      }, `${field.label} ${field.supported ? `${field.non_empty}/${field.row_count}` : '不支持'}`))),
-      platform.warnings?.length ? h('ul', { class: 'diagnostic-warnings' }, platform.warnings.map((warning: string) => h('li', warning))) : null
-    ]))
-  ])
-}
-
-function renderRawTableMetric(label: string, table: Dict = {}) {
-  return h('div', [
-    h('span', label),
-    h('strong', table.exists ? `${table.row_count || 0}` : '缺失'),
-    h('small', table.table || '无映射')
-  ])
-}
-
-function importantDiagnosticFields(platform: Dict) {
-  const contentFields = platform.tables?.content?.fields || []
-  const commentFields = platform.tables?.comment?.fields || []
-  const creatorFields = platform.tables?.creator?.fields || []
-  const pick = (fields: Dict[], key: string) => fields.find(field => field.key === key)
-  return [
-    pick(contentFields, 'author_id'),
-    pick(contentFields, 'nickname'),
-    pick(contentFields, 'signature'),
-    pick(commentFields, 'body'),
-    pick(creatorFields, 'signature'),
-    pick(creatorFields, 'fans')
-  ].filter((field): field is Dict => Boolean(field))
-}
 </script>
-
-<style>
-.shell {
-  min-height: 100vh;
-  background: linear-gradient(180deg, #f7faf8 0%, #eef4f2 100%);
-}
-
-.sidebar {
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid #dbe7e2;
-  background: #ffffff;
-}
-
-.brand {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 22px 18px;
-  border-bottom: 1px solid #e5ece8;
-}
-
-.brand-mark {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  border-radius: 8px;
-  color: #ffffff;
-  background: #0f766e;
-  font-weight: 800;
-}
-
-.brand strong,
-.brand span {
-  display: block;
-}
-
-.brand span,
-.sidebar-status small,
-.workflow-step small,
-.section-title span,
-.task-row span,
-.env-item small {
-  color: #64748b;
-  overflow-wrap: anywhere;
-}
-
-.nav {
-  flex: 1;
-  border-right: 0;
-}
-
-.sidebar-status {
-  margin: 16px;
-  padding: 14px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #f8fbfa;
-}
-
-.sidebar-status strong {
-  display: block;
-  margin-top: 6px;
-  color: #0f766e;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 78px;
-  padding: 0 28px;
-  border-bottom: 1px solid #dbe7e2;
-  background: rgba(255, 255, 255, 0.9);
-}
-
-.topbar h1 {
-  margin: 0;
-  font-size: 22px;
-}
-
-.topbar p {
-  margin: 5px 0 0;
-  color: #64748b;
-}
-
-.topbar-actions,
-.action-row,
-.button-pair,
-.row-actions,
-.toggles {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.main {
-  height: calc(100vh - 78px);
-  overflow: auto;
-  padding: 22px;
-}
-
-.workflow-strip {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(150px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.workflow-step {
-  display: flex;
-  gap: 10px;
-  min-height: 68px;
-  padding: 12px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.workflow-step.active {
-  border-color: #0f766e;
-  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.1);
-}
-
-.workflow-step span {
-  color: #0f766e;
-  font-weight: 800;
-}
-
-.workflow-step strong,
-.workflow-step small {
-  display: block;
-}
-
-.split-pane {
-  display: grid;
-  gap: 0;
-  align-items: start;
-}
-
-.split-resizer {
-  width: 10px;
-  min-height: 520px;
-  border: 0;
-  cursor: col-resize;
-  background: transparent;
-  position: relative;
-}
-
-.split-resizer::before {
-  content: '';
-  position: absolute;
-  top: 12px;
-  bottom: 12px;
-  left: 4px;
-  width: 2px;
-  border-radius: 999px;
-  background: #cbd5e1;
-}
-
-.split-resizer:hover::before,
-.split-resizer:focus-visible::before,
-.split-pane.dragging .split-resizer::before {
-  background: #0f766e;
-}
-
-.split-resizer:focus-visible {
-  outline: 2px solid rgba(15, 118, 110, 0.25);
-  outline-offset: 2px;
-}
-
-.pane {
-  min-height: 520px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 18px;
-  overflow: auto;
-}
-
-.side-pane {
-  max-height: calc(100vh - 188px);
-}
-
-.log-pane {
-  overflow: hidden;
-}
-
-.section-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.section-title.compact {
-  margin-top: 18px;
-}
-
-.section-title h2 {
-  margin: 0;
-  font-size: 17px;
-}
-
-.mode-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.mode-option,
-.task-row,
-.table-filters button,
-.library-list button,
-.wide-action,
-.primary-action,
-.icon-button {
-  cursor: pointer;
-}
-
-.mode-option {
-  min-height: 116px;
-  padding: 14px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #f9fbfa;
-  text-align: left;
-}
-
-.mode-option.selected {
-  border-color: #0f766e;
-  background: #ecfdf5;
-}
-
-.mode-option small,
-.mode-option strong,
-.mode-option span {
-  display: block;
-}
-
-.mode-option small {
-  color: #b45309;
-  font-weight: 700;
-}
-
-.mode-option strong {
-  margin: 8px 0;
-}
-
-.capability-panel {
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid #cfe4dc;
-  border-radius: 8px;
-  background: #f6fbf8;
-}
-
-.capability-panel.muted {
-  color: #64748b;
-}
-
-.capability-panel.muted strong,
-.capability-panel.muted small {
-  display: block;
-}
-
-.capability-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.capability-head small,
-.capability-head strong {
-  display: block;
-}
-
-.capability-head small {
-  color: #0f766e;
-  font-weight: 700;
-}
-
-.capability-head strong {
-  margin-top: 4px;
-  color: #1f2937;
-  font-size: 14px;
-}
-
-.capability-type {
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: #e0f2fe;
-  color: #075985;
-  padding: 5px 9px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.capability-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.capability-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border-radius: 999px;
-  border: 1px solid #dbe7e2;
-  background: #ffffff;
-  padding: 6px 9px;
-  font-size: 12px;
-}
-
-.capability-chip em {
-  color: #475569;
-  font-style: normal;
-}
-
-.capability-chip strong {
-  color: #1f2937;
-}
-
-.capability-chip.status-supported {
-  border-color: #bbf7d0;
-  background: #f0fdf4;
-}
-
-.capability-chip.status-partial {
-  border-color: #fde68a;
-  background: #fffbeb;
-}
-
-.capability-chip.status-unsupported {
-  border-color: #fecaca;
-  background: #fff7f7;
-}
-
-.capability-warnings {
-  display: grid;
-  gap: 5px;
-  margin: 12px 0 0;
-  padding-left: 18px;
-  color: #475569;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.task-preview {
-  display: grid;
-  gap: 12px;
-  margin: 14px 0 0;
-  padding: 14px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #fbfdfc;
-}
-
-.task-preview.has-error {
-  border-color: #fed7aa;
-  background: #fffaf2;
-}
-
-.preview-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.preview-head small,
-.preview-head strong {
-  display: block;
-}
-
-.preview-head small {
-  color: #64748b;
-  font-weight: 700;
-}
-
-.preview-head strong {
-  margin-top: 3px;
-  color: #1f2937;
-  font-size: 14px;
-}
-
-.task-preview.has-error .preview-head strong {
-  color: #9a3412;
-}
-
-.preview-status {
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: #eef6f3;
-  color: #0f766e;
-  padding: 5px 9px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.preview-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.preview-field {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 8px 10px;
-  border-radius: 7px;
-  background: #ffffff;
-}
-
-.preview-field em {
-  color: #64748b;
-  font-size: 12px;
-  font-style: normal;
-}
-
-.preview-field strong {
-  min-width: 0;
-  color: #1f2937;
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-line {
-  max-width: 100%;
-  margin: 0;
-  padding: 10px;
-  overflow-x: auto;
-  border-radius: 7px;
-  background: #10201d;
-  color: #d1fae5;
-  font-size: 12px;
-  line-height: 1.55;
-  white-space: pre;
-}
-
-.preview-warnings {
-  display: grid;
-  gap: 5px;
-  margin: 0;
-  padding-left: 18px;
-  color: #475569;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(160px, 1fr));
-  gap: 12px;
-  margin: 18px 0;
-}
-
-label {
-  display: grid;
-  gap: 6px;
-  color: #475569;
-  font-size: 13px;
-}
-
-.form-field.field-wide {
-  grid-column: span 2;
-}
-
-.form-field.field-full {
-  grid-column: 1 / -1;
-}
-
-input,
-select,
-textarea {
-  width: 100%;
-  min-height: 36px;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  padding: 8px 10px;
-  background: #ffffff;
-  color: #1f2937;
-}
-
-input:disabled {
-  background: #f1f5f9;
-  color: #94a3b8;
-  cursor: not-allowed;
-}
-
-.tag-input {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-height: 44px;
-  padding: 6px 8px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: #ffffff;
-  cursor: text;
-}
-
-.tag-input:focus-within {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
-}
-
-.tag-input.disabled {
-  background: #f1f5f9;
-  cursor: not-allowed;
-}
-
-.tag-input input {
-  flex: 1 1 180px;
-  min-width: 140px;
-  min-height: 30px;
-  border: 0;
-  padding: 4px 6px;
-  background: transparent;
-  outline: 0;
-}
-
-.tag-input input:disabled {
-  background: transparent;
-}
-
-.tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  min-height: 30px;
-  padding: 0 8px 0 10px;
-  border: 1px solid #bfdbfe;
-  border-radius: 6px;
-  background: #eff6ff;
-  color: #1d4ed8;
-  font-size: 13px;
-}
-
-.tag-chip-text {
-  overflow-wrap: anywhere;
-}
-
-.tag-remove {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  color: #2563eb;
-  background: transparent;
-  cursor: pointer;
-}
-
-.tag-remove:hover,
-.tag-remove:focus-visible {
-  background: #dbeafe;
-}
-
-.tag-remove-icon {
-  width: 14px;
-  height: 14px;
-}
-
-input[type='checkbox'] {
-  width: 18px;
-  height: 18px;
-  min-height: 18px;
-  padding: 0;
-  accent-color: #0f766e;
-}
-
-.toggles label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: #334155;
-}
-
-.primary-action,
-.wide-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 6px;
-  color: #ffffff;
-  background: #0f766e;
-}
-
-.wide-action {
-  width: 100%;
-  margin-bottom: 10px;
-}
-
-.danger-action {
-  background: #dc2626;
-}
-
-.inline-icon,
-.icon-button svg {
-  width: 16px;
-  height: 16px;
-}
-
-.task-list,
-.tree-list,
-.env-list {
-  display: grid;
-  gap: 10px;
-}
-
-.task-row {
-  display: grid;
-  gap: 5px;
-  width: 100%;
-  padding: 12px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-  text-align: left;
-}
-
-.status {
-  display: inline-flex;
-  width: fit-content;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #e2e8f0;
-  color: #334155;
-  font-style: normal;
-  font-size: 12px;
-}
-
-.status.succeeded {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.status.failed {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.status.running {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.metric-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.metric-tile {
-  padding: 14px;
-  border-radius: 8px;
-  border: 1px solid #dbe7e2;
-}
-
-.metric-tile small,
-.metric-tile strong {
-  display: block;
-}
-
-.metric-tile strong {
-  margin-top: 8px;
-  font-size: 24px;
-}
-
-.accent-green {
-  background: #ecfdf5;
-}
-
-.accent-amber {
-  background: #fffbeb;
-}
-
-.accent-blue {
-  background: #eff6ff;
-}
-
-.data-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.table-scroll {
-  overflow: auto;
-}
-
-.data-table.resizable-table {
-  table-layout: fixed;
-}
-
-.data-table th,
-.data-table td {
-  padding: 12px;
-  border-bottom: 1px solid #e5ece8;
-  text-align: left;
-  vertical-align: top;
-}
-
-.data-table th {
-  position: relative;
-  background: #f8fafc;
-  color: #475569;
-  font-size: 13px;
-}
-
-.data-table th span {
-  display: block;
-  padding-right: 10px;
-}
-
-.column-resizer {
-  position: absolute;
-  top: 0;
-  right: -4px;
-  width: 8px;
-  height: 100%;
-  border: 0;
-  background: transparent;
-  cursor: col-resize;
-  z-index: 1;
-}
-
-.column-resizer::after {
-  content: '';
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 3px;
-  width: 2px;
-  border-radius: 999px;
-  background: transparent;
-}
-
-.column-resizer:hover::after,
-.column-resizer:focus-visible::after {
-  background: #0f766e;
-}
-
-.data-table td strong {
-  display: block;
-}
-
-.data-table td {
-  overflow-wrap: anywhere;
-}
-
-.table-primary-link {
-  color: #0f4fb3;
-  text-decoration: none;
-}
-
-.table-primary-text {
-  display: -webkit-box;
-  max-width: 100%;
-  overflow: hidden;
-  color: #0f4fb3;
-  font-weight: 700;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
-.table-primary-link:hover {
-  text-decoration: underline;
-}
-
-.icon-button {
-  display: inline-grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border: 1px solid #dbe7e2;
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.icon-button:disabled,
-.icon-button.is-disabled {
-  cursor: not-allowed;
-  color: #9aa8a0;
-  background: #f3f6f4;
-  border-color: #e4ebe7;
-}
-
-.danger,
-.icon-button.danger {
-  color: #b91c1c;
-}
-
-.table-workspace {
-  min-height: calc(100vh - 188px);
-}
-
-.table-library-bar {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 18px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e5ece8;
-}
-
-.library-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.library-list button {
-  min-height: 36px;
-  border: 1px solid #dbe7e2;
-  border-radius: 999px;
-  background: #ffffff;
-  padding: 0 14px;
-  color: #334155;
-  white-space: nowrap;
-}
-
-.library-list button.selected {
-  border-color: #0f766e;
-  color: #0f766e;
-  background: #ecfdf5;
-}
-
-.table-filters {
-  display: grid;
-  grid-template-columns: minmax(140px, 180px) minmax(220px, 1fr) auto auto;
-  gap: 10px;
-  align-items: center;
-}
-
-.table-filters select,
-.table-filters input,
-.table-filters button {
-  min-height: 36px;
-  border: 1px solid #dbe7e2;
-  border-radius: 7px;
-  background: #ffffff;
-  padding: 0 10px;
-}
-
-.table-filters button {
-  color: #ffffff;
-  background: #0f766e;
-}
-
-.table-filters .ghost-button {
-  color: #334155;
-  background: #f8fafc;
-}
-
-.overview-pane {
-  min-height: calc(100vh - 188px);
-}
-
-.overview-table {
-  display: grid;
-  gap: 10px;
-  min-width: 920px;
-}
-
-.overview-row {
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(420px, auto);
-  gap: 14px;
-  align-items: center;
-  min-height: 50px;
-  padding: 8px 14px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.overview-row.platform {
-  border-color: transparent;
-  background: transparent;
-  padding: 4px 0;
-}
-
-.overview-row.keyword {
-  border-color: #bfdbfe;
-  background: #f8fbff;
-}
-
-.overview-row.account {
-  background: #ffffff;
-}
-
-.overview-main {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-  min-width: 0;
-}
-
-.overview-title {
-  min-width: 0;
-}
-
-.overview-title strong,
-.overview-link,
-.overview-title small {
-  display: block;
-}
-
-.overview-title strong,
-.overview-link {
-  color: #0f4fb3;
-  font-size: 14px;
-  font-weight: 700;
-  text-decoration: none;
-  overflow-wrap: anywhere;
-}
-
-.overview-link:hover {
-  text-decoration: underline;
-}
-
-.overview-row.platform .overview-title strong {
-  color: #0f172a;
-  font-size: 16px;
-}
-
-.overview-title small {
-  margin-top: 3px;
-  color: #64748b;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-.overview-metrics {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.metric-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
-  border-radius: 7px;
-  background: #f1f5f9;
-  color: #334155;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.outline-button {
-  min-width: 56px;
-  min-height: 30px;
-  border: 1px solid #bfdbfe;
-  border-radius: 7px;
-  background: #eff6ff;
-  color: #2563eb;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.overview-action {
-  min-height: 28px;
-  padding: 0 10px;
-  border: 1px solid #cbd5e1;
-  border-radius: 7px;
-  background: #ffffff;
-  color: #0f766e;
-  font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.overview-action:hover {
-  border-color: #0f766e;
-  background: #ecfdf5;
-}
-
-.overview-action.danger {
-  border-color: #fecaca;
-  color: #dc2626;
-}
-
-.overview-action.danger:hover {
-  border-color: #dc2626;
-  background: #fff1f2;
-}
-
-.overview-action.reserved {
-  border-color: #bfdbfe;
-  color: #2563eb;
-}
-
-.overview-action.reserved:hover {
-  border-color: #2563eb;
-  background: #eff6ff;
-}
-
-.overview-action:disabled {
-  border-color: #e2e8f0;
-  background: #f8fafc;
-  color: #94a3b8;
-  cursor: not-allowed;
-}
-
-.overview-spacer {
-  width: 56px;
-  flex: 0 0 56px;
-}
-
-.empty-state {
-  display: grid;
-  min-height: 260px;
-  place-items: center;
-  border: 1px dashed #cbd5e1;
-  border-radius: 8px;
-  color: #64748b;
-}
-
-.json-view {
-  min-height: 430px;
-  border: 1px solid #e5ece8;
-  border-radius: 8px;
-  background: #0f172a;
-  color: #d1fae5;
-  padding: 14px;
-  overflow: auto;
-}
-
-.log-console {
-  height: clamp(320px, calc(100vh - 260px), 560px);
-  border: 1px solid #e5ece8;
-  border-radius: 8px;
-  background: #0f172a;
-  color: #d1fae5;
-  padding: 14px;
-  overflow: auto;
-}
-
-.task-outcome {
-  display: grid;
-  gap: 12px;
-  margin-bottom: 14px;
-  padding: 14px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.task-outcome-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-}
-
-.task-outcome-head strong {
-  color: #0f3d3a;
-}
-
-.outcome-health {
-  display: inline-flex;
-  width: fit-content;
-  padding: 3px 9px;
-  border-radius: 999px;
-  color: #475569;
-  background: #e2e8f0;
-  font-size: 12px;
-}
-
-.outcome-health.actionable {
-  color: #166534;
-  background: #dcfce7;
-}
-
-.outcome-health.collected {
-  color: #075985;
-  background: #e0f2fe;
-}
-
-.outcome-health.empty {
-  color: #9a3412;
-  background: #ffedd5;
-}
-
-.outcome-health.failed {
-  color: #991b1b;
-  background: #fee2e2;
-}
-
-.task-outcome-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(72px, 1fr));
-  gap: 8px;
-}
-
-.task-outcome-grid > div {
-  display: grid;
-  gap: 4px;
-  padding: 9px;
-  border-radius: 7px;
-  background: #f6faf8;
-}
-
-.task-outcome-grid small,
-.task-row-outcome {
-  color: #64748b;
-}
-
-.task-outcome-grid strong {
-  color: #1f2937;
-  font-size: 18px;
-}
-
-.task-next-actions {
-  margin: 0;
-  padding-left: 18px;
-  color: #31524c;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.task-next-actions.empty {
-  padding-left: 0;
-  color: #64748b;
-}
-
-.empty-state.compact {
-  min-height: 120px;
-  margin-bottom: 14px;
-}
-
-.log-console p {
-  display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 12px;
-  margin: 0 0 8px;
-  font-family: Consolas, monospace;
-  font-size: 12px;
-}
-
-.log-console time {
-  color: #93c5fd;
-}
-
-.button-pair {
-  margin-top: 14px;
-}
-
-.button-pair button {
-  flex: 1;
-  min-height: 36px;
-  border: 1px solid #dbe7e2;
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.icp-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(220px, 1fr));
-  gap: 12px;
-}
-
-.icp-field span {
-  color: #334155;
-  font-weight: 700;
-}
-
-.icp-field textarea {
-  min-height: 86px;
-  resize: vertical;
-  line-height: 1.55;
-}
-
-.icp-field-wide {
-  grid-column: span 2;
-}
-
-.env-item {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-  padding: 12px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-}
-
-.env-item .ok {
-  color: #166534;
-}
-
-.env-item .warn {
-  color: #b45309;
-}
-
-.env-stack,
-.project-quality,
-.quality-sections,
-.platform-diagnostics,
-.diagnostic-panel {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  width: 100%;
-}
-
-.project-quality {
-  padding: 12px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.quality-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(70px, 1fr));
-  gap: 8px;
-}
-
-.quality-summary > div {
-  display: grid;
-  gap: 3px;
-  padding: 8px;
-  border-radius: 7px;
-  background: #f4f8f6;
-}
-
-.quality-summary span,
-.quality-section-head span,
-.quality-fields span,
-.quality-issues span {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.quality-summary strong {
-  color: #0f3d3a;
-  font-size: 16px;
-}
-
-.quality-section {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid #edf2ef;
-  border-radius: 7px;
-  background: #fbfdfc;
-}
-
-.quality-section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-}
-
-.quality-fields,
-.quality-issues {
-  display: flex;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.quality-fields span {
-  padding: 4px 7px;
-  border-radius: 999px;
-  background: #eef6f3;
-}
-
-.quality-fields .field-warn {
-  color: #9a3412;
-  background: #fff7ed;
-}
-
-.quality-issues {
-  margin: 0;
-  padding: 0;
-}
-
-.quality-issues li {
-  display: grid;
-  width: 100%;
-  gap: 3px;
-  padding: 8px;
-  border-radius: 7px;
-  background: #fff7ed;
-  list-style: none;
-}
-
-.quality-issues .issue-danger {
-  background: #fef2f2;
-}
-
-.quality-issues strong {
-  color: #7c2d12;
-  font-size: 13px;
-}
-
-.quality-issues .issue-danger strong {
-  color: #991b1b;
-}
-
-.diagnostic-panel {
-  box-sizing: border-box;
-  padding: 12px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.diagnostic-head,
-.diagnostic-tables,
-.field-quality {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.diagnostic-head {
-  justify-content: space-between;
-}
-
-.diagnostic-head strong {
-  color: #0f3d3a;
-}
-
-.diagnostic-tables > div {
-  display: grid;
-  min-width: 78px;
-  gap: 2px;
-  padding: 7px 8px;
-  border-radius: 6px;
-  background: #f4f8f6;
-}
-
-.diagnostic-tables span,
-.field-quality span {
-  font-size: 12px;
-  color: #64748b;
-}
-
-.diagnostic-tables strong {
-  color: #1f2937;
-  font-size: 14px;
-}
-
-.diagnostic-tables small {
-  color: #8a9a93;
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-.field-quality span {
-  padding: 4px 7px;
-  border-radius: 999px;
-  background: #eef6f3;
-}
-
-.field-quality .field-warn {
-  color: #9a3412;
-  background: #fff7ed;
-}
-
-.diagnostic-warnings {
-  margin: 0;
-  padding-left: 18px;
-  color: #92400e;
-  font-size: 12px;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-}
-
-.diagnostic-empty {
-  padding: 12px;
-  border: 1px dashed #cbd5d1;
-  border-radius: 8px;
-  color: #64748b;
-  font-size: 13px;
-}
-
-.danger-zone {
-  margin-top: 18px;
-  padding: 14px;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  background: #fff7f7;
-}
-
-.danger-zone p {
-  margin: 0 0 12px;
-  color: #7f1d1d;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-@media (max-width: 1100px) {
-  /* 窄屏按文档流纵向展开，避免固定高度容器把内容挤出视口。 */
-  .shell,
-  .shell > .el-container {
-    display: block;
-    min-height: 100vh;
-  }
-
-  .workflow-strip,
-  .split-pane,
-  .mode-grid,
-  .form-grid,
-  .icp-grid,
-  .table-filters {
-    grid-template-columns: 1fr;
-  }
-
-  .form-field.field-wide,
-  .form-field.field-full,
-  .icp-field-wide {
-    grid-column: auto;
-  }
-
-  .capability-head {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .capability-type {
-    white-space: normal;
-  }
-
-  .preview-head {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .preview-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    display: none;
-  }
-
-  .topbar {
-    height: auto;
-    min-height: 78px;
-    align-items: flex-start;
-    gap: 14px;
-    padding: 16px 22px;
-    flex-wrap: wrap;
-  }
-
-  .topbar-actions {
-    justify-content: flex-start;
-  }
-
-  .main {
-    height: auto;
-    min-height: calc(100vh - 78px);
-    overflow: visible;
-  }
-
-  .split-pane {
-    grid-template-columns: 1fr !important;
-    row-gap: 16px;
-  }
-
-  .split-resizer {
-    display: none;
-  }
-
-  .pane,
-  .side-pane {
-    min-height: auto;
-    max-height: none;
-  }
-
-  .pane {
-    overflow-x: auto;
-  }
-
-  .data-table {
-    min-width: 720px;
-  }
-}
-
-@media (max-width: 640px) {
-  .topbar h1 {
-    font-size: 20px;
-  }
-
-  .topbar p {
-    font-size: 13px;
-  }
-
-  .main {
-    padding: 16px;
-  }
-
-  .section-title {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .workflow-step,
-  .pane {
-    padding: 14px;
-  }
-}
-</style>

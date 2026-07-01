@@ -7,8 +7,8 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import database
-from app.schemas import AiBatchCreate, AiJobCreate, ClearDataRequest, SettingsUpdate, TableUpdate, TaskCreate
-from app.services import account_actions, ai_service, crawler_adapter, deletion, maintenance
+from app.schemas import AiBatchCreate, AiBulkDelete, AiJobCreate, BulkActionPreview, ClearDataRequest, CustomerFollowStatusUpdate, SettingsUpdate, TableUpdate, TaskCreate
+from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, maintenance, message_workbench, ops_visibility
 from app import views
 
 
@@ -38,10 +38,21 @@ def health() -> dict[str, str]:
 @app.post("/api/tasks")
 def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict[str, object]:
     try:
+        account_ids = (
+            account_actions.resolve_account_analysis_task_account_ids(payload.model_dump())
+            if payload.mode == "account_analysis"
+            else []
+        )
         task = crawler_adapter.create_task(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    background_tasks.add_task(crawler_adapter.run_task, str(task["id"]))
+    if payload.mode == "account_analysis" and account_ids:
+        if len(account_ids) == 1:
+            background_tasks.add_task(account_actions.run_account_analysis, account_ids[0], str(task["id"]))
+        else:
+            background_tasks.add_task(account_actions.run_account_analysis_batch, account_ids, str(task["id"]))
+    else:
+        background_tasks.add_task(crawler_adapter.run_task, str(task["id"]))
     return task
 
 
@@ -93,6 +104,66 @@ def create_account_analysis_task(
     return task
 
 
+@app.post("/api/accounts/{account_id}/find-customers")
+def create_account_find_customer_task(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    run_now: bool = True,
+) -> dict[str, object]:
+    try:
+        result = account_actions.create_account_find_customer_task(account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run_now and result["task_ids"]:
+        background_tasks.add_task(crawler_adapter.run_task, str(result["task_ids"][0]))
+    return result
+
+
+@app.post("/api/overview/customers/{lead_id}/intent-analysis")
+def analyze_overview_customer_intent(
+    lead_id: int,
+    run_now: bool = True,
+) -> dict[str, object]:
+    try:
+        return account_actions.create_customer_intent_analysis(lead_id, run_now=run_now)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/overview/customers/{lead_id}/follow-status")
+def update_overview_customer_follow_status(
+    lead_id: int,
+    payload: CustomerFollowStatusUpdate,
+) -> dict[str, object]:
+    try:
+        return account_actions.update_customer_follow_status(lead_id, payload.follow_status, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/overview/accounts/{account_id}/customers/analyze")
+def analyze_overview_account_customers(
+    account_id: int,
+    background_tasks: BackgroundTasks,
+    run_now: bool = True,
+) -> dict[str, object]:
+    try:
+        result = account_actions.create_account_customer_intent_jobs(account_id, run_now=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run_now and result["job_ids"]:
+        background_tasks.add_task(account_actions.run_account_customer_intent_jobs, result["job_ids"])
+    return result
+
+
+@app.post("/api/overview/accounts/{account_id}/customers/non-customers/delete")
+def delete_overview_account_non_customers(account_id: int) -> dict[str, object]:
+    try:
+        return account_actions.delete_account_non_customers(account_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/tasks")
 def list_tasks(include_archived: bool = False) -> list[dict[str, object]]:
     return crawler_adapter.list_tasks(include_archived)
@@ -105,6 +176,16 @@ def get_task(task_id: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="任务不存在")
     task["logs"] = crawler_adapter.list_task_logs(task_id)
     return task
+
+
+@app.get("/api/tasks/{task_id}/diagnostics")
+def get_task_diagnostics(task_id: str) -> dict[str, object]:
+    return diagnostics.task_diagnostics(task_id)
+
+
+@app.get("/api/tasks/{task_id}/dedup-summary")
+def get_task_dedup_summary(task_id: str) -> dict[str, object]:
+    return ops_visibility.task_dedup_summary(task_id)
 
 
 @app.post("/api/tasks/{task_id}/cancel")
@@ -161,9 +242,115 @@ def delete_keyword_non_competitors(
     return account_actions.delete_keyword_non_competitors(platform, keyword)
 
 
+@app.post("/api/overview/keywords/analyze")
+def analyze_keyword_accounts(
+    background_tasks: BackgroundTasks,
+    platform: str = Query(...),
+    keyword: str = Query(...),
+    run_now: bool = True,
+) -> dict[str, object]:
+    result = account_actions.create_keyword_account_analysis_tasks(platform, keyword)
+    if run_now and result["task_ids"]:
+        account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
+        background_tasks.add_task(account_actions.run_keyword_account_analysis, account_ids, str(result["task_ids"][0]))
+    return result
+
+
+@app.post("/api/overview/keywords/find-customers")
+def find_keyword_customers(
+    background_tasks: BackgroundTasks,
+    platform: str = Query(...),
+    keyword: str = Query(...),
+    run_now: bool = True,
+) -> dict[str, object]:
+    result = account_actions.create_keyword_find_customer_task(platform, keyword)
+    if run_now and result["task_ids"]:
+        background_tasks.add_task(crawler_adapter.run_task, str(result["task_ids"][0]))
+    return result
+
+
+@app.delete("/api/overview/platforms/{platform}")
+def delete_overview_platform(platform: str) -> dict[str, object]:
+    return deletion.delete_overview_platform(platform)
+
+
+@app.delete("/api/overview/keywords")
+def delete_overview_keyword(
+    platform: str = Query(...),
+    keyword: str = Query(...),
+) -> dict[str, object]:
+    return deletion.delete_overview_keyword(platform, keyword)
+
+
+@app.delete("/api/overview/accounts/{account_id}")
+def delete_overview_account(account_id: int) -> dict[str, object]:
+    return deletion.delete_overview_account(account_id)
+
+
+@app.delete("/api/overview/customers/{lead_id}")
+def delete_overview_customer(
+    lead_id: int,
+    source_account_id: int | None = Query(default=None),
+) -> dict[str, object]:
+    return deletion.delete_lead_customer(lead_id, source_account_id=source_account_id, source="overview_customer_delete")
+
+
 @app.get("/api/workbench/actions")
 def workbench_actions() -> dict[str, object]:
     return views.workbench_actions()
+
+
+@app.get("/api/tombstones/summary")
+def get_tombstone_summary() -> dict[str, object]:
+    return ops_visibility.tombstone_summary()
+
+
+@app.get("/api/tombstones")
+def get_tombstones(
+    entity_type: str = Query(default=""),
+    platform: str = Query(default=""),
+    source: str = Query(default=""),
+    query: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> dict[str, object]:
+    return ops_visibility.list_tombstones(
+        entity_type=entity_type,
+        platform=platform,
+        source=source,
+        query=query,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@app.post("/api/bulk-actions/preview")
+def bulk_action_preview(payload: BulkActionPreview) -> dict[str, object]:
+    return bulk_actions.preview_bulk_action(payload)
+
+
+@app.get("/api/message-workbench/keywords")
+def message_workbench_keywords() -> list[dict[str, object]]:
+    return message_workbench.list_keywords()
+
+
+@app.get("/api/message-workbench/customers")
+def message_workbench_customers(
+    keyword: str = Query(default=""),
+    status: str = Query(default="待私信"),
+    query: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> dict[str, object]:
+    return message_workbench.list_customers(keyword=keyword, status=status, query=query, page=page, page_size=page_size)
+
+
+@app.get("/api/message-workbench/customers/{lead_id}")
+def message_workbench_customer_detail(lead_id: int) -> dict[str, object]:
+    try:
+        return message_workbench.customer_detail(lead_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/platform-capabilities")
@@ -189,6 +376,21 @@ def create_ai_jobs(payload: AiBatchCreate) -> list[dict[str, object]]:
 @app.get("/api/ai/jobs")
 def list_ai_jobs() -> list[dict[str, object]]:
     return ai_service.list_ai_jobs()
+
+
+@app.get("/api/ai/workbench")
+def ai_workbench() -> dict[str, object]:
+    return ai_service.ai_workbench()
+
+
+@app.post("/api/ai/workbench/non-competitors/delete")
+def delete_ai_workbench_non_competitors(payload: AiBulkDelete) -> dict[str, object]:
+    return ai_service.delete_workbench_non_competitors(payload.target_ids)
+
+
+@app.post("/api/ai/workbench/non-customers/delete")
+def delete_ai_workbench_non_customers(payload: AiBulkDelete) -> dict[str, object]:
+    return ai_service.delete_workbench_non_customers(payload.target_ids)
 
 
 @app.post("/api/ai/jobs/{job_id}/retry")

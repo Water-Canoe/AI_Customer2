@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
 from app import database
+from app.services import tombstones
 
 
 CONTENT_TABLES = {
@@ -24,6 +26,7 @@ CONTENT_TABLES = {
         "signature": "user_signature",
         "avatar": "avatar",
         "keyword": "source_keyword",
+        "created": "create_time",
     },
     "xhs": {
         "table": "xhs_note",
@@ -40,6 +43,7 @@ CONTENT_TABLES = {
         "signature": "",
         "avatar": "avatar",
         "keyword": "source_keyword",
+        "created": "time",
     },
     "ks": {
         "table": "kuaishou_video",
@@ -56,6 +60,7 @@ CONTENT_TABLES = {
         "signature": "",
         "avatar": "avatar",
         "keyword": "source_keyword",
+        "created": "create_time",
     },
 }
 
@@ -73,6 +78,7 @@ COMMENT_TABLES = {
         "signature": "user_signature",
         "avatar": "avatar",
         "parent": "parent_comment_id",
+        "created": "create_time",
     },
     "xhs": {
         "table": "xhs_note_comment",
@@ -87,6 +93,7 @@ COMMENT_TABLES = {
         "signature": "",
         "avatar": "avatar",
         "parent": "parent_comment_id",
+        "created": "create_time",
     },
     "ks": {
         "table": "kuaishou_video_comment",
@@ -101,12 +108,13 @@ COMMENT_TABLES = {
         "signature": "",
         "avatar": "avatar",
         "parent": "",
+        "created": "create_time",
     },
 }
 
 CREATOR_TABLES = {
-    "dy": {"table": "dy_creator", "id": "user_id", "nickname": "nickname", "signature": "desc", "avatar": "avatar", "fans": "fans"},
-    "xhs": {"table": "xhs_creator", "id": "user_id", "nickname": "nickname", "signature": "desc", "avatar": "avatar", "fans": "fans"},
+    "dy": {"table": "dy_creator", "id": "user_id", "nickname": "nickname", "signature": "desc", "avatar": "avatar", "fans": "fans", "content_total": "videos_count"},
+    "xhs": {"table": "xhs_creator", "id": "user_id", "nickname": "nickname", "signature": "desc", "avatar": "avatar", "fans": "fans", "content_total": ""},
 }
 
 
@@ -203,6 +211,69 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+def _safe_int_setting(conn: sqlite3.Connection, key: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(database.get_setting(conn, key, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _cutoff_ts_seconds(conn: sqlite3.Connection, setting_key: str) -> int | None:
+    days = _safe_int_setting(conn, setting_key, 0, 0, 3650)
+    if days <= 0:
+        return None
+    return int(time.time()) - days * 86400
+
+
+def _raw_ts_seconds(row: sqlite3.Row, column: str) -> int | None:
+    value = _int_or_none(_value(row, column))
+    if value is None or value <= 0:
+        return None
+    # MediaCrawler platforms mix second and millisecond timestamps.
+    return value // 1000 if value > 10_000_000_000 else value
+
+
+def _content_passes_cutoff(row: sqlite3.Row, mapping: dict[str, str], cutoff_ts: int | None) -> bool:
+    if cutoff_ts is None:
+        return True
+    content_ts = _raw_ts_seconds(row, mapping.get("created", ""))
+    return content_ts is None or content_ts >= cutoff_ts
+
+
+def _comment_passes_cutoff(row: sqlite3.Row, mapping: dict[str, str], cutoff_ts: int | None) -> bool:
+    if cutoff_ts is None:
+        return True
+    comment_ts = _raw_ts_seconds(row, mapping.get("created", ""))
+    return comment_ts is None or comment_ts >= cutoff_ts
+
+
+def _content_native_passes_cutoff(
+    raw_conn: sqlite3.Connection,
+    platform: str,
+    content_native_id: str,
+    cutoff_ts: int | None,
+    cache: dict[str, bool],
+) -> bool:
+    if cutoff_ts is None or not content_native_id:
+        return True
+    if content_native_id in cache:
+        return cache[content_native_id]
+    mapping = CONTENT_TABLES[platform]
+    table = mapping["table"]
+    id_column = mapping["id"]
+    row = raw_conn.execute(
+        f"SELECT * FROM {_quote_identifier(table)} WHERE {_quote_identifier(id_column)} = ? LIMIT 1",
+        (content_native_id,),
+    ).fetchone()
+    if row is None:
+        cache[content_native_id] = True
+        return True
+    result = _content_passes_cutoff(row, mapping, cutoff_ts)
+    cache[content_native_id] = result
+    return result
+
+
 def _keyword_terms(keyword_source: str) -> list[str]:
     normalized = str(keyword_source or "")
     for separator in ("，", ",", "；", ";", "\n", "\t"):
@@ -228,6 +299,10 @@ def _profile_url(platform: str, platform_user_id: str, sec_uid: str = "") -> str
     return ""
 
 
+def _looks_like_douyin_sec_uid(value: str) -> bool:
+    return value.startswith("MS4w")
+
+
 def _upsert_account(
     conn: sqlite3.Connection,
     platform: str,
@@ -238,18 +313,87 @@ def _upsert_account(
     avatar: str = "",
     signature: str = "",
     fans: int | None = None,
+    content_total_count: int | None = None,
     raw_payload: dict[str, Any] | None = None,
-) -> int:
+) -> int | None:
     if not platform_user_id:
         platform_user_id = f"unknown-{platform}-{nickname or 'user'}"
+    platform_user_id = str(platform_user_id)
+    sec_uid = str(sec_uid or "")
+    if platform == "dy" and not sec_uid and _looks_like_douyin_sec_uid(platform_user_id):
+        sec_uid = platform_user_id
+    profile_url = _profile_url(platform, platform_user_id, sec_uid)
     raw_json = json.dumps(raw_payload or {}, ensure_ascii=False, default=str)
+    existing = conn.execute(
+        """
+        SELECT id
+        FROM user_accounts
+        WHERE platform = ?
+          AND (
+            platform_user_id = ?
+            OR (? <> '' AND sec_uid = ?)
+            OR (? <> '' AND profile_url = ?)
+          )
+        ORDER BY
+          CASE
+            WHEN ? <> '' AND sec_uid = ? THEN 0
+            WHEN ? <> '' AND profile_url = ? THEN 1
+            ELSE 2
+          END,
+          id
+        LIMIT 1
+        """,
+        (
+            platform,
+            platform_user_id,
+            sec_uid,
+            sec_uid,
+            profile_url,
+            profile_url,
+            sec_uid,
+            sec_uid,
+            profile_url,
+            profile_url,
+        ),
+    ).fetchone()
+    if existing:
+        # creator 表常用 sec_uid；优先回写到已有账号，避免总览树挂在旧账号上。
+        conn.execute(
+            """
+            UPDATE user_accounts
+            SET sec_uid = COALESCE(NULLIF(?, ''), sec_uid),
+                user_unique_id = COALESCE(NULLIF(?, ''), user_unique_id),
+                nickname = COALESCE(NULLIF(?, ''), nickname),
+                avatar = COALESCE(NULLIF(?, ''), avatar),
+                signature = COALESCE(NULLIF(?, ''), signature),
+                profile_url = COALESCE(NULLIF(?, ''), profile_url),
+                fans = COALESCE(?, fans),
+                content_total_count = COALESCE(?, content_total_count),
+                raw_payload = ?,
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+            """,
+            (
+                sec_uid,
+                str(unique_id or ""),
+                str(nickname or ""),
+                str(avatar or ""),
+                str(signature or ""),
+                profile_url,
+                fans,
+                content_total_count,
+                raw_json,
+                int(existing["id"]),
+            ),
+        )
+        return int(existing["id"])
     conn.execute(
         """
         INSERT INTO user_accounts(
             platform, platform_user_id, sec_uid, user_unique_id, nickname,
-            avatar, signature, profile_url, fans, raw_payload
+            avatar, signature, profile_url, fans, content_total_count, raw_payload
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(platform, platform_user_id) DO UPDATE SET
             sec_uid = COALESCE(NULLIF(excluded.sec_uid, ''), user_accounts.sec_uid),
             user_unique_id = COALESCE(NULLIF(excluded.user_unique_id, ''), user_accounts.user_unique_id),
@@ -258,6 +402,7 @@ def _upsert_account(
             signature = COALESCE(NULLIF(excluded.signature, ''), user_accounts.signature),
             profile_url = COALESCE(NULLIF(excluded.profile_url, ''), user_accounts.profile_url),
             fans = COALESCE(excluded.fans, user_accounts.fans),
+            content_total_count = COALESCE(excluded.content_total_count, user_accounts.content_total_count),
             raw_payload = excluded.raw_payload,
             updated_at = datetime('now', 'localtime')
         """,
@@ -269,8 +414,9 @@ def _upsert_account(
             str(nickname or ""),
             str(avatar or ""),
             str(signature or ""),
-            _profile_url(platform, str(platform_user_id), str(sec_uid or "")),
+            profile_url,
             fans,
+            content_total_count,
             raw_json,
         ),
     )
@@ -310,16 +456,22 @@ def _import_creators(
     if not mapping:
         return
     for row in _safe_select_rows(raw_conn, mapping["table"], task):
+        platform_user_id = str(_value(row, mapping["id"]))
+        if tombstones.is_deleted_author(conn, platform, platform_user_id):
+            continue
         account_id = _upsert_account(
             conn,
             platform,
-            str(_value(row, mapping["id"])),
+            platform_user_id,
             nickname=str(_value(row, mapping["nickname"])),
             avatar=str(_value(row, mapping["avatar"])),
             signature=str(_value(row, mapping["signature"])),
             fans=_int_or_none(_value(row, mapping["fans"])),
+            content_total_count=_int_or_none(_value(row, mapping.get("content_total", ""))),
             raw_payload=dict(row),
         )
+        if account_id is None:
+            continue
         _add_raw_ref(conn, "account", account_id, platform, mapping["table"], row["__raw_pk"], task["id"])
         counts["accounts"] += 1
 
@@ -333,23 +485,52 @@ def _import_contents(
 ) -> None:
     mapping = CONTENT_TABLES[platform]
     content_limit = int(task["content_count"] or 5) if task["mode"] == "account_analysis" else None
-    for row in _safe_select_rows(raw_conn, mapping["table"], task, limit=content_limit):
+    search_limit = int(task["content_count"] or 20) if task["crawler_type"] == "search" else None
+    content_cutoff_ts = _cutoff_ts_seconds(conn, "content_cutoff_days")
+    rows = _safe_select_rows(raw_conn, mapping["table"], task, limit=None)
+    per_account_counts: dict[str, int] = {}
+    per_keyword_counts: dict[str, int] = {}
+    if content_limit is not None:
+        rows = sorted(rows, key=lambda item: int(item["__raw_pk"]), reverse=True)
+    for row in rows:
+        if not _content_passes_cutoff(row, mapping, content_cutoff_ts):
+            continue
         content_native_id = str(_value(row, mapping["id"]))
         if not content_native_id:
             continue
+        if tombstones.is_deleted_native(conn, "content", platform, content_native_id):
+            continue
+        author_platform_user_id = str(_value(row, mapping["author_id"]))
+        author_sec_uid = str(_value(row, mapping["sec_uid"]))
+        author_unique_id = str(_value(row, mapping["unique"]))
+        author_profile_url = _profile_url(platform, author_platform_user_id, author_sec_uid)
+        if tombstones.is_deleted_author(conn, platform, author_platform_user_id, author_sec_uid, author_unique_id, author_profile_url):
+            continue
+        author_key = str(_value(row, mapping["author_id"])) or str(_value(row, mapping["sec_uid"]))
+        if content_limit is not None:
+            imported_for_account = per_account_counts.get(author_key, 0)
+            if imported_for_account >= content_limit:
+                continue
+        keyword_key = str(_value(row, mapping["keyword"])) or str(task["keywords"] or "")
+        if search_limit is not None:
+            imported_for_keyword = per_keyword_counts.get(keyword_key, 0)
+            if imported_for_keyword >= search_limit:
+                continue
         author_nickname = str(_value(row, mapping["nickname"]))
         author_signature = "" if task["mode"] in ("profile_enrichment", "account_analysis") else str(_value(row, mapping["signature"]))
         account_id = _upsert_account(
             conn,
             platform,
-            str(_value(row, mapping["author_id"])),
+            author_platform_user_id,
             nickname=author_nickname,
-            sec_uid=str(_value(row, mapping["sec_uid"])),
-            unique_id=str(_value(row, mapping["unique"])),
+            sec_uid=author_sec_uid,
+            unique_id=author_unique_id,
             avatar=str(_value(row, mapping["avatar"])),
             signature=author_signature,
             raw_payload=dict(row),
         )
+        if account_id is None:
+            continue
         account_row = conn.execute("SELECT nickname, signature FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
         effective_nickname = str(account_row["nickname"] or author_nickname) if account_row else author_nickname
         effective_signature = str(account_row["signature"] or author_signature) if account_row else author_signature
@@ -389,8 +570,13 @@ def _import_contents(
         content_id = int(conn.execute("SELECT id FROM contents WHERE platform = ? AND content_id = ?", (platform, content_native_id)).fetchone()["id"])
         _add_raw_ref(conn, "content", content_id, platform, mapping["table"], row["__raw_pk"], task["id"])
         counts["contents"] += 1
+        if content_limit is not None:
+            per_account_counts[author_key] = per_account_counts.get(author_key, 0) + 1
+        if search_limit is not None:
+            per_keyword_counts[keyword_key] = per_keyword_counts.get(keyword_key, 0) + 1
         if task["mode"] in ("competitor_discovery", "demand_content"):
-            _handle_keyword_author(conn, task, account_id, content_id, str(_value(row, mapping["keyword"])), effective_nickname, effective_signature)
+            if _handle_keyword_author(conn, task, account_id, content_id, str(_value(row, mapping["keyword"])), effective_nickname, effective_signature):
+                counts["competitor_candidates"] += 1
 
 
 def _handle_keyword_author(
@@ -401,12 +587,28 @@ def _handle_keyword_author(
     keyword: str,
     nickname: str,
     signature: str,
-) -> None:
+) -> bool:
     keyword_source = keyword or task["keywords"]
     if task["mode"] == "competitor_discovery":
-        if not _matches_keyword([nickname, signature], keyword_source):
-            return
-        conn.execute("UPDATE user_accounts SET account_role = 'competitor_candidate' WHERE id = ?", (account_id,))
+        existing = conn.execute(
+            """
+            SELECT 1 FROM account_sources
+            WHERE account_id = ? AND content_id = ? AND keyword = ? AND task_id = ? AND source_kind = 'keyword_author'
+            """,
+            (account_id, content_id, keyword_source, task["id"]),
+        ).fetchone()
+        conn.execute(
+            """
+            UPDATE user_accounts
+            SET account_role = CASE
+                WHEN account_role = 'competitor' THEN account_role
+                ELSE 'competitor_candidate'
+            END,
+            updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+            """,
+            (account_id,),
+        )
         conn.execute(
             """
             INSERT OR IGNORE INTO account_sources(account_id, content_id, keyword, task_id, source_kind)
@@ -414,6 +616,7 @@ def _handle_keyword_author(
             """,
             (account_id, content_id, keyword_source, task["id"]),
         )
+        return existing is None
     elif task["mode"] == "demand_content":
         lead_id = _ensure_lead(conn, account_id)
         conn.execute(
@@ -423,6 +626,7 @@ def _handle_keyword_author(
             """,
             (lead_id, content_id, keyword_source, task["id"]),
         )
+    return False
 
 
 def _refresh_competitor_candidates_from_profiles(conn: sqlite3.Connection) -> int:
@@ -482,26 +686,44 @@ def _import_comments(
     counts: dict[str, int],
 ) -> None:
     mapping = COMMENT_TABLES[platform]
+    comment_cutoff_ts = _cutoff_ts_seconds(conn, "comment_cutoff_days")
+    content_cutoff_ts = _cutoff_ts_seconds(conn, "content_cutoff_days")
+    content_cutoff_cache: dict[str, bool] = {}
     for row in _safe_select_rows(raw_conn, mapping["table"], task):
+        if not _comment_passes_cutoff(row, mapping, comment_cutoff_ts):
+            continue
         comment_native_id = str(_value(row, mapping["id"]))
         if not comment_native_id:
             continue
+        if tombstones.is_deleted_native(conn, "comment", platform, comment_native_id):
+            continue
         content_native_id = str(_value(row, mapping["content_id"]))
+        if tombstones.is_deleted_native(conn, "content", platform, content_native_id):
+            continue
+        if not _content_native_passes_cutoff(raw_conn, platform, content_native_id, content_cutoff_ts, content_cutoff_cache):
+            continue
+        author_platform_user_id = str(_value(row, mapping["author_id"]))
+        author_sec_uid = str(_value(row, mapping["sec_uid"]))
+        author_unique_id = str(_value(row, mapping["unique"]))
         content_row = conn.execute(
             "SELECT id, author_account_id, source_keyword FROM contents WHERE platform = ? AND content_id = ?",
             (platform, content_native_id),
         ).fetchone()
+        if content_row is None:
+            continue
         account_id = _upsert_account(
             conn,
             platform,
-            str(_value(row, mapping["author_id"])),
+            author_platform_user_id,
             nickname=str(_value(row, mapping["nickname"])),
-            sec_uid=str(_value(row, mapping["sec_uid"])),
-            unique_id=str(_value(row, mapping["unique"])),
+            sec_uid=author_sec_uid,
+            unique_id=author_unique_id,
             avatar=str(_value(row, mapping["avatar"])),
             signature=str(_value(row, mapping["signature"])),
             raw_payload=dict(row),
         )
+        if account_id is None:
+            continue
         conn.execute(
             """
             INSERT INTO comments(
@@ -537,6 +759,7 @@ def _import_comments(
         if task["mode"] in ("competitor_crawl", "own_account"):
             lead_id = _ensure_lead(conn, account_id)
             source_account_id = int(content_row["author_account_id"]) if content_row and content_row["author_account_id"] else None
+            source_keyword = str(content_row["source_keyword"] if content_row else "") or str(task["keywords"] or "")
             conn.execute(
                 """
                 INSERT OR IGNORE INTO lead_sources(
@@ -549,7 +772,7 @@ def _import_comments(
                     source_account_id,
                     int(content_row["id"]) if content_row else None,
                     comment_id,
-                    str(content_row["source_keyword"]) if content_row else "",
+                    source_keyword,
                     task["mode"],
                     task["id"],
                 ),
@@ -570,13 +793,8 @@ def _ensure_lead(conn: sqlite3.Connection, account_id: int) -> int:
 
 
 def _enqueue_auto_analysis(conn: sqlite3.Connection, task: sqlite3.Row) -> None:
-    # The actual network call stays explicit in the AI service; this only creates queue rows.
-    auto_competitor = database.get_setting(conn, "auto_analyze_competitors", "false") == "true"
+    # 线索自动分析仍是纯 AI 队列；竞品自动分析需要先跑 creator 补资料，由 crawler_adapter 接管。
     auto_lead = database.get_setting(conn, "auto_analyze_leads", "false") == "true"
-    if auto_competitor and task["mode"] == "competitor_discovery":
-        rows = conn.execute("SELECT id FROM user_accounts WHERE account_role = 'competitor_candidate' AND competitor_status = '未分析'").fetchall()
-        for row in rows:
-            _insert_analysis_job(conn, "competitor", int(row["id"]))
     if auto_lead and task["mode"] in ("competitor_crawl", "own_account", "demand_content"):
         rows = conn.execute("SELECT id FROM lead_user_accounts WHERE follow_status = '待筛选'").fetchall()
         for row in rows:
@@ -584,6 +802,19 @@ def _enqueue_auto_analysis(conn: sqlite3.Connection, task: sqlite3.Row) -> None:
 
 
 def _insert_analysis_job(conn: sqlite3.Connection, target_type: str, target_id: int) -> None:
+    existing = conn.execute(
+        """
+        SELECT 1
+        FROM analysis_jobs
+        WHERE target_type = ?
+          AND target_id = ?
+          AND status IN ('pending', 'running')
+        LIMIT 1
+        """,
+        (target_type, target_id),
+    ).fetchone()
+    if existing:
+        return
     job_id = f"{target_type}-{target_id}-{int(__import__('time').time() * 1000)}"
     conn.execute(
         "INSERT OR IGNORE INTO analysis_jobs(id, target_type, target_id) VALUES(?, ?, ?)",

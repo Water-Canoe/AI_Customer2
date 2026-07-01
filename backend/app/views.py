@@ -35,6 +35,7 @@ DIAGNOSTIC_FIELDS = {
         ("author_id", "评论者ID"),
         ("nickname", "评论者昵称"),
         ("body", "评论内容"),
+        ("created", "评论时间"),
     ],
     "creator": [
         ("id", "账号ID"),
@@ -49,12 +50,27 @@ def get_settings() -> dict[str, Any]:
     with database.connect() as conn:
         rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
     result = {row["key"]: row["value"] for row in rows}
-    for key in ("auto_analyze_competitors", "auto_analyze_leads", "headless"):
+    for key in (
+        "auto_analyze_competitors",
+        "auto_delete_non_competitors",
+        "auto_analyze_leads",
+        "auto_delete_non_customers",
+        "headless",
+    ):
         result[key] = result.get(key, "false") == "true"
     try:
         result["icp_profile"] = json.loads(result.get("icp_profile", "{}"))
     except json.JSONDecodeError:
         result["icp_profile"] = {}
+    for key in ("content_cutoff_days", "comment_cutoff_days", "ai_analysis_concurrency", "unreplied_reminder_days"):
+        try:
+            result[key] = int(result.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            result[key] = 0
+    try:
+        result["douyin_detail_sleep_seconds"] = float(result.get("douyin_detail_sleep_seconds", 2) or 0)
+    except (TypeError, ValueError):
+        result["douyin_detail_sleep_seconds"] = 2
     return result
 
 
@@ -509,7 +525,7 @@ def workbench_actions() -> dict[str, Any]:
             """
             SELECT COUNT(*) AS count
             FROM lead_user_accounts
-            WHERE hidden = 0 AND follow_status IN ('未私信', '未回复', '已回复', '未成交')
+            WHERE hidden = 0 AND follow_status IN ('未私信', '已私信', '未回复', '已回复', '未成交')
             """,
         )
         ai_failed = _scalar_count(conn, "SELECT COUNT(*) AS count FROM analysis_jobs WHERE status = 'failed'")
@@ -663,7 +679,8 @@ def _list_competitors(candidate: bool, status: str, keyword: str) -> list[dict[s
 
 
 def _list_leads(target: bool, status: str, keyword: str) -> list[dict[str, Any]]:
-    target_clause = "lua.follow_status NOT IN ('待筛选', '无需跟进') AND lua.hidden = 0" if target else "lua.follow_status IN ('待筛选', '无需跟进') AND lua.hidden = 0"
+    non_target_statuses = "('待筛选', '无需跟进', '非客户')"
+    target_clause = f"lua.follow_status NOT IN {non_target_statuses} AND lua.hidden = 0" if target else f"lua.follow_status IN {non_target_statuses} AND lua.hidden = 0"
     status_clause = " AND lua.follow_status = ?" if status else ""
     kw_clause, params = _keyword_clause(keyword, ["ua.nickname", "ua.signature", "lua.reason", "lua.script"])
     all_params: list[Any] = ([status] if status else []) + params
@@ -748,7 +765,7 @@ def overview_tree() -> list[dict[str, Any]]:
             platform_key = platform["platform"]
             keywords = conn.execute(
                 """
-                SELECT COALESCE(NULLIF(c.source_keyword, ''), '未标记关键词') AS keyword,
+                SELECT c.source_keyword AS keyword,
                        COUNT(DISTINCT CASE WHEN ua.competitor_status = '竞品' THEN ua.id END) AS competitors,
                        COUNT(DISTINCT c.id) AS contents,
                        COUNT(DISTINCT cm.id) AS comments,
@@ -759,8 +776,8 @@ def overview_tree() -> list[dict[str, Any]]:
                 LEFT JOIN comments cm ON cm.content_id = c.id
                 LEFT JOIN lead_sources ls ON ls.content_id = c.id
                 LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-                WHERE c.platform = ?
-                GROUP BY COALESCE(NULLIF(c.source_keyword, ''), '未标记关键词')
+                WHERE c.platform = ? AND NULLIF(c.source_keyword, '') IS NOT NULL
+                GROUP BY c.source_keyword
                 """,
                 (platform_key,),
             ).fetchall()
@@ -777,10 +794,14 @@ def overview_tree() -> list[dict[str, Any]]:
 
 
 def _keyword_node(conn, platform: str, keyword: str, metrics: dict[str, Any]) -> dict[str, Any]:
+    # 返回完整账号列表，由前端逐层分页，避免后端静默截断业务数据。
     accounts = conn.execute(
         """
-        SELECT ua.id, ua.platform, ua.nickname, ua.profile_url, ua.fans, ua.signature,
-               ua.account_role, ua.competitor_status,
+        SELECT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
+               ua.nickname, ua.profile_url, ua.fans, ua.signature,
+               ua.account_role, ua.competitor_status, ua.competitor_reason,
+               ua.content_total_count,
+               ua.raw_payload,
                COUNT(DISTINCT c.id) AS content_count,
                COUNT(DISTINCT cm.id) AS comment_count,
                COUNT(DISTINCT lua.id) AS customer_count,
@@ -790,28 +811,303 @@ def _keyword_node(conn, platform: str, keyword: str, metrics: dict[str, Any]) ->
         LEFT JOIN comments cm ON cm.content_id = c.id
         LEFT JOIN lead_sources ls ON ls.content_id = c.id
         LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-        WHERE c.platform = ? AND COALESCE(NULLIF(c.source_keyword, ''), '未标记关键词') = ?
+        WHERE c.platform = ? AND c.source_keyword = ?
         GROUP BY ua.id
-        LIMIT 100
+        ORDER BY latest DESC, ua.id DESC
         """,
         (platform, keyword),
     ).fetchall()
+    analysis_states = _overview_account_analysis_states(conn, platform, accounts)
+    node_metrics = dict(metrics)
+    node_metrics["platform"] = platform
+    node_metrics["keyword"] = keyword
     return {
         "id": f"keyword:{platform}:{keyword}",
         "label": keyword,
         "kind": "keyword",
+        "metrics": node_metrics,
+        "children": [_overview_account_node(conn, row, analysis_states) for row in accounts],
+    }
+
+
+def _overview_account_node(conn: sqlite3.Connection, row: sqlite3.Row, analysis_states: dict[int, str]) -> dict[str, Any]:
+    metrics = database.row_to_dict(row)
+    account_id = int(row["id"])
+    children = _overview_customer_nodes_for_account(conn, account_id)
+    metrics.update(_overview_account_totals(conn, account_id))
+    base_status = str(metrics.get("competitor_status") or "未分析")
+    metrics["competitor_display_status"] = analysis_states.get(account_id, base_status) if base_status == "未分析" else base_status
+    metrics["content_total_count"] = metrics.get("content_total_count") or _overview_content_total_count(metrics.get("raw_payload"))
+    metrics["crawled_content_count"] = int(metrics.get("content_count") or 0)
+    return {
+        "id": f"account:{account_id}",
+        "label": row["nickname"] or f"账号 {account_id}",
+        "kind": "account",
         "metrics": metrics,
-        "children": [
+        "children": children,
+    }
+
+
+def _overview_account_totals(conn: sqlite3.Connection, account_id: int) -> dict[str, Any]:
+    # Account cards show account-wide totals, not only the current keyword branch.
+    row = conn.execute(
+        """
+        SELECT
+            (
+                SELECT COUNT(DISTINCT c.id)
+                FROM contents c
+                WHERE c.author_account_id = ?
+            ) AS content_count,
+            (
+                SELECT COUNT(DISTINCT cm.id)
+                FROM contents c
+                JOIN comments cm ON cm.content_id = c.id
+                WHERE c.author_account_id = ?
+            ) AS comment_count,
+            (
+                SELECT COUNT(DISTINCT lua.id)
+                FROM lead_sources ls
+                JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+                LEFT JOIN contents c ON c.id = ls.content_id
+                WHERE ls.active = 1
+                  AND lua.hidden = 0
+                  AND (ls.source_account_id = ? OR c.author_account_id = ?)
+            ) AS customer_count,
+            (
+                SELECT COUNT(DISTINCT lua.id)
+                FROM lead_sources ls
+                JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+                LEFT JOIN contents c ON c.id = ls.content_id
+                WHERE ls.active = 1
+                  AND lua.hidden = 0
+                  AND (ls.source_account_id = ? OR c.author_account_id = ?)
+                  AND (
+                    lua.screening_status = '目标客户'
+                    OR lua.follow_status IN ('未私信', '已私信', '未回复', '已回复', '未成交', '已成交')
+                  )
+            ) AS target_customer_count,
+            (
+                SELECT COUNT(DISTINCT lua.id)
+                FROM lead_sources ls
+                JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+                LEFT JOIN contents c ON c.id = ls.content_id
+                WHERE ls.active = 1
+                  AND lua.hidden = 0
+                  AND (ls.source_account_id = ? OR c.author_account_id = ?)
+                  AND (
+                    lua.screening_status = '非客户'
+                    OR lua.follow_status IN ('非客户', '无需跟进')
+                  )
+            ) AS non_customer_count,
+            (
+                SELECT MAX(ts)
+                FROM (
+                    SELECT c.updated_at AS ts
+                    FROM contents c
+                    WHERE c.author_account_id = ?
+                    UNION ALL
+                    SELECT cm.updated_at AS ts
+                    FROM comments cm
+                    JOIN contents c ON c.id = cm.content_id
+                    WHERE c.author_account_id = ?
+                    UNION ALL
+                    SELECT ls.created_at AS ts
+                    FROM lead_sources ls
+                    LEFT JOIN contents c ON c.id = ls.content_id
+                    WHERE ls.active = 1
+                      AND (ls.source_account_id = ? OR c.author_account_id = ?)
+                )
+            ) AS latest
+        """,
+        (
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+            account_id,
+        ),
+    ).fetchone()
+    return database.row_to_dict(row) if row else {
+        "content_count": 0,
+        "comment_count": 0,
+        "customer_count": 0,
+        "target_customer_count": 0,
+        "non_customer_count": 0,
+        "latest": "",
+    }
+
+
+def _overview_customer_nodes_for_account(conn: sqlite3.Connection, source_account_id: int) -> list[dict[str, Any]]:
+    # 客户节点同样返回完整集合，具体展示页码交给总览树前端控制。
+    rows = conn.execute(
+        """
+        SELECT lua.id AS lead_id, lua.screening_status, lua.follow_status,
+               lua.intention, lua.reason, lua.suggested_action, lua.script,
+               lua.hidden, lua.updated_at,
+               ua.id AS account_id, ua.platform, ua.nickname, ua.profile_url,
+               ua.signature, COUNT(DISTINCT ls.id) AS source_count,
+               GROUP_CONCAT(DISTINCT TRIM(
+                   COALESCE(NULLIF(ct.title, ''), '') ||
+                   CASE
+                       WHEN COALESCE(NULLIF(ct.description, ''), '') <> ''
+                            AND COALESCE(NULLIF(ct.description, ''), '') <> COALESCE(NULLIF(ct.title, ''), '')
+                       THEN ' ' || ct.description
+                       ELSE ''
+                   END
+               )) AS content_samples,
+               GROUP_CONCAT(DISTINCT NULLIF(ct.content_url, '')) AS content_urls,
+               GROUP_CONCAT(DISTINCT cm.body) AS comment_samples,
+               MAX(ls.created_at) AS latest
+        FROM lead_sources ls
+        JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+        JOIN user_accounts ua ON ua.id = lua.account_id
+        LEFT JOIN contents ct ON ct.id = ls.content_id
+        LEFT JOIN comments cm ON cm.id = ls.comment_id
+        WHERE ls.active = 1
+          AND lua.hidden = 0
+          AND (
+            ls.source_account_id = ?
+            OR ls.content_id IN (SELECT id FROM contents WHERE author_account_id = ?)
+        )
+        GROUP BY lua.id
+        ORDER BY lua.updated_at DESC, lua.id DESC
+        """,
+        (source_account_id, source_account_id),
+    ).fetchall()
+    analysis_states = _overview_customer_analysis_states(conn, [int(row["lead_id"]) for row in rows])
+    nodes: list[dict[str, Any]] = []
+    for row in rows:
+        metrics = database.row_to_dict(row)
+        lead_id = int(row["lead_id"])
+        metrics["id"] = lead_id
+        metrics["source_account_id"] = source_account_id
+        metrics["ai_analysis_status"] = analysis_states.get(lead_id) or _overview_customer_analysis_status(metrics)
+        nodes.append(
             {
-                "id": f"account:{row['id']}",
-                "label": row["nickname"] or f"账号 {row['id']}",
-                "kind": "account",
-                "metrics": database.row_to_dict(row),
+                "id": f"customer:{lead_id}",
+                "label": row["nickname"] or f"客户 {lead_id}",
+                "kind": "customer",
+                "metrics": metrics,
                 "children": [],
             }
-            for row in accounts
-        ],
-    }
+        )
+    return nodes
+
+
+def _overview_customer_analysis_status(metrics: dict[str, Any]) -> str:
+    if metrics.get("reason") or metrics.get("script"):
+        return "已分析"
+    if str(metrics.get("screening_status") or "") in ("目标客户", "非客户"):
+        return "已分析"
+    if str(metrics.get("follow_status") or "") in ("未私信", "已私信", "未回复", "已回复", "未成交", "已成交", "非客户", "无需跟进"):
+        return "已分析"
+    return "未分析"
+
+
+def _overview_customer_analysis_states(conn: sqlite3.Connection, lead_ids: list[int]) -> dict[int, str]:
+    if not lead_ids:
+        return {}
+    states: dict[int, str] = {}
+    for index in range(0, len(lead_ids), 800):
+        chunk = lead_ids[index:index + 800]
+        placeholders = ",".join(["?"] * len(chunk))
+        rows = conn.execute(
+            f"""
+            SELECT target_id, status
+            FROM analysis_jobs
+            WHERE target_type = 'lead'
+              AND status IN ('pending', 'running')
+              AND target_id IN ({placeholders})
+            ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, updated_at DESC
+            """,
+            chunk,
+        ).fetchall()
+        for job in rows:
+            lead_id = int(job["target_id"])
+            status = "正在分析" if job["status"] == "running" else "排队分析"
+            if states.get(lead_id) != "正在分析":
+                states[lead_id] = status
+    return states
+
+
+def _overview_content_total_count(raw_payload: Any) -> int | None:
+    if isinstance(raw_payload, str):
+        try:
+            raw_payload = json.loads(raw_payload or "{}")
+        except json.JSONDecodeError:
+            raw_payload = {}
+    if not isinstance(raw_payload, dict):
+        return None
+    for key in ("videos_count", "notes_count", "content_count", "contents_count", "aweme_count"):
+        value = raw_payload.get(key)
+        if value in ("", None):
+            continue
+        try:
+            return int(float(str(value).replace(",", "")))
+        except ValueError:
+            continue
+    return None
+
+
+def _overview_account_analysis_states(conn: sqlite3.Connection, platform: str, rows: list[sqlite3.Row]) -> dict[int, str]:
+    # 总览树只展示派生进度，不改写账号真实竞品结论。
+    account_ids = [int(row["id"]) for row in rows]
+    if not account_ids:
+        return {}
+
+    states: dict[int, str] = {}
+    placeholders = ",".join(["?"] * len(account_ids))
+    job_rows = conn.execute(
+        f"""
+        SELECT target_id, status
+        FROM analysis_jobs
+        WHERE target_type = 'competitor'
+          AND status IN ('pending', 'running')
+          AND target_id IN ({placeholders})
+        ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, updated_at DESC
+        """,
+        account_ids,
+    ).fetchall()
+    for job in job_rows:
+        account_id = int(job["target_id"])
+        status = "正在分析" if job["status"] == "running" else "排队分析"
+        if states.get(account_id) != "正在分析":
+            states[account_id] = status
+
+    identifiers: dict[str, set[int]] = {}
+    for row in rows:
+        account_id = int(row["id"])
+        if str(row["competitor_status"] or "未分析") != "未分析":
+            continue
+        for value in (row["profile_url"], row["platform_user_id"], row["sec_uid"]):
+            key = str(value or "").strip()
+            if key:
+                identifiers.setdefault(key, set()).add(account_id)
+    if not identifiers:
+        return states
+
+    task_rows = conn.execute(
+        """
+        SELECT creator_id
+        FROM crawl_jobs
+        WHERE mode = 'account_analysis'
+          AND status IN ('pending', 'running')
+          AND platform = ?
+        """,
+        (platform,),
+    ).fetchall()
+    for task in task_rows:
+        for creator_id in str(task["creator_id"] or "").split(","):
+            for account_id in identifiers.get(creator_id.strip(), set()):
+                states.setdefault(account_id, "排队分析")
+    return states
 
 
 def overview_node(node_id: str) -> dict[str, Any]:

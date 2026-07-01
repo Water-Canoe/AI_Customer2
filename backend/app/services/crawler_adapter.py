@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 import platform
+import re
+import socket
+import sqlite3
 import subprocess
 import threading
 import time
@@ -10,7 +13,7 @@ from typing import Any, Callable, Literal
 
 from app import database
 from app.schemas import TaskCreate
-from app.services.importer import import_for_task
+from app.services.importer import CONTENT_TABLES, import_for_task
 
 
 PLATFORM_LABELS = {"dy": "抖音", "xhs": "小红书", "ks": "快手"}
@@ -25,6 +28,7 @@ MODE_LABELS = {
 PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
 
 RUNNING_PROCESSES: dict[str, subprocess.Popen[str]] = {}
+CDP_BROWSER_PROCESS: subprocess.Popen[str] | None = None
 
 ACCOUNT_ANALYSIS_AWEME_LOG_MARKERS = (
     "store.douyin.update_douyin_aweme",
@@ -82,7 +86,11 @@ def normalize_task_defaults(payload: TaskCreate) -> TaskCreate:
     collect_sub_comments = payload.collect_sub_comments or payload.mode in ("competitor_crawl", "own_account")
     name = payload.name.strip()
     if not name:
-        seed = keywords or creator_id or specified_id or PLATFORM_LABELS[payload.platform]
+        creator_items = [item.strip() for item in creator_id.split(",") if item.strip()]
+        if payload.mode == "account_analysis" and len(creator_items) > 1:
+            seed = f"{len(creator_items)}个竞品账号"
+        else:
+            seed = keywords or creator_id or specified_id or PLATFORM_LABELS[payload.platform]
         name = f"{MODE_LABELS[payload.mode]}-{seed}"
     return payload.model_copy(
         update={
@@ -521,6 +529,25 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     try:
+        schema_message = _ensure_media_crawler_sqlite_schema(media_dir, str(task["platform"]), env)
+    except Exception as exc:
+        _fail_task(task_id, f"初始化 MediaCrawler SQLite 表结构失败：{exc}")
+        return
+    if schema_message:
+        with database.connect() as conn:
+            log_task(conn, task_id, "info", schema_message)
+
+    try:
+        cdp_message = _ensure_cdp_browser_for_existing_mode(media_dir, bool(task.get("headless")))
+    except Exception as exc:
+        _fail_task(task_id, f"启动 MediaCrawler 前置 CDP 浏览器失败：{exc}")
+        return
+    if cdp_message:
+        with database.connect() as conn:
+            log_task(conn, task_id, "info", cdp_message)
+
+    run_env = _media_crawler_subprocess_env(env, task)
+    try:
         process = subprocess.Popen(
             command,
             cwd=media_path,
@@ -529,7 +556,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=env,
+            env=run_env,
         )
     except Exception as exc:
         _fail_task(task_id, f"启动 MediaCrawler 失败：{exc}")
@@ -580,6 +607,177 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
             """,
             (task_id,),
         )
+    _run_post_success_automation(task_id)
+
+
+def _ensure_media_crawler_sqlite_schema(media_dir: Path, platform_value: str, env: dict[str, str]) -> str | None:
+    mapping = CONTENT_TABLES.get(platform_value)
+    required_table = mapping["table"] if mapping else ""
+    if not required_table:
+        return None
+
+    db_path = media_dir / "database" / "sqlite_tables.db"
+    if _sqlite_table_exists(db_path, required_table):
+        return None
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    command = ["uv", "run", "main.py", "--init_db", "sqlite"]
+    result = subprocess.run(
+        command,
+        cwd=media_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        output = (result.stdout or "").strip()
+        raise RuntimeError(f"uv run main.py --init_db sqlite 退出码 {result.returncode}：{output}")
+    if not _sqlite_table_exists(db_path, required_table):
+        output = (result.stdout or "").strip()
+        raise RuntimeError(f"初始化完成后仍缺少表 {required_table}：{output}")
+    return f"检测到 MediaCrawler SQLite 缺少 {required_table} 表，已自动执行 uv run main.py --init_db sqlite 初始化表结构"
+
+
+def _sqlite_table_exists(db_path: Path, table_name: str) -> bool:
+    if not db_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table_name,),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
+def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> str | None:
+    cdp_config = _read_media_crawler_cdp_config(media_dir)
+    if not cdp_config["enabled"] or not cdp_config["connect_existing"]:
+        return None
+
+    debug_port = int(cdp_config["debug_port"])
+    if _is_tcp_port_open("127.0.0.1", debug_port):
+        return None
+
+    browser_path = _detect_browser_path(str(cdp_config["custom_browser_path"]))
+    user_data_dir = media_dir / "browser_data" / "ai_customer_cdp"
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+
+    global CDP_BROWSER_PROCESS
+    args = [
+        browser_path,
+        f"--remote-debugging-port={debug_port}",
+        "--remote-debugging-address=127.0.0.1",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-features=TranslateUI",
+        "--disable-blink-features=AutomationControlled",
+        "--exclude-switches=enable-automation",
+        "--disable-infobars",
+        f"--user-data-dir={user_data_dir}",
+    ]
+    if headless:
+        args.extend(["--headless=new", "--disable-gpu"])
+    else:
+        args.append("--start-maximized")
+
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == "Windows" else 0
+    CDP_BROWSER_PROCESS = subprocess.Popen(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        creationflags=creationflags,
+    )
+    if not _wait_for_tcp_port("127.0.0.1", debug_port, timeout_seconds=20):
+        raise RuntimeError(f"Chrome 已启动但 CDP 端口 {debug_port} 未就绪")
+    return f"检测到 MediaCrawler 需要连接已有 CDP 浏览器，但端口 {debug_port} 未开启；已自动启动 Chrome 调试实例"
+
+
+def _read_media_crawler_cdp_config(media_dir: Path) -> dict[str, object]:
+    config_path = media_dir / "config" / "base_config.py"
+    if not config_path.exists():
+        return {"enabled": False, "connect_existing": False, "debug_port": 9222, "custom_browser_path": ""}
+    text = config_path.read_text(encoding="utf-8", errors="ignore")
+    return {
+        "enabled": _read_bool_assignment(text, "ENABLE_CDP_MODE", False),
+        "connect_existing": _read_bool_assignment(text, "CDP_CONNECT_EXISTING", False),
+        "debug_port": _read_int_assignment(text, "CDP_DEBUG_PORT", 9222),
+        "custom_browser_path": _read_str_assignment(text, "CUSTOM_BROWSER_PATH", ""),
+    }
+
+
+def _read_bool_assignment(text: str, name: str, default: bool) -> bool:
+    match = re.search(rf"^\s*{re.escape(name)}\s*=\s*(True|False)\b", text, re.MULTILINE)
+    return (match.group(1) == "True") if match else default
+
+
+def _read_int_assignment(text: str, name: str, default: int) -> int:
+    match = re.search(rf"^\s*{re.escape(name)}\s*=\s*(\d+)\b", text, re.MULTILINE)
+    return int(match.group(1)) if match else default
+
+
+def _read_str_assignment(text: str, name: str, default: str) -> str:
+    match = re.search(rf"^\s*{re.escape(name)}\s*=\s*['\"]([^'\"]*)['\"]", text, re.MULTILINE)
+    return match.group(1) if match else default
+
+
+def _detect_browser_path(custom_browser_path: str = "") -> str:
+    if custom_browser_path and Path(custom_browser_path).is_file():
+        return custom_browser_path
+    candidates: list[str]
+    if platform.system() == "Windows":
+        candidates = [
+            os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
+        ]
+    elif platform.system() == "Darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+    else:
+        candidates = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/microsoft-edge",
+        ]
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return candidate
+    raise RuntimeError("找不到 Chrome 或 Edge，请安装浏览器或在 MediaCrawler config/base_config.py 设置 CUSTOM_BROWSER_PATH")
+
+
+def _is_tcp_port_open(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _wait_for_tcp_port(host: str, port: int, timeout_seconds: int) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if _is_tcp_port_open(host, port):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def _finish_without_crawler(task_id: str) -> None:
@@ -600,6 +798,110 @@ def _finish_without_crawler(task_id: str) -> None:
             """,
             (status, "" if status == "succeeded" else message, task_id),
         )
+    if status == "succeeded":
+        _run_post_success_automation(task_id)
+
+
+def _run_post_success_automation(task_id: str) -> None:
+    with database.connect() as conn:
+        task = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
+        if not task:
+            return
+        auto_competitor = database.get_setting(conn, "auto_analyze_competitors", "false") == "true"
+        auto_lead = database.get_setting(conn, "auto_analyze_leads", "false") == "true"
+        task_mode = str(task["mode"])
+        if auto_competitor and task_mode == "competitor_discovery":
+            log_task(conn, task_id, "info", "已开启自动分析竞品账号，开始创建账号分析任务")
+
+    if auto_competitor and task_mode == "competitor_discovery":
+        try:
+            from app.services import account_actions
+
+            result = account_actions.create_task_account_analysis_task(task_id)
+            if not result.get("task_ids"):
+                with database.connect() as conn:
+                    log_task(conn, task_id, "info", f"自动分析竞品账号未创建任务：待分析账号 {result.get('account_count', 0)} 个，跳过 {len(result.get('skipped', []))} 个")
+                return
+            analysis_task_id = str(result["task_ids"][0])
+            account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
+            with database.connect() as conn:
+                log_task(conn, task_id, "info", f"已创建自动账号分析任务 {analysis_task_id}，账号 {len(account_ids)} 个")
+            account_actions.run_account_analysis_batch(account_ids, analysis_task_id)
+        except Exception as exc:
+            with database.connect() as conn:
+                log_task(conn, task_id, "error", f"自动分析竞品账号失败：{exc}")
+
+    if auto_lead and task_mode in ("competitor_crawl", "own_account", "demand_content"):
+        with database.connect() as conn:
+            log_task(conn, task_id, "info", "已开启自动分析线索用户，开始执行 AI 筛选")
+        try:
+            from app.services import ai_service
+
+            result = ai_service.run_auto_lead_analysis_for_task(task_id)
+            with database.connect() as conn:
+                log_task(
+                    conn,
+                    task_id,
+                    "info",
+                    f"自动线索 AI 分析完成：成功 {result['succeeded']} 个，失败 {result['failed']} 个，自动删除非客户 {result['auto_deleted']} 个",
+                )
+                if result["errors"]:
+                    log_task(conn, task_id, "error", f"自动线索 AI 分析失败明细：{result['errors']}")
+        except Exception as exc:
+            with database.connect() as conn:
+                log_task(conn, task_id, "error", f"自动分析线索用户失败：{exc}")
+
+
+def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, object]) -> dict[str, str]:
+    env = base_env.copy()
+    shim_required = False
+    if task.get("platform") == "dy":
+        env["AI_CUSTOMER_DY_RESILIENT_HTTP"] = "1"
+        env["AI_CUSTOMER_DY_DETAIL_SLEEP_SEC"] = _douyin_detail_sleep_seconds()
+        shim_required = True
+    if (
+        task.get("mode") in ("account_analysis", "competitor_crawl", "own_account")
+        and task.get("crawler_type") == "creator"
+        and task.get("platform") == "dy"
+    ):
+        limit = max(1, int(task.get("content_count") or 5))
+        env["AI_CUSTOMER_DY_CREATOR_VIDEO_LIMIT"] = str(limit)
+        shim_required = True
+    content_cutoff_ts = _setting_cutoff_ts_seconds("content_cutoff_days")
+    if content_cutoff_ts:
+        env["AI_CUSTOMER_CONTENT_CUTOFF_TS"] = str(content_cutoff_ts)
+        shim_required = True
+    comment_cutoff_ts = _setting_cutoff_ts_seconds("comment_cutoff_days")
+    if comment_cutoff_ts:
+        env["AI_CUSTOMER_COMMENT_CUTOFF_TS"] = str(comment_cutoff_ts)
+        shim_required = True
+    if shim_required:
+        shim_dir = Path(__file__).resolve().parents[1] / "mediacrawler_shims"
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(shim_dir) if not existing_pythonpath else f"{shim_dir}{os.pathsep}{existing_pythonpath}"
+    return env
+
+
+def _setting_cutoff_ts_seconds(setting_key: str) -> int | None:
+    with database.connect() as conn:
+        try:
+            days = int(database.get_setting(conn, setting_key, "0") or "0")
+        except (TypeError, ValueError):
+            days = 0
+    if days <= 0:
+        return None
+    return int(time.time()) - days * 86400
+
+
+def _douyin_detail_sleep_seconds() -> str:
+    with database.connect() as conn:
+        raw_value = database.get_setting(conn, "douyin_detail_sleep_seconds", "2")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = 2.0
+    value = min(max(value, 0.0), 10.0)
+    return f"{value:g}"
 
 
 def _fail_task(task_id: str, error: str) -> None:
@@ -632,6 +934,8 @@ def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
 
 def _should_stop_account_analysis(task: dict[str, object], message: str, progress: dict[str, Any]) -> bool:
     if task.get("mode") != "account_analysis":
+        return False
+    if "," in str(task.get("creator_id") or ""):
         return False
     if any(marker in message for marker in ACCOUNT_ANALYSIS_CREATOR_LOG_MARKERS):
         progress["creator"] = True

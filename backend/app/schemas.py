@@ -59,3 +59,26 @@ class AiBatchCreate(BaseModel):
     target_type: Literal["competitor", "lead", "content"]
     target_ids: list[int]
     run_now: bool = True
+
+
+class AiBulkDelete(BaseModel):
+    target_ids: list[int]
+
+
+class BulkActionPreview(BaseModel):
+    action: Literal[
+        "ai_analyze",
+        "delete_non_competitors",
+        "delete_non_customers",
+        "retry_failed_ai",
+        "keyword_analyze",
+        "keyword_find_customers",
+    ]
+    target_type: Literal["competitor", "lead", "ai_job", "keyword"]
+    target_ids: list[int | str] = Field(default_factory=list)
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class CustomerFollowStatusUpdate(BaseModel):
+    follow_status: Literal["待筛选", "未私信", "已私信", "未回复", "已回复", "未成交", "已成交", "非客户", "无需跟进"]
+    note: str = ""
