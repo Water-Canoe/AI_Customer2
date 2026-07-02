@@ -303,6 +303,7 @@ DEFAULT_SETTINGS = {
     "icp_profile": json.dumps(
         {
             "product": "",
+            "company_name": "",
             "industry": "",
             "roles": "",
             "pain_points": "",

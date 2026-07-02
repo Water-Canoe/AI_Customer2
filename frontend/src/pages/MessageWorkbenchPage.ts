@@ -1,4 +1,5 @@
 import { computed, defineComponent, h, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Close, CopyDocument, Search } from '@element-plus/icons-vue'
 import { SplitPane } from '../components/ui/SplitPane'
 import { platformName } from '../shared/format'
@@ -161,6 +162,8 @@ function renderCustomerTable(rows: Dict[], loading: boolean, emit: any) {
 }
 
 function renderCustomerRow(row: Dict, emit: any) {
+  const rawScript = String(row.script || '').trim()
+  const script = rawScript || '暂无AI话术'
   return h('tr', { class: row.overdue ? 'is-overdue' : '', onClick: () => emit('select-customer', row.lead_id) }, [
     h('td', { class: 'message-customer-cell' }, [
       row.profile_url
@@ -176,7 +179,16 @@ function renderCustomerRow(row: Dict, emit: any) {
         ? h('a', { class: 'message-link', href: row.content_url, target: '_blank', rel: 'noreferrer', onClick: (event: Event) => event.stopPropagation() }, '打开视频')
         : null
     ]),
-    h('td', { class: 'message-rich-cell' }, [renderClamp(row.script || '暂无AI话术', 5)]),
+    h('td', {
+      class: ['message-rich-cell', 'message-script-cell', rawScript ? 'copyable-script' : 'empty-script'],
+      title: rawScript ? `${rawScript}\n点击复制AI话术` : script,
+      role: rawScript ? 'button' : undefined,
+      tabindex: rawScript ? 0 : undefined,
+      onClick: rawScript ? (event: MouseEvent) => copyAiScript(rawScript, event) : undefined,
+      onKeydown: rawScript ? (event: KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') copyAiScript(rawScript, event)
+      } : undefined
+    }, [renderClamp(script, 5)]),
     h('td', { class: 'message-time-cell' }, [
       h('span', `评论 ${row.comment_at || '-'}`),
       h('span', `私信 ${row.private_message_at || '-'}`),
@@ -210,6 +222,8 @@ function renderDetailDrawer(detail: Dict, emit: any) {
   const customer = detail.customer || {}
   const sources = detail.sources || []
   const events = detail.events || []
+  const rawScript = String(customer.script || '').trim()
+  const script = rawScript || '暂无AI话术'
   return h('div', { class: 'message-detail-drawer' }, [
     h('div', { class: 'drawer-head' }, [
       h('div', [
@@ -218,9 +232,18 @@ function renderDetailDrawer(detail: Dict, emit: any) {
       ]),
       h('button', { type: 'button', class: 'icon-button', onClick: () => emit('close-detail') }, [h(Close)])
     ]),
-    h('div', { class: 'drawer-section' }, [
-      h('h4', 'AI话术'),
-      h('p', customer.script || '暂无AI话术')
+    h('div', {
+      class: ['drawer-section', 'drawer-script-section', rawScript ? 'copyable-script' : 'empty-script'],
+      title: rawScript ? `${rawScript}\n点击复制AI话术` : script,
+      role: rawScript ? 'button' : undefined,
+      tabindex: rawScript ? 0 : undefined,
+      onClick: rawScript ? (event: MouseEvent) => copyAiScript(rawScript, event) : undefined,
+      onKeydown: rawScript ? (event: KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') copyAiScript(rawScript, event)
+      } : undefined
+    }, [
+      h('h4', rawScript ? 'AI话术 · 点击复制' : 'AI话术'),
+      h('p', script)
     ]),
     h('div', { class: 'drawer-section' }, [
       h('h4', 'AI分析原因'),
@@ -252,6 +275,22 @@ function renderDetailDrawer(detail: Dict, emit: any) {
 function renderClamp(value: unknown, lines: number) {
   const text = String(value || '')
   return h('span', { class: `message-clamp clamp-${lines}`, title: text }, text)
+}
+
+async function copyAiScript(value: unknown, event?: MouseEvent | KeyboardEvent) {
+  event?.stopPropagation()
+  if (event instanceof KeyboardEvent) event.preventDefault()
+  const text = String(value || '').trim()
+  if (!text) {
+    ElMessage.warning('暂无AI话术可复制')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('AI话术已复制')
+  } catch {
+    ElMessage.error('复制失败，请检查浏览器剪贴板权限')
+  }
 }
 
 function followOptions(current: string) {

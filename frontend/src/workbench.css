@@ -493,6 +493,175 @@
   line-height: 1.55;
 }
 
+.bulk-preview-message-box {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.bulk-preview-message {
+  display: grid;
+  gap: 12px;
+  max-height: min(62vh, 560px);
+  overflow: auto;
+  padding-right: 2px;
+  color: #2d3b4f;
+  line-height: 1.55;
+}
+
+.bulk-preview-confirm {
+  margin: 0;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.bulk-preview-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.bulk-preview-metric {
+  padding: 10px 12px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #f8fbfa;
+}
+
+.bulk-preview-metric small,
+.bulk-preview-metric strong {
+  display: block;
+}
+
+.bulk-preview-metric small {
+  color: #65758c;
+  font-size: 12px;
+}
+
+.bulk-preview-metric strong {
+  margin-top: 2px;
+  color: #182334;
+  font-size: 20px;
+}
+
+.bulk-preview-metric.is-success {
+  border-color: #b7efe4;
+  background: #f0fdf9;
+}
+
+.bulk-preview-metric.is-muted {
+  background: #f6f8fb;
+}
+
+.bulk-preview-section {
+  display: grid;
+  gap: 8px;
+}
+
+.bulk-preview-section h4,
+.bulk-preview-warning h4 {
+  margin: 0;
+  color: #607087;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bulk-preview-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bulk-preview-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: #eef4f8;
+}
+
+.bulk-preview-count em {
+  overflow: hidden;
+  color: #607087;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-preview-count strong {
+  color: #1f2937;
+  font-size: 13px;
+}
+
+.bulk-preview-empty {
+  color: #8a97aa;
+  font-size: 13px;
+}
+
+.bulk-preview-samples,
+.bulk-preview-warning ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bulk-preview-samples li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: #f7fafc;
+}
+
+.bulk-preview-samples span {
+  overflow: hidden;
+  color: #203047;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-preview-samples em {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3651a7;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.bulk-preview-warning {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fffaf2;
+}
+
+.bulk-preview-warning li {
+  position: relative;
+  padding-left: 14px;
+  color: #7c4a03;
+  font-size: 13px;
+}
+
+.bulk-preview-warning li::before {
+  position: absolute;
+  left: 0;
+  color: #f59e0b;
+  content: "!";
+  font-weight: 800;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(160px, 1fr));
@@ -1326,6 +1495,32 @@ input[type='checkbox'] {
 
 .customer-script span {
   -webkit-line-clamp: 3;
+}
+
+.copyable-script {
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
+}
+
+.copyable-script:hover,
+.copyable-script:focus-visible {
+  background: #f0fdfa;
+  box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.22);
+  outline: none;
+}
+
+.copyable-script:hover span,
+.copyable-script:focus-visible span,
+.message-script-cell.copyable-script:hover .message-clamp,
+.message-script-cell.copyable-script:focus-visible .message-clamp,
+.drawer-script-section.copyable-script:hover p,
+.drawer-script-section.copyable-script:focus-visible p {
+  color: #0f766e;
+}
+
+.empty-script {
+  cursor: default;
 }
 
 .customer-video a {
@@ -2886,6 +3081,10 @@ input[type='checkbox'] {
   line-height: 1.45;
 }
 
+.message-script-cell {
+  border-radius: 6px;
+}
+
 .message-video-cell {
   display: grid;
   align-content: start;
@@ -3060,6 +3259,10 @@ input[type='checkbox'] {
 .drawer-section {
   display: grid;
   gap: 8px;
+}
+
+.drawer-script-section {
+  padding: 10px 12px;
 }
 
 .drawer-section p,

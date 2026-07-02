@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
   Grid,
@@ -504,31 +504,84 @@ async function createAiJob(targetType: string, targetId: number) {
 
 async function confirmBulkPreview(payload: Dict, title = '批量操作预览') {
   const { data } = await api.post('/bulk-actions/preview', payload)
-  const affected = Object.entries(data.affected_counts || {})
-    .map(([key, value]) => `${key} ${value}`)
-    .join(' / ') || '无'
-  const tombstonesText = Object.entries(data.tombstone_counts || {})
-    .map(([key, value]) => `${key} ${value}`)
-    .join(' / ') || '无'
-  const samples = (data.sample_rows || [])
-    .map((row: Dict) => `- ${row.name || row.id || '-'}${row.status ? `（${row.status}）` : ''}`)
-    .join('\n')
-  const warnings = (data.warnings || []).map((item: string) => `- ${item}`).join('\n')
-  const message = [
-    data.confirm_text || '确认执行当前批量操作？',
-    `符合条件：${data.eligible_count || 0}`,
-    `跳过：${data.skipped_count || 0}`,
-    `预计影响：${affected}`,
-    `预计写入墓碑：${tombstonesText}`,
-    samples ? `样例：\n${samples}` : '',
-    warnings ? `注意：\n${warnings}` : '',
-  ].filter(Boolean).join('\n\n')
-  await ElMessageBox.confirm(message, title, {
+  await ElMessageBox.confirm(renderBulkPreviewMessage(data), title, {
     type: (data.tombstone_counts && Object.keys(data.tombstone_counts).length) ? 'warning' : 'info',
     confirmButtonText: '确认执行',
     cancelButtonText: '取消',
+    customClass: 'bulk-preview-message-box',
   })
   return data
+}
+
+function renderBulkPreviewMessage(data: Dict) {
+  return h('div', { class: 'bulk-preview-message' }, [
+    h('p', { class: 'bulk-preview-confirm' }, data.confirm_text || '确认执行当前批量操作？'),
+    h('div', { class: 'bulk-preview-metrics' }, [
+      bulkPreviewMetric('符合条件', data.eligible_count || 0, 'success'),
+      bulkPreviewMetric('跳过', data.skipped_count || 0, 'muted'),
+    ]),
+    bulkPreviewCountSection('预计影响', data.affected_counts || {}),
+    bulkPreviewCountSection('预计写入墓碑', data.tombstone_counts || {}),
+    bulkPreviewSamples(data.sample_rows || []),
+    bulkPreviewWarnings(data.warnings || []),
+  ].filter(Boolean))
+}
+
+function bulkPreviewMetric(label: string, value: unknown, tone = '') {
+  return h('div', { class: ['bulk-preview-metric', tone ? `is-${tone}` : ''] }, [
+    h('small', label),
+    h('strong', String(value)),
+  ])
+}
+
+function bulkPreviewCountSection(title: string, counts: Dict) {
+  const entries = Object.entries(counts).filter(([, value]) => Number(value) > 0)
+  return h('section', { class: 'bulk-preview-section' }, [
+    h('h4', title),
+    entries.length
+      ? h('div', { class: 'bulk-preview-counts' }, entries.map(([key, value]) => (
+        h('span', { class: 'bulk-preview-count' }, [
+          h('em', bulkPreviewLabel(key)),
+          h('strong', String(value)),
+        ])
+      )))
+      : h('span', { class: 'bulk-preview-empty' }, '无'),
+  ])
+}
+
+function bulkPreviewSamples(rows: Dict[]) {
+  if (!rows.length) return null
+  return h('section', { class: 'bulk-preview-section' }, [
+    h('h4', '样例对象'),
+    h('ul', { class: 'bulk-preview-samples' }, rows.map((row) => (
+      h('li', [
+        h('span', { title: String(row.name || row.id || '-') }, row.name || row.id || '-'),
+        row.status ? h('em', row.status) : null,
+      ])
+    ))),
+  ])
+}
+
+function bulkPreviewWarnings(items: string[]) {
+  if (!items.length) return null
+  return h('section', { class: 'bulk-preview-warning' }, [
+    h('h4', '注意'),
+    h('ul', items.map((item) => h('li', item))),
+  ])
+}
+
+function bulkPreviewLabel(key: string) {
+  const labels: Dict = {
+    accounts: '账号',
+    author_account: '作者账号墓碑',
+    comments: '评论',
+    comment: '评论墓碑',
+    contents: '内容',
+    content: '内容墓碑',
+    leads: '线索',
+    analysis_jobs: 'AI任务',
+  }
+  return labels[key] || key
 }
 
 async function createBatchAiJobs(targetType: string, targetIds: number[]) {
@@ -1009,7 +1062,10 @@ async function findCustomers(target: Dict) {
     }
 
     if (data.created) {
-      ElMessage.success(`已创建找客户任务，包含 ${data.account_count || 0} 个竞品账号`)
+      const taskCount = data.task_ids?.length || data.created || 0
+      const reuseCount = data.reuse_content_count || 0
+      const supplementCount = data.creator_account_count || 0
+      ElMessage.success(`已创建 ${taskCount} 个找客户任务：复用已有内容 ${reuseCount} 条，补采竞品账号 ${supplementCount} 个`)
     } else {
       ElMessage.info(data.skipped?.length ? '相关竞品账号已有运行中的找客户任务' : '没有可用于找客户的竞品账号')
     }

@@ -115,7 +115,7 @@ def create_account_find_customer_task(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if run_now and result["task_ids"]:
-        background_tasks.add_task(crawler_adapter.run_task, str(result["task_ids"][0]))
+        background_tasks.add_task(crawler_adapter.run_tasks_serially, result["task_ids"])
     return result
 
 
@@ -265,7 +265,7 @@ def find_keyword_customers(
 ) -> dict[str, object]:
     result = account_actions.create_keyword_find_customer_task(platform, keyword)
     if run_now and result["task_ids"]:
-        background_tasks.add_task(crawler_adapter.run_task, str(result["task_ids"][0]))
+        background_tasks.add_task(crawler_adapter.run_tasks_serially, result["task_ids"])
     return result
 
 

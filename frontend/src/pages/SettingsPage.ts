@@ -5,6 +5,7 @@ import { SplitPane } from '../components/ui/SplitPane'
 
 const icpFields = [
   { key: 'product', label: '产品/服务', placeholder: '例如：AI客服、获客工具' },
+  { key: 'company_name', label: '公司名（可选）', placeholder: '留空时，AI话术不得出现公司名或公司占位符' },
   { key: 'industry', label: '目标行业', placeholder: '例如：跨境电商、教育培训' },
   { key: 'roles', label: '目标角色', placeholder: '例如：老板、运营负责人、销售主管' },
   { key: 'pain_points', label: '典型痛点', placeholder: '用户常见问题、需求或抱怨', multiline: true },

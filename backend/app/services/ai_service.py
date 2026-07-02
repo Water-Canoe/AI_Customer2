@@ -16,8 +16,19 @@ from app.services import deletion
 
 PROMPT_VERSIONS = {
     "competitor": "competitor_v1",
-    "lead": "lead_v1",
-    "content": "content_v1",
+    "lead": "lead_v2",
+    "content": "content_v2",
+}
+
+DEFAULT_ICP_PROFILE = {
+    "product": "",
+    "company_name": "",
+    "industry": "",
+    "roles": "",
+    "pain_points": "",
+    "high_intent_words": "",
+    "value_proposition": "",
+    "excluded_audience": "",
 }
 
 
@@ -754,7 +765,7 @@ def _delete_non_customer_lead_account(lead_id: int) -> dict[str, Any]:
 
 
 def build_input_payload(conn, target_type: str, target_id: int) -> dict[str, Any]:
-    icp = json.loads(database.get_setting(conn, "icp_profile", "{}") or "{}")
+    icp = _load_icp_profile(conn)
     if target_type == "competitor":
         account = conn.execute("SELECT * FROM user_accounts WHERE id = ?", (target_id,)).fetchone()
         if not account:
@@ -814,6 +825,17 @@ def build_input_payload(conn, target_type: str, target_id: int) -> dict[str, Any
             raise HTTPException(status_code=404, detail="内容不存在")
         return {"icp": icp, "content": database.row_to_dict(content)}
     raise HTTPException(status_code=400, detail="不支持的 AI 分析类型")
+
+
+def _load_icp_profile(conn) -> dict[str, Any]:
+    """Keep old ICP settings explicit about missing optional fields."""
+    try:
+        raw = json.loads(database.get_setting(conn, "icp_profile", "{}") or "{}")
+    except json.JSONDecodeError:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    return {**DEFAULT_ICP_PROFILE, **raw}
 
 
 def extract_lead_intent_signals(evidence: list[dict[str, Any]]) -> list[str]:
@@ -905,14 +927,19 @@ def build_ai_messages(target_type: str, payload: dict[str, Any]) -> tuple[str, s
             "不要因为评论没有直接写出ICP关键词、客户主页简介为空、昵称像普通用户、没有公司信息，就把这类询价或详情咨询判为非客户。"
             "只有在评论明显与来源视频/ICP无关、纯玩笑围观、纯技术学习不涉及采购方案、同行广告、招聘、辱骂、抽奖互动时，才判为非客户。"
             "意向分级：高=明确询价/购买/定制/供应商/联系方式/采购配置；中=询问适配、方案可行性、关键参数或技术细节；低=泛泛关注但仍有产品需求线索。"
+            "生成的script必须是可直接复制发送给客户的自然私信，不要出现模板占位符。"
+            "ICP画像中的company_name/公司名是可选字段：如果非空，script可以自然使用该公司名；如果为空，script不得出现任何公司名、品牌名、公司占位符，也不得出现“我们公司”“我司”“本公司”“公司名”“XX公司”“{company_name}”等表达，且不得编造自己属于哪家公司；这种情况下优先用“这边”这类不暴露公司名的表达。"
             "输出格式："
             '{"is_customer": true, "intention": "低/中/高", "reason": "必须引用具体评论和来源视频依据", '
-            '"pain_points": ["..."], "suggested_action": "...", "script": "基于评论内容生成自然私信话术"}。\n'
+            '"pain_points": ["..."], "suggested_action": "...", "script": "基于评论内容生成可直接复制的自然私信话术"}。\n'
             f"输入：{json.dumps(payload, ensure_ascii=False)}"
         )
         return system_prompt, user_prompt
     user_prompt = (
-        "判断是否为目标客户。输出格式："
+        "判断是否为目标客户。"
+        "生成的script必须是可直接复制发送给客户的自然私信，不要出现模板占位符。"
+        "如果ICP画像中的company_name为空，script不得出现任何公司名、品牌名或公司占位符；如果非空，才可以自然使用该公司名。"
+        "输出格式："
         '{"is_customer": true, "intention": "低/中/高", "reason": "...", '
         '"pain_points": ["..."], "suggested_action": "...", "script": "..."}。\n'
         f"输入：{json.dumps(payload, ensure_ascii=False)}"

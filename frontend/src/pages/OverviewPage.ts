@@ -1,5 +1,5 @@
 ﻿import { defineComponent, h, reactive } from 'vue'
-import { ElDropdown, ElDropdownItem, ElDropdownMenu } from 'element-plus'
+import { ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { accountRoleLabel, competitorStatusClass, competitorStatusLabel, platformName } from '../shared/format'
 
@@ -198,7 +198,8 @@ function renderOverviewAccountRow(
 function renderOverviewCustomerRow(node: Dict, level: number, handlers: OverviewHandlers) {
   const metrics = node.metrics || {}
   const reason = metrics.reason || '暂无AI分析原因'
-  const script = metrics.script || '暂无AI生成话术'
+  const rawScript = String(metrics.script || '').trim()
+  const script = rawScript || '暂无AI生成话术'
   const videoText = overviewSampleText(metrics.content_samples, '暂无视频详情')
   const commentText = overviewSampleText(metrics.comment_samples, metrics.signature || '暂无评论摘要')
   const firstContentUrl = firstOverviewSample(metrics.content_urls)
@@ -217,8 +218,17 @@ function renderOverviewCustomerRow(node: Dict, level: number, handlers: Overview
       h('span', videoText),
       firstContentUrl ? h('a', { href: firstContentUrl, target: '_blank', rel: 'noreferrer' }, '打开视频') : null
     ]),
-    h('div', { class: 'account-cell account-reason customer-script', title: script }, [
-      h('small', 'AI生成话术'),
+    h('div', {
+      class: ['account-cell', 'account-reason', 'customer-script', rawScript ? 'copyable-script' : 'empty-script'],
+      title: rawScript ? `${script}\n点击复制AI话术` : script,
+      role: rawScript ? 'button' : undefined,
+      tabindex: rawScript ? 0 : undefined,
+      onClick: rawScript ? (event: MouseEvent) => copyAiScript(rawScript, event) : undefined,
+      onKeydown: rawScript ? (event: KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') copyAiScript(rawScript, event)
+      } : undefined
+    }, [
+      h('small', rawScript ? 'AI生成话术 · 点击复制' : 'AI生成话术'),
       h('span', script)
     ]),
     h('div', { class: 'account-cell account-reason', title: reason }, [
@@ -270,6 +280,22 @@ function renderOverviewCustomerRow(node: Dict, level: number, handlers: Overview
       }, '删除')
     ])
   ])
+}
+
+async function copyAiScript(value: unknown, event?: MouseEvent | KeyboardEvent) {
+  event?.stopPropagation()
+  if (event instanceof KeyboardEvent) event.preventDefault()
+  const text = String(value || '').trim()
+  if (!text) {
+    ElMessage.warning('暂无AI话术可复制')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('AI话术已复制')
+  } catch {
+    ElMessage.error('复制失败，请检查浏览器剪贴板权限')
+  }
 }
 
 function renderCustomerScreeningStatusDropdown(node: Dict, stage: string, handlers: OverviewHandlers) {

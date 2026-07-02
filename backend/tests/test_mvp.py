@@ -840,13 +840,14 @@ def test_keyword_account_analysis_creates_unanalysed_tasks_and_skips_running(tmp
     assert all(row["mode"] == "account_analysis" for row in rows)
 
 
-def test_keyword_find_customer_creates_single_competitor_crawl_task(tmp_path: Path) -> None:
+def test_keyword_find_customer_reuses_existing_contents_before_creator(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
     from app.services import account_actions, crawler_adapter
     from app.schemas import TaskCreate
 
     with database.connect() as conn:
+        database.set_setting(conn, "default_content_count", "1")
         competitor_a = conn.execute(
             """
             INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status, profile_url)
@@ -886,20 +887,58 @@ def test_keyword_find_customer_creates_single_competitor_crawl_task(tmp_path: Pa
 
     assert result["created"] == 1
     assert result["account_count"] == 1
-    assert result["tasks"][0]["task_name"] == "找客户-竞品A"
+    assert result["reuse_content_count"] == 1
+    assert result["creator_account_count"] == 0
+    assert result["tasks"][0]["strategy"] == "reuse_existing_contents"
     assert result["skipped"][0]["reason"] == "已有找客户任务正在等待或运行"
     with database.connect() as conn:
         row = conn.execute(
-            "SELECT mode, creator_id, collect_comments, collect_sub_comments, command FROM crawl_jobs WHERE id = ?",
+            "SELECT mode, crawler_type, specified_id, creator_id, collect_comments, collect_sub_comments, command FROM crawl_jobs WHERE id = ?",
             (result["task_ids"][0],),
         ).fetchone()
     assert row["mode"] == "competitor_crawl"
-    assert row["creator_id"] == "https://www.douyin.com/user/customer-a"
+    assert row["crawler_type"] == "detail"
+    assert row["specified_id"] == "fc-a"
+    assert row["creator_id"] == ""
     assert row["collect_comments"] == 1
     assert row["collect_sub_comments"] == 1
-    assert "--creator_id https://www.douyin.com/user/customer-a" in row["command"]
+    assert "--specified_id fc-a" in row["command"]
 
 
+def test_keyword_find_customer_supplements_when_existing_contents_are_insufficient(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import account_actions
+
+    with database.connect() as conn:
+        database.set_setting(conn, "default_content_count", "2")
+        competitor = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status, profile_url)
+            VALUES('dy', 'customer-a', '竞品A', '竞品', 'https://www.douyin.com/user/customer-a')
+            """
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword) VALUES('dy', 'fc-a', ?, '关键词内容', '电车')",
+            (competitor,),
+        )
+
+    result = account_actions.create_keyword_find_customer_task("dy", "电车")
+
+    assert result["created"] == 2
+    assert result["reuse_content_count"] == 1
+    assert result["creator_account_count"] == 1
+    assert [task["strategy"] for task in result["tasks"]] == ["reuse_existing_contents", "supplement_creator_contents"]
+    with database.connect() as conn:
+        rows = conn.execute(
+            "SELECT crawler_type, specified_id, creator_id, content_count FROM crawl_jobs WHERE id IN (?, ?) ORDER BY id",
+            tuple(result["task_ids"]),
+        ).fetchall()
+    assert rows[0]["crawler_type"] == "detail"
+    assert rows[0]["specified_id"] == "fc-a"
+    assert rows[1]["crawler_type"] == "creator"
+    assert rows[1]["creator_id"] == "https://www.douyin.com/user/customer-a"
+    assert rows[1]["content_count"] == 1
 def test_overview_shows_account_analysis_progress_statuses(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database, views
@@ -2249,12 +2288,49 @@ def test_lead_ai_prompt_treats_competitor_comment_price_question_as_intent(tmp_p
         lead_id = int(conn.execute("SELECT id FROM lead_user_accounts LIMIT 1").fetchone()["id"])
         payload = ai_service.build_input_payload(conn, "lead", lead_id)
 
+    assert payload["icp"]["company_name"] == ""
     assert "询价" in payload["intent_signals"]
     assert payload["evidence"][0]["source_account_nickname"] == "AI客服竞品号"
     _, user_prompt = ai_service.build_ai_messages("lead", payload)
     assert "评论者询问价格" in user_prompt
     assert "不要因为评论没有直接写出ICP关键词" in user_prompt
     assert "通常应判定为目标客户" in user_prompt
+    assert "company_name/公司名是可选字段" in user_prompt
+    assert "script不得出现任何公司名" in user_prompt
+    assert "我们公司" in user_prompt
+    assert ai_service.prompt_version_for("lead") == "lead_v2"
+
+
+def test_lead_ai_prompt_uses_optional_company_name_when_provided(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import ai_service, crawler_adapter
+    from app.services.importer import import_for_task
+
+    with database.connect() as conn:
+        database.set_setting(
+            conn,
+            "icp_profile",
+            json.dumps(
+                {"product": "AI客服", "company_name": "水舟科技", "value_proposition": "降低客服人力成本"},
+                ensure_ascii=False,
+            ),
+        )
+
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    import_for_task(str(task["id"]))
+
+    with database.connect() as conn:
+        lead_id = int(conn.execute("SELECT id FROM lead_user_accounts LIMIT 1").fetchone()["id"])
+        payload = ai_service.build_input_payload(conn, "lead", lead_id)
+
+    assert payload["icp"]["company_name"] == "水舟科技"
+    _, user_prompt = ai_service.build_ai_messages("lead", payload)
+    assert "如果非空，script可以自然使用该公司名" in user_prompt
+    assert "水舟科技" in user_prompt
 
 
 def test_competitor_ai_prompt_requires_profile_and_majority_content_relevance(tmp_path: Path) -> None:
