@@ -552,6 +552,10 @@ def _import_contents(
         account_row = conn.execute("SELECT nickname, signature FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
         effective_nickname = str(account_row["nickname"] or author_nickname) if account_row else author_nickname
         effective_signature = str(account_row["signature"] or author_signature) if account_row else author_signature
+        existing_content = conn.execute(
+            "SELECT id FROM contents WHERE platform = ? AND content_id = ?",
+            (platform, content_native_id),
+        ).fetchone()
         conn.execute(
             """
             INSERT INTO contents(
@@ -587,7 +591,8 @@ def _import_contents(
         )
         content_id = int(conn.execute("SELECT id FROM contents WHERE platform = ? AND content_id = ?", (platform, content_native_id)).fetchone()["id"])
         _add_raw_ref(conn, "content", content_id, platform, mapping["table"], row["__raw_pk"], task["id"])
-        counts["contents"] += 1
+        if existing_content is None:
+            counts["contents"] += 1
         if content_limit is not None:
             per_account_counts[author_key] = per_account_counts.get(author_key, 0) + 1
         if search_limit is not None:
@@ -707,6 +712,7 @@ def _import_comments(
     comment_cutoff_ts = _cutoff_ts_seconds(conn, "comment_cutoff_days")
     content_cutoff_ts = _cutoff_ts_seconds(conn, "content_cutoff_days")
     content_cutoff_cache: dict[str, bool] = {}
+    touched_content_ids: set[int] = set()
     for row in _safe_select_rows(raw_conn, mapping["table"], task):
         if not _comment_passes_cutoff(row, mapping, comment_cutoff_ts):
             continue
@@ -729,6 +735,7 @@ def _import_comments(
         ).fetchone()
         if content_row is None:
             continue
+        touched_content_ids.add(int(content_row["id"]))
         account_id = _upsert_account(
             conn,
             platform,
@@ -742,6 +749,10 @@ def _import_comments(
         )
         if account_id is None:
             continue
+        existing_comment = conn.execute(
+            "SELECT id FROM comments WHERE platform = ? AND comment_id = ?",
+            (platform, comment_native_id),
+        ).fetchone()
         conn.execute(
             """
             INSERT INTO comments(
@@ -773,12 +784,13 @@ def _import_comments(
         )
         comment_id = int(conn.execute("SELECT id FROM comments WHERE platform = ? AND comment_id = ?", (platform, comment_native_id)).fetchone()["id"])
         _add_raw_ref(conn, "comment", comment_id, platform, mapping["table"], row["__raw_pk"], task["id"])
-        counts["comments"] += 1
+        if existing_comment is None:
+            counts["comments"] += 1
         if task["mode"] in ("competitor_crawl", "own_account"):
             lead_id = _ensure_lead(conn, account_id)
             source_account_id = int(content_row["author_account_id"]) if content_row and content_row["author_account_id"] else None
             source_keyword = str(content_row["source_keyword"] if content_row else "") or str(task["keywords"] or "")
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO lead_sources(
                     lead_account_id, source_account_id, content_id, comment_id, keyword, source_type, task_id
@@ -795,7 +807,51 @@ def _import_comments(
                     task["id"],
                 ),
             )
-            counts["leads"] += 1
+            if cursor.rowcount > 0:
+                counts["leads"] += 1
+    _mark_task_comment_crawled(conn, platform, task, touched_content_ids)
+
+
+def _mark_task_comment_crawled(
+    conn: sqlite3.Connection,
+    platform: str,
+    task: sqlite3.Row,
+    touched_content_ids: set[int],
+) -> None:
+    content_ids = set(touched_content_ids)
+    rows = conn.execute(
+        "SELECT id FROM contents WHERE platform = ? AND task_id = ?",
+        (platform, task["id"]),
+    ).fetchall()
+    content_ids.update(int(row["id"]) for row in rows)
+
+    specified_items = [item.strip() for item in str(task["specified_id"] or "").split(",") if item.strip()]
+    if specified_items:
+        placeholders = ",".join(["?"] * len(specified_items))
+        rows = conn.execute(
+            f"""
+            SELECT id
+            FROM contents
+            WHERE platform = ?
+              AND (content_id IN ({placeholders}) OR content_url IN ({placeholders}))
+            """,
+            (platform, *specified_items, *specified_items),
+        ).fetchall()
+        content_ids.update(int(row["id"]) for row in rows)
+
+    if not content_ids:
+        return
+
+    placeholders = ",".join(["?"] * len(content_ids))
+    conn.execute(
+        f"""
+        UPDATE contents
+        SET last_comment_crawled_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
+        WHERE id IN ({placeholders})
+        """,
+        tuple(content_ids),
+    )
 
 
 def _ensure_lead(conn: sqlite3.Connection, account_id: int) -> int:

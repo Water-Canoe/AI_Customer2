@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS contents (
     content_url TEXT NOT NULL DEFAULT '',
     like_count INTEGER,
     comment_count INTEGER,
+    last_comment_crawled_at TEXT NOT NULL DEFAULT '',
     source_keyword TEXT NOT NULL DEFAULT '',
     task_id TEXT,
     raw_payload TEXT NOT NULL DEFAULT '{}',
@@ -290,6 +291,7 @@ DEFAULT_SETTINGS = {
     "default_comment_count": "20",
     "content_cutoff_days": "0",
     "comment_cutoff_days": "0",
+    "comment_recrawl_cooldown_hours": "24",
     "account_analysis_content_count": "5",
     "ai_analysis_concurrency": "3",
     "unreplied_reminder_days": "3",
@@ -331,6 +333,7 @@ def init_db() -> None:
         conn.executescript(SCHEMA_SQL)
         _ensure_column(conn, "user_accounts", "competitor_reason", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "user_accounts", "content_total_count", "INTEGER")
+        _ensure_column(conn, "contents", "last_comment_crawled_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lead_user_accounts", "manual_follow_status", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "analysis_jobs", "raw_output", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "analysis_jobs", "prompt_version", "TEXT NOT NULL DEFAULT ''")

@@ -269,6 +269,7 @@ export default defineComponent({
             inputField(local, 'default_comment_count', '默认评论数', 'number', '', markSettingsDirty),
             selectField(local, 'content_cutoff_days', '内容截至日期', commentCutoffOptions, markSettingsDirty),
             selectField(local, 'comment_cutoff_days', '评论截至日期', commentCutoffOptions, markSettingsDirty),
+            inputField(local, 'comment_recrawl_cooldown_hours', '评论复采间隔小时', 'number', '默认 24；填 0 表示每次找客户都复采已有内容评论', markSettingsDirty),
             inputField(local, 'account_analysis_content_count', '账号分析内容数', 'number', '', markSettingsDirty),
             inputField(local, 'ai_analysis_concurrency', 'AI分析并行数', 'number', '建议 1-5，过高容易触发模型限流', markSettingsDirty),
             inputField(local, 'unreplied_reminder_days', '未回复提醒天数', 'number', '默认 3 天，填 0 表示不提醒', markSettingsDirty),

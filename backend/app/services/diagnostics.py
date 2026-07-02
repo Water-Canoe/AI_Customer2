@@ -35,6 +35,13 @@ DIAGNOSTIC_RULES: list[Rule] = [
         True,
     ),
     (
+        "路径配置",
+        ("failed to spawn", "应用程序控制策略", "os error 4551", "blocked this file", "applocker"),
+        "本机 Windows 应用控制策略阻止了 Python 启动，MediaCrawler 子进程没有真正开始采集。",
+        ["更新后重启后端，确认任务命令已变为 python main.py", "如果仍被拦截，在设置页确认 MediaCrawler 路径下 .venv 依赖完整", "让系统管理员放行当前可执行的 Python，或把可执行 Python 加入系统允许列表"],
+        True,
+    ),
+    (
         "网络代理",
         ("httpx", "timeout", "timed out", "connection", "proxy", "tls", "ssl", "network", "连接"),
         "采集或 AI 请求过程中出现网络连接异常，可能是代理、目标平台限流或本地网络不稳定。",

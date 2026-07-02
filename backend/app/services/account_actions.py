@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from typing import Any
 
 import sqlite3
@@ -213,11 +214,13 @@ def _find_customer_defaults() -> dict[str, Any]:
         headless = database.get_setting(conn, "headless", "false") == "true"
         content_count = _safe_int_setting(conn, "default_content_count", 20, 1, 500)
         comment_count = _safe_int_setting(conn, "default_comment_count", 20, 0, 1000)
+        comment_recrawl_cooldown_hours = _safe_int_setting(conn, "comment_recrawl_cooldown_hours", 24, 0, 24 * 30)
     return {
         "login_type": login_type if login_type in ("qrcode", "phone", "cookie") else "qrcode",
         "headless": headless,
         "content_count": content_count,
         "comment_count": comment_count,
+        "comment_recrawl_cooldown_hours": comment_recrawl_cooldown_hours,
     }
 
 
@@ -294,7 +297,7 @@ def _existing_find_customer_contents(
     rows = conn.execute(
         f"""
         SELECT c.id, c.platform, c.content_id, c.content_url, c.author_account_id,
-               c.title, c.source_keyword, c.updated_at, c.created_at
+               c.title, c.source_keyword, c.last_comment_crawled_at, c.updated_at, c.created_at
         FROM contents c
         WHERE c.platform = ?
           AND c.author_account_id IN ({placeholders})
@@ -321,11 +324,26 @@ def _existing_find_customer_contents(
     return grouped
 
 
+def _recently_crawled_comments(row: sqlite3.Row | dict[str, Any], cooldown_hours: int) -> bool:
+    if cooldown_hours <= 0:
+        return False
+    value = str(row["last_comment_crawled_at"] or "").strip()
+    if not value:
+        return False
+    try:
+        crawled_at = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return datetime.now() - crawled_at < timedelta(hours=cooldown_hours)
+
+
 def _build_find_customer_task(
     platform: str,
     rows: list[sqlite3.Row],
     label: str,
     log_message: str,
+    task_mode: str = "competitor_crawl",
+    account_label: str = "竞品账号",
     skipped: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     skipped = skipped or []
@@ -365,6 +383,7 @@ def _build_find_customer_task(
         "reuse_content_count": 0,
         "detail_content_count": 0,
         "creator_account_count": 0,
+        "recent_comment_skip_count": 0,
     }
     if not accounts:
         return result
@@ -375,8 +394,12 @@ def _build_find_customer_task(
 
     detail_items: list[dict[str, Any]] = []
     seen_detail_identifiers: set[str] = set()
+    recent_comment_skip_count = 0
     for account in accounts:
         for content in existing_by_account.get(int(account["account_id"]), []):
+            if _recently_crawled_comments(content, int(defaults["comment_recrawl_cooldown_hours"])):
+                recent_comment_skip_count += 1
+                continue
             identifier = _content_detail_identifier(platform, content)
             if not identifier or identifier in active_specified_ids or identifier in seen_detail_identifiers:
                 continue
@@ -396,7 +419,7 @@ def _build_find_customer_task(
         task = crawler_adapter.create_task(
             TaskCreate(
                 name=f"找客户-复用{len(chunk)}条内容",
-                mode="competitor_crawl",
+                mode=task_mode,  # type: ignore[arg-type]
                 platform=platform,  # type: ignore[arg-type]
                 login_type=defaults["login_type"],
                 specified_id=specified_ids,
@@ -434,8 +457,8 @@ def _build_find_customer_task(
         creator_ids = ",".join(item["creator_id"] for item in supplement_accounts)
         task = crawler_adapter.create_task(
             TaskCreate(
-                name=f"找客户-补采{len(supplement_accounts)}个竞品账号",
-                mode="competitor_crawl",
+                name=f"找客户-补采{len(supplement_accounts)}个{account_label}",
+                mode=task_mode,  # type: ignore[arg-type]
                 platform=platform,  # type: ignore[arg-type]
                 login_type=defaults["login_type"],
                 creator_id=creator_ids,
@@ -463,13 +486,14 @@ def _build_find_customer_task(
     result["created"] = len(result["task_ids"])
     result["reuse_content_count"] = len(detail_items)
     result["detail_content_count"] = len(detail_items)
+    result["recent_comment_skip_count"] = recent_comment_skip_count
     with database.connect() as conn:
         for task_id in result["task_ids"]:
             crawler_adapter.log_task(
                 conn,
                 str(task_id),
                 "info",
-                f"{log_message}；找客户采集策略：复用已有内容 {len(detail_items)} 条，补采账号 {len(supplement_accounts)} 个",
+                f"{log_message}；找客户采集策略：复用已有内容 {len(detail_items)} 条，补采账号 {len(supplement_accounts)} 个，近期已采评论跳过 {recent_comment_skip_count} 条",
             )
     return result
 
@@ -478,7 +502,8 @@ def create_account_find_customer_task(account_id: int) -> dict[str, Any]:
     with database.connect() as conn:
         row = conn.execute(
             """
-            SELECT id, platform, platform_user_id, sec_uid, nickname, profile_url, competitor_status
+            SELECT id, platform, platform_user_id, sec_uid, nickname, profile_url,
+                   competitor_status, account_role, is_own_account
             FROM user_accounts
             WHERE id = ?
             """,
@@ -486,13 +511,17 @@ def create_account_find_customer_task(account_id: int) -> dict[str, Any]:
         ).fetchone()
         if not row:
             raise ValueError("账号不存在，无法找客户")
-        if str(row["competitor_status"] or "") != "竞品":
-            raise ValueError("只有已判定为竞品的账号才能找客户")
+        is_own_account = bool(row["is_own_account"]) or str(row["account_role"] or "") == "own_account"
+        if str(row["competitor_status"] or "") != "竞品" and not is_own_account:
+            raise ValueError("只有已判定为竞品或已标记为自家账号的账号才能找客户")
+    account_label = "自家账号" if is_own_account else "竞品账号"
     return _build_find_customer_task(
         str(row["platform"]),
         [row],
         str(row["nickname"] or account_id),
-        f"竞品账号找客户：账号 {row['nickname'] or account_id}（ID={account_id}）",
+        f"{account_label}找客户：账号 {row['nickname'] or account_id}（ID={account_id}）",
+        task_mode="own_account" if is_own_account else "competitor_crawl",
+        account_label=account_label,
     )
 
 
@@ -840,13 +869,18 @@ def run_account_customer_intent_jobs(job_ids: list[str]) -> dict[str, Any]:
 def delete_account_non_customers(account_id: int) -> dict[str, Any]:
     with database.connect() as conn:
         account = conn.execute(
-            "SELECT id, nickname, competitor_status FROM user_accounts WHERE id = ?",
+            """
+            SELECT id, nickname, competitor_status, account_role, is_own_account
+            FROM user_accounts
+            WHERE id = ?
+            """,
             (account_id,),
         ).fetchone()
         if not account:
-            raise ValueError("竞品账号不存在，无法删除非客户")
-        if str(account["competitor_status"] or "") != "竞品":
-            raise ValueError("只有已判定为竞品的账号才能删除非客户")
+            raise ValueError("账号不存在，无法删除非客户")
+        is_own_account = bool(account["is_own_account"]) or str(account["account_role"] or "") == "own_account"
+        if str(account["competitor_status"] or "") != "竞品" and not is_own_account:
+            raise ValueError("只有已判定为竞品或已标记为自家账号的账号才能删除非客户")
         rows = [
             row for row in _customer_lead_rows_for_account(conn, account_id)
             if str(row["screening_status"] or "") == "非客户" or str(row["follow_status"] or "") in ("非客户", "无需跟进")

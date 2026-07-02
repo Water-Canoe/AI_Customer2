@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 import platform
 import re
+import shutil
 import socket
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -108,8 +110,7 @@ def normalize_task_defaults(payload: TaskCreate) -> TaskCreate:
 def build_command(task: dict[str, object], media_crawler_path: str) -> list[str]:
     """Translate project task fields to MediaCrawler CLI flags."""
     command = [
-        "uv",
-        "run",
+        _python_launcher(),
         "main.py",
         "--platform",
         str(task["platform"]),
@@ -140,6 +141,17 @@ def build_command(task: dict[str, object], media_crawler_path: str) -> list[str]
     if crawler_type == "creator" and task["creator_id"]:
         command.extend(["--creator_id", str(task["creator_id"])])
     return command
+
+
+def _python_launcher() -> str:
+    """Use an allowed Python executable instead of uv spawning python internally."""
+    current = Path(sys.executable)
+    if current.name.lower() in {"python.exe", "python"}:
+        return str(current)
+    python_path = shutil.which("python")
+    if python_path:
+        return python_path
+    raise RuntimeError("未找到可执行的 python，无法启动 MediaCrawler")
 
 
 def preview_task(payload: TaskCreate) -> dict[str, object]:
@@ -566,7 +578,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         with database.connect() as conn:
             log_task(conn, task_id, "info", cdp_message)
 
-    run_env = _media_crawler_subprocess_env(env, task)
+    run_env = _media_crawler_subprocess_env(env, task, media_dir)
     try:
         process = subprocess.Popen(
             command,
@@ -641,7 +653,8 @@ def _ensure_media_crawler_sqlite_schema(media_dir: Path, platform_value: str, en
         return None
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    command = ["uv", "run", "main.py", "--init_db", "sqlite"]
+    command = [_python_launcher(), "main.py", "--init_db", "sqlite"]
+    init_env = _media_crawler_subprocess_env(env, {}, media_dir)
     result = subprocess.run(
         command,
         cwd=media_dir,
@@ -650,16 +663,16 @@ def _ensure_media_crawler_sqlite_schema(media_dir: Path, platform_value: str, en
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=env,
+        env=init_env,
         timeout=120,
     )
     if result.returncode != 0:
         output = (result.stdout or "").strip()
-        raise RuntimeError(f"uv run main.py --init_db sqlite 退出码 {result.returncode}：{output}")
+        raise RuntimeError(f"python main.py --init_db sqlite 退出码 {result.returncode}：{output}")
     if not _sqlite_table_exists(db_path, required_table):
         output = (result.stdout or "").strip()
         raise RuntimeError(f"初始化完成后仍缺少表 {required_table}：{output}")
-    return f"检测到 MediaCrawler SQLite 缺少 {required_table} 表，已自动执行 uv run main.py --init_db sqlite 初始化表结构"
+    return f"检测到 MediaCrawler SQLite 缺少 {required_table} 表，已自动执行 python main.py --init_db sqlite 初始化表结构"
 
 
 def _sqlite_table_exists(db_path: Path, table_name: str) -> bool:
@@ -872,7 +885,7 @@ def _run_post_success_automation(task_id: str) -> None:
                 log_task(conn, task_id, "error", f"自动分析线索用户失败：{exc}")
 
 
-def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, object]) -> dict[str, str]:
+def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, object], media_dir: Path | None = None) -> dict[str, str]:
     env = base_env.copy()
     shim_required = False
     if task.get("platform") == "dy":
@@ -895,10 +908,17 @@ def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, obje
     if comment_cutoff_ts:
         env["AI_CUSTOMER_COMMENT_CUTOFF_TS"] = str(comment_cutoff_ts)
         shim_required = True
+    pythonpath_items: list[str] = []
     if shim_required:
-        shim_dir = Path(__file__).resolve().parents[1] / "mediacrawler_shims"
-        existing_pythonpath = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = str(shim_dir) if not existing_pythonpath else f"{shim_dir}{os.pathsep}{existing_pythonpath}"
+        pythonpath_items.append(str(Path(__file__).resolve().parents[1] / "mediacrawler_shims"))
+    site_packages = media_dir / ".venv" / "Lib" / "site-packages" if media_dir else None
+    if site_packages and site_packages.exists():
+        pythonpath_items.append(str(site_packages))
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    if existing_pythonpath:
+        pythonpath_items.append(existing_pythonpath)
+    if pythonpath_items:
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_items)
     return env
 
 

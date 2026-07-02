@@ -991,14 +991,14 @@ async function analyzeKeywordCompetitors(node: Dict) {
 async function deleteAccountNonCustomers(node: Dict) {
   const accountId = node.metrics?.id
   if (!accountId) {
-    ElMessage.error('当前竞品账号缺少ID，无法删除非客户')
+    ElMessage.error('当前账号缺少ID，无法删除非客户')
     return
   }
   try {
     await confirmBulkPreview({ action: 'delete_non_customers', target_type: 'lead', filters: { source_account_id: accountId } }, '删除非客户预览')
     const { data } = await api.post(`/overview/accounts/${accountId}/customers/non-customers/delete`)
     if (data.deleted) ElMessage.success(`已删除 ${data.deleted} 个非客户`)
-    else ElMessage.info('当前竞品账号下没有可删除的非客户')
+    else ElMessage.info('当前账号下没有可删除的非客户')
     if (data.failed) ElMessage.warning(`有 ${data.failed} 个非客户删除失败，请查看返回错误`)
     await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks(), loadAiJobs()])
   } catch (error: any) {
@@ -1137,9 +1137,14 @@ async function findCustomers(target: Dict) {
       const taskCount = data.task_ids?.length || data.created || 0
       const reuseCount = data.reuse_content_count || 0
       const supplementCount = data.creator_account_count || 0
-      ElMessage.success(`已创建 ${taskCount} 个找客户任务：复用已有内容 ${reuseCount} 条，补采竞品账号 ${supplementCount} 个`)
+      const recentSkipCount = data.recent_comment_skip_count || 0
+      ElMessage.success(`已创建 ${taskCount} 个找客户任务：复用已有内容 ${reuseCount} 条，补采账号 ${supplementCount} 个，近期跳过 ${recentSkipCount} 条`)
     } else {
-      ElMessage.info(data.skipped?.length ? '相关竞品账号已有运行中的找客户任务' : '没有可用于找客户的竞品账号')
+      if (data.recent_comment_skip_count) {
+        ElMessage.info(`近期已采过 ${data.recent_comment_skip_count} 条内容的评论，未重复创建采集任务`)
+      } else {
+        ElMessage.info(data.skipped?.length ? '相关账号已有运行中的找客户任务' : '没有可用于找客户的账号')
+      }
     }
     await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
     if (data.task_ids?.length) {

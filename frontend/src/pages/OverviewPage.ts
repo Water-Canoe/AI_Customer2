@@ -484,6 +484,22 @@ function overviewActions(node: Dict, handlers: OverviewHandlers) {
   if (isOwnAccount) {
     return [
       h('button', {
+        class: 'overview-action reserved',
+        title: '采集自家账号内容评论区，生成线索客户',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation()
+          handlers.findCustomers(node)
+        }
+      }, '找客户'),
+      h('button', {
+        class: 'overview-action danger',
+        title: '删除该自家账号下已判定为非客户的客户线索',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation()
+          handlers.deleteAccountNonCustomers(node)
+        }
+      }, '删除非客户'),
+      h('button', {
         class: 'overview-action danger',
         onClick: (event: MouseEvent) => {
           event.stopPropagation()

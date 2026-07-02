@@ -190,6 +190,55 @@ def test_task_command_mapping_and_import(tmp_path: Path) -> None:
     assert account_metrics["non_customer_count"] == 1
 
 
+def test_reimport_existing_comments_does_not_count_as_new_leads(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+
+    first = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    second = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+
+    assert import_for_task(str(first["id"]))["leads"] == 1
+    second_result = import_for_task(str(second["id"]))
+
+    assert second_result["contents"] == 0
+    assert second_result["comments"] == 0
+    assert second_result["leads"] == 0
+
+
+def test_import_marks_comment_crawl_even_when_no_comments(tmp_path: Path) -> None:
+    _, raw_db = prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        raw_conn.execute("DELETE FROM douyin_aweme_comment")
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    result = import_for_task(str(task["id"]))
+
+    assert result["contents"] == 1
+    assert result["comments"] == 0
+    with database.connect() as conn:
+        crawled_at = conn.execute(
+            "SELECT last_comment_crawled_at FROM contents WHERE content_id = '10001'"
+        ).fetchone()["last_comment_crawled_at"]
+    assert crawled_at
+
+
 def test_overview_groups_unlabeled_account_tasks_by_source_mode(tmp_path: Path) -> None:
     _, raw_db = prepare_project(tmp_path)
     from app import database, views
@@ -1008,6 +1057,77 @@ def test_keyword_find_customer_supplements_when_existing_contents_are_insufficie
     assert rows[1]["crawler_type"] == "creator"
     assert rows[1]["creator_id"] == "https://www.douyin.com/user/customer-a"
     assert rows[1]["content_count"] == 1
+
+
+def test_keyword_find_customer_skips_recently_crawled_comments_without_supplementing(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import account_actions
+
+    with database.connect() as conn:
+        database.set_setting(conn, "default_content_count", "1")
+        database.set_setting(conn, "comment_recrawl_cooldown_hours", "24")
+        competitor = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status, profile_url)
+            VALUES('dy', 'customer-a', '竞品A', '竞品', 'https://www.douyin.com/user/customer-a')
+            """
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO contents(
+                platform, content_id, author_account_id, title, source_keyword, last_comment_crawled_at
+            )
+            VALUES('dy', 'fc-a', ?, '关键词内容', '电车', datetime('now', 'localtime'))
+            """,
+            (competitor,),
+        )
+
+    result = account_actions.create_keyword_find_customer_task("dy", "电车")
+
+    assert result["created"] == 0
+    assert result["account_count"] == 1
+    assert result["reuse_content_count"] == 0
+    assert result["recent_comment_skip_count"] == 1
+    assert result["creator_account_count"] == 0
+
+
+def test_own_account_find_customer_uses_own_account_mode(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import account_actions
+
+    with database.connect() as conn:
+        database.set_setting(conn, "default_content_count", "1")
+        own_account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(
+                platform, platform_user_id, sec_uid, nickname, profile_url,
+                account_role, is_own_account, competitor_status
+            )
+            VALUES('dy', 'self-a', 'self-a-sec', '自家账号A', 'https://www.douyin.com/user/self-a', 'own_account', 1, '未分析')
+            """
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO contents(platform, content_id, author_account_id, title) VALUES('dy', 'own-content-a', ?, '自家视频')",
+            (own_account_id,),
+        )
+
+    result = account_actions.create_account_find_customer_task(int(own_account_id))
+
+    assert result["created"] == 1
+    assert result["reuse_content_count"] == 1
+    with database.connect() as conn:
+        row = conn.execute(
+            "SELECT mode, crawler_type, specified_id, creator_id FROM crawl_jobs WHERE id = ?",
+            (result["task_ids"][0],),
+        ).fetchone()
+    assert row["mode"] == "own_account"
+    assert row["crawler_type"] == "detail"
+    assert row["specified_id"] == "own-content-a"
+    assert row["creator_id"] == ""
+
+
 def test_overview_shows_account_analysis_progress_statuses(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database, views
@@ -1441,7 +1561,8 @@ def test_media_crawler_sqlite_schema_auto_initializes(tmp_path: Path, monkeypatc
 
     message = crawler_adapter._ensure_media_crawler_sqlite_schema(media_dir, "dy", {"PYTHONIOENCODING": "utf-8"})
 
-    assert run_calls == [["uv", "run", "main.py", "--init_db", "sqlite"]]
+    assert Path(run_calls[0][0]).name.lower() in {"python", "python.exe"}
+    assert run_calls[0][1:] == ["main.py", "--init_db", "sqlite"]
     assert "douyin_aweme" in str(message)
 
 
@@ -2569,6 +2690,45 @@ def test_delete_non_customer_keeps_other_lead_sources(tmp_path: Path) -> None:
     assert other_active == 1
 
 
+def test_delete_non_customer_allows_own_account_source(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import account_actions, ai_service, crawler_adapter
+    from app.services.importer import import_for_task
+
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="own_account", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    import_for_task(str(task["id"]))
+
+    with database.connect() as conn:
+        source_account_id = int(conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'creator-1'").fetchone()["id"])
+        source = conn.execute(
+            "SELECT account_role, is_own_account, competitor_status FROM user_accounts WHERE id = ?",
+            (source_account_id,),
+        ).fetchone()
+        lead_id = int(conn.execute("SELECT id FROM lead_user_accounts LIMIT 1").fetchone()["id"])
+        ai_service.apply_ai_result(
+            conn,
+            "lead",
+            lead_id,
+            {"is_customer": False, "intention": "低", "reason": "自家评论区非客户", "script": ""},
+        )
+
+    deleted = account_actions.delete_account_non_customers(source_account_id)
+
+    assert source["account_role"] == "own_account"
+    assert source["is_own_account"] == 1
+    assert source["competitor_status"] != "竞品"
+    assert deleted["deleted"] == 1
+    with database.connect() as conn:
+        lead_after = conn.execute("SELECT 1 FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone()
+        source_after = conn.execute("SELECT 1 FROM user_accounts WHERE id = ?", (source_account_id,)).fetchone()
+    assert lead_after is None
+    assert source_after is not None
+
+
 def test_account_customer_intent_batch_resumes_pending_and_stale_running_jobs(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
@@ -3351,14 +3511,20 @@ def test_task_diagnostics_classifies_missing_raw_table_and_empty_success(tmp_pat
     empty = crawler_adapter.create_task(
         TaskCreate(mode="competitor_discovery", platform="dy", keywords="无结果", execute_crawler=False)
     )
+    blocked = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_discovery", platform="dy", keywords="策略拦截", execute_crawler=False)
+    )
     with database.connect() as conn:
         conn.execute("UPDATE crawl_jobs SET status = 'failed', error = 'sqlite3.OperationalError: no such table: douyin_aweme' WHERE id = ?", (failed["id"],))
         crawler_adapter.log_task(conn, str(failed["id"]), "error", "sqlalchemy.exc.OperationalError: no such table: douyin_aweme")
         conn.execute("UPDATE crawl_jobs SET status = 'succeeded' WHERE id = ?", (empty["id"],))
+        conn.execute("UPDATE crawl_jobs SET status = 'failed', error = 'error: Failed to spawn: `python` Caused by: 应用程序控制策略已阻止此文件。 (os error 4551)' WHERE id = ?", (blocked["id"],))
+        crawler_adapter.log_task(conn, str(blocked["id"]), "error", "Caused by: 应用程序控制策略已阻止此文件。 (os error 4551)")
 
     client = TestClient(app)
     failed_response = client.get(f"/api/tasks/{failed['id']}/diagnostics")
     empty_response = client.get(f"/api/tasks/{empty['id']}/diagnostics")
+    blocked_response = client.get(f"/api/tasks/{blocked['id']}/diagnostics")
 
     assert failed_response.status_code == 200
     assert failed_response.json()["category"] == "数据库缺表"
@@ -3366,6 +3532,9 @@ def test_task_diagnostics_classifies_missing_raw_table_and_empty_success(tmp_pat
     assert empty_response.status_code == 200
     assert empty_response.json()["category"] == "无有效数据"
     assert empty_response.json()["status"] == "warning"
+    assert blocked_response.status_code == 200
+    assert blocked_response.json()["category"] == "路径配置"
+    assert "应用控制策略" in blocked_response.json()["summary"]
 
 
 def test_tombstone_summary_list_and_task_dedup_summary(tmp_path: Path) -> None:
