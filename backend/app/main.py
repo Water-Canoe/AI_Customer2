@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
+import sys
 import sqlite3
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app import database
 from app.schemas import AiBatchCreate, AiBulkDelete, AiJobCreate, BulkActionPreview, ClearDataRequest, CustomerFollowStatusUpdate, LicenseUpdate, SettingsUpdate, TableUpdate, TaskCreate
@@ -453,3 +457,32 @@ def clear_data(payload: ClearDataRequest) -> dict[str, object]:
         return maintenance.clear_all_data(payload.confirm)
     except (ValueError, sqlite3.Error) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _frontend_dist() -> Path | None:
+    candidates: list[Path] = []
+    env_path = os.getenv("AI_CUSTOMER_FRONTEND_DIST", "").strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(getattr(sys, "_MEIPASS", "")) / "frontend_dist")
+        candidates.append(Path(sys.executable).resolve().parent / "frontend_dist")
+    candidates.append(database.WORKSPACE_ROOT / "frontend" / "dist")
+    for path in candidates:
+        if path and (path / "index.html").exists():
+            return path
+    return None
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_frontend(full_path: str) -> FileResponse:
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="接口不存在")
+    dist = _frontend_dist()
+    if not dist:
+        raise HTTPException(status_code=404, detail="前端静态文件不存在，请先运行 npm run build")
+    safe_dist = dist.resolve()
+    target = (safe_dist / full_path).resolve()
+    if target.is_file() and str(target).startswith(str(safe_dist)):
+        return FileResponse(target)
+    return FileResponse(safe_dist / "index.html")

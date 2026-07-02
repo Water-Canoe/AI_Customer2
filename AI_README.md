@@ -222,6 +222,14 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 
 当前实现保留旧 demo 接口 `/ai-customer/get-permission`、`/ai-customer/add-permission`、`/ai-customer/get-permission-list` 便于过渡测试，但正式授权接入应优先使用授权码接口。AI_Customer 路由代码位于 Sealos 服务器 `~/project/routers/AI_Customer/`；`~/project/routers/AI_Medician/` 属于另一个业务，不应在 AI拓客授权迭代中修改。
 
+## 本地打包
+
+Windows 测试包通过 `script/build_package.ps1` 生成。脚本会先执行 `frontend/npm run build` 生成静态文件，再使用后端虚拟环境里的 PyInstaller 把 `packaging/ai_customer_launcher.py` 打成 one-folder 包，并把 `frontend/dist` 作为 `frontend_dist` 一起放入包内。生成目录形如 `dist/AI_Customer_Test_yyyyMMdd_HHmmss/`，双击其中的 `AI_Customer_Test_yyyyMMdd_HHmmss.exe` 即可启动本地服务并自动打开浏览器。
+
+打包启动器会把业务库放在包目录的 `runtime/ai_customer.sqlite3`，首次启动自动初始化；前端由 FastAPI 直接托管，不需要朋友运行 Vite 或 Node。启动器会优先使用包目录旁的 `MediaCrawler/` 作为默认采集器路径，因此如果需要给朋友做完整采集测试，可以把 MediaCrawler 目录放到 exe 同级目录，或让朋友在“设置”页手动填写 MediaCrawler 路径和底层 SQLite 路径。当前测试包不把 MediaCrawler 打进 exe，因为该目录包含上游源码和虚拟环境，体积约 1GB 以上。
+
+打包包内不会包含 AI_Customer 的 Python/Vue 源码，但本地软件不能做到绝对防逆向；授权与设备限制仍以 Sealos 服务端为准。分发前如果自己启动过包做 smoke test，需要删除包目录下明确的单个文件 `runtime/ai_customer.sqlite3`，避免把测试设备码一起发出去。
+
 ## 已知限制
 
 - MediaCrawler 仓库许可证声明为非商业学习使用，本项目按本地自用验证处理。

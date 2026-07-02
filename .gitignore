@@ -3,18 +3,57 @@ backend/.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # Runtime databases and logs
 backend/runtime/
+runtime/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 *.log
+logs/
+script/logs/
 
 # Frontend dependencies and build output
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Local packaging output
+build/
+dist/
+release/
+*.spec
+*.zip
+*.7z
+*.rar
 
 # Local browser/test artifacts
 .playwright-cli/
 .playwright-mcp/
+.tmp_pytest/
+.tmp_pytest_run_*/
+.manual_test_find_customers/
+
+# Local agent/editor state
+.agents/
+.codex/
+.vscode/
+.idea/
 
 # Local document previews and temporary exports
 lark_whiteboard_preview_*.png
+
+# External crawler dependency kept outside source control
+MediaCrawler/
+
+# OS metadata
+.DS_Store
+Thumbs.db
