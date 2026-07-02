@@ -289,7 +289,6 @@ def _existing_find_customer_contents(
     conn: sqlite3.Connection,
     platform: str,
     account_ids: list[int],
-    limit_per_account: int,
 ) -> dict[int, list[sqlite3.Row]]:
     if not account_ids:
         return {}
@@ -316,8 +315,6 @@ def _existing_find_customer_contents(
     grouped: dict[int, list[sqlite3.Row]] = {account_id: [] for account_id in account_ids}
     for row in rows:
         account_id = int(row["author_account_id"])
-        if len(grouped.setdefault(account_id, [])) >= limit_per_account:
-            continue
         if not _content_detail_identifier(platform, row):
             continue
         grouped[account_id].append(row)
@@ -335,6 +332,14 @@ def _recently_crawled_comments(row: sqlite3.Row | dict[str, Any], cooldown_hours
     except ValueError:
         return False
     return datetime.now() - crawled_at < timedelta(hours=cooldown_hours)
+
+
+def _known_content_total(account: dict[str, Any]) -> int | None:
+    try:
+        value = int(account.get("content_total_count") or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _build_find_customer_task(
@@ -367,6 +372,7 @@ def _build_find_customer_task(
                 "account_id": int(row["id"]),
                 "nickname": row["nickname"],
                 "creator_id": identifier,
+                "content_total_count": row["content_total_count"] if "content_total_count" in row.keys() else None,
             }
         )
 
@@ -384,19 +390,25 @@ def _build_find_customer_task(
         "detail_content_count": 0,
         "creator_account_count": 0,
         "recent_comment_skip_count": 0,
+        "skip_content_count": 0,
+        "supplement_content_count": 0,
     }
     if not accounts:
         return result
 
     account_ids = [int(item["account_id"]) for item in accounts]
     with database.connect() as conn:
-        existing_by_account = _existing_find_customer_contents(conn, platform, account_ids, defaults["content_count"])
+        existing_by_account = _existing_find_customer_contents(conn, platform, account_ids)
 
     detail_items: list[dict[str, Any]] = []
     seen_detail_identifiers: set[str] = set()
     recent_comment_skip_count = 0
+    detail_counts_by_account: dict[int, int] = {}
     for account in accounts:
         for content in existing_by_account.get(int(account["account_id"]), []):
+            account_id = int(account["account_id"])
+            if detail_counts_by_account.get(account_id, 0) >= int(defaults["content_count"]):
+                continue
             if _recently_crawled_comments(content, int(defaults["comment_recrawl_cooldown_hours"])):
                 recent_comment_skip_count += 1
                 continue
@@ -404,10 +416,11 @@ def _build_find_customer_task(
             if not identifier or identifier in active_specified_ids or identifier in seen_detail_identifiers:
                 continue
             seen_detail_identifiers.add(identifier)
+            detail_counts_by_account[account_id] = detail_counts_by_account.get(account_id, 0) + 1
             detail_items.append(
                 {
                     "identifier": identifier,
-                    "account_id": int(account["account_id"]),
+                    "account_id": account_id,
                     "nickname": account["nickname"],
                     "content_id": content["content_id"],
                     "title": content["title"],
@@ -445,24 +458,37 @@ def _build_find_customer_task(
 
     supplement_accounts: list[dict[str, Any]] = []
     max_missing_count = 0
+    skip_content_ids: list[str] = []
     for account in accounts:
-        imported_count = len(existing_by_account.get(int(account["account_id"]), []))
-        missing_count = max(0, defaults["content_count"] - imported_count)
-        if missing_count <= 0:
+        # 未达到默认数时补足缺口；已达到默认数时继续向后扩展一批新内容。
+        account_existing = existing_by_account.get(int(account["account_id"]), [])
+        imported_count = len(account_existing)
+        known_total = _known_content_total(account)
+        if known_total is not None and imported_count >= known_total:
             continue
-        supplement_accounts.append(account)
-        max_missing_count = max(max_missing_count, missing_count)
+        if imported_count < int(defaults["content_count"]):
+            supplement_count = int(defaults["content_count"]) - imported_count
+        else:
+            supplement_count = int(defaults["content_count"])
+        if known_total is not None:
+            supplement_count = min(supplement_count, max(0, known_total - imported_count))
+        if supplement_count <= 0:
+            continue
+        supplement_account = {**account, "supplement_count": supplement_count}
+        supplement_accounts.append(supplement_account)
+        max_missing_count = max(max_missing_count, supplement_count)
+        skip_content_ids.extend(str(content["content_id"] or "") for content in account_existing)
 
     if supplement_accounts:
         creator_ids = ",".join(item["creator_id"] for item in supplement_accounts)
         task = crawler_adapter.create_task(
             TaskCreate(
-                name=f"找客户-补采{len(supplement_accounts)}个{account_label}",
+                name=f"找客户-补采{len(supplement_accounts)}个{account_label}新内容",
                 mode=task_mode,  # type: ignore[arg-type]
                 platform=platform,  # type: ignore[arg-type]
                 login_type=defaults["login_type"],
                 creator_id=creator_ids,
-                content_count=max(1, min(max_missing_count, defaults["content_count"])),
+                content_count=max(1, min(max_missing_count, 500)),
                 comment_count=defaults["comment_count"],
                 collect_comments=True,
                 collect_sub_comments=True,
@@ -471,6 +497,7 @@ def _build_find_customer_task(
                 execute_crawler=True,
             )
         )
+        crawler_adapter.set_task_skip_content_ids(str(task["id"]), skip_content_ids)
         result["task_ids"].append(task["id"])
         result["tasks"].append(
             {
@@ -478,10 +505,13 @@ def _build_find_customer_task(
                 "task_name": task["name"],
                 "account_count": len(supplement_accounts),
                 "content_count": max_missing_count,
+                "skip_content_count": len({item for item in skip_content_ids if item}),
                 "strategy": "supplement_creator_contents",
             }
         )
         result["creator_account_count"] = len(supplement_accounts)
+        result["skip_content_count"] = len({item for item in skip_content_ids if item})
+        result["supplement_content_count"] = max_missing_count
 
     result["created"] = len(result["task_ids"])
     result["reuse_content_count"] = len(detail_items)
@@ -493,7 +523,7 @@ def _build_find_customer_task(
                 conn,
                 str(task_id),
                 "info",
-                f"{log_message}；找客户采集策略：复用已有内容 {len(detail_items)} 条，补采账号 {len(supplement_accounts)} 个，近期已采评论跳过 {recent_comment_skip_count} 条",
+                f"{log_message}；找客户采集策略：复用已有内容 {len(detail_items)} 条，补采账号 {len(supplement_accounts)} 个，补采内容目标 {max_missing_count} 条，已采内容跳过 {result['skip_content_count']} 条，近期已采评论跳过 {recent_comment_skip_count} 条",
             )
     return result
 
@@ -502,7 +532,7 @@ def create_account_find_customer_task(account_id: int) -> dict[str, Any]:
     with database.connect() as conn:
         row = conn.execute(
             """
-            SELECT id, platform, platform_user_id, sec_uid, nickname, profile_url,
+            SELECT id, platform, platform_user_id, sec_uid, nickname, profile_url, content_total_count,
                    competitor_status, account_role, is_own_account
             FROM user_accounts
             WHERE id = ?
@@ -532,7 +562,7 @@ def create_keyword_find_customer_task(platform: str, keyword: str, limit: int = 
         rows = conn.execute(
             """
             SELECT DISTINCT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
-                   ua.nickname, ua.profile_url, ua.competitor_status
+                   ua.nickname, ua.profile_url, ua.competitor_status, ua.content_total_count
             FROM user_accounts ua
             LEFT JOIN contents c ON c.author_account_id = ua.id
             LEFT JOIN account_sources src ON src.account_id = ua.id AND src.active = 1

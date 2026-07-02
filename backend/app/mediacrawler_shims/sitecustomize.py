@@ -1,16 +1,27 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
-from typing import Any
+from typing import Any, Callable
 
 
 def _creator_video_limit() -> int:
+    raw = os.getenv("AI_CUSTOMER_CREATOR_CONTENT_LIMIT", "") or os.getenv("AI_CUSTOMER_DY_CREATOR_VIDEO_LIMIT", "0")
     try:
-        value = int(os.getenv("AI_CUSTOMER_DY_CREATOR_VIDEO_LIMIT", "0") or "0")
+        value = int(raw or "0")
     except ValueError:
         return 0
     return max(0, value)
+
+
+def _creator_platform() -> str:
+    return os.getenv("AI_CUSTOMER_CREATOR_PLATFORM", "").strip().lower()
+
+
+def _skip_content_ids() -> set[str]:
+    raw = os.getenv("AI_CUSTOMER_SKIP_CONTENT_IDS", "")
+    return {item.strip() for item in raw.split(",") if item.strip()}
 
 
 def _comment_cutoff_ts() -> int:
@@ -103,6 +114,42 @@ def _filter_recent_contents(contents: list[Any]) -> tuple[list[Any], bool]:
     return result, reached_old_content
 
 
+def _filter_skipped_contents(contents: list[Any], id_getter: Callable[[Any], str]) -> tuple[list[Any], int]:
+    # 过滤项目库已经采过的内容，让 creator 翻页继续寻找新的作品。
+    skipped_ids = _skip_content_ids()
+    if not skipped_ids:
+        return contents, 0
+    result: list[Any] = []
+    skipped_count = 0
+    for content in contents:
+        content_id = id_getter(content)
+        if content_id and content_id in skipped_ids:
+            skipped_count += 1
+            continue
+        result.append(content)
+    return result, skipped_count
+
+
+def _douyin_content_id(content: Any) -> str:
+    if not isinstance(content, dict):
+        return ""
+    aweme_info = content.get("aweme_info") if isinstance(content.get("aweme_info"), dict) else {}
+    return str(content.get("aweme_id") or aweme_info.get("aweme_id") or "")
+
+
+def _xhs_content_id(content: Any) -> str:
+    if not isinstance(content, dict):
+        return ""
+    return str(content.get("note_id") or content.get("id") or "")
+
+
+def _ks_content_id(content: Any) -> str:
+    if not isinstance(content, dict):
+        return ""
+    photo = content.get("photo") if isinstance(content.get("photo"), dict) else {}
+    return str(photo.get("id") or content.get("id") or "")
+
+
 def _patch_comment_response_method(client_class: Any, method_name: str, comments_key: str, stop_key: str, stop_value: Any) -> None:
     target = getattr(client_class, method_name)
     patch_flag = f"_ai_customer_comment_cutoff_{method_name}"
@@ -147,6 +194,9 @@ def _patch_comment_cutoff() -> None:
 
 
 def _patch_douyin_creator_video_limit() -> None:
+    platform = _creator_platform()
+    if platform and platform != "dy":
+        return
     limit = _creator_video_limit()
     if limit <= 0:
         return
@@ -179,12 +229,17 @@ def _patch_douyin_creator_video_limit() -> None:
             max_cursor = aweme_post_res.get("max_cursor")
             aweme_list = aweme_post_res.get("aweme_list") if aweme_post_res.get("aweme_list") else []
             aweme_list, reached_old_content = _filter_recent_contents(aweme_list)
+            aweme_list, skipped_known = _filter_skipped_contents(aweme_list, _douyin_content_id)
             utils.logger.info(
-                f"[AI_Customer.creator_limit] sec_user_id:{sec_user_id} page video len:{len(aweme_list)} limit:{current_limit} content_cutoff:{_content_cutoff_ts() or 0}"
+                f"[AI_Customer.creator_limit] sec_user_id:{sec_user_id} page video len:{len(aweme_list)} skipped_known:{skipped_known} limit:{current_limit} content_cutoff:{_content_cutoff_ts() or 0}"
             )
             if not aweme_list:
-                break
+                if reached_old_content:
+                    posts_has_more = 0
+                continue
             remaining = current_limit - len(result)
+            if remaining <= 0:
+                break
             selected = aweme_list[:remaining]
             if callback and selected:
                 await callback(selected)
@@ -199,6 +254,142 @@ def _patch_douyin_creator_video_limit() -> None:
 
     limited_get_all_user_aweme_posts._ai_customer_limited = True  # type: ignore[attr-defined]
     douyin_client.DouYinClient.get_all_user_aweme_posts = limited_get_all_user_aweme_posts
+
+
+def _patch_xhs_creator_note_limit() -> None:
+    platform = _creator_platform()
+    if platform and platform != "xhs":
+        return
+    limit = _creator_video_limit()
+    if limit <= 0:
+        return
+
+    try:
+        from media_platform.xhs import client as xhs_client
+        from tools import utils
+    except ModuleNotFoundError:
+        sys.path.insert(0, os.getcwd())
+        from media_platform.xhs import client as xhs_client
+        from tools import utils
+
+    target = xhs_client.XiaoHongShuClient.get_all_notes_by_creator
+    if getattr(target, "_ai_customer_limited", False):
+        return
+
+    async def limited_get_all_notes_by_creator(
+        self,
+        user_id: str,
+        crawl_interval: float = 1.0,
+        callback=None,
+        xsec_token: str = "",
+        xsec_source: str = "pc_feed",
+    ):
+        current_limit = _creator_video_limit()
+        if current_limit <= 0:
+            return await target(self, user_id, crawl_interval, callback, xsec_token, xsec_source)
+
+        result = []
+        notes_has_more = True
+        notes_cursor = ""
+        while notes_has_more and len(result) < current_limit:
+            notes_res = await self.get_notes_by_creator(
+                user_id, notes_cursor, xsec_token=xsec_token, xsec_source=xsec_source
+            )
+            if not notes_res:
+                utils.logger.error(
+                    f"[AI_Customer.creator_limit] xhs creator unavailable user_id:{user_id}"
+                )
+                break
+            notes_has_more = notes_res.get("has_more", False)
+            notes_cursor = notes_res.get("cursor", "")
+            if "notes" not in notes_res:
+                utils.logger.info(f"[AI_Customer.creator_limit] xhs notes missing user_id:{user_id} res:{notes_res}")
+                break
+            notes = notes_res["notes"]
+            notes, reached_old_content = _filter_recent_contents(notes)
+            notes, skipped_known = _filter_skipped_contents(notes, _xhs_content_id)
+            utils.logger.info(
+                f"[AI_Customer.creator_limit] xhs user_id:{user_id} page notes len:{len(notes)} skipped_known:{skipped_known} limit:{current_limit}"
+            )
+            if not notes:
+                if reached_old_content:
+                    notes_has_more = False
+                await asyncio.sleep(crawl_interval)
+                continue
+            remaining = current_limit - len(result)
+            if remaining <= 0:
+                break
+            selected = notes[:remaining]
+            if callback and selected:
+                await callback(selected)
+            result.extend(selected)
+            if reached_old_content:
+                notes_has_more = False
+            await asyncio.sleep(crawl_interval)
+        utils.logger.info(f"[AI_Customer.creator_limit] xhs user_id:{user_id} limited notes total:{len(result)}")
+        return result
+
+    limited_get_all_notes_by_creator._ai_customer_limited = True  # type: ignore[attr-defined]
+    xhs_client.XiaoHongShuClient.get_all_notes_by_creator = limited_get_all_notes_by_creator
+
+
+def _patch_ks_creator_video_limit() -> None:
+    platform = _creator_platform()
+    if platform and platform != "ks":
+        return
+    limit = _creator_video_limit()
+    if limit <= 0:
+        return
+
+    try:
+        from media_platform.kuaishou import client as kuaishou_client
+        from tools import utils
+    except ModuleNotFoundError:
+        sys.path.insert(0, os.getcwd())
+        from media_platform.kuaishou import client as kuaishou_client
+        from tools import utils
+
+    target = kuaishou_client.KuaiShouClient.get_all_videos_by_creator
+    if getattr(target, "_ai_customer_limited", False):
+        return
+
+    async def limited_get_all_videos_by_creator(self, user_id: str, crawl_interval: float = 1.0, callback=None):
+        current_limit = _creator_video_limit()
+        if current_limit <= 0:
+            return await target(self, user_id, crawl_interval, callback)
+
+        result = []
+        pcursor = ""
+        while pcursor != "no_more" and len(result) < current_limit:
+            videos_res = await self.get_video_by_creater(user_id, pcursor)
+            if not videos_res:
+                utils.logger.error(
+                    f"[AI_Customer.creator_limit] ks creator unavailable user_id:{user_id}"
+                )
+                break
+            vision_profile_photo_list = videos_res.get("visionProfilePhotoList", {})
+            pcursor = vision_profile_photo_list.get("pcursor", "")
+            videos = vision_profile_photo_list.get("feeds", [])
+            videos, skipped_known = _filter_skipped_contents(videos, _ks_content_id)
+            utils.logger.info(
+                f"[AI_Customer.creator_limit] ks user_id:{user_id} page videos len:{len(videos)} skipped_known:{skipped_known} limit:{current_limit}"
+            )
+            if not videos:
+                await asyncio.sleep(crawl_interval)
+                continue
+            remaining = current_limit - len(result)
+            if remaining <= 0:
+                break
+            selected = videos[:remaining]
+            if callback and selected:
+                await callback(selected)
+            result.extend(selected)
+            await asyncio.sleep(crawl_interval)
+        utils.logger.info(f"[AI_Customer.creator_limit] ks user_id:{user_id} limited videos total:{len(result)}")
+        return result
+
+    limited_get_all_videos_by_creator._ai_customer_limited = True  # type: ignore[attr-defined]
+    kuaishou_client.KuaiShouClient.get_all_videos_by_creator = limited_get_all_videos_by_creator
 
 
 def _patch_douyin_http_resilience() -> None:
@@ -281,5 +472,7 @@ def _patch_douyin_sleep_interval() -> None:
 
 _patch_douyin_sleep_interval()
 _patch_douyin_creator_video_limit()
+_patch_xhs_creator_note_limit()
+_patch_ks_creator_video_limit()
 _patch_comment_cutoff()
 _patch_douyin_http_resilience()

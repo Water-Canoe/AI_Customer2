@@ -1003,24 +1003,27 @@ def test_keyword_find_customer_reuses_existing_contents_before_creator(tmp_path:
 
     result = account_actions.create_keyword_find_customer_task("dy", "电车")
 
-    assert result["created"] == 1
+    assert result["created"] == 2
     assert result["account_count"] == 1
     assert result["reuse_content_count"] == 1
-    assert result["creator_account_count"] == 0
-    assert result["tasks"][0]["strategy"] == "reuse_existing_contents"
+    assert result["creator_account_count"] == 1
+    assert [task["strategy"] for task in result["tasks"]] == ["reuse_existing_contents", "supplement_creator_contents"]
     assert result["skipped"][0]["reason"] == "已有找客户任务正在等待或运行"
     with database.connect() as conn:
-        row = conn.execute(
-            "SELECT mode, crawler_type, specified_id, creator_id, collect_comments, collect_sub_comments, command FROM crawl_jobs WHERE id = ?",
-            (result["task_ids"][0],),
-        ).fetchone()
-    assert row["mode"] == "competitor_crawl"
-    assert row["crawler_type"] == "detail"
-    assert row["specified_id"] == "fc-a"
-    assert row["creator_id"] == ""
-    assert row["collect_comments"] == 1
-    assert row["collect_sub_comments"] == 1
-    assert "--specified_id fc-a" in row["command"]
+        rows = conn.execute(
+            "SELECT mode, crawler_type, specified_id, creator_id, collect_comments, collect_sub_comments, command, skip_content_ids FROM crawl_jobs WHERE id IN (?, ?) ORDER BY id",
+            tuple(result["task_ids"]),
+        ).fetchall()
+    assert rows[0]["mode"] == "competitor_crawl"
+    assert rows[0]["crawler_type"] == "detail"
+    assert rows[0]["specified_id"] == "fc-a"
+    assert rows[0]["creator_id"] == ""
+    assert rows[0]["collect_comments"] == 1
+    assert rows[0]["collect_sub_comments"] == 1
+    assert "--specified_id fc-a" in rows[0]["command"]
+    assert rows[1]["crawler_type"] == "creator"
+    assert rows[1]["creator_id"] == "https://www.douyin.com/user/customer-a"
+    assert rows[1]["skip_content_ids"] == "fc-a"
 
 
 def test_keyword_find_customer_supplements_when_existing_contents_are_insufficient(tmp_path: Path) -> None:
@@ -1059,7 +1062,7 @@ def test_keyword_find_customer_supplements_when_existing_contents_are_insufficie
     assert rows[1]["content_count"] == 1
 
 
-def test_keyword_find_customer_skips_recently_crawled_comments_without_supplementing(tmp_path: Path) -> None:
+def test_keyword_find_customer_expands_after_existing_contents_reach_default_count(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
     from app.services import account_actions
@@ -1085,11 +1088,101 @@ def test_keyword_find_customer_skips_recently_crawled_comments_without_supplemen
 
     result = account_actions.create_keyword_find_customer_task("dy", "电车")
 
-    assert result["created"] == 0
+    assert result["created"] == 1
     assert result["account_count"] == 1
     assert result["reuse_content_count"] == 0
     assert result["recent_comment_skip_count"] == 1
+    assert result["creator_account_count"] == 1
+    assert result["skip_content_count"] == 1
+    assert result["supplement_content_count"] == 1
+    with database.connect() as conn:
+        row = conn.execute(
+            "SELECT crawler_type, creator_id, content_count, skip_content_ids FROM crawl_jobs WHERE id = ?",
+            (result["task_ids"][0],),
+        ).fetchone()
+    assert row["crawler_type"] == "creator"
+    assert row["creator_id"] == "https://www.douyin.com/user/customer-a"
+    assert row["content_count"] == 1
+    assert row["skip_content_ids"] == "fc-a"
+
+
+def test_keyword_find_customer_does_not_expand_when_creator_total_is_exhausted(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import account_actions
+
+    with database.connect() as conn:
+        database.set_setting(conn, "default_content_count", "1")
+        database.set_setting(conn, "comment_recrawl_cooldown_hours", "24")
+        competitor = conn.execute(
+            """
+            INSERT INTO user_accounts(
+                platform, platform_user_id, nickname, competitor_status, profile_url, content_total_count
+            )
+            VALUES('dy', 'customer-a', '竞品A', '竞品', 'https://www.douyin.com/user/customer-a', 1)
+            """
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO contents(
+                platform, content_id, author_account_id, title, source_keyword, last_comment_crawled_at
+            )
+            VALUES('dy', 'fc-a', ?, '关键词内容', '电车', datetime('now', 'localtime'))
+            """,
+            (competitor,),
+        )
+
+    result = account_actions.create_keyword_find_customer_task("dy", "电车")
+
+    assert result["created"] == 0
+    assert result["recent_comment_skip_count"] == 1
     assert result["creator_account_count"] == 0
+
+
+def test_keyword_find_customer_batch_supplement_uses_max_new_target_and_all_skip_ids(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import account_actions
+
+    with database.connect() as conn:
+        database.set_setting(conn, "default_content_count", "2")
+        competitor_a = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status, profile_url)
+            VALUES('dy', 'customer-a', '竞品A', '竞品', 'https://www.douyin.com/user/customer-a')
+            """
+        ).lastrowid
+        competitor_b = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status, profile_url)
+            VALUES('dy', 'customer-b', '竞品B', '竞品', 'https://www.douyin.com/user/customer-b')
+            """
+        ).lastrowid
+        for content_id in ("a-1", "a-2"):
+            conn.execute(
+                "INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword, last_comment_crawled_at) VALUES('dy', ?, ?, 'A内容', '电车', datetime('now', 'localtime'))",
+                (content_id, competitor_a),
+            )
+        conn.execute(
+            "INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword, last_comment_crawled_at) VALUES('dy', 'b-1', ?, 'B内容', '电车', datetime('now', 'localtime'))",
+            (competitor_b,),
+        )
+
+    result = account_actions.create_keyword_find_customer_task("dy", "电车")
+
+    assert result["created"] == 1
+    assert result["creator_account_count"] == 2
+    assert result["supplement_content_count"] == 2
+    assert result["skip_content_count"] == 3
+    with database.connect() as conn:
+        row = conn.execute(
+            "SELECT creator_id, content_count, skip_content_ids FROM crawl_jobs WHERE id = ?",
+            (result["task_ids"][0],),
+        ).fetchone()
+    assert row["content_count"] == 2
+    assert "https://www.douyin.com/user/customer-a" in row["creator_id"]
+    assert "https://www.douyin.com/user/customer-b" in row["creator_id"]
+    assert set(row["skip_content_ids"].split(",")) == {"a-1", "a-2", "b-1"}
 
 
 def test_own_account_find_customer_uses_own_account_mode(tmp_path: Path) -> None:
@@ -1115,17 +1208,21 @@ def test_own_account_find_customer_uses_own_account_mode(tmp_path: Path) -> None
 
     result = account_actions.create_account_find_customer_task(int(own_account_id))
 
-    assert result["created"] == 1
+    assert result["created"] == 2
     assert result["reuse_content_count"] == 1
     with database.connect() as conn:
-        row = conn.execute(
-            "SELECT mode, crawler_type, specified_id, creator_id FROM crawl_jobs WHERE id = ?",
-            (result["task_ids"][0],),
-        ).fetchone()
-    assert row["mode"] == "own_account"
-    assert row["crawler_type"] == "detail"
-    assert row["specified_id"] == "own-content-a"
-    assert row["creator_id"] == ""
+        rows = conn.execute(
+            "SELECT mode, crawler_type, specified_id, creator_id, skip_content_ids FROM crawl_jobs WHERE id IN (?, ?) ORDER BY id",
+            tuple(result["task_ids"]),
+        ).fetchall()
+    assert rows[0]["mode"] == "own_account"
+    assert rows[0]["crawler_type"] == "detail"
+    assert rows[0]["specified_id"] == "own-content-a"
+    assert rows[0]["creator_id"] == ""
+    assert rows[1]["mode"] == "own_account"
+    assert rows[1]["crawler_type"] == "creator"
+    assert rows[1]["creator_id"] == "https://www.douyin.com/user/self-a"
+    assert rows[1]["skip_content_ids"] == "own-content-a"
 
 
 def test_overview_shows_account_analysis_progress_statuses(tmp_path: Path) -> None:
@@ -1436,6 +1533,8 @@ def test_account_analysis_subprocess_env_limits_douyin_creator_videos(tmp_path: 
     )
     env = crawler_adapter._media_crawler_subprocess_env({"PYTHONPATH": "existing-path"}, task)
 
+    assert env["AI_CUSTOMER_CREATOR_CONTENT_LIMIT"] == "3"
+    assert env["AI_CUSTOMER_CREATOR_PLATFORM"] == "dy"
     assert env["AI_CUSTOMER_DY_CREATOR_VIDEO_LIMIT"] == "3"
     assert "mediacrawler_shims" in env["PYTHONPATH"]
     assert env["PYTHONPATH"].endswith("existing-path")
@@ -1452,6 +1551,7 @@ def test_account_analysis_subprocess_env_limits_douyin_creator_videos(tmp_path: 
     )
     customer_env = crawler_adapter._media_crawler_subprocess_env({}, customer_task)
 
+    assert customer_env["AI_CUSTOMER_CREATOR_CONTENT_LIMIT"] == "5"
     assert customer_env["AI_CUSTOMER_DY_CREATOR_VIDEO_LIMIT"] == "5"
     assert "mediacrawler_shims" in customer_env["PYTHONPATH"]
 
@@ -1466,8 +1566,15 @@ def test_account_analysis_subprocess_env_limits_douyin_creator_videos(tmp_path: 
     )
     xhs_env = crawler_adapter._media_crawler_subprocess_env({}, xhs_task)
 
+    assert xhs_env["AI_CUSTOMER_CREATOR_CONTENT_LIMIT"] == "3"
+    assert xhs_env["AI_CUSTOMER_CREATOR_PLATFORM"] == "xhs"
     assert "AI_CUSTOMER_DY_CREATOR_VIDEO_LIMIT" not in xhs_env
-    assert "PYTHONPATH" not in xhs_env
+    assert "mediacrawler_shims" in xhs_env["PYTHONPATH"]
+
+    crawler_adapter.set_task_skip_content_ids(str(customer_task["id"]), ["10001", "10002", "10001"])
+    refreshed_task = crawler_adapter.get_task(str(customer_task["id"]))
+    skip_env = crawler_adapter._media_crawler_subprocess_env({}, refreshed_task or {})
+    assert skip_env["AI_CUSTOMER_SKIP_CONTENT_IDS"] == "10001,10002"
 
 
 def test_content_cutoff_subprocess_env_applies_without_comment_collection(tmp_path: Path) -> None:

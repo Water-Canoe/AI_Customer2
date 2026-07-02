@@ -287,6 +287,19 @@ def create_task(payload: TaskCreate) -> dict[str, object]:
     return get_task(task_id) or {}
 
 
+def set_task_skip_content_ids(task_id: str, content_ids: list[str]) -> None:
+    # 这些 ID 只传给运行时 shim，用于 creator 补采时跳过已入库内容。
+    normalized = sorted({str(content_id).strip() for content_id in content_ids if str(content_id).strip()})
+    if not normalized:
+        return
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE crawl_jobs SET skip_content_ids = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (",".join(normalized), task_id),
+        )
+        log_task(conn, task_id, "info", f"已记录 {len(normalized)} 条已采内容，creator 补采时会跳过这些内容")
+
+
 def _account_profile_identifier(account: dict[str, object]) -> str:
     # creator 模式优先使用主页链接；抖音主页链接内含 sec_uid，跨平台也更贴近 MediaCrawler 的解析入口。
     platform = str(account.get("platform") or "")
@@ -895,10 +908,17 @@ def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, obje
     if (
         task.get("mode") in ("account_analysis", "competitor_crawl", "own_account")
         and task.get("crawler_type") == "creator"
-        and task.get("platform") == "dy"
+        and task.get("platform") in ("dy", "xhs", "ks")
     ):
         limit = max(1, int(task.get("content_count") or 5))
-        env["AI_CUSTOMER_DY_CREATOR_VIDEO_LIMIT"] = str(limit)
+        env["AI_CUSTOMER_CREATOR_PLATFORM"] = str(task.get("platform") or "")
+        env["AI_CUSTOMER_CREATOR_CONTENT_LIMIT"] = str(limit)
+        if task.get("platform") == "dy":
+            env["AI_CUSTOMER_DY_CREATOR_VIDEO_LIMIT"] = str(limit)
+        shim_required = True
+    skip_content_ids = str(task.get("skip_content_ids") or "").strip()
+    if skip_content_ids and task.get("crawler_type") == "creator":
+        env["AI_CUSTOMER_SKIP_CONTENT_IDS"] = skip_content_ids
         shim_required = True
     content_cutoff_ts = _setting_cutoff_ts_seconds("content_cutoff_days")
     if content_cutoff_ts:

@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS crawl_jobs (
     tcp_mode INTEGER NOT NULL DEFAULT 1,
     headless INTEGER NOT NULL DEFAULT 0,
     execute_crawler INTEGER NOT NULL DEFAULT 1,
+    skip_content_ids TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'pending',
     archived INTEGER NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT '',
@@ -333,6 +334,7 @@ def init_db() -> None:
         conn.executescript(SCHEMA_SQL)
         _ensure_column(conn, "user_accounts", "competitor_reason", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "user_accounts", "content_total_count", "INTEGER")
+        _ensure_column(conn, "crawl_jobs", "skip_content_ids", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "contents", "last_comment_crawled_at", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "lead_user_accounts", "manual_follow_status", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "analysis_jobs", "raw_output", "TEXT NOT NULL DEFAULT ''")

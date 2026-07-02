@@ -1138,7 +1138,9 @@ async function findCustomers(target: Dict) {
       const reuseCount = data.reuse_content_count || 0
       const supplementCount = data.creator_account_count || 0
       const recentSkipCount = data.recent_comment_skip_count || 0
-      ElMessage.success(`已创建 ${taskCount} 个找客户任务：复用已有内容 ${reuseCount} 条，补采账号 ${supplementCount} 个，近期跳过 ${recentSkipCount} 条`)
+      const skipContentCount = data.skip_content_count || 0
+      const supplementTarget = data.supplement_content_count || 0
+      ElMessage.success(`已创建 ${taskCount} 个找客户任务：复用已有内容 ${reuseCount} 条，补采账号 ${supplementCount} 个，新内容目标 ${supplementTarget} 条，跳过已采内容 ${skipContentCount} 条，近期评论跳过 ${recentSkipCount} 条`)
     } else {
       if (data.recent_comment_skip_count) {
         ElMessage.info(`近期已采过 ${data.recent_comment_skip_count} 条内容的评论，未重复创建采集任务`)
