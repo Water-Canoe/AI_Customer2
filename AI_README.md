@@ -14,6 +14,8 @@
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts` 和 `SettingsPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane` 和标签输入 `TagInput`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
+`App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。
+
 前端应用壳内置自动同步层：任务和 AI job 作为全局异步运行态会持续感知；当存在 `pending/running` 任务或 AI job 时，每 3 秒同步一次当前页面相关数据，空闲时每 12 秒同步一次。切换页面、浏览器窗口重新可见时会立即同步。同步范围按当前页面裁剪：日志页刷新任务列表、当前任务详情/日志、失败诊断和防重复摘要，总览树刷新树，AI页刷新 AI 工作台，私信工作台刷新关键词队列、客户分页和当前详情，数据表页静默刷新当前库，设置页刷新设置、环境检查和墓碑概览；避免每次都全量拉取所有页面。设置页有本地草稿保护：用户聚焦任意设置输入、切换下拉框或编辑标签输入时就进入未保存草稿态，页面本地同步和应用壳自动同步都会跳过服务端设置刷新，避免失焦或自动轮询把旧设置覆盖到正在输入的内容；点击“保存设置”时会先提交标签输入中尚未按回车的草稿，再发起保存请求，保存成功后才接受后端返回的新配置。
 
 ## 工作流

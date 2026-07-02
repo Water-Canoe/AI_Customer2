@@ -213,51 +213,79 @@ const routeProps = computed(() => {
   }
 })
 
-const routeListeners = computed(() => ({
-  'create-task': createTask,
-  'open-logs': openTaskLogs,
-  'consume-retry-draft': consumeRetryDraft,
-  'account-analyze': analyzeOverviewAccount,
-  'keyword-analyze': analyzeKeywordCompetitors,
-  'customer-intent-analyze': analyzeOverviewCustomerIntent,
-  'account-customers-analyze': analyzeAccountCustomersIntent,
-  'customer-message': messageOverviewCustomer,
-  'customer-follow-update': updateOverviewCustomerFollowStatus,
-  'delete-account': deleteOverviewAccount,
-  'delete-customer': deleteOverviewCustomer,
-  'delete-account-noncustomers': deleteAccountNonCustomers,
-  'delete-platform': deleteOverviewPlatform,
-  'delete-keyword': deleteOverviewKeyword,
-  'delete-keyword-noncompetitors': deleteKeywordNonCompetitors,
-  'find-customers': findCustomers,
-  'create-job': createAiJob,
-  'create-batch-jobs': createBatchAiJobs,
-  'delete-non-competitors': deleteAiWorkbenchNonCompetitors,
-  'delete-non-customers': deleteAiWorkbenchNonCustomers,
-  'filter-change': changeMessageWorkbenchFilter,
-  'select-customer': selectMessageWorkbenchCustomer,
-  'message-customer': messageWorkbenchCustomer,
-  'update-follow-status': updateMessageWorkbenchFollowStatus,
-  'close-detail': closeMessageWorkbenchDetail,
-  'retry-job': retryAiJob,
-  'retry-jobs': retryAiJobs,
-  'select-task': selectTask,
-  'retry-task': retryTask,
-  'cancel-task': cancelTask,
-  'archive-task': archiveTask,
-  'delete-task': deleteTask,
-  'change-library': changeLibrary,
-  'change-filter': changeTableFilter,
-  'update-row': updateRow,
-  'delete-row': deleteRow,
-  'analyze-row': analyzeTableRow,
-  'enrich-profile': enrichProfile,
-  save: saveSettings,
-  'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
-  'check-env': checkEnv,
-  'load-tombstones': loadTombstones,
-  'clear-data': clearAllData,
-}))
+const routeListeners = computed(() => {
+  // 只把当前页面声明的事件传下去，避免 fragment 页面收到无关监听器 warning。
+  if (activeView.value === 'tasks') {
+    return {
+      'create-task': createTask,
+      'open-logs': openTaskLogs,
+      'consume-retry-draft': consumeRetryDraft,
+    }
+  }
+  if (activeView.value === 'overview') {
+    return {
+      'account-analyze': analyzeOverviewAccount,
+      'keyword-analyze': analyzeKeywordCompetitors,
+      'customer-intent-analyze': analyzeOverviewCustomerIntent,
+      'account-customers-analyze': analyzeAccountCustomersIntent,
+      'customer-message': messageOverviewCustomer,
+      'customer-follow-update': updateOverviewCustomerFollowStatus,
+      'delete-account': deleteOverviewAccount,
+      'delete-customer': deleteOverviewCustomer,
+      'delete-account-noncustomers': deleteAccountNonCustomers,
+      'delete-platform': deleteOverviewPlatform,
+      'delete-keyword': deleteOverviewKeyword,
+      'delete-keyword-noncompetitors': deleteKeywordNonCompetitors,
+      'find-customers': findCustomers,
+    }
+  }
+  if (activeView.value === 'ai') {
+    return {
+      'create-job': createAiJob,
+      'create-batch-jobs': createBatchAiJobs,
+      'delete-non-competitors': deleteAiWorkbenchNonCompetitors,
+      'delete-non-customers': deleteAiWorkbenchNonCustomers,
+      'retry-job': retryAiJob,
+      'retry-jobs': retryAiJobs,
+    }
+  }
+  if (activeView.value === 'message-workbench') {
+    return {
+      'filter-change': changeMessageWorkbenchFilter,
+      'select-customer': selectMessageWorkbenchCustomer,
+      'message-customer': messageWorkbenchCustomer,
+      'update-follow-status': updateMessageWorkbenchFollowStatus,
+      'close-detail': closeMessageWorkbenchDetail,
+    }
+  }
+  if (activeView.value === 'logs') {
+    return {
+      'select-task': selectTask,
+      'retry-task': retryTask,
+      'cancel-task': cancelTask,
+      'archive-task': archiveTask,
+      'delete-task': deleteTask,
+    }
+  }
+  if (activeView.value === 'tables') {
+    return {
+      'change-library': changeLibrary,
+      'change-filter': changeTableFilter,
+      'update-row': updateRow,
+      'delete-row': deleteRow,
+      'analyze-row': analyzeTableRow,
+      'enrich-profile': enrichProfile,
+      'find-customers': findCustomers,
+    }
+  }
+  return {
+    save: saveSettings,
+    'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
+    'check-env': checkEnv,
+    'load-tombstones': loadTombstones,
+    'clear-data': clearAllData,
+  }
+})
 
 function goToView(view: string) {
   router.push(`/${view}`)
