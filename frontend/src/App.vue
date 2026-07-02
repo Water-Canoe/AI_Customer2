@@ -107,6 +107,9 @@ const retryDraft = ref<Dict | null>(null)
 const leadRows = ref<Dict[]>([])
 const competitorRows = ref<Dict[]>([])
 const settings = ref<Dict>({})
+const settingsDraftDirty = ref(false)
+const settingsSaving = ref(false)
+const settingsSaveRevision = ref(0)
 const env = ref<Dict>({})
 const platformCapabilities = ref<Dict[]>([])
 const messageKeywords = ref<Dict[]>([])
@@ -123,6 +126,7 @@ const lastAutoSyncAt = ref(0)
 const AUTO_SYNC_ACTIVE_MS = 3000
 const AUTO_SYNC_IDLE_MS = 12000
 let autoSyncTimer: ReturnType<typeof window.setInterval> | null = null
+let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
@@ -176,6 +180,7 @@ const routeProps = computed(() => {
   }
   return {
     settings: settings.value,
+    settingsSaveRevision: settingsSaveRevision.value,
     env: env.value,
     tombstoneSummary: tombstoneSummary.value,
     tombstones: tombstones.value,
@@ -223,6 +228,7 @@ const routeListeners = computed(() => ({
   'analyze-row': analyzeTableRow,
   'enrich-profile': enrichProfile,
   save: saveSettings,
+  'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
   'check-env': checkEnv,
   'load-tombstones': loadTombstones,
   'clear-data': clearAllData,
@@ -250,7 +256,11 @@ async function fetchTask(id: string) {
 }
 
 async function loadSettings() {
+  const requestSeq = settingsMutationSeq
   const { data } = await api.get('/settings')
+  // 保存中或已有本地草稿时，忽略可能较旧的设置响应。
+  if (requestSeq !== settingsMutationSeq) return
+  if (activeView.value === 'settings' && (settingsDraftDirty.value || settingsSaving.value)) return
   settings.value = data
 }
 
@@ -393,7 +403,8 @@ async function syncCurrentView(reason: 'auto' | 'route' | 'visible') {
     if (activeView.value === 'message-workbench') loaders.set('message-workbench', () => loadMessageWorkbench(true))
     if (activeView.value === 'tables') loaders.set('table', () => loadTable(activeLibrary.value, true))
     if (activeView.value === 'settings') {
-      loaders.set('settings', loadSettings)
+      // 设置页有未保存草稿时，不用后台刷新覆盖本地输入。
+      if (!settingsDraftDirty.value) loaders.set('settings', loadSettings)
       loaders.set('env', checkEnv)
       loaders.set('tombstones-summary', loadTombstoneSummary)
       loaders.set('tombstones', () => loadTombstones())
@@ -1080,10 +1091,18 @@ async function findCustomers(target: Dict) {
 }
 
 async function saveSettings(values: Dict) {
-  const { data } = await api.put('/settings', { values })
-  settings.value = data
-  ElMessage.success('设置已保存')
-  await checkEnv()
+  settingsSaving.value = true
+  settingsMutationSeq += 1
+  try {
+    const { data } = await api.put('/settings', { values })
+    settings.value = data
+    settingsDraftDirty.value = false
+    settingsSaveRevision.value += 1
+    ElMessage.success('设置已保存')
+    await checkEnv()
+  } finally {
+    settingsSaving.value = false
+  }
 }
 
 async function clearAllData() {

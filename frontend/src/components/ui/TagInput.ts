@@ -23,7 +23,7 @@ export const TagInput = defineComponent({
     disabled: { type: Boolean, default: false },
     placeholder: { type: String, default: '' }
   },
-  emits: ['update:modelValue'],
+  emits: ['update:modelValue', 'focus'],
   setup(props, { emit }) {
     const draft = ref('')
     const inputRef = ref<HTMLInputElement | null>(null)
@@ -91,6 +91,7 @@ export const TagInput = defineComponent({
           value: draft.value,
           disabled: props.disabled,
           placeholder: tags.length ? '' : props.placeholder,
+          onFocus: () => emit('focus'),
           onInput,
           onPaste,
           onKeydown,

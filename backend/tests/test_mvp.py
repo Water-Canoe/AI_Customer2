@@ -190,6 +190,67 @@ def test_task_command_mapping_and_import(tmp_path: Path) -> None:
     assert account_metrics["non_customer_count"] == 1
 
 
+def test_overview_groups_unlabeled_account_tasks_by_source_mode(tmp_path: Path) -> None:
+    _, raw_db = prepare_project(tmp_path)
+    from app import database, views
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+
+    raw_conn = sqlite3.connect(raw_db)
+    try:
+        raw_conn.execute("UPDATE douyin_aweme SET source_keyword = ''")
+        raw_conn.commit()
+    finally:
+        raw_conn.close()
+
+    own_task = crawler_adapter.create_task(
+        TaskCreate(mode="own_account", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    import_for_task(str(own_task["id"]))
+
+    with database.connect() as conn:
+        competitor_account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status)
+            VALUES('dy', 'direct-competitor', '直接账号任务竞品', '竞品')
+            """
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO crawl_jobs(id, name, mode, platform, login_type, crawler_type, status)
+            VALUES('direct-comp-task', '直接竞品账号爬取', 'competitor_crawl', 'dy', 'qrcode', 'creator', 'succeeded')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword, task_id)
+            VALUES('dy', 'direct-comp-content', ?, '无关键词竞品内容', '', 'direct-comp-task')
+            """,
+            (competitor_account_id,),
+        )
+
+    tree = views.overview_tree()
+    groups = {child["metrics"]["source_mode"]: child for child in tree[0]["children"] if child["kind"] == "source_group"}
+
+    assert all(child["kind"] != "keyword" for child in tree[0]["children"])
+    assert set(groups) == {"own_account", "competitor_crawl"}
+    assert groups["own_account"]["label"] == "自家账号互动"
+    assert groups["competitor_crawl"]["label"] == "竞品账号爬取"
+    own_account = groups["own_account"]["children"][0]
+    assert own_account["metrics"]["account_role"] == "own_account"
+    assert own_account["metrics"]["is_own_account"] == 1
+
+
+def test_own_account_task_requires_own_account_identifier(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+
+    with pytest.raises(ValueError, match="自家账号主页/ID"):
+        crawler_adapter.preview_task(TaskCreate(mode="own_account", platform="dy", execute_crawler=False))
+
+
 def test_comment_cutoff_filters_old_comments(tmp_path: Path) -> None:
     _, raw_db = prepare_project(tmp_path)
     import time
@@ -3007,6 +3068,27 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     response = client.put("/api/settings", json={"values": {"ai_model": "deepseek-chat"}})
     assert response.status_code == 200
     assert response.json()["ai_model"] == "deepseek-chat"
+    assert response.json()["own_accounts"] == {"dy": [], "xhs": [], "ks": []}
+    own_accounts = {
+        "dy": ["https://www.douyin.com/user/a", "https://www.douyin.com/user/b"],
+        "xhs": ["xhs-account"],
+        "ks": [],
+    }
+    response = client.put("/api/settings", json={"values": {"own_accounts": own_accounts}})
+    assert response.status_code == 200
+    assert response.json()["own_accounts"] == own_accounts
+    preview = client.post(
+        "/api/tasks/preview",
+        json={"mode": "own_account", "platform": "dy", "execute_crawler": False},
+    )
+    assert preview.status_code == 200
+    assert preview.json()["normalized"]["creator_id"] == ",".join(own_accounts["dy"])
+    created = client.post(
+        "/api/tasks",
+        json={"mode": "own_account", "platform": "xhs", "execute_crawler": False},
+    )
+    assert created.status_code == 200
+    assert created.json()["creator_id"] == "xhs-account"
 
 
 def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

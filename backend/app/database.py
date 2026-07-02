@@ -300,6 +300,7 @@ DEFAULT_SETTINGS = {
     "auto_delete_non_competitors": "false",
     "auto_analyze_leads": "false",
     "auto_delete_non_customers": "false",
+    "own_accounts": json.dumps({"dy": [], "xhs": [], "ks": []}, ensure_ascii=False),
     "license_code": "",
     "device_code": "",
     "license_server_url": "https://tfwqsfaegbdj.sealosbja.site/ai-customer",

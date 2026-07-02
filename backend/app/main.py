@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import sqlite3
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -46,6 +47,32 @@ def require_license() -> None:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
+def _own_account_items_for_platform(platform: str) -> list[str]:
+    """Read configured self-account IDs for the selected platform."""
+    with database.connect() as conn:
+        raw = database.get_setting(conn, "own_accounts", "{}")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    items = parsed.get(platform, [])
+    if not isinstance(items, list):
+        return []
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _apply_own_account_defaults(payload: TaskCreate) -> TaskCreate:
+    """Allow API callers to reuse self accounts configured in Settings."""
+    if payload.mode != "own_account" or payload.creator_id.strip() or payload.specified_id.strip():
+        return payload
+    creator_ids = _own_account_items_for_platform(payload.platform)
+    if not creator_ids:
+        return payload
+    return payload.model_copy(update={"creator_id": ",".join(creator_ids)})
+
+
 @app.get("/api/license")
 def get_license() -> dict[str, object]:
     return license_service.license_overview()
@@ -65,6 +92,7 @@ def check_license(payload: LicenseUpdate) -> dict[str, object]:
 def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict[str, object]:
     require_license()
     try:
+        payload = _apply_own_account_defaults(payload)
         account_ids = (
             account_actions.resolve_account_analysis_task_account_ids(payload.model_dump())
             if payload.mode == "account_analysis"
@@ -86,6 +114,7 @@ def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict[
 @app.post("/api/tasks/preview")
 def preview_task(payload: TaskCreate) -> dict[str, object]:
     try:
+        payload = _apply_own_account_defaults(payload)
         return crawler_adapter.preview_task(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -20,6 +20,10 @@ LIBRARY_LABELS = {
 
 PLATFORM_LABELS = {"dy": "抖音", "xhs": "小红书", "ks": "快手"}
 PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
+ACCOUNT_SOURCE_GROUPS = {
+    "competitor_crawl": "竞品账号爬取",
+    "own_account": "自家账号互动",
+}
 DIAGNOSTIC_FIELDS = {
     "content": [
         ("id", "内容ID"),
@@ -62,6 +66,11 @@ def get_settings() -> dict[str, Any]:
         result["icp_profile"] = json.loads(result.get("icp_profile", "{}"))
     except json.JSONDecodeError:
         result["icp_profile"] = {}
+    try:
+        own_accounts = json.loads(result.get("own_accounts", "{}"))
+        result["own_accounts"] = own_accounts if isinstance(own_accounts, dict) else {}
+    except json.JSONDecodeError:
+        result["own_accounts"] = {}
     for key in ("content_cutoff_days", "comment_cutoff_days", "ai_analysis_concurrency", "unreplied_reminder_days"):
         try:
             result[key] = int(result.get(key, 0) or 0)
@@ -86,7 +95,7 @@ def update_settings(values: dict[str, Any]) -> dict[str, Any]:
         for key, value in values.items():
             if key in protected_keys:
                 continue
-            if key == "icp_profile":
+            if key in ("icp_profile", "own_accounts"):
                 value = json.dumps(value, ensure_ascii=False)
             elif isinstance(value, bool):
                 value = "true" if value else "false"
@@ -231,7 +240,7 @@ def _mode_capability(mode: str, profile_supported: bool) -> dict[str, Any]:
             "own_account": "自家账号互动",
         }[mode],
         "crawler_type": "search" if mode in ("competitor_discovery", "demand_content") else "creator/detail",
-        "required_input": "关键词" if mode in ("competitor_discovery", "demand_content") else "创作者主页/ID或指定内容ID/链接",
+        "required_input": _mode_required_input(mode),
         "comments_default": mode in ("competitor_crawl", "own_account"),
         "expected_outputs": _mode_expected_outputs(mode),
         "warnings": [],
@@ -248,6 +257,16 @@ def _mode_capability(mode: str, profile_supported: bool) -> dict[str, Any]:
         if not profile_supported:
             warnings.append("该平台无法补齐作者主页简介，AI判断时应降低对主页资料的依赖。")
     return {**base, "warnings": warnings}
+
+
+def _mode_required_input(mode: str) -> str:
+    if mode in ("competitor_discovery", "demand_content"):
+        return "关键词"
+    if mode == "competitor_crawl":
+        return "竞品账号主页/ID或指定内容ID/链接"
+    if mode == "own_account":
+        return "自家账号主页/ID或指定内容ID/链接"
+    return "创作者主页/ID"
 
 
 def _mode_expected_outputs(mode: str) -> list[str]:
@@ -790,16 +809,89 @@ def overview_tree() -> list[dict[str, Any]]:
                 """,
                 (platform_key,),
             ).fetchall()
+            account_source_groups = conn.execute(
+                """
+                SELECT COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) AS source_mode,
+                       COUNT(DISTINCT CASE WHEN ua.competitor_status = '竞品' THEN ua.id END) AS competitors,
+                       COUNT(DISTINCT c.id) AS contents,
+                       COUNT(DISTINCT cm.id) AS comments,
+                       COUNT(DISTINCT lua.id) AS customers,
+                       MAX(c.updated_at) AS latest
+                FROM contents c
+                LEFT JOIN crawl_jobs j ON j.id = c.task_id
+                LEFT JOIN user_accounts ua ON ua.id = c.author_account_id
+                LEFT JOIN comments cm ON cm.content_id = c.id
+                LEFT JOIN lead_sources ls ON ls.content_id = c.id AND ls.active = 1
+                LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+                WHERE c.platform = ?
+                  AND NULLIF(c.source_keyword, '') IS NULL
+                  AND COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) IN ('competitor_crawl', 'own_account')
+                GROUP BY source_mode
+                """,
+                (platform_key,),
+            ).fetchall()
             result.append(
                 {
                     "id": f"platform:{platform_key}",
                     "label": platform_key,
                     "kind": "platform",
                     "metrics": database.row_to_dict(platform),
-                    "children": [_keyword_node(conn, platform_key, row["keyword"], database.row_to_dict(row)) for row in keywords],
+                    "children": [
+                        *[_keyword_node(conn, platform_key, row["keyword"], database.row_to_dict(row)) for row in keywords],
+                        *[
+                            _source_group_node(conn, platform_key, row["source_mode"], database.row_to_dict(row))
+                            for row in account_source_groups
+                        ],
+                    ],
                 }
             )
     return result
+
+
+def _source_group_node(conn, platform: str, source_mode: str, metrics: dict[str, Any]) -> dict[str, Any]:
+    accounts = conn.execute(
+        """
+        SELECT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
+               ua.nickname, ua.profile_url, ua.fans, ua.signature,
+               ua.account_role, ua.competitor_status, ua.competitor_reason,
+               ua.content_total_count, ua.is_own_account,
+               ua.raw_payload,
+               COUNT(DISTINCT c.id) AS content_count,
+               COUNT(DISTINCT cm.id) AS comment_count,
+               COUNT(DISTINCT lua.id) AS customer_count,
+               MAX(c.updated_at) AS latest
+        FROM contents c
+        JOIN user_accounts ua ON ua.id = c.author_account_id
+        LEFT JOIN crawl_jobs j ON j.id = c.task_id
+        LEFT JOIN comments cm ON cm.content_id = c.id
+        LEFT JOIN lead_sources ls ON ls.content_id = c.id AND ls.active = 1
+        LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+        WHERE c.platform = ?
+          AND NULLIF(c.source_keyword, '') IS NULL
+          AND COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) = ?
+        GROUP BY ua.id
+        ORDER BY latest DESC, ua.id DESC
+        """,
+        (platform, source_mode),
+    ).fetchall()
+    analysis_states = _overview_account_analysis_states(conn, platform, accounts)
+    node_metrics = dict(metrics)
+    node_metrics.update(
+        {
+            "platform": platform,
+            "source_mode": source_mode,
+            "source_label": ACCOUNT_SOURCE_GROUPS.get(source_mode, source_mode),
+            "keyword": "",
+            "unlabeled": True,
+        }
+    )
+    return {
+        "id": f"source:{platform}:{source_mode}:unlabeled",
+        "label": ACCOUNT_SOURCE_GROUPS.get(source_mode, source_mode),
+        "kind": "source_group",
+        "metrics": node_metrics,
+        "children": [_overview_account_node(conn, row, analysis_states) for row in accounts],
+    }
 
 
 def _keyword_node(conn, platform: str, keyword: str, metrics: dict[str, Any]) -> dict[str, Any]:
@@ -809,7 +901,7 @@ def _keyword_node(conn, platform: str, keyword: str, metrics: dict[str, Any]) ->
         SELECT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
                ua.nickname, ua.profile_url, ua.fans, ua.signature,
                ua.account_role, ua.competitor_status, ua.competitor_reason,
-               ua.content_total_count,
+               ua.content_total_count, ua.is_own_account,
                ua.raw_payload,
                COUNT(DISTINCT c.id) AS content_count,
                COUNT(DISTINCT cm.id) AS comment_count,

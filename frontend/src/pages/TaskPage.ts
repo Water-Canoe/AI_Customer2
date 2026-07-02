@@ -118,13 +118,36 @@ export default defineComponent({
     const settingsDefaultsApplied = ref(false)
     const modeNeedsCreator = computed(() => ['competitor_crawl', 'own_account'].includes(form.mode))
     const modeUsesKeywords = computed(() => ['competitor_discovery', 'demand_content'].includes(form.mode))
+    const creatorFieldLabel = computed(() => {
+      if (form.mode === 'own_account') return '自家账号主页/ID'
+      if (form.mode === 'competitor_crawl') return '竞品账号主页/ID'
+      return '创作者主页/ID'
+    })
+    const creatorPlaceholder = computed(() => {
+      if (form.mode === 'own_account') return '输入自家账号主页或ID后按回车'
+      if (form.mode === 'competitor_crawl') return '输入竞品账号主页或ID后按回车'
+      return modeNeedsCreator.value ? '输入账号主页或ID后按回车' : '详情任务可不填'
+    })
     const activeCapability = computed(() => (props.capabilities as Dict[]).find(item => item.platform === form.platform) || {})
     const activeModeCapability = computed(() => activeCapability.value?.modes?.[form.mode] || {})
     const taskPreview = ref<Dict | null>(null)
     const previewError = ref('')
     const previewLoading = ref(false)
     let previewTimer: ReturnType<typeof setTimeout> | null = null
+    function configuredOwnAccounts(platform: string) {
+      const raw = (props.settings as Dict)?.own_accounts
+      let source = raw
+      if (typeof raw === 'string') {
+        try { source = JSON.parse(raw) } catch { source = {} }
+      }
+      const items = (source && typeof source === 'object') ? (source as Dict)[platform] : []
+      return Array.isArray(items) ? items.map(item => String(item).trim()).filter(Boolean) : splitTagText(String(items || ''))
+    }
+    function applyOwnAccountDefaults() {
+      form.creator_id_tags = configuredOwnAccounts(form.platform)
+    }
     function applyMode(modeKey: string) {
+      const previousMode = form.mode
       prefillSource.value = null
       form.mode = modeKey
       form.collect_comments = ['competitor_crawl', 'own_account'].includes(modeKey)
@@ -134,6 +157,11 @@ export default defineComponent({
         form.specified_id_tags = []
       } else {
         form.keyword_tags = []
+        if (modeKey === 'own_account') {
+          applyOwnAccountDefaults()
+        } else if (previousMode === 'own_account') {
+          form.creator_id_tags = []
+        }
       }
     }
     function applySettingsDefaultsOnce() {
@@ -223,6 +251,12 @@ export default defineComponent({
       if (['account_analysis', 'profile_enrichment'].includes(payload.mode) && !payload.creator_id) {
         return '账号资料任务必须填写创作者主页/ID'
       }
+      if (payload.mode === 'own_account' && !payload.creator_id && !payload.specified_id) {
+        return '自家账号互动任务必须填写自家账号主页/ID或指定内容ID'
+      }
+      if (payload.mode === 'competitor_crawl' && !payload.creator_id && !payload.specified_id) {
+        return '竞品账号爬取任务必须填写竞品账号主页/ID或指定内容ID'
+      }
       if (!['competitor_discovery', 'demand_content'].includes(payload.mode) && !payload.creator_id && !payload.specified_id) {
         return '账号/详情采集任务必须填写创作者主页/ID或指定内容ID'
       }
@@ -254,8 +288,17 @@ export default defineComponent({
     )
     watch(
       () => props.settings,
-      applySettingsDefaultsOnce,
+      () => {
+        applySettingsDefaultsOnce()
+        if (form.mode === 'own_account' && !form.creator_id_tags.length) applyOwnAccountDefaults()
+      },
       { immediate: true, deep: true }
+    )
+    watch(
+      () => [form.mode, form.platform],
+      () => {
+        if (form.mode === 'own_account') applyOwnAccountDefaults()
+      }
     )
     watch(
       () => props.retryDraft,
@@ -312,10 +355,10 @@ export default defineComponent({
             placeholder: modeUsesKeywords.value ? '输入关键词后按回车，例如：AI客服' : '账号/详情任务不使用关键词',
             'onUpdate:modelValue': (value: string[]) => form.keyword_tags = value
           })]),
-          h('label', { class: 'form-field field-full' }, ['创作者主页/ID', h(TagInput, {
+          h('label', { class: 'form-field field-full' }, [creatorFieldLabel.value, h(TagInput, {
             modelValue: form.creator_id_tags,
             disabled: modeUsesKeywords.value,
-            placeholder: modeNeedsCreator.value ? '输入账号主页或ID后按回车' : '详情任务可不填',
+            placeholder: creatorPlaceholder.value,
             'onUpdate:modelValue': (value: string[]) => form.creator_id_tags = value
           })]),
           h('label', { class: 'form-field field-full' }, ['指定内容ID/链接', h(TagInput, {

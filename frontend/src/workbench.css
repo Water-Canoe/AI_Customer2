@@ -1735,6 +1735,11 @@ input[type='checkbox'] {
   color: #991b1b;
 }
 
+.account-status-pill.is-own-account {
+  background: #e0f2fe;
+  color: #075985;
+}
+
 .account-status-pill.is-queued {
   background: #fef3c7;
   color: #92400e;
@@ -2142,6 +2147,27 @@ input[type='checkbox'] {
   border: 1px solid #dbe7e2;
   border-radius: 6px;
   background: #ffffff;
+}
+
+.own-account-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.own-account-field {
+  gap: 8px;
+}
+
+.own-account-field > span {
+  color: #334155;
+  font-weight: 700;
+}
+
+.own-account-field small {
+  color: #64748b;
+  line-height: 1.5;
 }
 
 .icp-grid {

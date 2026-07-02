@@ -427,6 +427,22 @@ def _upsert_account(
     return int(row["id"])
 
 
+def _mark_own_account(conn: sqlite3.Connection, account_id: int, task: sqlite3.Row) -> None:
+    if task["mode"] != "own_account":
+        return
+    # 自家账号互动的内容作者就是自家账号，后续总览树按角色展示。
+    conn.execute(
+        """
+        UPDATE user_accounts
+        SET is_own_account = 1,
+            account_role = 'own_account',
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+        """,
+        (account_id,),
+    )
+
+
 def _add_raw_ref(
     conn: sqlite3.Connection,
     entity_type: str,
@@ -472,6 +488,7 @@ def _import_creators(
         )
         if account_id is None:
             continue
+        _mark_own_account(conn, account_id, task)
         _add_raw_ref(conn, "account", account_id, platform, mapping["table"], row["__raw_pk"], task["id"])
         counts["accounts"] += 1
 
@@ -531,6 +548,7 @@ def _import_contents(
         )
         if account_id is None:
             continue
+        _mark_own_account(conn, account_id, task)
         account_row = conn.execute("SELECT nickname, signature FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
         effective_nickname = str(account_row["nickname"] or author_nickname) if account_row else author_nickname
         effective_signature = str(account_row["signature"] or author_signature) if account_row else author_signature

@@ -4,6 +4,8 @@ import { ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { api } from '../shared/api'
 import { SplitPane } from '../components/ui/SplitPane'
+import { TagInput, splitTagText } from '../components/ui/TagInput'
+import { platformName } from '../shared/format'
 
 const icpFields = [
   { key: 'product', label: '产品/服务', placeholder: '例如：AI客服、获客工具' },
@@ -26,6 +28,7 @@ const commentCutoffOptions = [
   { value: 365, label: '365天内' },
   { value: 0, label: '不限' }
 ]
+const ownAccountPlatforms = ['dy', 'xhs', 'ks']
 
 function defaultIcpProfile() {
   return Object.fromEntries(icpFields.map(field => [field.key, '']))
@@ -47,17 +50,44 @@ function buildIcpPayload(value: Dict) {
   return payload
 }
 
+function normalizeOwnAccounts(value: any) {
+  let source = value
+  if (typeof value === 'string') {
+    try { source = JSON.parse(value) } catch { source = {} }
+  }
+  const result: Dict = { dy: [], xhs: [], ks: [] }
+  ownAccountPlatforms.forEach(platform => {
+    const raw = source?.[platform]
+    result[platform] = Array.isArray(raw)
+      ? raw.map(item => String(item).trim()).filter(Boolean)
+      : splitTagText(String(raw || ''))
+  })
+  return result
+}
+
+function buildOwnAccountsPayload(value: Dict) {
+  const result: Dict = { dy: [], xhs: [], ks: [] }
+  ownAccountPlatforms.forEach(platform => {
+    const tags = Array.isArray(value?.[platform]) ? value[platform] : splitTagText(String(value?.[platform] || ''))
+    result[platform] = Array.from(new Set(tags.map((item: unknown) => String(item).trim()).filter(Boolean)))
+  })
+  return result
+}
+
 export default defineComponent({
   props: {
     settings: { type: Object, required: true },
+    settingsSaveRevision: { type: Number, default: 0 },
     env: { type: Object, required: true },
     tombstoneSummary: { type: Object, default: () => ({}) },
     tombstones: { type: Object, default: () => ({ items: [] }) },
     tombstoneFilters: { type: Object, default: () => ({}) }
   },
-  emits: ['save', 'check-env', 'clear-data', 'load-tombstones'],
+  emits: ['save', 'check-env', 'clear-data', 'load-tombstones', 'settings-dirty-change'],
   setup(props, { emit }) {
     const local = reactive<Dict>({})
+    const settingsDirty = ref(false)
+    const syncingFromProps = ref(false)
     const licenseDialogOpen = ref(false)
     const licenseLoading = ref(false)
     const licenseChecking = ref(false)
@@ -126,11 +156,36 @@ export default defineComponent({
     }
 
     function sync() {
+      if (settingsDirty.value) return
+      syncingFromProps.value = true
       Object.keys(local).forEach(key => delete local[key])
       Object.assign(local, JSON.parse(JSON.stringify(props.settings || {})))
       local.icp_profile = normalizeIcpProfile(local.icp_profile)
+      local.own_accounts = normalizeOwnAccounts(local.own_accounts)
+      emit('settings-dirty-change', false)
+      syncingFromProps.value = false
+    }
+    function markSettingsDirty() {
+      if (syncingFromProps.value) return
+      settingsDirty.value = true
+      emit('settings-dirty-change', true)
+    }
+    function submitSettings(payload: Dict) {
+      emit('save', payload)
+    }
+    function submitSettingsAfterDraft(payloadFactory: () => Dict) {
+      const active = document.activeElement as HTMLElement | null
+      active?.blur()
+      // 标签输入的 blur 会先把草稿提交为标签，再读取保存 payload。
+      window.setTimeout(() => submitSettings(payloadFactory()), 0)
     }
     watch(() => props.settings, sync, { immediate: true, deep: true })
+    watch(() => props.settingsSaveRevision, revision => {
+      if (!revision) return
+      settingsDirty.value = false
+      emit('settings-dirty-change', false)
+      sync()
+    })
 
     function renderLicenseDialog() {
       if (!licenseDialogOpen.value) return null
@@ -191,41 +246,50 @@ export default defineComponent({
       if (!local.icp_profile || typeof local.icp_profile !== 'object') {
         local.icp_profile = normalizeIcpProfile(local.icp_profile)
       }
+      if (!local.own_accounts || typeof local.own_accounts !== 'object') {
+        local.own_accounts = normalizeOwnAccounts(local.own_accounts)
+      }
       const icpProfile = local.icp_profile as Dict
+      const ownAccounts = local.own_accounts as Dict
       return [
       h(SplitPane, { storageKey: 'settings', side: 'right', defaultSideWidth: 360 }, {
         default: () => [
         h('section', { class: 'pane primary-pane' }, [
-          h('div', { class: 'section-title' }, [h('h2', '基础配置'), h('span', '没有配置时 AI 分析会明确失败')]),
+          h('div', { class: 'section-title' }, [
+            h('h2', '基础配置'),
+            h('span', settingsDirty.value ? '有未保存修改，自动同步不会覆盖草稿' : '没有配置时 AI 分析会明确失败')
+          ]),
           h('div', { class: 'form-grid' }, [
-            inputField(local, 'media_crawler_path', 'MediaCrawler路径'),
-            inputField(local, 'media_crawler_db_path', '底层SQLite路径'),
-            inputField(local, 'ai_base_url', 'AI Base URL'),
-            inputField(local, 'ai_api_key', 'API Key', 'password'),
-            inputField(local, 'ai_model', '模型名'),
-            inputField(local, 'default_content_count', '默认内容数', 'number'),
-            inputField(local, 'default_comment_count', '默认评论数', 'number'),
-            selectField(local, 'content_cutoff_days', '内容截至日期', commentCutoffOptions),
-            selectField(local, 'comment_cutoff_days', '评论截至日期', commentCutoffOptions),
-            inputField(local, 'account_analysis_content_count', '账号分析内容数', 'number'),
-            inputField(local, 'ai_analysis_concurrency', 'AI分析并行数', 'number', '建议 1-5，过高容易触发模型限流'),
-            inputField(local, 'unreplied_reminder_days', '未回复提醒天数', 'number', '默认 3 天，填 0 表示不提醒'),
-            inputField(local, 'douyin_detail_sleep_seconds', '抖音详情等待秒数', 'number', '建议 0.5-2，越小越快但越容易限流'),
-            inputField(local, 'max_concurrency', '默认并发', 'number')
+            inputField(local, 'media_crawler_path', 'MediaCrawler路径', 'text', '', markSettingsDirty),
+            inputField(local, 'media_crawler_db_path', '底层SQLite路径', 'text', '', markSettingsDirty),
+            inputField(local, 'ai_base_url', 'AI Base URL', 'text', '', markSettingsDirty),
+            inputField(local, 'ai_api_key', 'API Key', 'password', '', markSettingsDirty),
+            inputField(local, 'ai_model', '模型名', 'text', '', markSettingsDirty),
+            inputField(local, 'default_content_count', '默认内容数', 'number', '', markSettingsDirty),
+            inputField(local, 'default_comment_count', '默认评论数', 'number', '', markSettingsDirty),
+            selectField(local, 'content_cutoff_days', '内容截至日期', commentCutoffOptions, markSettingsDirty),
+            selectField(local, 'comment_cutoff_days', '评论截至日期', commentCutoffOptions, markSettingsDirty),
+            inputField(local, 'account_analysis_content_count', '账号分析内容数', 'number', '', markSettingsDirty),
+            inputField(local, 'ai_analysis_concurrency', 'AI分析并行数', 'number', '建议 1-5，过高容易触发模型限流', markSettingsDirty),
+            inputField(local, 'unreplied_reminder_days', '未回复提醒天数', 'number', '默认 3 天，填 0 表示不提醒', markSettingsDirty),
+            inputField(local, 'douyin_detail_sleep_seconds', '抖音详情等待秒数', 'number', '建议 0.5-2，越小越快但越容易限流', markSettingsDirty),
+            inputField(local, 'max_concurrency', '默认并发', 'number', '', markSettingsDirty)
           ]),
           h('div', { class: 'toggles' }, [
-            toggleField(local, 'headless', '默认无头模式'),
-            toggleField(local, 'auto_analyze_competitors', '自动分析竞品账号'),
-            toggleField(local, 'auto_delete_non_competitors', '自动删除非竞品账号'),
-            toggleField(local, 'auto_analyze_leads', '自动分析线索用户'),
-            toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号')
+            toggleField(local, 'headless', '默认无头模式', markSettingsDirty),
+            toggleField(local, 'auto_analyze_competitors', '自动分析竞品账号', markSettingsDirty),
+            toggleField(local, 'auto_delete_non_competitors', '自动删除非竞品账号', markSettingsDirty),
+            toggleField(local, 'auto_analyze_leads', '自动分析线索用户', markSettingsDirty),
+            toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty)
           ]),
+          h('div', { class: 'section-title compact' }, [h('h2', '自家账号'), h('span', '同平台可多个，跨平台分任务运行')]),
+          h('div', { class: 'own-account-grid' }, ownAccountPlatforms.map(platform => renderOwnAccountField(ownAccounts, platform, markSettingsDirty))),
           h('div', { class: 'section-title compact' }, [h('h2', 'ICP画像'), h('span', 'AI筛选时会带入这些信息')]),
-          h('div', { class: 'icp-grid' }, icpFields.map(field => renderIcpField(icpProfile, field))),
+          h('div', { class: 'icp-grid' }, icpFields.map(field => renderIcpField(icpProfile, field, markSettingsDirty))),
           h('div', { class: 'action-row' }, [
             h('button', {
               class: 'primary-action',
-              onClick: () => emit('save', { ...local, icp_profile: buildIcpPayload(icpProfile) })
+              onClick: () => submitSettingsAfterDraft(() => ({ ...local, icp_profile: buildIcpPayload(icpProfile), own_accounts: buildOwnAccountsPayload(ownAccounts) }))
             }, [h(Check, { class: 'inline-icon' }), '保存设置']),
             h('button', { class: 'secondary-action', onClick: openLicenseDialog }, '授权与设备')
           ])
@@ -257,17 +321,43 @@ function licenseStatusText(status: string, authorized: boolean) {
   return '未校验'
 }
 
-function renderIcpField(profile: Dict, field: Dict) {
+function renderOwnAccountField(accounts: Dict, platform: string, markDirty: () => void) {
+  return h('label', { class: 'own-account-field' }, [
+    h('span', `${platformName(platform)}自家账号主页/ID`),
+    h(TagInput, {
+      modelValue: accounts[platform] || [],
+      placeholder: `输入${platformName(platform)}账号主页或ID后按回车`,
+      onFocus: markDirty,
+      'onUpdate:modelValue': (value: string[]) => {
+        accounts[platform] = value
+        markDirty()
+      }
+    }),
+    h('small', '同平台可填多个；跨平台需要按平台分别运行任务。')
+  ])
+}
+
+function renderIcpField(profile: Dict, field: Dict, markDirty: () => void) {
   const control = field.multiline
     ? h('textarea', {
         value: profile[field.key] || '',
         placeholder: field.placeholder,
-        onInput: (event: Event) => profile[field.key] = (event.target as HTMLTextAreaElement).value
+        onFocus: markDirty,
+        onCompositionstart: markDirty,
+        onInput: (event: Event) => {
+          profile[field.key] = (event.target as HTMLTextAreaElement).value
+          markDirty()
+        }
       })
     : h('input', {
         value: profile[field.key] || '',
         placeholder: field.placeholder,
-        onInput: (event: Event) => profile[field.key] = (event.target as HTMLInputElement).value
+        onFocus: markDirty,
+        onCompositionstart: markDirty,
+        onInput: (event: Event) => {
+          profile[field.key] = (event.target as HTMLInputElement).value
+          markDirty()
+        }
       })
   return h('label', { class: ['icp-field', field.multiline ? 'icp-field-wide' : ''] }, [
     h('span', field.label),
@@ -275,12 +365,17 @@ function renderIcpField(profile: Dict, field: Dict) {
   ])
 }
 
-function inputField(local: Dict, key: string, label: string, type = 'text', placeholder = '') {
+function inputField(local: Dict, key: string, label: string, type = 'text', placeholder = '', markDirty?: () => void) {
   const inputProps: Dict = {
     type,
     value: local[key] || '',
     placeholder,
-    onInput: (event: Event) => local[key] = (event.target as HTMLInputElement).value
+    onFocus: markDirty,
+    onCompositionstart: markDirty,
+    onInput: (event: Event) => {
+      local[key] = (event.target as HTMLInputElement).value
+      markDirty?.()
+    }
   }
   if (type === 'number') {
     inputProps.step = key === 'douyin_detail_sleep_seconds' ? '0.1' : '1'
@@ -289,19 +384,31 @@ function inputField(local: Dict, key: string, label: string, type = 'text', plac
   return h('label', [label, h('input', inputProps)])
 }
 
-function selectField(local: Dict, key: string, label: string, options: { value: number, label: string }[]) {
+function selectField(local: Dict, key: string, label: string, options: { value: number, label: string }[], markDirty?: () => void) {
   const current = Number(local[key] ?? 0)
   return h('label', [
     label,
     h('select', {
       value: String(current),
-      onChange: (event: Event) => local[key] = Number((event.target as HTMLSelectElement).value)
+      onFocus: markDirty,
+      onChange: (event: Event) => {
+        local[key] = Number((event.target as HTMLSelectElement).value)
+        markDirty?.()
+      }
     }, options.map(option => h('option', { value: String(option.value) }, option.label)))
   ])
 }
 
-function toggleField(local: Dict, key: string, label: string) {
-  return h('label', [h('input', { type: 'checkbox', checked: Boolean(local[key]), onChange: (event: Event) => local[key] = (event.target as HTMLInputElement).checked }), label])
+function toggleField(local: Dict, key: string, label: string, markDirty?: () => void) {
+  return h('label', [h('input', {
+    type: 'checkbox',
+    checked: Boolean(local[key]),
+    onFocus: markDirty,
+    onChange: (event: Event) => {
+      local[key] = (event.target as HTMLInputElement).checked
+      markDirty?.()
+    }
+  }), label])
 }
 
 function renderEnv(envValue: Dict) {

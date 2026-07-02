@@ -20,6 +20,7 @@ export function competitorStatusLabel(status: string) {
 export function competitorStatusClass(status: string) {
   if (status === '竞品') return 'is-competitor'
   if (status === '非竞品') return 'is-not-competitor'
+  if (status === '自家账号') return 'is-own-account'
   if (status === '排队分析') return 'is-queued'
   if (status === '正在分析') return 'is-running'
   return 'is-unknown'

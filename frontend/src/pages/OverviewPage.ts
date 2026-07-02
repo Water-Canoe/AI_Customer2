@@ -1,7 +1,7 @@
 ﻿import { defineComponent, h, reactive } from 'vue'
 import { ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
-import { accountRoleLabel, competitorStatusClass, competitorStatusLabel, platformName } from '../shared/format'
+import { accountRoleLabel, competitorStatusClass, competitorStatusLabel, platformName, taskModeName } from '../shared/format'
 
 const OVERVIEW_CHILD_PAGE_SIZE = 20
 
@@ -411,12 +411,14 @@ function renderOverviewTitle(node: Dict) {
 function displayOverviewLabel(node: Dict) {
   if (node.kind === 'platform') return platformName(node.label)
   if (node.kind === 'keyword') return `关键词：${node.label}`
+  if (node.kind === 'source_group') return `账号任务：${node.metrics?.source_label || taskModeName(node.metrics?.source_mode || node.label)}`
   return node.label || `账号 ${node.metrics?.id || ''}`
 }
 
 function overviewSubtitle(node: Dict) {
   if (node.kind === 'platform') return node.label
   if (node.kind === 'keyword') return '关键词分组'
+  if (node.kind === 'source_group') return '无关键词来源'
   if (node.kind === 'customer') return '客户账号'
   if (node.kind === 'account') {
     const signature = node.metrics?.signature || '主页简介未采集，需账号分析'
@@ -476,8 +478,20 @@ function overviewActions(node: Dict, handlers: OverviewHandlers) {
   }
   if (node.kind !== 'account') return []
   const isCompetitor = metrics.competitor_status === '竞品'
+  const isOwnAccount = Boolean(metrics.is_own_account) || metrics.account_role === 'own_account'
   const canAnalyze = ['dy', 'xhs'].includes(metrics.platform)
   const isAnalysisBusy = ['排队分析', '正在分析'].includes(overviewAccountStatus(metrics))
+  if (isOwnAccount) {
+    return [
+      h('button', {
+        class: 'overview-action danger',
+        onClick: (event: MouseEvent) => {
+          event.stopPropagation()
+          handlers.deleteAccount(node)
+        }
+      }, '删除')
+    ]
+  }
   if (isCompetitor) {
     return [
       h('button', {
@@ -559,6 +573,7 @@ function overviewMetricChips(node: Dict) {
 
 function overviewAccountStatus(metrics: Dict) {
   // 真实结论仍用 competitor_status；display 字段只承载队列/运行进度。
+  if (Boolean(metrics.is_own_account) || metrics.account_role === 'own_account') return '自家账号'
   return competitorStatusLabel(metrics.competitor_display_status || metrics.competitor_status)
 }
 

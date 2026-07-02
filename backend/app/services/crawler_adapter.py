@@ -79,7 +79,7 @@ def normalize_task_defaults(payload: TaskCreate) -> TaskCreate:
         creator_id = ""
     else:
         if not creator_id:
-            raise ValueError("账号采集任务必须填写创作者主页/ID")
+            raise ValueError(_missing_creator_message(payload.mode))
         keywords = ""
         specified_id = ""
     collect_comments = payload.collect_comments or payload.mode in ("competitor_crawl", "own_account")
@@ -185,7 +185,7 @@ def _preview_warnings(task: TaskCreate, crawler_type: str, sanitized: dict[str, 
     elif crawler_type == "detail":
         warnings.append("详情任务只会向 MediaCrawler 传递指定内容ID/链接，不会传递关键词或创作者主页。")
     else:
-        warnings.append("账号任务只会向 MediaCrawler 传递创作者主页/ID，不会传递关键词或内容ID。")
+        warnings.append(f"{_mode_creator_label(task.mode)}任务只会向 MediaCrawler 传递{_creator_input_label(task.mode)}，不会传递关键词或内容ID。")
     if task.mode in ("competitor_crawl", "own_account") and not task.collect_comments:
         warnings.append("该模式会自动打开评论采集，因为线索客户来自评论区。")
     if task.platform == "ks" and task.mode == "competitor_discovery":
@@ -199,6 +199,26 @@ def _task_field_label(field: str) -> str:
         "creator_id": "创作者主页/ID",
         "specified_id": "指定内容ID/链接",
     }.get(field, field)
+
+
+def _creator_input_label(mode: str) -> str:
+    if mode == "own_account":
+        return "自家账号主页/ID"
+    if mode == "competitor_crawl":
+        return "竞品账号主页/ID"
+    return "创作者主页/ID"
+
+
+def _mode_creator_label(mode: str) -> str:
+    if mode == "own_account":
+        return "自家账号互动"
+    if mode == "competitor_crawl":
+        return "竞品账号爬取"
+    return "账号"
+
+
+def _missing_creator_message(mode: str) -> str:
+    return f"{_mode_creator_label(mode)}任务必须填写{_creator_input_label(mode)}"
 
 
 def create_task(payload: TaskCreate) -> dict[str, object]:
