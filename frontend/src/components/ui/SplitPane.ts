@@ -12,13 +12,19 @@ export const SplitPane = defineComponent({
     maxSideWidth: { type: Number, default: 680 }
   },
   setup(props, { slots }) {
-    if (!splitWidths[props.storageKey]) splitWidths[props.storageKey] = props.defaultSideWidth
+    if (!splitWidths[props.storageKey]) {
+      const storedWidth = readStoredWidth(props.storageKey)
+      splitWidths[props.storageKey] = clamp(storedWidth ?? props.defaultSideWidth, props.minSideWidth, props.maxSideWidth)
+    }
     const dragging = ref(false)
     let startX = 0
     let startWidth = 0
 
     function setWidth(nextWidth: number) {
-      splitWidths[props.storageKey] = clamp(nextWidth, props.minSideWidth, props.maxSideWidth)
+      const width = clamp(nextWidth, props.minSideWidth, props.maxSideWidth)
+      splitWidths[props.storageKey] = width
+      // 记住用户调整后的左右栏宽度，刷新页面后保留工作台手感。
+      window.localStorage?.setItem(storageName(props.storageKey), String(width))
     }
 
     function stopDrag() {
@@ -76,3 +82,12 @@ export const SplitPane = defineComponent({
     }
   }
 })
+
+function storageName(key: string) {
+  return `ai-customer:split:${key}`
+}
+
+function readStoredWidth(key: string) {
+  const value = Number(window.localStorage?.getItem(storageName(key)))
+  return Number.isFinite(value) ? value : null
+}

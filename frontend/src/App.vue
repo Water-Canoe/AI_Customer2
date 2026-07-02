@@ -25,9 +25,21 @@
 
     <el-container>
       <el-header class="topbar">
-        <div>
+        <div class="topbar-heading">
+          <span class="topbar-kicker">AI 客户开发工作台</span>
           <h1>{{ viewTitle }}</h1>
           <p>{{ viewSubtitle }}</p>
+        </div>
+        <div class="topbar-insights" aria-label="当前工作台指标">
+          <div
+            v-for="item in dashboardInsights"
+            :key="item.label"
+            class="topbar-insight"
+            :class="`tone-${item.tone}`"
+          >
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
         </div>
         <div class="topbar-actions">
           <el-tag type="info" effect="plain">
@@ -139,6 +151,19 @@ const hasActiveAsyncWork = computed(() => {
 const autoSyncHint = computed(() => {
   const seconds = Math.round((hasActiveAsyncWork.value ? AUTO_SYNC_ACTIVE_MS : AUTO_SYNC_IDLE_MS) / 1000)
   return autoSyncing.value ? '同步中' : `自动同步 ${seconds}s`
+})
+const dashboardInsights = computed(() => {
+  const summary = aiWorkbench.value?.summary || {}
+  const pendingAi = Number(summary.competitor_pending || 0) + Number(summary.lead_pending || 0)
+  const failedAi = Number(summary.failed || 0)
+  const activeTaskCount = tasks.value.filter(task => isActiveStatus(task.status)).length
+  const failedTaskCount = tasks.value.filter(task => String(task.status || '') === 'failed').length
+  return [
+    { label: '运行任务', value: compactCount(activeTaskCount), tone: 'blue' },
+    { label: 'AI待处理', value: compactCount(pendingAi), tone: 'amber' },
+    { label: '待私信', value: compactCount(messageCustomers.value?.total || 0), tone: 'green' },
+    { label: '失败待查', value: compactCount(failedTaskCount + failedAi), tone: 'red' },
+  ]
 })
 
 const routeProps = computed(() => {
@@ -366,6 +391,14 @@ async function refreshSelectedTask() {
 
 function isActiveStatus(status: unknown) {
   return ['pending', 'running'].includes(String(status || ''))
+}
+
+function compactCount(value: unknown) {
+  const count = Number(value || 0)
+  if (!Number.isFinite(count)) return '0'
+  if (count >= 10000) return `${Math.round(count / 1000) / 10}万`
+  if (count >= 1000) return `${Math.round(count / 100) / 10}k`
+  return String(count)
 }
 
 function startAutoSync() {

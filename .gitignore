@@ -38,6 +38,7 @@ release/
 # Local browser/test artifacts
 .playwright-cli/
 .playwright-mcp/
+output/playwright/
 .tmp_pytest/
 .tmp_pytest_run_*/
 .manual_test_find_customers/
