@@ -7,8 +7,8 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import database
-from app.schemas import AiBatchCreate, AiBulkDelete, AiJobCreate, BulkActionPreview, ClearDataRequest, CustomerFollowStatusUpdate, SettingsUpdate, TableUpdate, TaskCreate
-from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, maintenance, message_workbench, ops_visibility
+from app.schemas import AiBatchCreate, AiBulkDelete, AiJobCreate, BulkActionPreview, ClearDataRequest, CustomerFollowStatusUpdate, LicenseUpdate, SettingsUpdate, TableUpdate, TaskCreate
+from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility
 from app import views
 
 
@@ -35,8 +35,31 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def require_license() -> None:
+    try:
+        license_service.ensure_authorized()
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.get("/api/license")
+def get_license() -> dict[str, object]:
+    return license_service.license_overview()
+
+
+@app.put("/api/license")
+def update_license(payload: LicenseUpdate) -> dict[str, object]:
+    return license_service.update_license_code(payload.license_code)
+
+
+@app.post("/api/license/check")
+def check_license(payload: LicenseUpdate) -> dict[str, object]:
+    return license_service.check_license(payload.license_code)
+
+
 @app.post("/api/tasks")
 def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict[str, object]:
+    require_license()
     try:
         account_ids = (
             account_actions.resolve_account_analysis_task_account_ids(payload.model_dump())
@@ -66,6 +89,7 @@ def preview_task(payload: TaskCreate) -> dict[str, object]:
 
 @app.post("/api/accounts/{account_id}/profile-enrichment")
 def create_profile_enrichment_task(account_id: int, background_tasks: BackgroundTasks) -> dict[str, object]:
+    require_license()
     try:
         task = crawler_adapter.create_profile_enrichment_task(account_id)
     except ValueError as exc:
@@ -80,6 +104,7 @@ def create_profile_enrichment_batch(
     limit: int = Query(default=10, ge=1, le=50),
     run_now: bool = True,
 ) -> dict[str, object]:
+    require_license()
     try:
         result = crawler_adapter.create_profile_enrichment_batch(limit)
     except ValueError as exc:
@@ -95,6 +120,7 @@ def create_account_analysis_task(
     background_tasks: BackgroundTasks,
     run_now: bool = True,
 ) -> dict[str, object]:
+    require_license()
     try:
         task = account_actions.create_account_analysis_task(account_id)
     except ValueError as exc:
@@ -110,6 +136,7 @@ def create_account_find_customer_task(
     background_tasks: BackgroundTasks,
     run_now: bool = True,
 ) -> dict[str, object]:
+    require_license()
     try:
         result = account_actions.create_account_find_customer_task(account_id)
     except ValueError as exc:
@@ -124,6 +151,7 @@ def analyze_overview_customer_intent(
     lead_id: int,
     run_now: bool = True,
 ) -> dict[str, object]:
+    require_license()
     try:
         return account_actions.create_customer_intent_analysis(lead_id, run_now=run_now)
     except ValueError as exc:
@@ -147,6 +175,7 @@ def analyze_overview_account_customers(
     background_tasks: BackgroundTasks,
     run_now: bool = True,
 ) -> dict[str, object]:
+    require_license()
     try:
         result = account_actions.create_account_customer_intent_jobs(account_id, run_now=False)
     except ValueError as exc:
@@ -249,6 +278,7 @@ def analyze_keyword_accounts(
     keyword: str = Query(...),
     run_now: bool = True,
 ) -> dict[str, object]:
+    require_license()
     result = account_actions.create_keyword_account_analysis_tasks(platform, keyword)
     if run_now and result["task_ids"]:
         account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
@@ -263,6 +293,7 @@ def find_keyword_customers(
     keyword: str = Query(...),
     run_now: bool = True,
 ) -> dict[str, object]:
+    require_license()
     result = account_actions.create_keyword_find_customer_task(platform, keyword)
     if run_now and result["task_ids"]:
         background_tasks.add_task(crawler_adapter.run_tasks_serially, result["task_ids"])
@@ -365,11 +396,13 @@ def overview_node(node_id: str) -> dict[str, object]:
 
 @app.post("/api/ai/jobs")
 def create_ai_job(payload: AiJobCreate) -> dict[str, object]:
+    require_license()
     return ai_service.create_ai_job(payload.target_type, payload.target_id, payload.run_now)
 
 
 @app.post("/api/ai/jobs/batch")
 def create_ai_jobs(payload: AiBatchCreate) -> list[dict[str, object]]:
+    require_license()
     return ai_service.create_batch_jobs(payload.target_type, payload.target_ids, payload.run_now)
 
 
@@ -395,6 +428,7 @@ def delete_ai_workbench_non_customers(payload: AiBulkDelete) -> dict[str, object
 
 @app.post("/api/ai/jobs/{job_id}/retry")
 def retry_ai_job(job_id: str) -> dict[str, object]:
+    require_license()
     return ai_service.retry_ai_job(job_id)
 
 

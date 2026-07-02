@@ -45,6 +45,10 @@ class SettingsUpdate(BaseModel):
     values: dict[str, Any]
 
 
+class LicenseUpdate(BaseModel):
+    license_code: str = ""
+
+
 class ClearDataRequest(BaseModel):
     confirm: str
 

@@ -75,8 +75,17 @@ def get_settings() -> dict[str, Any]:
 
 
 def update_settings(values: dict[str, Any]) -> dict[str, Any]:
+    protected_keys = {
+        "device_code",
+        "license_last_status",
+        "license_last_reason",
+        "license_last_message",
+        "license_last_checked_at",
+    }
     with database.connect() as conn:
         for key, value in values.items():
+            if key in protected_keys:
+                continue
             if key == "icp_profile":
                 value = json.dumps(value, ensure_ascii=False)
             elif isinstance(value, bool):

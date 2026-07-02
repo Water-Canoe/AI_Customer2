@@ -16,6 +16,14 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def allow_license_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import license_service
+
+    # API tests focus on业务逻辑，授权网络调用单独测试，避免真实公网请求影响稳定性。
+    monkeypatch.setattr(license_service, "ensure_authorized", lambda: {"authorized": True})
+
+
 def prepare_project(tmp_path: Path) -> tuple[Path, Path]:
     project_db = tmp_path / "ai_customer.sqlite3"
     raw_db = tmp_path / "sqlite_tables.db"
@@ -2999,6 +3007,46 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     response = client.put("/api/settings", json={"values": {"ai_model": "deepseek-chat"}})
     assert response.status_code == 200
     assert response.json()["ai_model"] == "deepseek-chat"
+
+
+def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.services import license_service
+
+    client = TestClient(app)
+    first = client.get("/api/license").json()
+    assert first["device_code"].startswith("AI-CUS-")
+
+    saved = client.put("/api/license", json={"license_code": "LIC-TEST"}).json()
+    assert saved["license_code"] == "LIC-TEST"
+    assert saved["device_code"] == first["device_code"]
+
+    response = client.put("/api/settings", json={"values": {"device_code": "changed-by-user"}})
+    assert response.status_code == 200
+    assert client.get("/api/license").json()["device_code"] == first["device_code"]
+
+    def fake_remote(server_url: str, license_code: str, device_code: str) -> dict[str, object]:
+        assert server_url.endswith("/ai-customer")
+        assert license_code == "LIC-TEST"
+        assert device_code == first["device_code"]
+        return {
+            "code": 200,
+            "message": "授权通过",
+            "data": {
+                "permission": True,
+                "reason": "DEVICE_ALREADY_BOUND",
+                "maxDevices": 3,
+                "activeDeviceCount": 1,
+                "boundNewDevice": False,
+            },
+        }
+
+    monkeypatch.setattr(license_service, "_request_license_check", fake_remote)
+    checked = client.post("/api/license/check", json={"license_code": "LIC-TEST"}).json()
+    assert checked["authorized"] is True
+    assert checked["reason"] == "DEVICE_ALREADY_BOUND"
+    assert checked["max_devices"] == 3
 
 
 def test_failed_task_without_imported_data_can_be_deleted(tmp_path: Path) -> None:

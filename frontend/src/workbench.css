@@ -809,6 +809,30 @@ input[type='checkbox'] {
   background: #0f766e;
 }
 
+.secondary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid #cfe0da;
+  border-radius: 6px;
+  color: #0f766e;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.secondary-action:hover {
+  border-color: #0f766e;
+  background: #eefaf6;
+}
+
+.compact-action {
+  min-height: 36px;
+  white-space: nowrap;
+}
+
 .wide-action {
   width: 100%;
   margin-bottom: 10px;
@@ -2357,6 +2381,110 @@ input[type='checkbox'] {
   color: #7f1d1d;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.license-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.license-modal {
+  width: min(640px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 20px;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.license-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.license-modal-head h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.license-modal-head p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.license-form {
+  display: grid;
+  gap: 14px;
+}
+
+.license-form label {
+  display: grid;
+  gap: 8px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.license-form input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid #cfe0da;
+  border-radius: 6px;
+  color: #0f172a;
+  background: #ffffff;
+  font-size: 14px;
+}
+
+.license-form input[readonly] {
+  color: #475569;
+  background: #f8fafc;
+}
+
+.readonly-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.license-status-card {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #7f1d1d;
+}
+
+.license-status-card.authorized {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.license-status-card span,
+.license-status-card small {
+  color: inherit;
+  line-height: 1.55;
+}
+
+.license-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .ai-workbench {

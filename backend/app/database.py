@@ -300,6 +300,13 @@ DEFAULT_SETTINGS = {
     "auto_delete_non_competitors": "false",
     "auto_analyze_leads": "false",
     "auto_delete_non_customers": "false",
+    "license_code": "",
+    "device_code": "",
+    "license_server_url": "https://tfwqsfaegbdj.sealosbja.site/ai-customer",
+    "license_last_status": "unconfigured",
+    "license_last_reason": "",
+    "license_last_message": "未填写授权码",
+    "license_last_checked_at": "",
     "icp_profile": json.dumps(
         {
             "product": "",

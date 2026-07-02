@@ -1,6 +1,8 @@
-﻿import { defineComponent, h, reactive, watch } from 'vue'
+import { defineComponent, h, reactive, ref, watch } from 'vue'
 import { Check, Delete, Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
+import { api } from '../shared/api'
 import { SplitPane } from '../components/ui/SplitPane'
 
 const icpFields = [
@@ -56,18 +58,142 @@ export default defineComponent({
   emits: ['save', 'check-env', 'clear-data', 'load-tombstones'],
   setup(props, { emit }) {
     const local = reactive<Dict>({})
+    const licenseDialogOpen = ref(false)
+    const licenseLoading = ref(false)
+    const licenseChecking = ref(false)
+    const licenseInfo = ref<Dict>({})
+    const licenseCodeDraft = ref('')
+
+    async function openLicenseDialog() {
+      licenseDialogOpen.value = true
+      licenseLoading.value = true
+      try {
+        const { data } = await api.get('/license')
+        licenseInfo.value = data
+        licenseCodeDraft.value = String(data.license_code || '')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '授权信息加载失败')
+      } finally {
+        licenseLoading.value = false
+      }
+    }
+
+    async function saveLicenseCode() {
+      licenseChecking.value = true
+      try {
+        const { data } = await api.put('/license', { license_code: licenseCodeDraft.value })
+        licenseInfo.value = data
+        licenseCodeDraft.value = String(data.license_code || '')
+        local.license_code = data.license_code || ''
+        local.device_code = data.device_code || ''
+        ElMessage.success('授权码已保存')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '授权码保存失败')
+      } finally {
+        licenseChecking.value = false
+      }
+    }
+
+    async function checkLicense() {
+      licenseChecking.value = true
+      try {
+        const { data } = await api.post('/license/check', { license_code: licenseCodeDraft.value })
+        licenseInfo.value = data
+        licenseCodeDraft.value = String(data.license_code || '')
+        local.license_code = data.license_code || ''
+        local.device_code = data.device_code || ''
+        local.license_last_status = data.status || ''
+        local.license_last_reason = data.reason || ''
+        local.license_last_message = data.message || ''
+        local.license_last_checked_at = data.checked_at || ''
+        if (data.authorized) ElMessage.success(data.message || '授权校验通过')
+        else ElMessage.error(data.message || '授权校验失败')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '授权校验失败')
+      } finally {
+        licenseChecking.value = false
+      }
+    }
+
+    async function copyDeviceCode() {
+      const code = String(licenseInfo.value.device_code || '').trim()
+      if (!code) {
+        ElMessage.warning('当前没有可复制的设备码')
+        return
+      }
+      await navigator.clipboard.writeText(code)
+      ElMessage.success('设备码已复制')
+    }
+
     function sync() {
       Object.keys(local).forEach(key => delete local[key])
       Object.assign(local, JSON.parse(JSON.stringify(props.settings || {})))
       local.icp_profile = normalizeIcpProfile(local.icp_profile)
     }
     watch(() => props.settings, sync, { immediate: true, deep: true })
+
+    function renderLicenseDialog() {
+      if (!licenseDialogOpen.value) return null
+      const status = String(licenseInfo.value.status || 'unconfigured')
+      const statusText = licenseStatusText(status, Boolean(licenseInfo.value.authorized))
+      return h('div', { class: 'license-modal-backdrop', onClick: () => licenseDialogOpen.value = false }, [
+        h('div', { class: 'license-modal', onClick: (event: Event) => event.stopPropagation() }, [
+          h('div', { class: 'license-modal-head' }, [
+            h('div', [
+              h('h3', '授权与设备'),
+              h('p', '授权码可修改，设备码由本机生成且不可编辑')
+            ]),
+            h('button', { class: 'icon-button', onClick: () => licenseDialogOpen.value = false }, '×')
+          ]),
+          licenseLoading.value
+            ? h('div', { class: 'diagnostic-empty' }, '正在读取授权信息')
+            : h('div', { class: 'license-form' }, [
+              h('label', [
+                h('span', '授权码'),
+                h('input', {
+                  value: licenseCodeDraft.value,
+                  placeholder: '输入 Sealos 后端创建的授权码',
+                  onInput: (event: Event) => licenseCodeDraft.value = (event.target as HTMLInputElement).value
+                })
+              ]),
+              h('label', [
+                h('span', '设备码'),
+                h('div', { class: 'readonly-input-row' }, [
+                  h('input', {
+                    value: licenseInfo.value.device_code || '',
+                    readonly: true,
+                    title: '设备码由本机后端生成，不支持手动修改'
+                  }),
+                  h('button', { class: 'secondary-action compact-action', onClick: copyDeviceCode }, '复制')
+                ])
+              ]),
+              h('div', { class: ['license-status-card', licenseInfo.value.authorized ? 'authorized' : ''] }, [
+                h('strong', statusText),
+                h('span', licenseInfo.value.message || '尚未校验授权'),
+                licenseInfo.value.reason ? h('small', `原因：${licenseInfo.value.reason}`) : null,
+                licenseInfo.value.last_checked_at || licenseInfo.value.checked_at
+                  ? h('small', `最近校验：${licenseInfo.value.last_checked_at || licenseInfo.value.checked_at}`)
+                  : null,
+                licenseInfo.value.max_devices
+                  ? h('small', `设备数：${licenseInfo.value.active_device_count || 0} / ${licenseInfo.value.max_devices}`)
+                  : null
+              ]),
+              h('div', { class: 'license-actions' }, [
+                h('button', { class: 'secondary-action', disabled: licenseChecking.value, onClick: saveLicenseCode }, '保存授权码'),
+                h('button', { class: 'primary-action', disabled: licenseChecking.value, onClick: checkLicense }, licenseChecking.value ? '校验中' : '保存并校验')
+              ])
+            ])
+        ])
+      ])
+    }
+
     return () => {
       if (!local.icp_profile || typeof local.icp_profile !== 'object') {
         local.icp_profile = normalizeIcpProfile(local.icp_profile)
       }
       const icpProfile = local.icp_profile as Dict
-      return h(SplitPane, { storageKey: 'settings', side: 'right', defaultSideWidth: 360 }, {
+      return [
+      h(SplitPane, { storageKey: 'settings', side: 'right', defaultSideWidth: 360 }, {
         default: () => [
         h('section', { class: 'pane primary-pane' }, [
           h('div', { class: 'section-title' }, [h('h2', '基础配置'), h('span', '没有配置时 AI 分析会明确失败')]),
@@ -100,7 +226,8 @@ export default defineComponent({
             h('button', {
               class: 'primary-action',
               onClick: () => emit('save', { ...local, icp_profile: buildIcpPayload(icpProfile) })
-            }, [h(Check, { class: 'inline-icon' }), '保存设置'])
+            }, [h(Check, { class: 'inline-icon' }), '保存设置']),
+            h('button', { class: 'secondary-action', onClick: openLicenseDialog }, '授权与设备')
           ])
         ])
         ],
@@ -117,10 +244,18 @@ export default defineComponent({
           ])
         ])
         ]
-      })
+      }),
+      renderLicenseDialog()
+      ]
     }
   }
 })
+
+function licenseStatusText(status: string, authorized: boolean) {
+  if (authorized || status === 'authorized') return '授权通过'
+  if (status === 'failed') return '授权失败'
+  return '未校验'
+}
 
 function renderIcpField(profile: Dict, field: Dict) {
   const control = field.multiline
