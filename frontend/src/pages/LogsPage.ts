@@ -3,7 +3,7 @@ import { Document, Tickets, Warning } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
 import { clamp, platformName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
-import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
+import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 export default defineComponent({
   props: {
@@ -92,12 +92,6 @@ export default defineComponent({
     return () => h(SplitPane, { storageKey: 'logs', side: 'right', defaultSideWidth: 390 }, {
       default: () => [
       h('section', { class: 'pane primary-pane log-pane' }, [
-        pageAction({
-          title: '先选任务，再核对产出和日志',
-          description: '选择任务，查看产出、诊断和日志。',
-          icon: Document,
-          tone: props.selectedTask ? 'blue' : 'gray'
-        }),
         sectionTitle({
           title: props.selectedTask ? `${props.selectedTask.id} · ${props.selectedTask.name}` : '任务详情',
           subtitle: props.selectedTask?.status || '请选择任务',

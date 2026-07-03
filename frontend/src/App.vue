@@ -98,7 +98,6 @@ const settingsDraftDirty = ref(false)
 const settingsSaving = ref(false)
 const settingsSaveRevision = ref(0)
 const env = ref<Dict>({})
-const platformCapabilities = ref<Dict[]>([])
 const messageKeywords = ref<Dict[]>([])
 const messageCustomers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const messageDetail = ref<Dict>({})
@@ -141,7 +140,6 @@ const routeProps = computed(() => {
     return {
       tasks: tasks.value,
       settings: settings.value,
-      capabilities: platformCapabilities.value,
       retryDraft: retryDraft.value || undefined,
     }
   }
@@ -263,7 +261,7 @@ function goToView(view: string) {
 
 async function refreshAll() {
   // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
-  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadPlatformCapabilities(), loadAiJobs(), loadOverview(), loadMessageWorkbench(true), loadTombstoneSummary(), loadTombstones(), loadTable(activeLibrary.value)])
+  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadMessageWorkbench(true), loadTombstoneSummary(), loadTombstones(), loadTable(activeLibrary.value)])
   lastAutoSyncAt.value = Date.now()
 }
 
@@ -290,11 +288,6 @@ async function loadSettings() {
 async function checkEnv() {
   const { data } = await api.get('/settings/env-check')
   env.value = data
-}
-
-async function loadPlatformCapabilities() {
-  const { data } = await api.get('/platform-capabilities')
-  platformCapabilities.value = data
 }
 
 async function loadAiJobs() {

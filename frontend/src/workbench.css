@@ -87,10 +87,6 @@
   padding: 22px;
 }
 
-.main.view-tasks .capability-panel {
-  display: none;
-}
-
 .split-pane {
   flex: 1 1 auto;
   min-height: 0;
@@ -235,108 +231,6 @@
 
 .mode-option strong {
   margin: 8px 0;
-}
-
-.capability-panel {
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid #cfe4dc;
-  border-radius: 8px;
-  background: #f6fbf8;
-}
-
-.capability-panel.muted {
-  color: #64748b;
-}
-
-.capability-panel.muted strong,
-.capability-panel.muted small {
-  display: block;
-}
-
-.capability-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.capability-head small,
-.capability-head strong {
-  display: block;
-}
-
-.capability-head small {
-  color: #0f766e;
-  font-weight: 700;
-}
-
-.capability-head strong {
-  margin-top: 4px;
-  color: #1f2937;
-  font-size: 14px;
-}
-
-.capability-type {
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: #e0f2fe;
-  color: #075985;
-  padding: 5px 9px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.capability-fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.capability-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border-radius: 999px;
-  border: 1px solid #dbe7e2;
-  background: #ffffff;
-  padding: 6px 9px;
-  font-size: 12px;
-}
-
-.capability-chip em {
-  color: #475569;
-  font-style: normal;
-}
-
-.capability-chip strong {
-  color: #1f2937;
-}
-
-.capability-chip.status-supported {
-  border-color: #bbf7d0;
-  background: #f0fdf4;
-}
-
-.capability-chip.status-partial {
-  border-color: #fde68a;
-  background: #fffbeb;
-}
-
-.capability-chip.status-unsupported {
-  border-color: #fecaca;
-  background: #fff7f7;
-}
-
-.capability-warnings {
-  display: grid;
-  gap: 5px;
-  margin: 12px 0 0;
-  padding-left: 18px;
-  color: #475569;
-  font-size: 12px;
-  line-height: 1.55;
 }
 
 .task-preview {
@@ -3437,15 +3331,6 @@ input[type='checkbox'] {
     grid-column: auto;
   }
 
-  .capability-head {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .capability-type {
-    white-space: normal;
-  }
-
   .preview-head {
     align-items: flex-start;
     flex-direction: column;
@@ -3749,10 +3634,6 @@ input[type='checkbox'] {
   background: #c8d7d1;
 }
 
-.main.view-tasks .capability-panel {
-  display: block;
-}
-
 .mode-grid {
   gap: 10px;
 }
@@ -3809,19 +3690,16 @@ input[type='checkbox'] {
   line-height: 1.45;
 }
 
-.capability-panel,
 .task-preview,
 .retry-prefill {
   border-color: #cfe1da;
   background: linear-gradient(180deg, #ffffff 0%, #f7fbfa 100%);
 }
 
-.capability-head strong,
 .preview-head strong {
   color: #142236;
 }
 
-.capability-chip,
 .preview-field {
   border: 1px solid #edf3f0;
   background: #ffffff;

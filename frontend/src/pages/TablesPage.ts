@@ -4,7 +4,7 @@ import { ChatDotRound, CopyDocument, DataBoard, Delete, Files, MagicStick, Manag
 import { computed, ref } from 'vue'
 import type { Dict } from '../shared/types'
 import { clamp } from '../shared/format'
-import { iconBadge, pageAction, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
+import { iconBadge, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 export default defineComponent({
   props: {
@@ -105,14 +105,7 @@ export default defineComponent({
     }
     onBeforeUnmount(() => stopColumnResize?.())
     return () => h('section', { class: 'pane table-workspace' }, [
-      pageAction({
-        title: '按业务库检查数据',
-        description: '切换业务库，筛选记录并处理对象。',
-        icon: Files,
-        tone: 'blue'
-      }),
       h('div', { class: 'table-library-bar' }, [
-        sectionTitle({ title: '数据表', subtitle: '选择一个业务库', icon: DataBoard, tone: 'blue' }),
         h('div', { class: 'library-list' }, libraries.map(library => h('button', { class: props.library === library.key ? 'selected' : '', onClick: () => emit('change-library', library.key) }, [
           iconBadge(library.icon, props.library === library.key ? library.tone : 'gray'),
           h('span', library.label)

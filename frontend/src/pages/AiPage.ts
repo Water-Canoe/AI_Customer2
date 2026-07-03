@@ -4,7 +4,7 @@ import { CircleCheck, CopyDocument, DataAnalysis, Delete, Finished, MagicStick, 
 import type { Dict } from '../shared/types'
 import { platformName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
-import { emptyState, metricTile, pageAction, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
+import { emptyState, metricTile, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
@@ -96,12 +96,6 @@ export default defineComponent({
 
     return () => h(SplitPane, { storageKey: 'ai-workbench', side: 'right', defaultSideWidth: 360 }, {
       default: () => h('section', { class: 'pane ai-workbench' }, [
-        pageAction({
-          title: '先处理待分析和失败项',
-          description: '筛选对象，批量分析，再处理失败项。',
-          icon: DataAnalysis,
-          tone: 'purple'
-        }),
         renderSummary(summary.value),
         renderTabs(activeTab.value, tab => activeTab.value = tab),
         renderToolbar(activeTab.value, filters, runBatch, retryBatch, deleteNonCompetitors, deleteNonCustomers),

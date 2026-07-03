@@ -3,7 +3,7 @@ import { Compass, Connection } from '@element-plus/icons-vue'
 import { ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { accountRoleLabel, competitorStatusClass, competitorStatusLabel, platformName, taskModeName } from '../shared/format'
-import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
+import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 const OVERVIEW_CHILD_PAGE_SIZE = 20
 
@@ -53,12 +53,6 @@ export default defineComponent({
       findCustomers: (node: Dict) => emit('find-customers', node)
     }
     return () => h('section', { class: 'pane overview-pane' }, [
-      pageAction({
-        title: '从层级关系定位下一步',
-        description: '展开平台、关键词或账号，处理下一步动作。',
-        icon: Connection,
-        tone: 'blue'
-      }),
       sectionTitle({ title: '关系总览', subtitle: '平台 / 关键词 / 账号层级表', icon: Compass, tone: 'blue' }),
       (props.tree as Dict[]).length
         ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, getPage, setPage, handlers)))

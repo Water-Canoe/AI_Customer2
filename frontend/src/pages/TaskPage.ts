@@ -1,51 +1,13 @@
 ﻿import { computed, defineComponent, h, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import type { Component } from 'vue'
-import { Aim, ChatDotRound, Compass, Guide, Search, Tickets, User, VideoPlay } from '@element-plus/icons-vue'
+import { Aim, ChatDotRound, Compass, Search, Tickets, User, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 import { platformName, taskModeName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, joinTags, splitTagText } from '../components/ui/TagInput'
-import { iconBadge, pageAction, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
-
-function renderCapabilityPanel(capability: Dict, modeCapability: Dict) {
-  // 能力提示只解释平台字段限制，不直接修改任务参数。
-  if (!capability?.platform || !modeCapability?.mode) {
-    return h('section', { class: 'capability-panel muted' }, [
-      h('strong', '平台能力读取中'),
-      h('small', '刷新后会显示当前平台和模式的数据字段限制')
-    ])
-  }
-  const fields = capability.fields || {}
-  const fieldItems = [
-    fields.content_signature,
-    fields.creator_signature,
-    fields.comment_signature,
-    fields.creator_fans
-  ].filter(Boolean)
-  const warnings = Array.from(new Set<string>([
-    ...(modeCapability.warnings || []),
-    ...(capability.warnings || [])
-  ])).slice(0, 5)
-  return h('section', { class: 'capability-panel' }, [
-    h('div', { class: 'capability-head' }, [
-      h('div', [
-        h('small', `${platformName(capability.platform)} · ${modeCapability.label}`),
-        h('strong', `${modeCapability.required_input} → ${(modeCapability.expected_outputs || []).join(' / ')}`)
-      ]),
-      h('span', { class: 'capability-type' }, `MediaCrawler: ${modeCapability.crawler_type}`)
-    ]),
-    h('div', { class: 'capability-fields' }, fieldItems.map((field: Dict) => h('span', {
-      class: ['capability-chip', field.supported ? `status-${field.status}` : 'status-unsupported'],
-      title: field.note
-    }, [
-      h('em', field.label),
-      h('strong', field.status_label)
-    ]))),
-    warnings.length ? h('ul', { class: 'capability-warnings' }, warnings.map(warning => h('li', warning))) : null
-  ])
-}
+import { iconBadge, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 function renderTaskPreviewPanel(preview: Dict | null, error: string, loading: boolean) {
   const normalized = preview?.normalized || {}
@@ -82,7 +44,6 @@ export default defineComponent({
   props: {
     tasks: { type: Array, required: true },
     settings: { type: Object, required: true },
-    capabilities: { type: Array, required: true },
     retryDraft: { type: Object, default: null }
   },
   emits: ['create-task', 'open-logs', 'consume-retry-draft'],
@@ -130,8 +91,6 @@ export default defineComponent({
       if (form.mode === 'competitor_crawl') return '输入竞品账号主页或ID后按回车'
       return modeNeedsCreator.value ? '输入账号主页或ID后按回车' : '详情任务可不填'
     })
-    const activeCapability = computed(() => (props.capabilities as Dict[]).find(item => item.platform === form.platform) || {})
-    const activeModeCapability = computed(() => activeCapability.value?.modes?.[form.mode] || {})
     const taskPreview = ref<Dict | null>(null)
     const previewError = ref('')
     const previewLoading = ref(false)
@@ -330,12 +289,6 @@ export default defineComponent({
     return () => h(SplitPane, { storageKey: 'tasks', side: 'right', defaultSideWidth: 360 }, {
       default: () => [
       h('section', { class: 'pane primary-pane' }, [
-        pageAction({
-          title: '按业务目标启动采集',
-          description: '选择模式和对象，确认预览后启动。',
-          icon: Guide,
-          tone: 'teal'
-        }),
         sectionTitle({ title: '选择拓客模式', subtitle: '先选目标，再填必要参数', icon: Compass, tone: 'teal' }),
         prefillSource.value ? h('div', { class: 'retry-prefill' }, [
           h('strong', `重试 ${prefillSource.value.id || ''} · ${taskModeName(form.mode)}`),
@@ -354,7 +307,6 @@ export default defineComponent({
           ]),
           h('span', mode.note)
         ]))),
-        renderCapabilityPanel(activeCapability.value, activeModeCapability.value),
         h('div', { class: 'form-grid' }, [
           h('label', ['平台', h('select', { value: form.platform, onChange: (event: Event) => form.platform = (event.target as HTMLSelectElement).value }, [
             h('option', { value: 'dy' }, '抖音'),
