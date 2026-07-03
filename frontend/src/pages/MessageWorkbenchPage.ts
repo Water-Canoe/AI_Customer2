@@ -1,10 +1,10 @@
 import { computed, defineComponent, h, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ChatDotRound, Close, Collection, CopyDocument, Promotion, Search } from '@element-plus/icons-vue'
+import { Close, Collection, CopyDocument, Promotion, Search } from '@element-plus/icons-vue'
 import { SplitPane } from '../components/ui/SplitPane'
 import { platformName } from '../shared/format'
 import type { Dict } from '../shared/types'
-import { iconBadge, pageAction, sectionTitle } from '../components/ui/Workbench'
+import { iconBadge, sectionTitle } from '../components/ui/Workbench'
 
 const statusTabs = ['待私信', '已私信', '未回复', '已回复', '未成交', '已成交', '全部']
 const keywordPageSize = 8
@@ -71,30 +71,24 @@ export default defineComponent({
         ])
       ]),
       default: () => h('section', { class: 'pane message-workbench' }, [
-        h('div', { class: 'message-workbench-head' }, [
-          pageAction({
-            title: '按跟进状态推进私信',
-            description: '筛选客户，复制话术并更新状态。',
-            icon: ChatDotRound,
-            tone: 'purple',
-            aside: h('div', { class: 'message-search' }, [
-              h('input', {
-                value: queryDraft.value,
-                placeholder: '搜索客户、评论、视频、话术',
-                onInput: (event: Event) => queryDraft.value = (event.target as HTMLInputElement).value,
-                onKeydown: (event: KeyboardEvent) => {
-                  if (event.key === 'Enter') runSearch()
-                }
-              }),
-              h('button', { type: 'button', onClick: runSearch }, [h(Search), h('span', '搜索')])
-            ])
-          })
-        ]),
-        h('div', { class: 'message-status-tabs' }, statusTabs.map(status => h('button', {
+        h('div', { class: 'message-status-tabs' }, [
+          ...statusTabs.map(status => h('button', {
           type: 'button',
           class: String((props.filters as Dict).status || '待私信') === status ? 'active' : '',
           onClick: () => changeFilter({ status, page: 1 })
-        }, status))),
+          }, status)),
+          h('div', { class: 'message-search' }, [
+            h('input', {
+              value: queryDraft.value,
+              placeholder: '搜索客户/评论',
+              onInput: (event: Event) => queryDraft.value = (event.target as HTMLInputElement).value,
+              onKeydown: (event: KeyboardEvent) => {
+                if (event.key === 'Enter') runSearch()
+              }
+            }),
+            h('button', { type: 'button', onClick: runSearch }, [h(Search), h('span', '搜索')])
+          ])
+        ]),
         renderCustomerTable(rows.value, props.loading, emit),
         h('div', { class: 'message-pagination' }, [
           h('span', `共 ${total.value} 个客户`),

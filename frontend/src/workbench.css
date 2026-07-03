@@ -1079,8 +1079,10 @@ input[type='checkbox'] {
 
 .table-library-bar {
   flex: 0 0 auto;
-  display: grid;
-  gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 12px;
   padding-bottom: 14px;
   border-bottom: 1px solid #e5ece8;
@@ -1099,8 +1101,10 @@ input[type='checkbox'] {
 
 .library-list {
   display: flex;
+  flex: 0 1 auto;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
 }
 
 .library-list button {
@@ -1108,7 +1112,7 @@ input[type='checkbox'] {
   border: 1px solid #dbe7e2;
   border-radius: 999px;
   background: #ffffff;
-  padding: 0 14px;
+  padding: 0 10px;
   color: #334155;
   white-space: nowrap;
 }
@@ -1120,9 +1124,11 @@ input[type='checkbox'] {
 }
 
 .table-filters {
-  display: grid;
-  grid-template-columns: minmax(140px, 180px) minmax(220px, 1fr) 72px 72px;
-  gap: 10px;
+  display: flex;
+  flex: 0 1 320px;
+  max-width: 360px;
+  min-width: 260px;
+  gap: 8px;
   align-items: center;
 }
 
@@ -1137,9 +1143,19 @@ input[type='checkbox'] {
 }
 
 .table-filters button {
-  width: 72px;
+  flex: 0 0 64px;
+  width: auto;
   color: #ffffff;
   background: #0f766e;
+}
+
+.table-filters select {
+  flex: 0 0 118px;
+}
+
+.table-filters input {
+  flex: 1 1 140px;
+  min-width: 120px;
 }
 
 .table-filters .ghost-button {
@@ -2876,26 +2892,9 @@ input[type='checkbox'] {
   overflow: hidden;
 }
 
-.message-workbench-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.message-workbench-head h2 {
-  margin: 0;
-  color: #172033;
-}
-
-.message-workbench-head p {
-  margin: 6px 0 0;
-  color: #65758c;
-}
-
 .message-search {
   display: grid;
-  grid-template-columns: minmax(220px, 360px) auto;
+  grid-template-columns: minmax(130px, 1fr) auto;
   gap: 8px;
 }
 
@@ -2933,8 +2932,16 @@ input[type='checkbox'] {
 .message-status-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   padding: 8px 0;
+}
+
+.message-status-tabs .message-search {
+  flex: 0 1 260px;
+  max-width: 320px;
+  min-width: 220px;
+  margin-left: 4px;
 }
 
 .message-status-tabs button.active {
@@ -3320,8 +3327,7 @@ input[type='checkbox'] {
   .split-pane,
   .mode-grid,
   .form-grid,
-  .icp-grid,
-  .table-filters {
+  .icp-grid {
     grid-template-columns: 1fr;
   }
 
@@ -3975,13 +3981,8 @@ input[type='checkbox'] {
   background: var(--workbench-primary-soft);
 }
 
-.message-workbench-head {
-  padding-bottom: 10px;
-  border-bottom: 1px solid #e2ebe7;
-}
-
 .message-search {
-  grid-template-columns: minmax(240px, 360px) auto;
+  grid-template-columns: minmax(130px, 1fr) auto;
 }
 
 .message-search button {
@@ -3997,7 +3998,7 @@ input[type='checkbox'] {
 
 .message-status-tabs button {
   min-height: 34px;
-  padding: 0 12px;
+  padding: 0 10px;
 }
 
 .message-status-tabs button.active {
@@ -4387,19 +4388,6 @@ input[type='checkbox'] {
 .library-list .ui-icon-badge svg {
   width: 14px;
   height: 14px;
-}
-
-.message-workbench-head {
-  padding-bottom: 0;
-  border-bottom: 0;
-}
-
-.message-workbench-head .page-action {
-  margin-bottom: 0;
-}
-
-.message-workbench-head .message-search {
-  width: 100%;
 }
 
 .message-keyword-main > div {
