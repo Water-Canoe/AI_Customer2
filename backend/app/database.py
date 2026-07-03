@@ -48,10 +48,6 @@ def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     return [row_to_dict(row) or {} for row in rows]
 
 
-def now_sql() -> str:
-    return "datetime('now', 'localtime')"
-
-
 def quote_identifier(identifier: str) -> str:
     """Quote a SQLite table or column name for dynamic SQL."""
     return '"' + identifier.replace('"', '""') + '"'
