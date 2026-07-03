@@ -1,8 +1,10 @@
 ﻿import { defineComponent, h, onBeforeUnmount, reactive, watch } from 'vue'
-import { CopyDocument, Delete, MagicStick, Refresh, Search } from '@element-plus/icons-vue'
+import type { Component } from 'vue'
+import { ChatDotRound, CopyDocument, DataBoard, Delete, Files, MagicStick, Management, Memo, Refresh, Search, User } from '@element-plus/icons-vue'
 import { computed, ref } from 'vue'
 import type { Dict } from '../shared/types'
 import { clamp } from '../shared/format'
+import { iconBadge, pageAction, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 export default defineComponent({
   props: {
@@ -14,13 +16,13 @@ export default defineComponent({
   },
   emits: ['change-library', 'change-filter', 'update-row', 'delete-row', 'analyze-row', 'enrich-profile', 'find-customers'],
   setup(props, { emit }) {
-    const libraries = [
-      ['contents', '内容库'],
-      ['comments', '评论库'],
-      ['competitor_candidates', '竞品候选库'],
-      ['competitors', '竞品库'],
-      ['lead_customers', '线索客户库'],
-      ['target_customers', '目标客户库']
+    const libraries: Array<{ key: string, label: string, icon: Component, tone: WorkbenchTone }> = [
+      { key: 'contents', label: '内容库', icon: Files, tone: 'blue' },
+      { key: 'comments', label: '评论库', icon: ChatDotRound, tone: 'green' },
+      { key: 'competitor_candidates', label: '竞品候选库', icon: DataBoard, tone: 'amber' },
+      { key: 'competitors', label: '竞品库', icon: Management, tone: 'teal' },
+      { key: 'lead_customers', label: '线索客户库', icon: User, tone: 'purple' },
+      { key: 'target_customers', label: '目标客户库', icon: Memo, tone: 'green' }
     ]
     const accountLibraries = ['competitor_candidates', 'competitors', 'lead_customers', 'target_customers']
     const baseHeaders = ['名称/内容', '状态', '来源任务', '证据/链接', '操作']
@@ -103,9 +105,19 @@ export default defineComponent({
     }
     onBeforeUnmount(() => stopColumnResize?.())
     return () => h('section', { class: 'pane table-workspace' }, [
+      pageAction({
+        title: '按业务库检查数据',
+        description: '先切换业务库，再按状态和关键词筛选；账号类数据可在表格内继续补资料或触发 AI 分析。',
+        icon: Files,
+        tone: 'blue',
+        steps: ['选择业务库', '筛选记录', '处理对象']
+      }),
       h('div', { class: 'table-library-bar' }, [
-        h('div', { class: 'section-title' }, [h('h2', '数据表'), h('span', '选择一个业务库')]),
-        h('div', { class: 'library-list' }, libraries.map(([key, label]) => h('button', { class: props.library === key ? 'selected' : '', onClick: () => emit('change-library', key) }, label))),
+        sectionTitle({ title: '数据表', subtitle: '选择一个业务库', icon: DataBoard, tone: 'blue' }),
+        h('div', { class: 'library-list' }, libraries.map(library => h('button', { class: props.library === library.key ? 'selected' : '', onClick: () => emit('change-library', library.key) }, [
+          iconBadge(library.icon, props.library === library.key ? library.tone : 'gray'),
+          h('span', library.label)
+        ]))),
         h('div', { class: 'table-filters' }, [
           statusOptions().length ? h('select', {
             value: filterDraft.status,
@@ -127,10 +139,12 @@ export default defineComponent({
         ])
       ]),
       h('div', { class: 'table-content' }, [
-        h('div', { class: 'section-title' }, [
-          h('h2', libraries.find(([key]) => key === props.library)?.[1] || '数据'),
-          h('span', totalRows.value ? `${pageStart.value}-${pageEnd.value} / ${totalRows.value} 条记录` : '0 条记录')
-        ]),
+        sectionTitle({
+          title: libraries.find(library => library.key === props.library)?.label || '数据',
+          subtitle: totalRows.value ? `${pageStart.value}-${pageEnd.value} / ${totalRows.value} 条记录` : '0 条记录',
+          icon: DataBoard,
+          tone: 'teal'
+        }),
         h('div', { class: 'table-scroll' }, [
         h('table', { class: 'data-table resizable-table', style: { minWidth: `${columnWidths().reduce((total, width) => total + width, 0)}px` } }, [
           h('colgroup', columnWidths().map(width => h('col', { style: { width: `${width}px` } }))),

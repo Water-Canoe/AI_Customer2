@@ -1,11 +1,13 @@
 ﻿import { computed, defineComponent, h, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { VideoPlay } from '@element-plus/icons-vue'
+import type { Component } from 'vue'
+import { Aim, ChatDotRound, Compass, Guide, Search, Tickets, User, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 import { platformName, taskModeName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, joinTags, splitTagText } from '../components/ui/TagInput'
+import { iconBadge, pageAction, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 function renderCapabilityPanel(capability: Dict, modeCapability: Dict) {
   // 能力提示只解释平台字段限制，不直接修改任务参数。
@@ -85,11 +87,11 @@ export default defineComponent({
   },
   emits: ['create-task', 'open-logs', 'consume-retry-draft'],
   setup(props, { emit }) {
-    const modes = [
-      { key: 'competitor_discovery', title: '竞品账号采集', note: '关键词找竞品候选，再用AI确认', badge: '找账号' },
-      { key: 'competitor_crawl', title: '竞品账号爬取', note: '爬评论区，把评论用户转为线索', badge: '找线索' },
-      { key: 'demand_content', title: '找需求内容', note: '关键词找吐槽/需求内容，作者进入客户池', badge: '找需求' },
-      { key: 'own_account', title: '自家账号互动', note: '监控自家评论区，筛出高意向用户', badge: '自有流量' }
+    const modes: Array<{ key: string, title: string, note: string, badge: string, icon: Component, tone: WorkbenchTone }> = [
+      { key: 'competitor_discovery', title: '竞品账号采集', note: '关键词找竞品候选，再用AI确认', badge: '找账号', icon: Aim, tone: 'teal' },
+      { key: 'competitor_crawl', title: '竞品账号爬取', note: '爬评论区，把评论用户转为线索', badge: '找线索', icon: User, tone: 'blue' },
+      { key: 'demand_content', title: '找需求内容', note: '关键词找吐槽/需求内容，作者进入客户池', badge: '找需求', icon: Search, tone: 'amber' },
+      { key: 'own_account', title: '自家账号互动', note: '监控自家评论区，筛出高意向用户', badge: '自有流量', icon: ChatDotRound, tone: 'green' }
     ]
     function settingNumber(key: string, fallback: number, minimum = 1) {
       const value = Number((props.settings as Dict)?.[key])
@@ -328,7 +330,14 @@ export default defineComponent({
     return () => h(SplitPane, { storageKey: 'tasks', side: 'right', defaultSideWidth: 360 }, {
       default: () => [
       h('section', { class: 'pane primary-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', '选择拓客模式'), h('span', '先选目标，再填必要参数')]),
+        pageAction({
+          title: '按业务目标启动采集',
+          description: '先选择任务意图，再补齐关键词、账号或内容链接；右侧预览会显示实际执行参数。',
+          icon: Guide,
+          tone: 'teal',
+          steps: ['选择模式', '填写对象', '检查预览']
+        }),
+        sectionTitle({ title: '选择拓客模式', subtitle: '先选目标，再填必要参数', icon: Compass, tone: 'teal' }),
         prefillSource.value ? h('div', { class: 'retry-prefill' }, [
           h('strong', `重试 ${prefillSource.value.id || ''} · ${taskModeName(form.mode)}`),
           h('span', '已带入失败任务参数，确认后会按当前表单重新创建任务。')
@@ -336,7 +345,14 @@ export default defineComponent({
         h('div', { class: 'mode-grid' }, modes.map(mode => h('button', {
           class: ['mode-option', form.mode === mode.key ? 'selected' : ''],
           onClick: () => applyMode(mode.key)
-        }, [h('small', mode.badge), h('strong', mode.title), h('span', mode.note)]))),
+        }, [
+          h('div', { class: 'mode-option-head' }, [
+            iconBadge(mode.icon, mode.tone),
+            h('small', mode.badge)
+          ]),
+          h('strong', mode.title),
+          h('span', mode.note)
+        ]))),
         renderCapabilityPanel(activeCapability.value, activeModeCapability.value),
         h('div', { class: 'form-grid' }, [
           h('label', ['平台', h('select', { value: form.platform, onChange: (event: Event) => form.platform = (event.target as HTMLSelectElement).value }, [
@@ -385,7 +401,7 @@ export default defineComponent({
       ],
       side: () => [
       h('aside', { class: 'pane side-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', '最近任务'), h('span', '确认采集是否跑通')]),
+        sectionTitle({ title: '最近任务', subtitle: '确认采集是否跑通', icon: Tickets, tone: 'blue' }),
         h('div', { class: 'task-list' }, (props.tasks as Dict[]).slice(0, 8).map(task => h('button', { class: 'task-row', onClick: () => emit('open-logs', task.id) }, [
           h('strong', `${task.id} · ${task.name}`),
           h('span', `${task.platform} / ${task.mode}`),

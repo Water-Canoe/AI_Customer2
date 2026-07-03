@@ -4324,3 +4324,388 @@ input[type='checkbox'] {
     grid-template-columns: 1fr;
   }
 }
+
+/* Front design v2: icon-led hierarchy and consistent page action areas. */
+.ui-icon-badge {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #cfded8;
+  border-radius: 8px;
+  background: #f7fbfa;
+  color: var(--workbench-primary);
+}
+
+.ui-icon-badge svg {
+  width: 18px;
+  height: 18px;
+}
+
+.ui-icon-badge.tone-teal {
+  border-color: #99d8ce;
+  background: #e9f8f5;
+  color: var(--workbench-primary);
+}
+
+.ui-icon-badge.tone-blue {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: var(--workbench-blue);
+}
+
+.ui-icon-badge.tone-green {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: var(--workbench-green);
+}
+
+.ui-icon-badge.tone-amber {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: var(--workbench-amber);
+}
+
+.ui-icon-badge.tone-red {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: var(--workbench-red);
+}
+
+.ui-icon-badge.tone-purple {
+  border-color: #ddd6fe;
+  background: #f5f3ff;
+  color: #7c3aed;
+}
+
+.ui-icon-badge.tone-gray {
+  border-color: #d8e1e8;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.section-title-with-icon {
+  align-items: center;
+}
+
+.section-title-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-title-main > div {
+  min-width: 0;
+}
+
+.section-title-main h2,
+.section-title-main span {
+  display: block;
+}
+
+.section-title-main h2 {
+  line-height: 1.25;
+}
+
+.section-title-aside {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.page-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.page-action.tone-teal {
+  border-color: #b7e2db;
+  background: #f3fbf9;
+}
+
+.page-action.tone-blue {
+  border-color: #c7ddff;
+  background: #f5f9ff;
+}
+
+.page-action.tone-green {
+  border-color: #c7efda;
+  background: #f5fcf7;
+}
+
+.page-action.tone-amber {
+  border-color: #f5dd9e;
+  background: #fffaf0;
+}
+
+.page-action.tone-red {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.page-action.tone-purple {
+  border-color: #ddd6fe;
+  background: #faf8ff;
+}
+
+.page-action-body {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.page-action-body strong {
+  display: block;
+  color: #102033;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.page-action-body p {
+  margin: 4px 0 0;
+  color: var(--workbench-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.page-action-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.page-action-steps span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid #dfe9e5;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .72);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.page-action-aside {
+  flex: 0 1 420px;
+  min-width: 260px;
+}
+
+.ui-empty-state {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 28px 18px;
+  border: 1px dashed #cfded8;
+  border-radius: 8px;
+  background: #fbfdfc;
+  color: #425466;
+  text-align: center;
+}
+
+.ui-empty-state strong {
+  color: #172033;
+  font-size: 14px;
+}
+
+.ui-empty-state p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--workbench-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.metric-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.metric-tile-head .ui-icon-badge {
+  width: 28px;
+  height: 28px;
+}
+
+.metric-tile-head .ui-icon-badge svg {
+  width: 15px;
+  height: 15px;
+}
+
+.metric-tile.tone-teal::before {
+  background: var(--workbench-primary);
+}
+
+.metric-tile.tone-blue::before {
+  background: var(--workbench-blue);
+}
+
+.metric-tile.tone-green::before {
+  background: var(--workbench-green);
+}
+
+.metric-tile.tone-amber::before {
+  background: var(--workbench-amber);
+}
+
+.metric-tile.tone-red::before {
+  background: var(--workbench-red);
+}
+
+.metric-tile.tone-purple::before {
+  background: #7c3aed;
+}
+
+.metric-tile.tone-gray::before {
+  background: #94a3b8;
+}
+
+.metric-tile > span {
+  display: block;
+  margin-top: 5px;
+  color: var(--workbench-muted);
+  font-size: 12px;
+}
+
+.mode-option {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mode-option-head,
+.message-keyword-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mode-option-head small {
+  margin: 0;
+}
+
+.mode-option strong {
+  margin: 0;
+}
+
+.mode-option span {
+  line-height: 1.45;
+}
+
+.library-list button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.library-list .ui-icon-badge {
+  width: 26px;
+  height: 26px;
+}
+
+.library-list .ui-icon-badge svg {
+  width: 14px;
+  height: 14px;
+}
+
+.message-workbench-head {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.message-workbench-head .page-action {
+  margin-bottom: 0;
+}
+
+.message-workbench-head .message-search {
+  width: 100%;
+}
+
+.message-keyword-main > div {
+  min-width: 0;
+}
+
+.message-keyword-main strong,
+.message-keyword-main small {
+  display: block;
+}
+
+.message-keyword-item {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.message-keyword-main {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+
+.keyword-metrics {
+  display: grid;
+  flex: 1 1 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: none;
+  justify-content: stretch;
+}
+
+.keyword-metrics span {
+  text-align: center;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .page-action {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .page-action-aside {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .section-title-with-icon {
+    align-items: flex-start;
+  }
+
+  .section-title-aside {
+    justify-content: flex-start;
+  }
+
+  .page-action {
+    padding: 10px;
+  }
+
+  .page-action-steps span {
+    max-width: 100%;
+  }
+
+  .topbar-actions {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .topbar-actions > * {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .topbar-actions .el-button {
+    margin-left: 0;
+  }
+}

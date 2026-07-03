@@ -1,7 +1,9 @@
 ﻿import { defineComponent, h, reactive } from 'vue'
+import { Compass, Connection } from '@element-plus/icons-vue'
 import { ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { accountRoleLabel, competitorStatusClass, competitorStatusLabel, platformName, taskModeName } from '../shared/format'
+import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
 
 const OVERVIEW_CHILD_PAGE_SIZE = 20
 
@@ -51,10 +53,22 @@ export default defineComponent({
       findCustomers: (node: Dict) => emit('find-customers', node)
     }
     return () => h('section', { class: 'pane overview-pane' }, [
-      h('div', { class: 'section-title' }, [h('h2', '关系总览'), h('span', '平台 / 关键词 / 账号层级表')]),
+      pageAction({
+        title: '从层级关系定位下一步',
+        description: '先展开平台和关键词，再对账号做竞品判断、找客户或推进意向分析。',
+        icon: Connection,
+        tone: 'blue',
+        steps: ['展开层级', '分析账号', '找客户']
+      }),
+      sectionTitle({ title: '关系总览', subtitle: '平台 / 关键词 / 账号层级表', icon: Compass, tone: 'blue' }),
       (props.tree as Dict[]).length
         ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, getPage, setPage, handlers)))
-        : h('div', { class: 'empty-state' }, '暂无总览数据，请先创建采集任务')
+        : emptyState({
+          title: '暂无总览数据',
+          description: '先创建一次采集任务，导入平台、关键词、账号和客户关系后这里会生成层级表。',
+          icon: Connection,
+          tone: 'gray'
+        })
     ])
   }
 })

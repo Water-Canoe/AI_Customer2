@@ -1,7 +1,9 @@
 ﻿import { computed, defineComponent, h, nextTick, ref, watch } from 'vue'
+import { Document, Tickets, Warning } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
 import { clamp, platformName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
+import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
 
 export default defineComponent({
   props: {
@@ -90,16 +92,36 @@ export default defineComponent({
     return () => h(SplitPane, { storageKey: 'logs', side: 'right', defaultSideWidth: 390 }, {
       default: () => [
       h('section', { class: 'pane primary-pane log-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', props.selectedTask ? `${props.selectedTask.id} · ${props.selectedTask.name}` : '任务详情'), h('span', props.selectedTask?.status || '请选择任务')]),
-        props.selectedTask ? renderTaskOutcome(props.selectedTask as Dict) : h('div', { class: 'empty-state compact' }, '请选择左侧任务查看产出和日志'),
+        pageAction({
+          title: '先选任务，再核对产出和日志',
+          description: '任务产出用于判断下一步动作；失败任务先看诊断和底层导入记录。',
+          icon: Document,
+          tone: props.selectedTask ? 'blue' : 'gray',
+          steps: ['选择任务', '看产出', '核对日志']
+        }),
+        sectionTitle({
+          title: props.selectedTask ? `${props.selectedTask.id} · ${props.selectedTask.name}` : '任务详情',
+          subtitle: props.selectedTask?.status || '请选择任务',
+          icon: props.selectedTask?.status === 'failed' ? Warning : Document,
+          tone: props.selectedTask?.status === 'failed' ? 'red' : 'blue'
+        }),
+        props.selectedTask ? renderTaskOutcome(props.selectedTask as Dict) : emptyState({
+          title: '请选择一个任务',
+          description: '从右侧任务列表选择任务后，这里会显示产出、失败诊断、防重复记录和实时日志。',
+          icon: Tickets,
+          tone: 'gray'
+        }),
         props.selectedTask ? renderDiagnostics(props.diagnostics as Dict) : null,
         props.selectedTask ? renderDedupSummary(props.dedupSummary as Dict) : null,
-        h('div', { class: 'log-console', ref: logConsoleRef, onScroll: updateLogFollowState }, (props.selectedTask?.logs || []).map((log: Dict) => h('p', [h('time', log.created_at), h('span', log.message)])))
+        props.selectedTask ? h('div', { class: 'log-console', ref: logConsoleRef, onScroll: updateLogFollowState }, (props.selectedTask?.logs || []).length
+          ? (props.selectedTask?.logs || []).map((log: Dict) => h('p', [h('time', log.created_at), h('span', log.message)]))
+          : [h('p', [h('span', '暂无日志输出')])]
+        ) : null
       ])
       ],
       side: () => [
       h('aside', { class: 'pane side-pane' }, [
-        h('div', { class: 'section-title' }, [h('h2', '任务列表'), h('span', '归档前先看日志')]),
+        sectionTitle({ title: '任务列表', subtitle: '归档前先看日志', icon: Tickets, tone: 'blue' }),
         h('div', { class: 'task-list-tools' }, [
           h('input', {
             value: taskSearch.value,
@@ -163,7 +185,12 @@ export default defineComponent({
               }
             }, '删除')
           ])
-        ])) : [h('div', { class: 'empty-state compact' }, '没有匹配任务')]),
+        ])) : [emptyState({
+          title: '没有匹配任务',
+          description: '尝试清空搜索词，或回到任务页创建新的采集任务。',
+          icon: Tickets,
+          tone: 'gray'
+        })]),
         h('div', { class: 'task-list-pagination' }, [
           h('button', { disabled: taskPage.value <= 1, onClick: () => goTaskPage(-1) }, '上一页'),
           h('span', `${taskPage.value} / ${totalTaskPages.value}`),

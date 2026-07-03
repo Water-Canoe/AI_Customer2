@@ -1,9 +1,10 @@
 import { computed, defineComponent, h, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Close, CopyDocument, Search } from '@element-plus/icons-vue'
+import { ChatDotRound, Close, Collection, CopyDocument, Promotion, Search } from '@element-plus/icons-vue'
 import { SplitPane } from '../components/ui/SplitPane'
 import { platformName } from '../shared/format'
 import type { Dict } from '../shared/types'
+import { iconBadge, pageAction, sectionTitle } from '../components/ui/Workbench'
 
 const statusTabs = ['待私信', '已私信', '未回复', '已回复', '未成交', '已成交', '全部']
 const keywordPageSize = 8
@@ -50,10 +51,7 @@ export default defineComponent({
 
     return () => h(SplitPane, { storageKey: 'message-workbench', side: 'left', defaultSideWidth: 300, minSideWidth: 260, maxSideWidth: 420 }, {
       side: () => h('aside', { class: 'pane message-keyword-pane' }, [
-        h('div', { class: 'section-title' }, [
-          h('h2', '关键词队列'),
-          h('span', '按需求产品筛选')
-        ]),
+        sectionTitle({ title: '关键词队列', subtitle: '按需求产品筛选', icon: Collection, tone: 'amber' }),
         h('div', { class: 'message-keyword-list' }, pagedKeywords.value.map(keyword => renderKeywordButton(keyword, props.filters as Dict, changeFilter))),
         h('div', { class: 'keyword-pagination' }, [
           h('span', `共 ${keywordTotal.value} 个关键词`),
@@ -74,21 +72,24 @@ export default defineComponent({
       ]),
       default: () => h('section', { class: 'pane message-workbench' }, [
         h('div', { class: 'message-workbench-head' }, [
-          h('div', [
-            h('h2', '私信工作台'),
-            h('p', '按关键词推进客户私信、回访和成交状态')
-          ]),
-          h('div', { class: 'message-search' }, [
-            h('input', {
-              value: queryDraft.value,
-              placeholder: '搜索客户、评论、视频、话术',
-              onInput: (event: Event) => queryDraft.value = (event.target as HTMLInputElement).value,
-              onKeydown: (event: KeyboardEvent) => {
-                if (event.key === 'Enter') runSearch()
-              }
-            }),
-            h('button', { type: 'button', onClick: runSearch }, [h(Search), h('span', '搜索')])
-          ])
+          pageAction({
+            title: '按跟进状态推进私信',
+            description: '先按关键词和状态筛选客户，再复制 AI 话术并更新跟进结果。',
+            icon: ChatDotRound,
+            tone: 'purple',
+            steps: ['筛客户', '复制话术', '更新状态'],
+            aside: h('div', { class: 'message-search' }, [
+              h('input', {
+                value: queryDraft.value,
+                placeholder: '搜索客户、评论、视频、话术',
+                onInput: (event: Event) => queryDraft.value = (event.target as HTMLInputElement).value,
+                onKeydown: (event: KeyboardEvent) => {
+                  if (event.key === 'Enter') runSearch()
+                }
+              }),
+              h('button', { type: 'button', onClick: runSearch }, [h(Search), h('span', '搜索')])
+            ])
+          })
         ]),
         h('div', { class: 'message-status-tabs' }, statusTabs.map(status => h('button', {
           type: 'button',
@@ -125,9 +126,12 @@ function renderKeywordButton(keyword: Dict, filters: Dict, changeFilter: (next: 
     class: ['message-keyword-item', selected ? 'active' : ''],
     onClick: () => changeFilter({ keyword: keyword.keyword || '', page: 1 })
   }, [
-    h('div', [
-      h('strong', keyword.label || keyword.keyword || '全部'),
-      h('small', `${keyword.customer_count || 0} 个客户`)
+    h('div', { class: 'message-keyword-main' }, [
+      iconBadge(Promotion, selected ? 'teal' : 'gray'),
+      h('div', [
+        h('strong', keyword.label || keyword.keyword || '全部'),
+        h('small', `${keyword.customer_count || 0} 个客户`)
+      ])
     ]),
     h('div', { class: 'keyword-metrics' }, [
       h('span', `待私信 ${keyword.unmessaged_count || 0}`),

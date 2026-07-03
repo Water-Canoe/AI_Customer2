@@ -1,8 +1,10 @@
 import { computed, defineComponent, h, reactive, ref, watch } from 'vue'
-import { CopyDocument, Delete, MagicStick, Refresh, Search, View } from '@element-plus/icons-vue'
+import type { Component } from 'vue'
+import { CircleCheck, CopyDocument, DataAnalysis, Delete, Finished, MagicStick, Refresh, Search, TrendCharts, User, View, Warning } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
 import { platformName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
+import { emptyState, metricTile, pageAction, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
@@ -94,6 +96,13 @@ export default defineComponent({
 
     return () => h(SplitPane, { storageKey: 'ai-workbench', side: 'right', defaultSideWidth: 360 }, {
       default: () => h('section', { class: 'pane ai-workbench' }, [
+        pageAction({
+          title: '先处理待分析和失败项',
+          description: '优先批量分析当前筛选，再回看失败原因；删除类操作只针对 AI 已判定的非目标对象。',
+          icon: DataAnalysis,
+          tone: 'purple',
+          steps: ['筛选对象', '批量分析', '处理失败']
+        }),
         renderSummary(summary.value),
         renderTabs(activeTab.value, tab => activeTab.value = tab),
         renderToolbar(activeTab.value, filters, runBatch, retryBatch, deleteNonCompetitors, deleteNonCustomers),
@@ -114,18 +123,15 @@ export default defineComponent({
 })
 
 function renderSummary(summary: Dict) {
-  const cards = [
-    ['待分析竞品', summary.competitor_pending || 0, 'accent-amber'],
-    ['待分析客户', summary.lead_pending || 0, 'accent-green'],
-    ['正在分析', summary.running || 0, 'accent-blue'],
-    ['失败待重试', summary.failed || 0, 'accent-red'],
-    ['今日已分析', summary.succeeded_today || 0, 'accent-purple'],
-    ['并行数', summary.concurrency || 1, 'accent-gray']
+  const cards: Array<{ label: string, value: string | number, icon: Component, tone: WorkbenchTone, note?: string }> = [
+    { label: '待分析竞品', value: summary.competitor_pending || 0, icon: TrendCharts, tone: 'amber', note: '账号判断' },
+    { label: '待分析客户', value: summary.lead_pending || 0, icon: User, tone: 'green', note: '意向筛选' },
+    { label: '正在分析', value: summary.running || 0, icon: MagicStick, tone: 'blue', note: '队列运行中' },
+    { label: '失败待重试', value: summary.failed || 0, icon: Warning, tone: 'red', note: '先看详情' },
+    { label: '今日已分析', value: summary.succeeded_today || 0, icon: CircleCheck, tone: 'purple', note: '已完成' },
+    { label: '并行数', value: summary.concurrency || 1, icon: Finished, tone: 'gray', note: '当前配置' }
   ]
-  return h('div', { class: 'ai-summary-grid' }, cards.map(([label, value, cls]) => h('div', { class: ['metric-tile', cls] }, [
-    h('small', label),
-    h('strong', String(value))
-  ])))
+  return h('div', { class: 'ai-summary-grid' }, cards.map(card => metricTile(card)))
 }
 
 function renderTabs(active: string, setActive: (tab: 'competitors' | 'leads' | 'failed' | 'history') => void) {
@@ -205,7 +211,12 @@ function renderRows(args: {
   onRetry: (row: Dict) => void
   onCopy: (row: Dict) => void
 }) {
-  if (!args.rows.length) return h('div', { class: 'empty-state ai-empty' }, '当前筛选下没有数据')
+  if (!args.rows.length) return emptyState({
+    title: '当前筛选下没有数据',
+    description: '切换状态、清空关键词或返回其它标签页查看待分析对象。',
+    icon: Search,
+    tone: 'gray'
+  })
   return h('div', { class: 'ai-row-list' }, args.rows.map(row => {
     const active = selectedKey(args.selected) === selectedKey(row)
     if (args.tab === 'failed') return renderFailedRow(row, active, args)
@@ -322,11 +333,16 @@ function renderPagination(filters: Dict, total: number, start: number, end: numb
 
 function renderDetailPane(row: Dict | null, tab: string) {
   if (!row) return h('aside', { class: 'pane side-pane ai-detail-pane' }, [
-    h('div', { class: 'section-title' }, [h('h2', '分析详情'), h('span', '选择左侧条目')]),
-    h('div', { class: 'empty-state' }, '点击任意账号、客户或失败任务查看输入证据和分析结果')
+    sectionTitle({ title: '分析详情', subtitle: '选择左侧条目', icon: View, tone: 'blue' }),
+    emptyState({
+      title: '选择一条分析对象',
+      description: '点击任意账号、客户或失败任务，右侧会显示输入证据、AI 结果和提示词回看。',
+      icon: DataAnalysis,
+      tone: 'gray'
+    })
   ])
   return h('aside', { class: 'pane side-pane ai-detail-pane' }, [
-    h('div', { class: 'section-title' }, [h('h2', detailTitle(row, tab)), h('span', row.analysis_status || row.status || '')]),
+    sectionTitle({ title: detailTitle(row, tab), subtitle: row.analysis_status || row.status || '', icon: View, tone: tab === 'failed' ? 'red' : 'blue' }),
     renderDetailBlock('对象', [
       ['平台', row.platform ? platformName(row.platform) : '-'],
       ['类型', targetTypeLabel(row.target_type || (tab === 'leads' ? 'lead' : 'competitor'))],

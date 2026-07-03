@@ -12,7 +12,7 @@
 
 ## 前端结构
 
-前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts` 和 `SettingsPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane` 和标签输入 `TagInput`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
+前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts` 和 `SettingsPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
 `App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。
 
@@ -214,7 +214,11 @@ AI分析页已从裸 `analysis_jobs` 表重构为“AI分析工作台”。顶�
 
 客户状态与跟进状态在总览树客户行中分开展示。客户状态只表示 `未筛选 / 客户 / 非客户` 三类，前端显示值分别映射内部 `screening_status=待筛选 / 目标客户 / 非客户`；跟进状态只在客户状态为 `客户` 时显示，负责 `未私信 / 已私信 / 未回复 / 已回复 / 未成交 / 已成交` 这条跟进进度。界面标签只显示状态值本身，不额外显示“客户状态”或“跟进”前缀；客户状态标签负责客户三态切换，跟进状态标签负责跟进阶段推进和回退，例如 `未回复` 可以改回 `未私信`。客户行状态区固定为三层：第一层显示 AI 分析状态和客户三态，第二层在客户三态为 `客户` 时显示更大的跟进状态标签，第三层显示意向和证据数量；非客户不显示跟进状态，避免把客户筛选结论和跟进进度混在一起。
 
-Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。当前账号 Starter plan 的 MCP 调用限额阻止继续写入画布，因此前端视觉规范直接落在代码中。Canva 已用于准备“用户工作流与界面信息架构”的视觉参考。
+本轮前端重构把图标化信息层级收敛为 `frontend/src/components/ui/Workbench.ts`：`sectionTitle` 统一页面/面板标题，`pageAction` 统一页面顶部的“当前页面该做什么”，`emptyState` 统一无数据提示，`metricTile` 统一 KPI 指标卡。图标来源统一使用项目已安装的 `@element-plus/icons-vue`，不额外引入图标包或新 UI 框架；任务页使用 `Aim/Guide`，AI页使用 `DataAnalysis/MagicStick/Warning`，私信页使用 `ChatDotRound/Promotion`，总览、日志、数据表和设置页分别使用关系、文件、数据和工具类图标。风格继续保持工作台式：低圆角、浅边框、紧凑信息密度，主色为青绿色，辅以蓝色运行、绿色成功、橙色待处理、红色风险、紫色 AI/私信语义色。
+
+每个主页面顶部都增加页面行动区，用 3 个短步骤告诉用户当前页面的推荐操作路径：任务页是选择模式、填写对象、检查预览；总览页是展开层级、分析账号、找客户；AI页是筛选对象、批量分析、处理失败；私信页是筛客户、复制话术、更新状态；日志页是选择任务、看产出、核对日志；数据表页是选择业务库、筛选记录、处理对象；设置页是采集路径、AI 模型、客户画像。日志页未选任务时不再显示空的深色日志控制台，避免用户误读为内容缺失；私信工作台左侧关键词指标在窄栏内改为两列网格，移动端顶部动作按钮改为 2x2 布局，避免 390px 宽度下横向裁切。
+
+Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。当前文件包含 `AI_Customer 前端重构蓝图 v2` 页面，用于记录本轮“页面行动区、图标化标题、统一空态、指标卡片”的设计方向；由于当前账号 Starter plan 的 MCP 调用限额阻止继续写入画布，且可用字体仅确认到 Inter，Figma 画布只作为设计蓝图参考，最终中文界面规范以代码实现为准。Canva 已用于准备“用户工作流与界面信息架构”的视觉参考。
 
 ## 授权服务
 

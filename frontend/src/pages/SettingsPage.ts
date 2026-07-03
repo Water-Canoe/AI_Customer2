@@ -1,11 +1,12 @@
 import { defineComponent, h, reactive, ref, watch } from 'vue'
-import { Check, Delete, Refresh } from '@element-plus/icons-vue'
+import { Check, DataAnalysis, Delete, Key, Monitor, Refresh, Setting, Tools, User, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { api } from '../shared/api'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, splitTagText } from '../components/ui/TagInput'
 import { platformName } from '../shared/format'
+import { pageAction, sectionTitle } from '../components/ui/Workbench'
 
 const icpFields = [
   { key: 'product', label: '产品/服务', placeholder: '例如：AI客服、获客工具' },
@@ -255,10 +256,19 @@ export default defineComponent({
       h(SplitPane, { storageKey: 'settings', side: 'right', defaultSideWidth: 360 }, {
         default: () => [
         h('section', { class: 'pane primary-pane' }, [
-          h('div', { class: 'section-title' }, [
-            h('h2', '基础配置'),
-            h('span', settingsDirty.value ? '有未保存修改，自动同步不会覆盖草稿' : '没有配置时 AI 分析会明确失败')
-          ]),
+          pageAction({
+            title: '先补齐采集、AI 和客户画像配置',
+            description: '路径、模型和 ICP 会直接影响采集导入、AI 判断和私信话术质量。',
+            icon: Setting,
+            tone: settingsDirty.value ? 'amber' : 'teal',
+            steps: ['采集路径', 'AI 模型', '客户画像']
+          }),
+          sectionTitle({
+            title: '基础配置',
+            subtitle: settingsDirty.value ? '有未保存修改，自动同步不会覆盖草稿' : '没有配置时 AI 分析会明确失败',
+            icon: Tools,
+            tone: settingsDirty.value ? 'amber' : 'teal'
+          }),
           h('div', { class: 'form-grid' }, [
             inputField(local, 'media_crawler_path', 'MediaCrawler路径', 'text', '', markSettingsDirty),
             inputField(local, 'media_crawler_db_path', '底层SQLite路径', 'text', '', markSettingsDirty),
@@ -283,27 +293,27 @@ export default defineComponent({
             toggleField(local, 'auto_analyze_leads', '自动分析线索用户', markSettingsDirty),
             toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty)
           ]),
-          h('div', { class: 'section-title compact' }, [h('h2', '自家账号'), h('span', '同平台可多个，跨平台分任务运行')]),
+          sectionTitle({ title: '自家账号', subtitle: '同平台可多个，跨平台分任务运行', icon: User, tone: 'blue', compact: true }),
           h('div', { class: 'own-account-grid' }, ownAccountPlatforms.map(platform => renderOwnAccountField(ownAccounts, platform, markSettingsDirty))),
-          h('div', { class: 'section-title compact' }, [h('h2', 'ICP画像'), h('span', 'AI筛选时会带入这些信息')]),
+          sectionTitle({ title: 'ICP画像', subtitle: 'AI筛选时会带入这些信息', icon: DataAnalysis, tone: 'purple', compact: true }),
           h('div', { class: 'icp-grid' }, icpFields.map(field => renderIcpField(icpProfile, field, markSettingsDirty))),
           h('div', { class: 'action-row' }, [
             h('button', {
               class: 'primary-action',
               onClick: () => submitSettingsAfterDraft(() => ({ ...local, icp_profile: buildIcpPayload(icpProfile), own_accounts: buildOwnAccountsPayload(ownAccounts) }))
             }, [h(Check, { class: 'inline-icon' }), '保存设置']),
-            h('button', { class: 'secondary-action', onClick: openLicenseDialog }, '授权与设备')
+            h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备'])
           ])
         ])
         ],
         side: () => [
         h('aside', { class: 'pane side-pane' }, [
-          h('div', { class: 'section-title' }, [h('h2', '环境状态'), h('span', '运行前先检查')]),
+          sectionTitle({ title: '环境状态', subtitle: '运行前先检查', icon: Monitor, tone: 'green' }),
           renderEnv(props.env),
           h('button', { class: 'wide-action', onClick: () => emit('check-env') }, [h(Refresh, { class: 'inline-icon' }), '重新检查']),
           renderTombstones(props.tombstoneSummary as Dict, props.tombstones as Dict, props.tombstoneFilters as Dict, filters => emit('load-tombstones', filters)),
           h('div', { class: 'danger-zone' }, [
-            h('div', { class: 'section-title compact' }, [h('h2', '危险操作'), h('span', '不可恢复')]),
+            sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Warning, tone: 'red', compact: true }),
             h('p', '清空项目库和 MediaCrawler 底层库中的所有采集、线索、AI、日志数据。'),
             h('button', { class: 'wide-action danger-action', onClick: () => emit('clear-data') }, [h(Delete, { class: 'inline-icon' }), '清空所有数据'])
           ])
@@ -436,10 +446,7 @@ function renderTombstones(summary: Dict, tombstones: Dict, filters: Dict, load: 
   const page = Number(tombstones.page || 1)
   const totalPages = Number(tombstones.total_pages || 1)
   return h('div', { class: 'tombstone-panel' }, [
-    h('div', { class: 'section-title compact' }, [
-      h('h2', '防重复墓碑'),
-      h('span', `共 ${summary.total || 0} 条`)
-    ]),
+    sectionTitle({ title: '防重复墓碑', subtitle: `共 ${summary.total || 0} 条`, icon: Delete, tone: 'amber', compact: true }),
     h('div', { class: 'quality-summary tombstone-summary' }, [
       renderQualityMetric('账号', summary.accounts || 0),
       renderQualityMetric('内容', summary.contents || 0),
@@ -482,10 +489,13 @@ function renderProjectQuality(quality: Dict) {
   const sections = quality.sections || []
   const issues = quality.issues || []
   return h('div', { class: 'project-quality' }, [
-    h('div', { class: 'section-title compact' }, [
-      h('h2', '项目数据质量'),
-      h('span', summary.status === 'ok' ? '关键字段完整' : `${summary.issues || 0} 项需要关注`)
-    ]),
+    sectionTitle({
+      title: '项目数据质量',
+      subtitle: summary.status === 'ok' ? '关键字段完整' : `${summary.issues || 0} 项需要关注`,
+      icon: Check,
+      tone: summary.status === 'ok' ? 'green' : 'amber',
+      compact: true
+    }),
     h('div', { class: 'quality-summary' }, [
       renderQualityMetric('账号', summary.accounts || 0),
       renderQualityMetric('内容', summary.contents || 0),
@@ -531,7 +541,7 @@ function renderPlatformDiagnostics(platforms: Dict[]) {
     return h('div', { class: 'diagnostic-empty' }, '底层 SQLite 不存在或尚未完成检查')
   }
   return h('div', { class: 'platform-diagnostics' }, [
-    h('div', { class: 'section-title compact' }, [h('h2', '平台数据诊断'), h('span', '原始表与关键字段')]),
+    sectionTitle({ title: '平台数据诊断', subtitle: '原始表与关键字段', icon: Monitor, tone: 'blue', compact: true }),
     ...platforms.map(platform => h('div', { class: 'diagnostic-panel' }, [
       h('div', { class: 'diagnostic-head' }, [
         h('strong', platform.label || platform.platform),
