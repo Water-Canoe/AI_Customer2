@@ -88,10 +88,10 @@ export default defineComponent({
   emits: ['create-task', 'open-logs', 'consume-retry-draft'],
   setup(props, { emit }) {
     const modes: Array<{ key: string, title: string, note: string, badge: string, icon: Component, tone: WorkbenchTone }> = [
-      { key: 'competitor_discovery', title: '竞品账号采集', note: '关键词找竞品候选，再用AI确认', badge: '找账号', icon: Aim, tone: 'teal' },
-      { key: 'competitor_crawl', title: '竞品账号爬取', note: '爬评论区，把评论用户转为线索', badge: '找线索', icon: User, tone: 'blue' },
-      { key: 'demand_content', title: '找需求内容', note: '关键词找吐槽/需求内容，作者进入客户池', badge: '找需求', icon: Search, tone: 'amber' },
-      { key: 'own_account', title: '自家账号互动', note: '监控自家评论区，筛出高意向用户', badge: '自有流量', icon: ChatDotRound, tone: 'green' }
+      { key: 'competitor_discovery', title: '竞品账号采集', note: '找候选竞品账号', badge: '找账号', icon: Aim, tone: 'teal' },
+      { key: 'competitor_crawl', title: '竞品账号爬取', note: '从评论转线索', badge: '找线索', icon: User, tone: 'blue' },
+      { key: 'demand_content', title: '找需求内容', note: '从内容找作者', badge: '找需求', icon: Search, tone: 'amber' },
+      { key: 'own_account', title: '自家账号互动', note: '筛高意向用户', badge: '自有流量', icon: ChatDotRound, tone: 'green' }
     ]
     function settingNumber(key: string, fallback: number, minimum = 1) {
       const value = Number((props.settings as Dict)?.[key])
@@ -332,10 +332,9 @@ export default defineComponent({
       h('section', { class: 'pane primary-pane' }, [
         pageAction({
           title: '按业务目标启动采集',
-          description: '先选择任务意图，再补齐关键词、账号或内容链接；右侧预览会显示实际执行参数。',
+          description: '选择模式和对象，确认预览后启动。',
           icon: Guide,
-          tone: 'teal',
-          steps: ['选择模式', '填写对象', '检查预览']
+          tone: 'teal'
         }),
         sectionTitle({ title: '选择拓客模式', subtitle: '先选目标，再填必要参数', icon: Compass, tone: 'teal' }),
         prefillSource.value ? h('div', { class: 'retry-prefill' }, [

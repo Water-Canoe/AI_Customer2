@@ -39,7 +39,6 @@ export function pageAction(args: {
   description: string
   icon: Component
   tone?: WorkbenchTone
-  steps?: string[]
   aside?: Child
 }) {
   return h('section', { class: ['page-action', `tone-${args.tone || 'teal'}`] }, [
@@ -47,7 +46,6 @@ export function pageAction(args: {
     h('div', { class: 'page-action-body' }, [
       h('strong', args.title),
       h('p', args.description),
-      args.steps?.length ? h('div', { class: 'page-action-steps' }, args.steps.map(step => h('span', step))) : null,
     ]),
     args.aside ? h('div', { class: 'page-action-aside' }, childList(args.aside)) : null,
   ])
@@ -73,7 +71,6 @@ export function metricTile(args: {
   value: string | number
   icon: Component
   tone?: WorkbenchTone
-  note?: string
 }) {
   return h('div', { class: ['metric-tile', `tone-${args.tone || 'gray'}`] }, [
     h('div', { class: 'metric-tile-head' }, [
@@ -81,6 +78,5 @@ export function metricTile(args: {
       h('small', args.label),
     ]),
     h('strong', String(args.value)),
-    args.note ? h('span', args.note) : null,
   ])
 }

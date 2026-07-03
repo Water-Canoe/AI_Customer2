@@ -35,8 +35,6 @@
 }
 
 .brand span,
-.sidebar-status small,
-.workflow-step small,
 .section-title span,
 .task-row span,
 .env-item small {
@@ -47,20 +45,6 @@
 .nav {
   flex: 1;
   border-right: 0;
-}
-
-.sidebar-status {
-  margin: 16px;
-  padding: 14px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #f8fbfa;
-}
-
-.sidebar-status strong {
-  display: block;
-  margin-top: 6px;
-  color: #0f766e;
 }
 
 .topbar {
@@ -101,39 +85,6 @@
   min-height: 0;
   overflow: hidden;
   padding: 22px;
-}
-
-.workflow-strip {
-  flex: 0 0 auto;
-  display: none;
-  grid-template-columns: repeat(5, minmax(150px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.workflow-step {
-  display: flex;
-  gap: 10px;
-  min-height: 68px;
-  padding: 12px;
-  border: 1px solid #dbe7e2;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.workflow-step.active {
-  border-color: #0f766e;
-  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.1);
-}
-
-.workflow-step span {
-  color: #0f766e;
-  font-weight: 800;
-}
-
-.workflow-step strong,
-.workflow-step small {
-  display: block;
 }
 
 .main.view-tasks .capability-panel {
@@ -3472,7 +3423,6 @@ input[type='checkbox'] {
     min-height: 100vh;
   }
 
-  .workflow-strip,
   .split-pane,
   .mode-grid,
   .form-grid,
@@ -3570,7 +3520,6 @@ input[type='checkbox'] {
     flex-direction: column;
   }
 
-  .workflow-step,
   .pane {
     padding: 14px;
   }
@@ -3657,11 +3606,6 @@ input[type='checkbox'] {
 
 .nav .el-menu-item.is-active .el-icon {
   color: var(--workbench-primary);
-}
-
-.sidebar-status {
-  border-color: var(--workbench-border);
-  background: linear-gradient(180deg, #ffffff 0%, #f4faf8 100%);
 }
 
 .topbar {
@@ -3770,57 +3714,6 @@ input[type='checkbox'] {
   height: calc(100vh - var(--workbench-topbar-height));
   padding: 18px;
   gap: 12px;
-}
-
-.workflow-strip {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(116px, 1fr));
-  gap: 8px;
-  margin-bottom: 0;
-}
-
-.workflow-step {
-  position: relative;
-  min-height: 58px;
-  padding: 10px 11px;
-  border-color: var(--workbench-border);
-  background: rgba(255, 255, 255, 0.82);
-  color: #334155;
-  text-align: left;
-}
-
-.workflow-step span {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: #e7f2ef;
-  color: var(--workbench-primary);
-  font-size: 11px;
-}
-
-.workflow-step strong {
-  color: #1e293b;
-  font-size: 13px;
-  line-height: 1.25;
-}
-
-.workflow-step small {
-  display: -webkit-box;
-  margin-top: 2px;
-  overflow: hidden;
-  font-size: 11px;
-  line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-}
-
-.workflow-step.active {
-  border-color: #8bcfc4;
-  background: var(--workbench-primary-soft);
-  box-shadow: none;
 }
 
 .pane {
@@ -4278,9 +4171,6 @@ input[type='checkbox'] {
     display: none;
   }
 
-  .workflow-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 1100px) {
@@ -4293,31 +4183,14 @@ input[type='checkbox'] {
     gap: 12px;
   }
 
-  .workflow-strip {
-    display: flex;
-    overflow-x: auto;
-    padding-bottom: 2px;
-    scroll-snap-type: x proximity;
-  }
-
-  .workflow-step {
-    flex: 0 0 188px;
-    scroll-snap-align: start;
-  }
-
   .ai-toolbar {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 640px) {
-  .topbar-kicker,
-  .workflow-step small {
+  .topbar-kicker {
     display: none;
-  }
-
-  .workflow-step {
-    min-height: 44px;
   }
 
   .message-search {
@@ -4499,26 +4372,6 @@ input[type='checkbox'] {
   line-height: 1.5;
 }
 
-.page-action-steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.page-action-steps span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 0 8px;
-  border: 1px solid #dfe9e5;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .72);
-  color: #475569;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .page-action-aside {
   flex: 0 1 420px;
   min-width: 260px;
@@ -4599,13 +4452,6 @@ input[type='checkbox'] {
 
 .metric-tile.tone-gray::before {
   background: #94a3b8;
-}
-
-.metric-tile > span {
-  display: block;
-  margin-top: 5px;
-  color: var(--workbench-muted);
-  font-size: 12px;
 }
 
 .mode-option {
@@ -4733,10 +4579,6 @@ input[type='checkbox'] {
 
   .page-action {
     padding: 10px;
-  }
-
-  .page-action-steps span {
-    max-width: 100%;
   }
 
   .topbar-actions {

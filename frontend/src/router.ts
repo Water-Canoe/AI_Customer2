@@ -61,12 +61,3 @@ export const router = createRouter({
   history: createWebHistory(),
   routes,
 })
-
-export const workflowSteps = [
-  { index: '01', title: '配置画像', note: 'AI模型、ICP、默认采集参数', route: '/settings', view: 'settings' },
-  { index: '02', title: '创建任务', note: '四种模式，一次选择', route: '/tasks', view: 'tasks' },
-  { index: '03', title: '观察入库', note: '日志、数量、失败原因', route: '/logs', view: 'logs' },
-  { index: '04', title: '理解来源', note: '总览树查看来源关系', route: '/overview', view: 'overview' },
-  { index: '05', title: 'AI筛选跟进', note: '批量分析、私信话术、状态流转', route: '/ai', view: 'ai' },
-  { index: '06', title: '私信跟进', note: '按关键词推进客户回访', route: '/message-workbench', view: 'message-workbench' },
-]

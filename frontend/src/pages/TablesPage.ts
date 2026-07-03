@@ -107,10 +107,9 @@ export default defineComponent({
     return () => h('section', { class: 'pane table-workspace' }, [
       pageAction({
         title: '按业务库检查数据',
-        description: '先切换业务库，再按状态和关键词筛选；账号类数据可在表格内继续补资料或触发 AI 分析。',
+        description: '切换业务库，筛选记录并处理对象。',
         icon: Files,
-        tone: 'blue',
-        steps: ['选择业务库', '筛选记录', '处理对象']
+        tone: 'blue'
       }),
       h('div', { class: 'table-library-bar' }, [
         sectionTitle({ title: '数据表', subtitle: '选择一个业务库', icon: DataBoard, tone: 'blue' }),

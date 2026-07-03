@@ -17,10 +17,6 @@
         <el-menu-item index="tables"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
         <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
       </el-menu>
-      <div class="sidebar-status">
-        <small>当前流程</small>
-        <strong>{{ workflowHint }}</strong>
-      </div>
     </el-aside>
 
     <el-container>
@@ -42,9 +38,6 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <el-tag type="info" effect="plain">
-            {{ autoSyncHint }}
-          </el-tag>
           <el-tag :type="envReady ? 'success' : 'warning'" effect="light">
             {{ envReady ? '环境就绪' : '需要检查环境' }}
           </el-tag>
@@ -54,23 +47,6 @@
       </el-header>
 
       <el-main class="main" :class="`view-${activeView}`">
-        <section class="workflow-strip">
-          <button
-            v-for="step in workflowSteps"
-            :key="step.title"
-            class="workflow-step"
-            :class="{ active: step.view === activeView }"
-            type="button"
-            @click="router.push(step.route)"
-          >
-            <span>{{ step.index }}</span>
-            <div>
-              <strong>{{ step.title }}</strong>
-              <small>{{ step.note }}</small>
-            </div>
-          </button>
-        </section>
-
         <RouterView v-slot="{ Component }">
           <component :is="Component" v-bind="routeProps" v-on="routeListeners" />
         </RouterView>
@@ -98,7 +74,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from './shared/api'
 import type { Dict } from './shared/types'
 import { competitorStatusLabel, platformName } from './shared/format'
-import { workflowSteps } from './router'
 
 const router = useRouter()
 const route = useRoute()
@@ -143,14 +118,9 @@ let settingsMutationSeq = 0
 const activeView = computed(() => String(route.name || 'tasks'))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
-const workflowHint = computed(() => String(route.meta.hint || ''))
 const envReady = computed(() => Boolean(env.value?.media_crawler_path?.ok && env.value?.media_crawler_db?.ok))
 const hasActiveAsyncWork = computed(() => {
   return tasks.value.some(task => isActiveStatus(task.status)) || aiJobs.value.some(job => isActiveStatus(job.status))
-})
-const autoSyncHint = computed(() => {
-  const seconds = Math.round((hasActiveAsyncWork.value ? AUTO_SYNC_ACTIVE_MS : AUTO_SYNC_IDLE_MS) / 1000)
-  return autoSyncing.value ? '同步中' : `自动同步 ${seconds}s`
 })
 const dashboardInsights = computed(() => {
   const summary = aiWorkbench.value?.summary || {}

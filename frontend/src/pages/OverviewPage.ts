@@ -55,10 +55,9 @@ export default defineComponent({
     return () => h('section', { class: 'pane overview-pane' }, [
       pageAction({
         title: '从层级关系定位下一步',
-        description: '先展开平台和关键词，再对账号做竞品判断、找客户或推进意向分析。',
+        description: '展开平台、关键词或账号，处理下一步动作。',
         icon: Connection,
-        tone: 'blue',
-        steps: ['展开层级', '分析账号', '找客户']
+        tone: 'blue'
       }),
       sectionTitle({ title: '关系总览', subtitle: '平台 / 关键词 / 账号层级表', icon: Compass, tone: 'blue' }),
       (props.tree as Dict[]).length

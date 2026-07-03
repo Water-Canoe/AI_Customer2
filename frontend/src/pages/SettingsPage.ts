@@ -258,10 +258,9 @@ export default defineComponent({
         h('section', { class: 'pane primary-pane' }, [
           pageAction({
             title: '先补齐采集、AI 和客户画像配置',
-            description: '路径、模型和 ICP 会直接影响采集导入、AI 判断和私信话术质量。',
+            description: '路径、模型和 ICP 会影响采集导入、AI 判断和私信话术。',
             icon: Setting,
-            tone: settingsDirty.value ? 'amber' : 'teal',
-            steps: ['采集路径', 'AI 模型', '客户画像']
+            tone: settingsDirty.value ? 'amber' : 'teal'
           }),
           sectionTitle({
             title: '基础配置',

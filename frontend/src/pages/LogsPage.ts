@@ -94,10 +94,9 @@ export default defineComponent({
       h('section', { class: 'pane primary-pane log-pane' }, [
         pageAction({
           title: '先选任务，再核对产出和日志',
-          description: '任务产出用于判断下一步动作；失败任务先看诊断和底层导入记录。',
+          description: '选择任务，查看产出、诊断和日志。',
           icon: Document,
-          tone: props.selectedTask ? 'blue' : 'gray',
-          steps: ['选择任务', '看产出', '核对日志']
+          tone: props.selectedTask ? 'blue' : 'gray'
         }),
         sectionTitle({
           title: props.selectedTask ? `${props.selectedTask.id} · ${props.selectedTask.name}` : '任务详情',

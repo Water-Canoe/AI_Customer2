@@ -74,10 +74,9 @@ export default defineComponent({
         h('div', { class: 'message-workbench-head' }, [
           pageAction({
             title: '按跟进状态推进私信',
-            description: '先按关键词和状态筛选客户，再复制 AI 话术并更新跟进结果。',
+            description: '筛选客户，复制话术并更新状态。',
             icon: ChatDotRound,
             tone: 'purple',
-            steps: ['筛客户', '复制话术', '更新状态'],
             aside: h('div', { class: 'message-search' }, [
               h('input', {
                 value: queryDraft.value,

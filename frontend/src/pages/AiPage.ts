@@ -98,10 +98,9 @@ export default defineComponent({
       default: () => h('section', { class: 'pane ai-workbench' }, [
         pageAction({
           title: '先处理待分析和失败项',
-          description: '优先批量分析当前筛选，再回看失败原因；删除类操作只针对 AI 已判定的非目标对象。',
+          description: '筛选对象，批量分析，再处理失败项。',
           icon: DataAnalysis,
-          tone: 'purple',
-          steps: ['筛选对象', '批量分析', '处理失败']
+          tone: 'purple'
         }),
         renderSummary(summary.value),
         renderTabs(activeTab.value, tab => activeTab.value = tab),
@@ -123,13 +122,13 @@ export default defineComponent({
 })
 
 function renderSummary(summary: Dict) {
-  const cards: Array<{ label: string, value: string | number, icon: Component, tone: WorkbenchTone, note?: string }> = [
-    { label: '待分析竞品', value: summary.competitor_pending || 0, icon: TrendCharts, tone: 'amber', note: '账号判断' },
-    { label: '待分析客户', value: summary.lead_pending || 0, icon: User, tone: 'green', note: '意向筛选' },
-    { label: '正在分析', value: summary.running || 0, icon: MagicStick, tone: 'blue', note: '队列运行中' },
-    { label: '失败待重试', value: summary.failed || 0, icon: Warning, tone: 'red', note: '先看详情' },
-    { label: '今日已分析', value: summary.succeeded_today || 0, icon: CircleCheck, tone: 'purple', note: '已完成' },
-    { label: '并行数', value: summary.concurrency || 1, icon: Finished, tone: 'gray', note: '当前配置' }
+  const cards: Array<{ label: string, value: string | number, icon: Component, tone: WorkbenchTone }> = [
+    { label: '待分析竞品', value: summary.competitor_pending || 0, icon: TrendCharts, tone: 'amber' },
+    { label: '待分析客户', value: summary.lead_pending || 0, icon: User, tone: 'green' },
+    { label: '正在分析', value: summary.running || 0, icon: MagicStick, tone: 'blue' },
+    { label: '失败待重试', value: summary.failed || 0, icon: Warning, tone: 'red' },
+    { label: '今日已分析', value: summary.succeeded_today || 0, icon: CircleCheck, tone: 'purple' },
+    { label: '并行数', value: summary.concurrency || 1, icon: Finished, tone: 'gray' }
   ]
   return h('div', { class: 'ai-summary-grid' }, cards.map(card => metricTile(card)))
 }
