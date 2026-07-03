@@ -26,12 +26,8 @@ PROJECT_DATA_TABLES = [
 ]
 
 
-def _quote_identifier(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
 def _table_count(conn: sqlite3.Connection, table: str) -> int:
-    return int(conn.execute(f"SELECT COUNT(*) AS c FROM {_quote_identifier(table)}").fetchone()["c"])
+    return int(conn.execute(f"SELECT COUNT(*) AS c FROM {database.quote_identifier(table)}").fetchone()["c"])
 
 
 def _list_user_tables(conn: sqlite3.Connection) -> list[str]:
@@ -82,7 +78,7 @@ def _clear_project_database(conn: sqlite3.Connection) -> dict[str, Any]:
     try:
         for table in PROJECT_DATA_TABLES:
             deleted[table] = _table_count(conn, table)
-            conn.execute(f"DELETE FROM {_quote_identifier(table)}")
+            conn.execute(f"DELETE FROM {database.quote_identifier(table)}")
         _reset_sequences(conn, PROJECT_DATA_TABLES)
         database.set_setting(conn, "next_task_number", "1")
     finally:
@@ -99,7 +95,7 @@ def _clear_media_crawler_database(raw_db_path: Path) -> dict[str, Any]:
         deleted: dict[str, int] = {}
         for table in tables:
             deleted[table] = _table_count(raw_conn, table)
-            raw_conn.execute(f"DELETE FROM {_quote_identifier(table)}")
+            raw_conn.execute(f"DELETE FROM {database.quote_identifier(table)}")
         _reset_sequences(raw_conn, tables)
         raw_conn.commit()
     except Exception:

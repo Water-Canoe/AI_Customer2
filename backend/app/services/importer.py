@@ -154,12 +154,8 @@ def _import_with_connections(raw_conn: sqlite3.Connection, task_id: str) -> dict
     return counts
 
 
-def _quote_identifier(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
 def _table_columns(raw_conn: sqlite3.Connection, table: str) -> set[str]:
-    rows = raw_conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()
+    rows = raw_conn.execute(f"PRAGMA table_info({database.quote_identifier(table)})").fetchall()
     return {str(row["name"]) for row in rows}
 
 
@@ -173,7 +169,7 @@ def _raw_time_clause(raw_conn: sqlite3.Connection, table: str, task: sqlite3.Row
     timestamp_columns = [column for column in ("last_modify_ts", "add_ts") if column in columns]
     if not timestamp_columns:
         return "", []
-    clause = " WHERE " + " OR ".join(f"CAST({_quote_identifier(column)} AS INTEGER) >= ?" for column in timestamp_columns)
+    clause = " WHERE " + " OR ".join(f"CAST({database.quote_identifier(column)} AS INTEGER) >= ?" for column in timestamp_columns)
     return clause, [raw_started_ts_ms] * len(timestamp_columns)
 
 
@@ -189,7 +185,7 @@ def _safe_select_rows(raw_conn: sqlite3.Connection, table: str, task: sqlite3.Ro
     if limit is not None:
         limit_clause = " ORDER BY rowid DESC LIMIT ?"
         params = [*params, max(1, int(limit))]
-    return raw_conn.execute(f"SELECT rowid AS __raw_pk, * FROM {_quote_identifier(table)}{where_clause}{limit_clause}", params).fetchall()
+    return raw_conn.execute(f"SELECT rowid AS __raw_pk, * FROM {database.quote_identifier(table)}{where_clause}{limit_clause}", params).fetchall()
 
 
 def _value(row: sqlite3.Row, column: str, default: Any = "") -> Any:
@@ -263,7 +259,7 @@ def _content_native_passes_cutoff(
     table = mapping["table"]
     id_column = mapping["id"]
     row = raw_conn.execute(
-        f"SELECT * FROM {_quote_identifier(table)} WHERE {_quote_identifier(id_column)} = ? LIMIT 1",
+        f"SELECT * FROM {database.quote_identifier(table)} WHERE {database.quote_identifier(id_column)} = ? LIMIT 1",
         (content_native_id,),
     ).fetchone()
     if row is None:

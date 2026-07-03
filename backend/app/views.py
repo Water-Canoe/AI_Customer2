@@ -407,10 +407,6 @@ def _project_quality_issues(sections: list[dict[str, Any]], tasks_with_comments:
     return issues
 
 
-def _quote_identifier(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
 def _platform_diagnostics(raw_db: Path) -> list[dict[str, Any]]:
     raw_conn = sqlite3.connect(raw_db)
     raw_conn.row_factory = sqlite3.Row
@@ -465,8 +461,8 @@ def _table_diagnostic(
     ).fetchone()
     if not table_row:
         return {"table": table, "supported": True, "exists": False, "row_count": 0, "fields": []}
-    columns = {str(row["name"]) for row in raw_conn.execute(f"PRAGMA table_info({_quote_identifier(table)})").fetchall()}
-    row_count = int(raw_conn.execute(f"SELECT COUNT(*) AS c FROM {_quote_identifier(table)}").fetchone()["c"])
+    columns = {str(row["name"]) for row in raw_conn.execute(f"PRAGMA table_info({database.quote_identifier(table)})").fetchall()}
+    row_count = int(raw_conn.execute(f"SELECT COUNT(*) AS c FROM {database.quote_identifier(table)}").fetchone()["c"])
     return {
         "table": table,
         "supported": True,
@@ -492,7 +488,7 @@ def _field_diagnostic(
         return {"key": key, "label": label, "column": column, "supported": False, "missing_column": True, "non_empty": 0, "row_count": row_count}
     non_empty = int(
         raw_conn.execute(
-            f"SELECT COUNT(*) AS c FROM {_quote_identifier(table)} WHERE COALESCE(CAST({_quote_identifier(column)} AS TEXT), '') <> ''"
+            f"SELECT COUNT(*) AS c FROM {database.quote_identifier(table)} WHERE COALESCE(CAST({database.quote_identifier(column)} AS TEXT), '') <> ''"
         ).fetchone()["c"]
     )
     return {"key": key, "label": label, "column": column, "supported": True, "non_empty": non_empty, "row_count": row_count}

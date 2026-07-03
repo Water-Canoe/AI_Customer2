@@ -52,6 +52,11 @@ def now_sql() -> str:
     return "datetime('now', 'localtime')"
 
 
+def quote_identifier(identifier: str) -> str:
+    """Quote a SQLite table or column name for dynamic SQL."""
+    return '"' + identifier.replace('"', '""') + '"'
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
