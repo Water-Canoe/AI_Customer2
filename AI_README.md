@@ -10,6 +10,8 @@
 2. 项目业务库：默认 `backend/runtime/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件。
 3. 页面视图：任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构。
 
+版本控制只保留项目源码和文档；`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MediaCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
+
 ## 前端结构
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts` 和 `SettingsPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
