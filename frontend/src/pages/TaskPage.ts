@@ -348,9 +348,11 @@ export default defineComponent({
         }, [
           h('div', { class: 'mode-option-head' }, [
             iconBadge(mode.icon, mode.tone),
-            h('small', mode.badge)
+            h('div', { class: 'mode-option-copy' }, [
+              h('small', mode.badge),
+              h('strong', mode.title)
+            ])
           ]),
-          h('strong', mode.title),
           h('span', mode.note)
         ]))),
         renderCapabilityPanel(activeCapability.value, activeModeCapability.value),
