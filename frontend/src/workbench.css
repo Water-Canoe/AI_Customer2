@@ -4327,20 +4327,39 @@ input[type='checkbox'] {
 
 /* Front design v2: icon-led hierarchy and consistent page action areas. */
 .ui-icon-badge {
-  display: inline-grid;
+  display: inline-flex;
   width: 34px;
   height: 34px;
   flex: 0 0 auto;
-  place-items: center;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   border: 1px solid #cfded8;
   border-radius: 8px;
   background: #f7fbfa;
   color: var(--workbench-primary);
+  line-height: 0;
+  text-align: center;
+}
+
+.ui-icon-badge > .el-icon,
+.ui-icon-badge > svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  margin: 0;
+  font-size: 18px;
+  line-height: 1;
 }
 
 .ui-icon-badge svg {
+  display: block;
   width: 18px;
   height: 18px;
+  margin: auto;
 }
 
 .ui-icon-badge.tone-teal {
@@ -4537,6 +4556,13 @@ input[type='checkbox'] {
   height: 28px;
 }
 
+.metric-tile-head .ui-icon-badge > .el-icon,
+.metric-tile-head .ui-icon-badge > svg {
+  width: 15px;
+  height: 15px;
+  font-size: 15px;
+}
+
 .metric-tile-head .ui-icon-badge svg {
   width: 15px;
   height: 15px;
@@ -4611,6 +4637,13 @@ input[type='checkbox'] {
 .library-list .ui-icon-badge {
   width: 26px;
   height: 26px;
+}
+
+.library-list .ui-icon-badge > .el-icon,
+.library-list .ui-icon-badge > svg {
+  width: 14px;
+  height: 14px;
+  font-size: 14px;
 }
 
 .library-list .ui-icon-badge svg {
