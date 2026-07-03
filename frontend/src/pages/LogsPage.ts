@@ -16,6 +16,8 @@ export default defineComponent({
     const taskPage = ref(1)
     const taskPageSize = 5
     const logConsoleRef = ref<HTMLElement | null>(null)
+    const logAutoFollow = ref(true)
+    const LOG_BOTTOM_THRESHOLD = 28
 
     const filteredTasks = computed(() => {
       const keyword = taskSearch.value.trim().toLowerCase()
@@ -38,10 +40,24 @@ export default defineComponent({
       taskPage.value = clamp(taskPage.value + delta, 1, totalTaskPages.value)
     }
 
-    function scrollLogToBottom() {
+    // 用户主动上滑后暂停自动跟随，避免自动同步把历史日志拉回底部。
+    function isLogNearBottom(logConsole: HTMLElement) {
+      return logConsole.scrollHeight - logConsole.scrollTop - logConsole.clientHeight <= LOG_BOTTOM_THRESHOLD
+    }
+
+    function updateLogFollowState() {
+      const logConsole = logConsoleRef.value
+      if (!logConsole) return
+      logAutoFollow.value = isLogNearBottom(logConsole)
+    }
+
+    function scrollLogToBottom(force = false) {
       nextTick(() => {
         const logConsole = logConsoleRef.value
-        if (logConsole) logConsole.scrollTop = logConsole.scrollHeight
+        if (!logConsole) return
+        if (!force && !logAutoFollow.value) return
+        logConsole.scrollTop = logConsole.scrollHeight
+        logAutoFollow.value = true
       })
     }
 
@@ -53,7 +69,23 @@ export default defineComponent({
       if (taskPage.value > pages) taskPage.value = pages
     })
 
-    watch(() => [props.selectedTask?.id, (props.selectedTask?.logs || []).length], scrollLogToBottom, { immediate: true })
+    watch(
+      () => ({
+        taskId: String(props.selectedTask?.id || ''),
+        logCount: (props.selectedTask?.logs || []).length
+      }),
+      (current, previous) => {
+        if (!current.taskId) return
+        const taskChanged = !previous || current.taskId !== previous.taskId
+        if (taskChanged) {
+          logAutoFollow.value = true
+          scrollLogToBottom(true)
+          return
+        }
+        if (!previous || current.logCount > previous.logCount) scrollLogToBottom(false)
+      },
+      { immediate: true }
+    )
 
     return () => h(SplitPane, { storageKey: 'logs', side: 'right', defaultSideWidth: 390 }, {
       default: () => [
@@ -62,7 +94,7 @@ export default defineComponent({
         props.selectedTask ? renderTaskOutcome(props.selectedTask as Dict) : h('div', { class: 'empty-state compact' }, '请选择左侧任务查看产出和日志'),
         props.selectedTask ? renderDiagnostics(props.diagnostics as Dict) : null,
         props.selectedTask ? renderDedupSummary(props.dedupSummary as Dict) : null,
-        h('div', { class: 'log-console', ref: logConsoleRef }, (props.selectedTask?.logs || []).map((log: Dict) => h('p', [h('time', log.created_at), h('span', log.message)])))
+        h('div', { class: 'log-console', ref: logConsoleRef, onScroll: updateLogFollowState }, (props.selectedTask?.logs || []).map((log: Dict) => h('p', [h('time', log.created_at), h('span', log.message)])))
       ])
       ],
       side: () => [

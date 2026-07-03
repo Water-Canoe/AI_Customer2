@@ -10,10 +10,10 @@
       </div>
       <el-menu :default-active="activeView" class="nav" @select="goToView">
         <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
+        <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
         <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
         <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
         <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>私信工作台</span></el-menu-item>
-        <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
         <el-menu-item index="tables"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
         <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
       </el-menu>
