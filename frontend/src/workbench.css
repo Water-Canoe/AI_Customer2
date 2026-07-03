@@ -4353,6 +4353,8 @@ input[type='checkbox'] {
   margin: 0;
   font-size: 18px;
   line-height: 1;
+  /* Element Plus glyphs sit optically high inside the SVG viewBox. */
+  transform: translateY(1.5px);
 }
 
 .ui-icon-badge svg {
@@ -4360,6 +4362,7 @@ input[type='checkbox'] {
   width: 18px;
   height: 18px;
   margin: auto;
+  transform-origin: center;
 }
 
 .ui-icon-badge.tone-teal {
@@ -4561,6 +4564,7 @@ input[type='checkbox'] {
   width: 15px;
   height: 15px;
   font-size: 15px;
+  transform: translateY(1px);
 }
 
 .metric-tile-head .ui-icon-badge svg {
@@ -4644,6 +4648,7 @@ input[type='checkbox'] {
   width: 14px;
   height: 14px;
   font-size: 14px;
+  transform: translateY(1px);
 }
 
 .library-list .ui-icon-badge svg {
