@@ -729,6 +729,38 @@ def test_traffic_material_image_upload_has_preview(tmp_path: Path) -> None:
     assert client.get(payload["preview_url"]).content == content
 
 
+def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = "ok"
+
+    def fake_run(command: list[str], **_: object) -> Result:
+        calls.append(command)
+        return Result()
+
+    # 安装测试只校验命令编排，不真实联网下载依赖。
+    monkeypatch.setattr(traffic_workbench.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        traffic_workbench.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "playwright" else None,
+    )
+
+    result = traffic_workbench.install_environment()
+
+    assert result["ok"] is True
+    assert result["check"]["ok"] is True
+    assert calls[0][:4] == [sys.executable, "-m", "pip", "install"]
+    assert "requirements.txt" in calls[0][-1]
+    assert calls[1] == [sys.executable, "-m", "playwright", "install", "chromium"]
+    assert calls[2][1] == "-c"
+
+
 def test_traffic_developing_platform_cannot_start(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficPlanCreate

@@ -962,6 +962,57 @@ input[type='checkbox'] {
   font-size: 12px;
 }
 
+.traffic-env-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  min-width: 0;
+}
+
+.traffic-env-panel .task-card-actions button {
+  white-space: nowrap;
+}
+
+.traffic-env-suggestion {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.traffic-install-log {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.traffic-install-log details {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.traffic-install-log summary {
+  cursor: pointer;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.traffic-install-log pre {
+  max-height: 180px;
+  margin: 8px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .status {
   display: inline-flex;
   width: fit-content;

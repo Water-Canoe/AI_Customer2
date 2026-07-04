@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import random
+import subprocess
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +29,7 @@ TRAFFIC_SETTING_KEYS = {
 TRAFFIC_IMAGE_DIR = database.BACKEND_ROOT / "runtime" / "traffic_images"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+INSTALL_TIMEOUT_SECONDS = 300
 
 
 # 停机异常同时携带用户提示和技术详情，日志页面按这两个层级展示。
@@ -361,6 +365,34 @@ def material_image_path(name: str) -> Path:
     if path.suffix.lower() not in TRAFFIC_IMAGE_EXTENSIONS or not path.exists():
         raise ValueError("图片不存在")
     return path
+
+
+def environment_check() -> dict[str, Any]:
+    playwright_ok = importlib.util.find_spec("playwright") is not None
+    chromium = _check_chromium() if playwright_ok else _env_item(False, "需要先安装 Playwright Python 包")
+    TRAFFIC_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    image_dir_ok = TRAFFIC_IMAGE_DIR.exists() and TRAFFIC_IMAGE_DIR.is_dir()
+    items = {
+        "python": _env_item(True, str(sys.executable)),
+        "playwright": _env_item(playwright_ok, "已安装" if playwright_ok else "缺少 Python Playwright 依赖"),
+        "chromium": chromium,
+        "image_dir": _env_item(image_dir_ok, str(TRAFFIC_IMAGE_DIR)),
+    }
+    ok = all(item["ok"] for item in items.values())
+    return {
+        "ok": ok,
+        "items": items,
+        "summary": "引流执行环境正常" if ok else "引流执行环境缺少依赖",
+        "suggestion": "可以启动引流批次" if ok else "点击“检查并自动安装”安装缺失依赖",
+    }
+
+
+def install_environment() -> dict[str, Any]:
+    steps = [
+        _run_install_step([sys.executable, "-m", "pip", "install", "-r", str(database.BACKEND_ROOT / "requirements.txt")]),
+        _run_install_step([sys.executable, "-m", "playwright", "install", "chromium"]),
+    ]
+    return {"ok": all(step["ok"] for step in steps), "steps": steps, "check": environment_check()}
 
 
 def source_keywords() -> list[dict[str, Any]]:
@@ -840,6 +872,55 @@ def _image_preview_url(path: Path) -> str:
     except OSError:
         return ""
     return f"/api/traffic/material-images/{path.name}"
+
+
+def _env_item(ok: bool, message: str) -> dict[str, Any]:
+    return {"ok": ok, "message": message}
+
+
+def _check_chromium() -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from playwright.sync_api import sync_playwright\n"
+                "with sync_playwright() as p:\n"
+                "    browser = p.chromium.launch(headless=True)\n"
+                "    browser.close()\n"
+                "print('Chromium 可启动')",
+            ],
+            cwd=str(database.BACKEND_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return _env_item(False, "Chromium 启动检查超时")
+    text = _tail(result.stdout)
+    if result.returncode != 0:
+        return _env_item(False, text or "Chromium 浏览器内核未安装")
+    return _env_item(True, text or "Chromium 浏览器内核可用")
+
+
+def _run_install_step(command: list[str]) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(database.BACKEND_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=INSTALL_TIMEOUT_SECONDS,
+        )
+        return {"command": " ".join(command), "ok": result.returncode == 0, "output": _tail(result.stdout)}
+    except subprocess.TimeoutExpired as exc:
+        return {"command": " ".join(command), "ok": False, "output": _tail(exc.stdout or "安装超时")}
+
+
+def _tail(text: str, limit: int = 2000) -> str:
+    return str(text or "").strip()[-limit:]
 
 
 def _plan_actions(plan: dict[str, Any]) -> list[str]:

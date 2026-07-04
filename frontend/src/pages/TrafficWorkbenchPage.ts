@@ -64,6 +64,9 @@ export default defineComponent({
     const imageDraft = ref('')
     const uploadedImages = ref<Dict[]>([])
     const imageUploading = ref(false)
+    const trafficEnv = ref<Dict>({})
+    const envInstalling = ref(false)
+    const envInstallResult = ref<Dict | null>(null)
     const recordFilters = ref({ query: '', status: '', action: '', page: 1 })
     const loading = ref(false)
 
@@ -86,7 +89,7 @@ export default defineComponent({
       if (view.value === 'traffic-plans') await Promise.all([loadPlans(), loadSources()])
       else if (view.value === 'traffic-monitor') await Promise.all([loadRuns()])
       else if (view.value === 'traffic-records') await loadRecords()
-      else if (view.value === 'traffic-settings') await Promise.all([loadSettings(), loadTrafficLicense()])
+      else if (view.value === 'traffic-settings') await Promise.all([loadSettings(), loadTrafficLicense(), loadTrafficEnvironment()])
     }
 
     async function loadPlans() {
@@ -124,6 +127,11 @@ export default defineComponent({
       const { data } = await api.get('/traffic/license')
       licenseInfo.value = data
       licenseCode.value = String(data.license_code || '')
+    }
+
+    async function loadTrafficEnvironment() {
+      const { data } = await api.get('/traffic/environment-check')
+      trafficEnv.value = data
     }
 
     async function loadSources() {
@@ -214,6 +222,22 @@ export default defineComponent({
       } finally {
         imageUploading.value = false
         input.value = ''
+      }
+    }
+
+    async function installTrafficEnvironment() {
+      envInstalling.value = true
+      envInstallResult.value = null
+      try {
+        const { data } = await api.post('/traffic/environment-install')
+        envInstallResult.value = data
+        trafficEnv.value = data.check || {}
+        if (data.ok) ElMessage.success('引流环境依赖已安装')
+        else ElMessage.error('依赖安装失败，请查看输出')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '依赖安装失败')
+      } finally {
+        envInstalling.value = false
       }
     }
 
@@ -375,6 +399,7 @@ export default defineComponent({
             h('span', licenseInfo.value.message || '请填写引流授权码'),
             h('small', `设备码：${licenseInfo.value.device_code || '-'}`),
           ]),
+          renderTrafficEnvironment(),
           sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Delete, tone: 'red', compact: true }),
           h('button', { class: 'text-icon-button danger', onClick: clearRecords }, [h(Delete, { class: 'inline-icon' }), '清除引流记录']),
         ]),
@@ -483,6 +508,39 @@ export default defineComponent({
           ElMessage.success('设备码已复制')
         },
       })
+    }
+
+    function renderTrafficEnvironment() {
+      const items = [
+        ['Python', trafficEnv.value?.items?.python],
+        ['Playwright', trafficEnv.value?.items?.playwright],
+        ['Chromium', trafficEnv.value?.items?.chromium],
+        ['图片目录', trafficEnv.value?.items?.image_dir],
+      ]
+      // 环境检查放在右栏，避免挤占文案和图片库的主编辑区。
+      return h('div', { class: 'traffic-env-panel' }, [
+        sectionTitle({
+          title: '环境检查',
+          subtitle: trafficEnv.value.summary || '检查 Playwright 和执行目录',
+          icon: Monitor,
+          tone: trafficEnv.value.ok ? 'green' : 'amber',
+          compact: true,
+        }),
+        h('div', { class: 'env-list' }, items.map(([label, item]: any) => h('div', { class: 'env-item' }, [
+          h('span', label),
+          h('strong', { class: item?.ok ? 'ok' : 'warn' }, item?.ok ? '正常' : '待处理'),
+          h('small', item?.message || '未检查'),
+        ]))),
+        trafficEnv.value.suggestion ? h('p', { class: 'traffic-env-suggestion' }, trafficEnv.value.suggestion) : null,
+        h('div', { class: 'task-card-actions' }, [
+          h('button', { class: 'secondary-action', onClick: loadTrafficEnvironment }, [h(Refresh, { class: 'inline-icon' }), '重新检查']),
+          h('button', { class: 'primary-action', disabled: envInstalling.value, onClick: installTrafficEnvironment }, envInstalling.value ? '安装中...' : '检查并自动安装'),
+        ]),
+        envInstallResult.value?.steps?.length ? h('div', { class: 'traffic-install-log' }, envInstallResult.value.steps.map((step: Dict) => h('details', { open: !step.ok }, [
+          h('summary', `${step.ok ? '成功' : '失败'}：${step.command}`),
+          h('pre', step.output || '无输出'),
+        ]))) : null,
+      ])
     }
 
     function actionToggle(key: string, text: string) {

@@ -213,6 +213,16 @@ def update_traffic_settings(payload: TrafficSettingsUpdate) -> dict[str, object]
     return traffic_workbench.update_settings(payload)
 
 
+@app.get("/api/traffic/environment-check")
+def traffic_environment_check() -> dict[str, object]:
+    return traffic_workbench.environment_check()
+
+
+@app.post("/api/traffic/environment-install")
+def traffic_environment_install() -> dict[str, object]:
+    return traffic_workbench.install_environment()
+
+
 @app.post("/api/traffic/material-images")
 async def upload_traffic_material_image(request: Request, filename: str = Query(default="")) -> dict[str, object]:
     try:

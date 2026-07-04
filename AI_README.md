@@ -238,6 +238,8 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `backend/runtime/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。
 
+引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、Chromium 浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `playwright install chromium`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
+
 执行器位于 `backend/app/services/traffic_workbench.py`，使用 Python Playwright 和独立浏览器 Profile `runtime/traffic_douyin_profile`。执行前会检查登录态、安全验证、页面类型和活跃视频 ID；遇到登录失效、人机验证、找不到活跃视频、翻页不变、连续动作失败或达到限额时自动停机，并在日志里写清楚“发生了什么、为什么停、用户下一步怎么做”。不会实现验证码或人机验证绕过。
 
 参考实现和探测依据见 `docs/traffic_workbench_rebuild_research.md`；根目录保留只读探测脚本 `script/douyin_probe.cjs`，用于在不点赞、不关注、不评论的前提下验证抖音页面结构。
