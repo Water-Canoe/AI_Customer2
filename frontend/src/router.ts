@@ -7,10 +7,7 @@ import OverviewPage from './pages/OverviewPage'
 import SettingsPage from './pages/SettingsPage'
 import TablesPage from './pages/TablesPage'
 import TaskPage from './pages/TaskPage'
-import TrafficLogsPage from './pages/TrafficLogsPage'
-import TrafficPage from './pages/TrafficPage'
-import TrafficRecordsPage from './pages/TrafficRecordsPage'
-import TrafficSettingsPage from './pages/TrafficSettingsPage'
+import TrafficPlaceholderPage from './pages/TrafficPlaceholderPage'
 
 export const routes = [
   {
@@ -62,32 +59,32 @@ export const routes = [
   {
     path: '/traffic-targeted',
     name: 'traffic-targeted',
-    component: TrafficPage,
-    meta: { title: '定向引流', subtitle: '从已采集视频生成队列，或按关键词搜索抖音视频后自动引流。', hint: '选择来源后执行' },
+    component: TrafficPlaceholderPage,
+    meta: { title: '定向引流', subtitle: '', hint: '' },
   },
   {
     path: '/traffic-random',
     name: 'traffic-random',
-    component: TrafficPage,
-    meta: { title: '随机引流', subtitle: '打开抖音推荐流后，按配置自动处理刷到的视频。', hint: '手动启动，系统自动跑完批次' },
+    component: TrafficPlaceholderPage,
+    meta: { title: '随机引流', subtitle: '', hint: '' },
   },
   {
     path: '/traffic-logs',
     name: 'traffic-logs',
-    component: TrafficLogsPage,
-    meta: { title: '引流任务与日志', subtitle: '查看引流批次状态、执行日志、目标明细，并停止正在运行的批次。', hint: '先确认批次是否正确完成' },
+    component: TrafficPlaceholderPage,
+    meta: { title: '任务与日志', subtitle: '', hint: '' },
   },
   {
     path: '/traffic-records',
     name: 'traffic-records',
-    component: TrafficRecordsPage,
-    meta: { title: '引流数据表', subtitle: '查看已评论视频、评论内容、作者、点赞数和时间。', hint: '观察评论记录' },
+    component: TrafficPlaceholderPage,
+    meta: { title: '数据表', subtitle: '', hint: '' },
   },
   {
     path: '/traffic-settings',
     name: 'traffic-settings',
-    component: TrafficSettingsPage,
-    meta: { title: '引流设置', subtitle: '配置独立授权、执行参数、文案和图片素材。', hint: '引流业务单独授权' },
+    component: TrafficPlaceholderPage,
+    meta: { title: '引流设置', subtitle: '', hint: '' },
   },
 ]
 

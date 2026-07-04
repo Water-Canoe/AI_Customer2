@@ -53,7 +53,7 @@ DIAGNOSTIC_FIELDS = {
 def get_settings() -> dict[str, Any]:
     with database.connect() as conn:
         rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
-    result = {row["key"]: row["value"] for row in rows if not str(row["key"]).startswith("traffic_")}
+    result = {row["key"]: row["value"] for row in rows}
     for key in (
         "auto_analyze_competitors",
         "auto_delete_non_competitors",
@@ -93,7 +93,7 @@ def update_settings(values: dict[str, Any]) -> dict[str, Any]:
     }
     with database.connect() as conn:
         for key, value in values.items():
-            if key in protected_keys or str(key).startswith("traffic_"):
+            if key in protected_keys:
                 continue
             if key in ("icp_profile", "own_accounts"):
                 value = json.dumps(value, ensure_ascii=False)

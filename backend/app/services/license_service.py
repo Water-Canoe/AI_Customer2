@@ -12,7 +12,7 @@ from app import database
 
 DEFAULT_LICENSE_SERVER_URL = "https://tfwqsfaegbdj.sealosbja.site/ai-customer"
 LICENSE_CHECK_TIMEOUT = 8.0
-LICENSE_SCOPES = {"lead", "traffic"}
+LICENSE_SCOPES = {"lead"}
 
 
 def license_overview() -> dict[str, Any]:
@@ -125,13 +125,6 @@ def ensure_authorized() -> dict[str, Any]:
     return result
 
 
-def ensure_traffic_authorized() -> dict[str, Any]:
-    result = check_license_for("traffic")
-    if not result.get("authorized"):
-        raise ValueError(str(result.get("message") or "引流授权校验失败，请在引流设置页检查授权码"))
-    return result
-
-
 def _request_license_check(server_url: str, license_code: str, device_code: str, scope: str) -> dict[str, Any]:
     url = f"{server_url.rstrip('/')}/check-license"
     body = {
@@ -139,7 +132,7 @@ def _request_license_check(server_url: str, license_code: str, device_code: str,
         "deviceId": device_code,
         "deviceName": socket.gethostname(),
         "business": scope,
-        "remark": "AI_Customer 引流工作台" if scope == "traffic" else "AI_Customer 本地工作台",
+        "remark": "AI_Customer 本地工作台",
     }
     with httpx.Client(timeout=LICENSE_CHECK_TIMEOUT) as client:
         response = client.post(url, json=body)
@@ -161,8 +154,7 @@ def _ensure_device_code(conn, scope: str) -> str:
     if device_code:
         return device_code
     # 设备码只在首次运行时生成，后续不通过前端修改。
-    prefix = "AI-TRF" if scope == "traffic" else "AI-CUS"
-    device_code = f"{prefix}-{uuid.uuid4().hex[:8].upper()}-{uuid.uuid4().hex[:8].upper()}"
+    device_code = f"AI-CUS-{uuid.uuid4().hex[:8].upper()}-{uuid.uuid4().hex[:8].upper()}"
     database.set_setting(conn, key, device_code)
     return device_code
 
@@ -215,6 +207,4 @@ def _normalize_scope(scope: str) -> str:
 
 
 def _scoped_key(scope: str, key: str) -> str:
-    if scope == "lead":
-        return key
-    return f"traffic_{key}"
+    return key
