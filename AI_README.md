@@ -236,6 +236,8 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 如果本地库曾运行过早期引流原型，`init_db()` 会为旧 `traffic_runs` 表补齐 `plan_id`、统计列和停机原因列，避免执行监控页因为旧表缺列返回 500。引流分栏页面必须使用 `SplitPane` 的默认 slot 作为主区、`side` slot 作为右栏，否则主区会消失、右栏被压成竖排。
 
+引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `backend/runtime/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。
+
 执行器位于 `backend/app/services/traffic_workbench.py`，使用 Python Playwright 和独立浏览器 Profile `runtime/traffic_douyin_profile`。执行前会检查登录态、安全验证、页面类型和活跃视频 ID；遇到登录失效、人机验证、找不到活跃视频、翻页不变、连续动作失败或达到限额时自动停机，并在日志里写清楚“发生了什么、为什么停、用户下一步怎么做”。不会实现验证码或人机验证绕过。
 
 参考实现和探测依据见 `docs/traffic_workbench_rebuild_research.md`；根目录保留只读探测脚本 `script/douyin_probe.cjs`，用于在不点赞、不关注、不评论的前提下验证抖音页面结构。

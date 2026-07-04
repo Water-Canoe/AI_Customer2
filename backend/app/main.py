@@ -7,7 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -211,6 +211,22 @@ def get_traffic_settings() -> dict[str, object]:
 @app.put("/api/traffic/settings")
 def update_traffic_settings(payload: TrafficSettingsUpdate) -> dict[str, object]:
     return traffic_workbench.update_settings(payload)
+
+
+@app.post("/api/traffic/material-images")
+async def upload_traffic_material_image(request: Request, filename: str = Query(default="")) -> dict[str, object]:
+    try:
+        return traffic_workbench.save_material_image(filename, await request.body())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/traffic/material-images/{name}")
+def preview_traffic_material_image(name: str) -> FileResponse:
+    try:
+        return FileResponse(traffic_workbench.material_image_path(name))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/traffic/source-keywords")

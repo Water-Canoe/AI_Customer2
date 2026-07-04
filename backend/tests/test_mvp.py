@@ -691,6 +691,25 @@ def test_traffic_comment_actions_require_materials(tmp_path: Path) -> None:
         traffic_workbench.create_run(plan["id"])
 
 
+def test_traffic_material_image_upload_has_preview(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+
+    client = TestClient(app)
+    content = b"\x89PNG\r\n\x1a\npreview"
+    response = client.post(
+        "/api/traffic/material-images?filename=preview.png",
+        content=content,
+        headers={"content-type": "application/octet-stream"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert Path(payload["path"]).exists()
+    assert payload["preview_url"].startswith("/api/traffic/material-images/")
+    assert client.get(payload["preview_url"]).content == content
+
+
 def test_traffic_developing_platform_cannot_start(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficPlanCreate

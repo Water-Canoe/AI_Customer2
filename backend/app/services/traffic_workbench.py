@@ -23,6 +23,10 @@ TRAFFIC_SETTING_KEYS = {
     "traffic_stop_after_failures": "3",
 }
 
+TRAFFIC_IMAGE_DIR = database.BACKEND_ROOT / "runtime" / "traffic_images"
+TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+
 
 # 停机异常同时携带用户提示和技术详情，日志页面按这两个层级展示。
 @dataclass
@@ -292,9 +296,10 @@ def get_settings() -> dict[str, Any]:
         texts = database.rows_to_dicts(
             conn.execute("SELECT * FROM traffic_material_texts ORDER BY id DESC").fetchall()
         )
-        images = database.rows_to_dicts(
-            conn.execute("SELECT * FROM traffic_material_images ORDER BY id DESC").fetchall()
-        )
+        images = [
+            _format_material_image(row)
+            for row in conn.execute("SELECT * FROM traffic_material_images ORDER BY id DESC").fetchall()
+        ]
     return {"values": values, "texts": texts, "images": images}
 
 
@@ -310,6 +315,29 @@ def update_settings(payload: TrafficSettingsUpdate) -> dict[str, Any]:
         for image in _clean_lines(payload.images):
             conn.execute("INSERT INTO traffic_material_images(path, enabled) VALUES(?, 1)", (image,))
     return get_settings()
+
+
+def save_material_image(filename: str, content: bytes) -> dict[str, Any]:
+    suffix = Path(filename).suffix.lower()
+    if suffix not in TRAFFIC_IMAGE_EXTENSIONS:
+        raise ValueError("只支持 jpg、png、gif、webp 图片")
+    if not content:
+        raise ValueError("图片文件为空")
+    if len(content) > TRAFFIC_IMAGE_MAX_BYTES:
+        raise ValueError("图片不能超过 8MB")
+
+    TRAFFIC_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    path = TRAFFIC_IMAGE_DIR / f"{uuid.uuid4().hex}{suffix}"
+    # ponytail: 本地工作台只存 runtime 文件；需要多设备共享时再换对象存储。
+    path.write_bytes(content)
+    return {"path": str(path), "preview_url": _image_preview_url(path)}
+
+
+def material_image_path(name: str) -> Path:
+    path = TRAFFIC_IMAGE_DIR / Path(name).name
+    if path.suffix.lower() not in TRAFFIC_IMAGE_EXTENSIONS or not path.exists():
+        raise ValueError("图片不存在")
+    return path
 
 
 def source_keywords() -> list[dict[str, Any]]:
@@ -772,6 +800,23 @@ def _format_record(row: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         data["actions"] = []
     return data
+
+
+def _format_material_image(row: Any) -> dict[str, Any]:
+    data = database.row_to_dict(row) or {}
+    preview_url = _image_preview_url(Path(str(data.get("path") or "")))
+    if preview_url:
+        data["preview_url"] = preview_url
+    return data
+
+
+def _image_preview_url(path: Path) -> str:
+    try:
+        if path.resolve().parent != TRAFFIC_IMAGE_DIR.resolve():
+            return ""
+    except OSError:
+        return ""
+    return f"/api/traffic/material-images/{path.name}"
 
 
 def _plan_actions(plan: dict[str, Any]) -> list[str]:

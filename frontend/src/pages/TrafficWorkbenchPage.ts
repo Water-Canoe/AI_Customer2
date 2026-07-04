@@ -62,10 +62,21 @@ export default defineComponent({
     const settingsDraft = ref<Dict>({})
     const textDraft = ref('')
     const imageDraft = ref('')
+    const uploadedImages = ref<Dict[]>([])
+    const imageUploading = ref(false)
     const recordFilters = ref({ query: '', status: '', action: '', page: 1 })
     const loading = ref(false)
 
     const view = computed(() => String(route.name || 'traffic-plans'))
+    const imagePreviewItems = computed(() => {
+      const previews = new Map<string, string>()
+      ;[...(settings.value.images || []), ...uploadedImages.value].forEach((item: Dict) => {
+        if (item.path && item.preview_url) previews.set(String(item.path), String(item.preview_url))
+      })
+      return imageLines()
+        .map(path => ({ path, preview_url: previews.get(path) || '' }))
+        .filter(item => item.preview_url)
+    })
 
     onMounted(loadPage)
     watch(view, () => loadPage())
@@ -103,6 +114,7 @@ export default defineComponent({
     async function loadSettings() {
       const { data } = await api.get('/traffic/settings')
       settings.value = data
+      uploadedImages.value = []
       settingsDraft.value = { ...(data.values || {}) }
       textDraft.value = (data.texts || []).map((item: Dict) => item.text).join('\n')
       imageDraft.value = (data.images || []).map((item: Dict) => item.path).join('\n')
@@ -171,10 +183,38 @@ export default defineComponent({
 
     async function saveSettings() {
       const texts = textDraft.value.split('\n').map(item => item.trim()).filter(Boolean)
-      const images = imageDraft.value.split('\n').map(item => item.trim()).filter(Boolean)
+      const images = imageLines()
       const { data } = await api.put('/traffic/settings', { values: settingsDraft.value, texts, images })
       settings.value = data
+      uploadedImages.value = []
       ElMessage.success('引流设置已保存')
+    }
+
+    async function uploadImages(event: Event) {
+      const input = event.target as HTMLInputElement
+      const files = Array.from(input.files || [])
+      if (!files.length) return
+      imageUploading.value = true
+      try {
+        for (const file of files) {
+          if (!file.type.startsWith('image/')) {
+            ElMessage.warning(`${file.name} 不是图片`)
+            continue
+          }
+          const { data } = await api.post('/traffic/material-images', file, {
+            params: { filename: file.name },
+            headers: { 'Content-Type': 'application/octet-stream' },
+          })
+          appendImagePath(String(data.path || ''))
+          uploadedImages.value = [data, ...uploadedImages.value.filter(item => item.path !== data.path)]
+        }
+        ElMessage.success('图片已上传，请保存设置')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '图片上传失败')
+      } finally {
+        imageUploading.value = false
+        input.value = ''
+      }
     }
 
     async function clearRecords() {
@@ -309,14 +349,14 @@ export default defineComponent({
     }
 
     function renderSettingsPage() {
-      return h(SplitPane, { storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 360 }, {
-        default: () => h('section', { class: 'content-pane' }, [
+      return h(SplitPane, { storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 320, minSideWidth: 280, maxSideWidth: 420 }, {
+        default: () => h('section', { class: 'content-pane traffic-settings-pane' }, [
           sectionTitle({ title: '引流设置', subtitle: '授权、文案、图片、限额统一在这里维护', icon: Setting, tone: 'teal' }),
           h('div', { class: 'task-card-actions' }, [
             h('button', { class: 'secondary-action', onClick: openLicense }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
             h('button', { class: 'primary-action', onClick: saveSettings }, '保存设置'),
           ]),
-          h('div', { class: 'form-grid' }, [
+          h('div', { class: 'form-grid traffic-settings-form' }, [
             settingInput('traffic_round_video_limit', '每轮视频上限'),
             settingInput('traffic_daily_action_limit', '每日动作上限'),
             settingInput('traffic_min_watch_seconds', '最短停留秒数'),
@@ -324,11 +364,11 @@ export default defineComponent({
             settingInput('traffic_author_cooldown_hours', '作者冷却小时'),
             settingInput('traffic_stop_after_failures', '连续失败停机次数'),
             labelTextarea('多文案', textDraft.value, value => textDraft.value = value, '一行一条，发送时随机抽取'),
-            labelTextarea('图片路径', imageDraft.value, value => imageDraft.value = value, '一行一个本地图片路径，发送时随机抽取'),
+            renderImageManager(),
           ]),
           renderLicenseDialog(),
         ]),
-        side: () => h('aside', { class: 'side-pane' }, [
+        side: () => h('aside', { class: 'side-pane traffic-settings-side' }, [
           sectionTitle({ title: '授权状态', subtitle: licenseInfo.value.message || '尚未读取', icon: Key, tone: licenseInfo.value.authorized ? 'green' : 'amber' }),
           h('div', { class: ['license-status-card', licenseInfo.value.authorized ? 'authorized' : ''] }, [
             h('strong', licenseInfo.value.authorized ? '授权通过' : '未授权'),
@@ -471,6 +511,30 @@ export default defineComponent({
       ])
     }
 
+    function renderImageManager() {
+      return h('div', { class: 'form-field field-full traffic-image-manager' }, [
+        h('div', { class: 'traffic-image-head' }, [
+          h('span', '图片路径'),
+          h('label', { class: ['secondary-action', imageUploading.value ? 'is-disabled' : ''] }, [
+            h('input', { class: 'traffic-image-input', type: 'file', accept: 'image/*', multiple: true, disabled: imageUploading.value, onChange: uploadImages }),
+            imageUploading.value ? '上传中...' : '上传图片',
+          ]),
+        ]),
+        h('textarea', {
+          rows: 5,
+          placeholder: '上传图片后自动填入；也可以一行一个本地图片路径',
+          value: imageDraft.value,
+          onInput: (event: Event) => imageDraft.value = (event.target as HTMLTextAreaElement).value,
+        }),
+        imagePreviewItems.value.length
+          ? h('div', { class: 'traffic-image-preview-grid' }, imagePreviewItems.value.map(item => h('figure', { class: 'traffic-image-preview' }, [
+            h('img', { src: item.preview_url, alt: imageName(item.path) }),
+            h('figcaption', imageName(item.path)),
+          ])))
+          : h('small', { class: 'traffic-image-help' }, '上传到图片库后会在这里显示预览。'),
+      ])
+    }
+
     function labelSelect(text: string, value: string, options: string[][], update: (value: string) => void) {
       return h('label', { class: 'form-field' }, [
         h('span', text),
@@ -512,6 +576,21 @@ export default defineComponent({
 
     function isActiveStatus(status: string) {
       return status === 'queued' || status === 'running'
+    }
+
+    function imageLines() {
+      return imageDraft.value.split('\n').map(item => item.trim()).filter(Boolean)
+    }
+
+    function appendImagePath(path: string) {
+      if (!path) return
+      const lines = imageLines()
+      if (!lines.includes(path)) lines.push(path)
+      imageDraft.value = lines.join('\n')
+    }
+
+    function imageName(path: string) {
+      return path.split(/[\\/]/).pop() || path
     }
 
     return () => {

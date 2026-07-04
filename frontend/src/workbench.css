@@ -875,6 +875,93 @@ input[type='checkbox'] {
   background: #fff7ed;
 }
 
+.traffic-settings-pane,
+.traffic-settings-side {
+  min-width: 0;
+  overflow: auto;
+}
+
+.traffic-settings-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.traffic-settings-form .form-field {
+  min-width: 0;
+}
+
+.traffic-settings-form .field-full {
+  grid-column: 1 / -1;
+}
+
+.traffic-settings-form textarea {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.traffic-image-manager {
+  gap: 8px;
+}
+
+.traffic-image-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.traffic-image-head .secondary-action {
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.traffic-image-head .secondary-action.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.traffic-image-input {
+  display: none;
+}
+
+.traffic-image-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 10px;
+}
+
+.traffic-image-preview {
+  min-width: 0;
+  margin: 0;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.traffic-image-preview img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #f8fafc;
+}
+
+.traffic-image-preview figcaption {
+  padding: 6px 8px;
+  color: #64748b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traffic-image-help {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .status {
   display: inline-flex;
   width: fit-content;
