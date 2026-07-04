@@ -280,6 +280,94 @@ CREATE TABLE IF NOT EXISTS deletion_audit (
     detail TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS traffic_campaigns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'dy',
+    mode TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    keyword TEXT NOT NULL DEFAULT '',
+    action_like INTEGER NOT NULL DEFAULT 1,
+    action_follow INTEGER NOT NULL DEFAULT 0,
+    action_comment INTEGER NOT NULL DEFAULT 1,
+    comment_templates TEXT NOT NULL DEFAULT '[]',
+    image_asset_ids TEXT NOT NULL DEFAULT '[]',
+    per_run_limit INTEGER NOT NULL DEFAULT 20,
+    daily_limit INTEGER NOT NULL DEFAULT 100,
+    stay_seconds_min REAL NOT NULL DEFAULT 6,
+    stay_seconds_max REAL NOT NULL DEFAULT 15,
+    action_interval_seconds_min REAL NOT NULL DEFAULT 1,
+    action_interval_seconds_max REAL NOT NULL DEFAULT 3,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS traffic_targets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id INTEGER NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'dy',
+    source_type TEXT NOT NULL,
+    target_key TEXT NOT NULL,
+    content_row_id INTEGER,
+    content_url TEXT NOT NULL DEFAULT '',
+    author_account_id INTEGER,
+    author_name TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    keyword TEXT NOT NULL DEFAULT '',
+    selected_comment TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT NOT NULL DEFAULT '',
+    run_id TEXT NOT NULL DEFAULT '',
+    last_action_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(campaign_id, platform, target_key),
+    FOREIGN KEY(campaign_id) REFERENCES traffic_campaigns(id) ON DELETE CASCADE,
+    FOREIGN KEY(content_row_id) REFERENCES contents(id) ON DELETE SET NULL,
+    FOREIGN KEY(author_account_id) REFERENCES user_accounts(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS traffic_runs (
+    id TEXT PRIMARY KEY,
+    campaign_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    process_id INTEGER,
+    per_run_limit INTEGER NOT NULL DEFAULT 20,
+    daily_limit INTEGER NOT NULL DEFAULT 100,
+    counts TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(campaign_id) REFERENCES traffic_campaigns(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS traffic_action_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    target_id INTEGER,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    screenshot_path TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(run_id) REFERENCES traffic_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY(target_id) REFERENCES traffic_targets(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS traffic_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
 """
 
 
@@ -312,6 +400,22 @@ DEFAULT_SETTINGS = {
     "license_last_reason": "",
     "license_last_message": "未填写授权码",
     "license_last_checked_at": "",
+    "traffic_license_code": "",
+    "traffic_device_code": "",
+    "traffic_license_last_status": "unconfigured",
+    "traffic_license_last_reason": "",
+    "traffic_license_last_message": "未填写引流授权码",
+    "traffic_license_last_checked_at": "",
+    "traffic_per_run_limit": "20",
+    "traffic_daily_limit": "100",
+    "traffic_stay_seconds_min": "6",
+    "traffic_stay_seconds_max": "15",
+    "traffic_action_interval_seconds_min": "1",
+    "traffic_action_interval_seconds_max": "3",
+    "traffic_action_like": "true",
+    "traffic_action_follow": "false",
+    "traffic_action_comment": "true",
+    "traffic_comment_templates": json.dumps(["想了解一下，方便看下主页吗？"], ensure_ascii=False),
     "icp_profile": json.dumps(
         {
             "product": "",

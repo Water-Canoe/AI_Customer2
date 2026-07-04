@@ -2,19 +2,19 @@
 
 ## 项目定位
 
-这是一个本地自用的 AI 获客系统。当前已实现“拓客工作台”，它不替代 MediaCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选、私信话术和跟进状态管理；后续“引流工作台”会继续复用 MediaCrawler 采集到的竞品账号视频信息。
+这是一个本地自用的 AI 获客系统。当前已实现“拓客工作台”和“引流工作台”V1。拓客工作台不替代 MediaCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选、私信话术和跟进状态管理；引流工作台继续复用 MediaCrawler 采集到的抖音竞品账号视频信息，提供独立授权、计划配置、队列生成、批次执行、文案和图片素材管理。
 
 数据分三层：
 
 1. MediaCrawler 底层原始库：默认 `D:\Dev\Projects\MediaCrawler\database\sqlite_tables.db`，只做采集保底和追溯。
 2. 项目业务库：默认 `backend/runtime/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件。
-3. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台当前仅保留导航入口，尚未实现点赞、评论或关注动作。
+3. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台下的定向引流、随机引流和引流设置同样只是操作入口，真实状态保存在 `traffic_campaigns`、`traffic_targets`、`traffic_runs`、`traffic_action_events` 和 `traffic_assets`。
 
 版本控制只保留项目源码和文档；`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MediaCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 
 ## 前端结构
 
-前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts` 和 `SettingsPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
+前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts`、`TrafficPage.ts` 和 `TrafficSettingsPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
 `App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。
 
@@ -31,6 +31,10 @@
 7. 在“私信工作台”按关键词筛选目标客户，批量推进私信、回访、回复和成交状态。
 8. 在“数据表”和“总览树”中查看业务数据和父子关系。
 9. 对失败任务、0 入库任务、批量删除和批量 AI 分析，先看诊断或预览，再决定是否重试或执行。
+10. 在“引流设置”中填写引流业务自己的授权码，复制引流设备码给授权服务，并配置每轮上限、每日上限、随机停留秒数、动作间隔、默认动作、引流文案和图片素材。
+11. 在“定向引流”中创建竞品视频或关键词视频计划，系统从已入库的抖音内容按评论数、点赞数和更新时间生成待执行队列，再手动启动一个批次；批次启动后由系统自动执行到上限或失败停止。
+12. 在“随机引流”中创建推荐流计划，启动后打开抖音推荐页，对刷到的视频按配置自动执行动作并写入队列记录。
+13. 引流批次遇到登录、验证码、平台警告、页面结构变化或必要按钮缺失时会记录失败和截图，不做验证码绕过、代理池、多账号轮换或其它风控规避。
 
 竞品账号采集采用两阶段漏斗：关键词 `search` 阶段只负责高召回发现作者，所有从关键词内容中发现的作者都会进入“竞品账号候选库”，并记录关键词、来源内容和任务证据；这一阶段不再依赖主页简介命中关键词，因为 `search` 模式常常拿不到稳定简介。真正的竞品判断由后续 `creator` 阶段完成：拿候选账号主页/ID 批量补采主页简介、粉丝数和少量近期内容，再把 ICP、昵称、简介、近期内容和来源关键词一起交给 AI 判断 `竞品 / 非竞品` 并写回分析原因。竞品判断采用适中口径：主页定位或部分近期视频提供、销售、展示或获客与 ICP 高度相近的产品/服务时，可判为 `竞品`；但不能把关键词命中等同于竞品关系，除非视频简介或主页简介明确说明账号从事了这个行业。AI 分析原因必须说明主页简介是否相关、相关视频数量/总视频数量，以及与 ICP 的重合点。当前后端只通过 OpenAI 兼容聊天接口传入证据；如果接入的模型本身不具备联网搜索能力，AI 不得编造外部搜索结果。
 
@@ -226,6 +230,18 @@ AI分析页已从裸 `analysis_jobs` 表重构为“AI分析工作台”。顶�
 
 Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。当前文件包含 `AI_Customer 前端重构蓝图 v2` 页面，用于记录早期“页面行动区、图标化标题、统一空态、指标卡片”的设计方向；由于当前账号 Starter plan 的 MCP 调用限额阻止继续写入画布，且可用字体仅确认到 Inter，Figma 画布只作为设计蓝图参考，最终中文界面规范以代码实现为准。Canva 已用于准备“用户工作流与界面信息架构”的视觉参考。
 
+## 引流工作台
+
+引流工作台 V1 只执行抖音链路，分为“定向引流”“随机引流”和“引流设置”三个页面。定向引流复用拓客工作台已经入库的 `contents` 和 `user_accounts`：竞品视频计划筛选 `competitor_status=竞品` 且有 `content_url` 的抖音内容；关键词视频计划筛选 `contents.source_keyword` 等于计划关键词的抖音内容。筛选结果写入 `traffic_targets`，并为每条目标预先生成一条本次要发送的文本评论。随机引流不预先生成队列，启动后由执行器在抖音推荐流页面边刷边写入目标记录。
+
+引流数据独立落在项目业务库中：`traffic_campaigns` 保存计划、动作开关、文案、图片素材 ID、每轮/每日上限和随机等待参数；`traffic_targets` 保存具体视频、作者、关键词、选中的评论文案、状态、失败原因和最后执行时间；`traffic_runs` 保存批次状态、进程 ID、计数和错误；`traffic_action_events` 保存打开视频、点赞、关注、评论、发送、失败截图等事件；`traffic_assets` 保存上传图片素材的本地文件路径和元数据。图片素材 V1 可在设置页上传并关联到计划，但执行器当前只自动发送文本评论，不自动上传图片评论。
+
+后端接口统一挂在 `/api/traffic`：授权为 `GET/PUT/POST /license(/check)`，设置为 `GET/PUT /settings`，素材为 `GET/POST /assets`，计划为 `GET/POST /campaigns`，队列为 `POST /campaigns/{id}/targets/build` 和 `GET /campaigns/{id}/targets`，批次为 `POST /runs`、`GET /runs/{id}`、`POST /runs/{id}/cancel`。引流授权使用同一个 Sealos 授权服务 URL，但本地存储键和设备码前缀独立于拓客工作台：拓客设备码是 `AI-CUS-*`，引流设备码是 `AI-TRF-*`，校验请求会带 `business=traffic`。
+
+批次启动前会调用 `ensure_traffic_authorized()`，因此引流工作台必须先通过自己的授权码校验。执行器位于 `backend/app/traffic_executor.py`，由 `traffic_workbench.create_run()` 使用 `MediaCrawler/.venv/Scripts/python.exe` 启动；启动前复用现有 MediaCrawler CDP 浏览器配置和 `_ensure_cdp_browser_for_existing_mode()`，不额外创建一套浏览器依赖。执行器通过 Playwright CDP 连接浏览器，按计划随机停留、随机动作间隔、点赞、关注和文本评论；必要 selector 找不到、页面异常或执行失败时会把截图写到 `runtime/traffic_screenshots/` 并把批次标为失败。
+
+V1 不做代理池、多账号轮换、验证码绕过、平台风控绕过或自动处理平台安全提醒；遇到这些情况应停止批次并查看事件日志。随机等待和多文案只用于让批次表现不机械，不代表能规避平台规则。测试默认只覆盖计划、队列、授权、设置和素材接口，不启动真实 Playwright 执行器。
+
 ## 授权服务
 
 Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试地址为 `https://tfwqsfaegbdj.sealosbja.site`，接口详情见根目录 `sealos接口文档.md`。V1 只做授权码和绑定设备数限制，不做同时在线状态、心跳或强制下线。
@@ -233,6 +249,8 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 授权服务使用 `AI_Customer-License` 保存授权码，使用 `AI_Customer-LicenseDevice` 保存绑定设备。`POST /ai-customer/add-license` 用于创建授权码，`maxDevices` 为空时默认最多 3 台设备；`POST /ai-customer/check-license` 用于校验授权码和自动绑定设备：同一设备重复请求会直接通过，未绑定设备会在 active 设备数未满时自动绑定，超过 `maxDevices` 时返回 `DEVICE_LIMIT_EXCEEDED`。设备解绑通过 `POST /ai-customer/revoke-license-device` 把设备状态改为 `revoked`，并释放 active 设备名额。
 
 本地 AI获客系统的“设置”页提供“授权与设备”按钮。点击后弹出授权信息窗口：授权码可编辑并保存，设备码由本机后端首次读取授权信息时生成，前端只读且只能复制，通用 `PUT /api/settings` 会忽略 `device_code` 和授权状态字段，避免误改设备码。弹窗提供“保存授权码”和“保存并校验”，校验会调用本地 `POST /api/license/check`，再由本地后端请求 Sealos `/ai-customer/check-license` 完成授权码和设备绑定校验。
+
+“引流设置”页提供独立的引流授权码和引流设备码，不复用拓客工作台的本地 `license_code/device_code`。本地 `GET /api/traffic/license` 会生成 `AI-TRF-*` 设备码，`PUT /api/traffic/license` 只保存引流授权码，`POST /api/traffic/license/check` 会以 `business=traffic` 调用同一个 Sealos `/ai-customer/check-license`。拓客授权和引流授权可以分别售卖、分别绑定设备、分别失效。
 
 本地后端新增 `GET /api/license`、`PUT /api/license`、`POST /api/license/check`。所有会创建采集任务或 AI 分析任务的入口都会在执行前调用授权校验，包括 `/api/tasks`、账号补资料、账号分析、找客户、关键词一键竞品分析、关键词一键找客户、客户意向分析、批量客户意向分析、AI分析创建和 AI 重试。授权失败时接口返回 `403`，页面会提示 Sealos 返回的明确原因；任务预览、查看、删除、设置保存和环境检查不需要授权。
 
@@ -253,3 +271,6 @@ Windows 测试包通过 `script/build_package.ps1` 生成。脚本会先执行 `
 - 自动测试默认使用模拟 MediaCrawler SQLite，不会触发真实采集。
 - 如果真实采集失败，应先看“任务与日志”的控制台输出，不会使用假数据兜底。
 - 快手上游 SQLite store 目前没有保存 creator 主页资料，因此“补资料”只支持抖音和小红书；快手账号的主页简介不会被伪造，任务页也会提前显示该限制。
+- 引流工作台 V1 只支持抖音执行，且依赖 MediaCrawler 本地虚拟环境里的 Playwright 和已配置的 CDP 浏览器；缺少 `MediaCrawler/.venv/Scripts/python.exe` 时不会改用其它浏览器兜底。
+- 引流图片素材当前只做管理和计划关联，执行器不会自动发送图片评论。
+- 引流执行遇到验证码、登录失效、平台警告或页面按钮定位失败会停止并记录截图，不提供绕过、代理、多账号轮换或自动解封能力。

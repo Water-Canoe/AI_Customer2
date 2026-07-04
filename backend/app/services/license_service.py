@@ -12,44 +12,61 @@ from app import database
 
 DEFAULT_LICENSE_SERVER_URL = "https://tfwqsfaegbdj.sealosbja.site/ai-customer"
 LICENSE_CHECK_TIMEOUT = 8.0
+LICENSE_SCOPES = {"lead", "traffic"}
 
 
 def license_overview() -> dict[str, Any]:
     """Return local license settings and create a stable device code if missing."""
+    return license_overview_for("lead")
+
+
+def license_overview_for(scope: str) -> dict[str, Any]:
+    scope = _normalize_scope(scope)
     with database.connect() as conn:
-        device_code = _ensure_device_code(conn)
-        status = database.get_setting(conn, "license_last_status", "unconfigured")
+        device_code = _ensure_device_code(conn, scope)
+        status = database.get_setting(conn, _scoped_key(scope, "license_last_status"), "unconfigured")
         return {
-            "license_code": database.get_setting(conn, "license_code"),
+            "scope": scope,
+            "license_code": database.get_setting(conn, _scoped_key(scope, "license_code")),
             "device_code": device_code,
             "license_server_url": _server_url(conn),
             "authorized": status == "authorized",
             "status": status,
-            "reason": database.get_setting(conn, "license_last_reason"),
-            "message": database.get_setting(conn, "license_last_message", "未填写授权码"),
-            "last_checked_at": database.get_setting(conn, "license_last_checked_at"),
+            "reason": database.get_setting(conn, _scoped_key(scope, "license_last_reason")),
+            "message": database.get_setting(conn, _scoped_key(scope, "license_last_message"), "未填写授权码"),
+            "last_checked_at": database.get_setting(conn, _scoped_key(scope, "license_last_checked_at")),
         }
 
 
 def update_license_code(license_code: str) -> dict[str, Any]:
     """Persist the editable authorization code while keeping device code immutable."""
+    return update_license_code_for("lead", license_code)
+
+
+def update_license_code_for(scope: str, license_code: str) -> dict[str, Any]:
+    scope = _normalize_scope(scope)
     with database.connect() as conn:
-        _ensure_device_code(conn)
-        database.set_setting(conn, "license_code", license_code.strip())
-        database.set_setting(conn, "license_last_status", "unconfigured")
-        database.set_setting(conn, "license_last_reason", "")
-        database.set_setting(conn, "license_last_message", "授权码已保存，尚未校验")
-        database.set_setting(conn, "license_last_checked_at", "")
-    return license_overview()
+        _ensure_device_code(conn, scope)
+        database.set_setting(conn, _scoped_key(scope, "license_code"), license_code.strip())
+        database.set_setting(conn, _scoped_key(scope, "license_last_status"), "unconfigured")
+        database.set_setting(conn, _scoped_key(scope, "license_last_reason"), "")
+        database.set_setting(conn, _scoped_key(scope, "license_last_message"), "授权码已保存，尚未校验")
+        database.set_setting(conn, _scoped_key(scope, "license_last_checked_at"), "")
+    return license_overview_for(scope)
 
 
 def check_license(license_code: str | None = None) -> dict[str, Any]:
     """Validate the current license code against the Sealos authorization service."""
+    return check_license_for("lead", license_code)
+
+
+def check_license_for(scope: str, license_code: str | None = None) -> dict[str, Any]:
+    scope = _normalize_scope(scope)
     with database.connect() as conn:
-        device_code = _ensure_device_code(conn)
+        device_code = _ensure_device_code(conn, scope)
         if license_code is not None:
-            database.set_setting(conn, "license_code", license_code.strip())
-        saved_license_code = database.get_setting(conn, "license_code").strip()
+            database.set_setting(conn, _scoped_key(scope, "license_code"), license_code.strip())
+        saved_license_code = database.get_setting(conn, _scoped_key(scope, "license_code")).strip()
         server_url = _server_url(conn)
 
     if not saved_license_code:
@@ -62,11 +79,11 @@ def check_license(license_code: str | None = None) -> dict[str, Any]:
             license_code=saved_license_code,
             server_url=server_url,
         )
-        _save_result(result)
+        _save_result(scope, result)
         return result
 
     try:
-        remote = _request_license_check(server_url, saved_license_code, device_code)
+        remote = _request_license_check(server_url, saved_license_code, device_code, scope)
     except (httpx.RequestError, ValueError) as exc:
         result = _result(
             authorized=False,
@@ -77,7 +94,7 @@ def check_license(license_code: str | None = None) -> dict[str, Any]:
             license_code=saved_license_code,
             server_url=server_url,
         )
-        _save_result(result)
+        _save_result(scope, result)
         return result
 
     payload = remote.get("data") if isinstance(remote.get("data"), dict) else {}
@@ -96,25 +113,33 @@ def check_license(license_code: str | None = None) -> dict[str, Any]:
         active_device_count=payload.get("activeDeviceCount"),
         bound_new_device=payload.get("boundNewDevice"),
     )
-    _save_result(result)
+    _save_result(scope, result)
     return result
 
 
 def ensure_authorized() -> dict[str, Any]:
     """Block task execution when the local device is not authorized."""
-    result = check_license()
+    result = check_license_for("lead")
     if not result.get("authorized"):
         raise ValueError(str(result.get("message") or "授权校验失败，请在设置页检查授权码"))
     return result
 
 
-def _request_license_check(server_url: str, license_code: str, device_code: str) -> dict[str, Any]:
+def ensure_traffic_authorized() -> dict[str, Any]:
+    result = check_license_for("traffic")
+    if not result.get("authorized"):
+        raise ValueError(str(result.get("message") or "引流授权校验失败，请在引流设置页检查授权码"))
+    return result
+
+
+def _request_license_check(server_url: str, license_code: str, device_code: str, scope: str) -> dict[str, Any]:
     url = f"{server_url.rstrip('/')}/check-license"
     body = {
         "licenseCode": license_code,
         "deviceId": device_code,
         "deviceName": socket.gethostname(),
-        "remark": "AI_Customer 本地工作台",
+        "business": scope,
+        "remark": "AI_Customer 引流工作台" if scope == "traffic" else "AI_Customer 本地工作台",
     }
     with httpx.Client(timeout=LICENSE_CHECK_TIMEOUT) as client:
         response = client.post(url, json=body)
@@ -130,13 +155,15 @@ def _request_license_check(server_url: str, license_code: str, device_code: str)
     return payload
 
 
-def _ensure_device_code(conn) -> str:
-    device_code = database.get_setting(conn, "device_code").strip()
+def _ensure_device_code(conn, scope: str) -> str:
+    key = _scoped_key(scope, "device_code")
+    device_code = database.get_setting(conn, key).strip()
     if device_code:
         return device_code
     # 设备码只在首次运行时生成，后续不通过前端修改。
-    device_code = f"AI-CUS-{uuid.uuid4().hex[:8].upper()}-{uuid.uuid4().hex[:8].upper()}"
-    database.set_setting(conn, "device_code", device_code)
+    prefix = "AI-TRF" if scope == "traffic" else "AI-CUS"
+    device_code = f"{prefix}-{uuid.uuid4().hex[:8].upper()}-{uuid.uuid4().hex[:8].upper()}"
+    database.set_setting(conn, key, device_code)
     return device_code
 
 
@@ -172,9 +199,22 @@ def _result(
     }
 
 
-def _save_result(result: dict[str, Any]) -> None:
+def _save_result(scope: str, result: dict[str, Any]) -> None:
     with database.connect() as conn:
-        database.set_setting(conn, "license_last_status", result.get("status", ""))
-        database.set_setting(conn, "license_last_reason", result.get("reason", ""))
-        database.set_setting(conn, "license_last_message", result.get("message", ""))
-        database.set_setting(conn, "license_last_checked_at", result.get("checked_at", ""))
+        database.set_setting(conn, _scoped_key(scope, "license_last_status"), result.get("status", ""))
+        database.set_setting(conn, _scoped_key(scope, "license_last_reason"), result.get("reason", ""))
+        database.set_setting(conn, _scoped_key(scope, "license_last_message"), result.get("message", ""))
+        database.set_setting(conn, _scoped_key(scope, "license_last_checked_at"), result.get("checked_at", ""))
+
+
+def _normalize_scope(scope: str) -> str:
+    value = str(scope or "lead").strip()
+    if value not in LICENSE_SCOPES:
+        raise ValueError(f"未知授权业务：{value}")
+    return value
+
+
+def _scoped_key(scope: str, key: str) -> str:
+    if scope == "lead":
+        return key
+    return f"traffic_{key}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sqlite3
@@ -3375,10 +3376,11 @@ def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch:
     assert response.status_code == 200
     assert client.get("/api/license").json()["device_code"] == first["device_code"]
 
-    def fake_remote(server_url: str, license_code: str, device_code: str) -> dict[str, object]:
+    def fake_remote(server_url: str, license_code: str, device_code: str, scope: str) -> dict[str, object]:
         assert server_url.endswith("/ai-customer")
         assert license_code == "LIC-TEST"
         assert device_code == first["device_code"]
+        assert scope == "lead"
         return {
             "code": 200,
             "message": "授权通过",
@@ -3758,3 +3760,111 @@ def test_ai_job_records_prompt_version_and_raw_output(tmp_path: Path, monkeypatc
     assert row["base_url"] == "https://ai.example/v1"
     assert "你正在判断一个候选账号" in row["user_prompt"]
     assert '"is_competitor": true' in row["raw_output"]
+
+
+def test_traffic_license_is_independent_from_lead_license(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.services import license_service
+
+    client = TestClient(app)
+    lead = client.put("/api/license", json={"license_code": "LIC-LEAD"}).json()
+    traffic = client.put("/api/traffic/license", json={"license_code": "LIC-TRAFFIC"}).json()
+
+    assert lead["device_code"].startswith("AI-CUS-")
+    assert traffic["device_code"].startswith("AI-TRF-")
+    assert lead["device_code"] != traffic["device_code"]
+    assert client.get("/api/license").json()["license_code"] == "LIC-LEAD"
+    assert client.get("/api/traffic/license").json()["license_code"] == "LIC-TRAFFIC"
+
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_remote(server_url: str, license_code: str, device_code: str, scope: str) -> dict[str, object]:
+        calls.append((license_code, device_code, scope))
+        return {
+            "code": 200,
+            "message": "授权通过",
+            "data": {
+                "permission": True,
+                "reason": "DEVICE_ALREADY_BOUND",
+                "maxDevices": 2,
+                "activeDeviceCount": 1,
+                "boundNewDevice": False,
+            },
+        }
+
+    monkeypatch.setattr(license_service, "_request_license_check", fake_remote)
+    checked = client.post("/api/traffic/license/check", json={"license_code": "LIC-TRAFFIC"}).json()
+
+    assert checked["authorized"] is True
+    assert calls == [("LIC-TRAFFIC", traffic["device_code"], "traffic")]
+
+
+def test_traffic_build_targets_from_competitor_contents(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate, TrafficCampaignCreate
+    from app.services import crawler_adapter, traffic_workbench
+    from app.services.importer import import_for_task
+
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    import_for_task(str(task["id"]))
+    with database.connect() as conn:
+        conn.execute("UPDATE user_accounts SET competitor_status = '竞品' WHERE platform_user_id = 'creator-1'")
+
+    campaign = traffic_workbench.create_campaign(
+        TrafficCampaignCreate(
+            name="竞品视频引流",
+            mode="targeted",
+            source_type="competitor",
+            comment_templates=["A {昵称}", "B {视频标题}"],
+        )
+    )
+    result = traffic_workbench.build_targets(int(campaign["id"]), limit=10)
+    targets = traffic_workbench.list_targets(int(campaign["id"]))
+
+    assert result["created"] == 1
+    assert targets["total"] == 1
+    row = targets["rows"][0]
+    assert row["content_url"] == "https://douyin.example/video/10001"
+    assert row["author_name"] == "AI客服竞品号"
+    assert row["selected_comment"].startswith(("A ", "B "))
+    assert row["status"] == "pending"
+
+
+def test_traffic_settings_and_assets_are_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.main import app
+
+    monkeypatch.setattr(database, "WORKSPACE_ROOT", tmp_path)
+    client = TestClient(app)
+    settings = client.put(
+        "/api/traffic/settings",
+        json={
+            "values": {
+                "traffic_per_run_limit": 7,
+                "traffic_daily_limit": 33,
+                "traffic_action_like": False,
+                "traffic_action_follow": True,
+                "traffic_action_comment": True,
+                "traffic_comment_templates": ["第一条", "第二条"],
+            }
+        },
+    )
+
+    assert settings.status_code == 200
+    assert settings.json()["traffic_per_run_limit"] == 7
+    assert settings.json()["traffic_action_like"] is False
+    assert settings.json()["traffic_comment_templates"] == ["第一条", "第二条"]
+    assert "traffic_per_run_limit" not in client.get("/api/settings").json()
+
+    data_url = "data:image/png;base64," + base64.b64encode(b"png-bytes").decode("ascii")
+    asset = client.post("/api/traffic/assets", json={"name": "评论图.png", "data_url": data_url})
+
+    assert asset.status_code == 200
+    assert asset.json()["mime_type"] == "image/png"
+    assert Path(asset.json()["path"]).exists()
+    assert client.get("/api/traffic/assets").json()[0]["name"] == "评论图.png"

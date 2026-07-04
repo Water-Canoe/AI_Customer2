@@ -7,6 +7,8 @@ import OverviewPage from './pages/OverviewPage'
 import SettingsPage from './pages/SettingsPage'
 import TablesPage from './pages/TablesPage'
 import TaskPage from './pages/TaskPage'
+import TrafficPage from './pages/TrafficPage'
+import TrafficSettingsPage from './pages/TrafficSettingsPage'
 
 export const routes = [
   {
@@ -54,6 +56,24 @@ export const routes = [
     name: 'settings',
     component: SettingsPage,
     meta: { title: '设置', subtitle: '配置 AI 模型、MediaCrawler 路径、自动化和 ICP 画像。', hint: '开始前先把基础环境配好' },
+  },
+  {
+    path: '/traffic-targeted',
+    name: 'traffic-targeted',
+    component: TrafficPage,
+    meta: { title: '定向引流', subtitle: '从竞品视频或关键词视频生成队列，再启动自动引流批次。', hint: '先生成队列再执行' },
+  },
+  {
+    path: '/traffic-random',
+    name: 'traffic-random',
+    component: TrafficPage,
+    meta: { title: '随机引流', subtitle: '打开抖音推荐流后，按配置自动处理刷到的视频。', hint: '手动启动，系统自动跑完批次' },
+  },
+  {
+    path: '/traffic-settings',
+    name: 'traffic-settings',
+    component: TrafficSettingsPage,
+    meta: { title: '引流设置', subtitle: '配置独立授权、执行参数、文案和图片素材。', hint: '引流业务单独授权' },
   },
 ]
 

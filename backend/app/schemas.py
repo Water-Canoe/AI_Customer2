@@ -86,3 +86,39 @@ class BulkActionPreview(BaseModel):
 class CustomerFollowStatusUpdate(BaseModel):
     follow_status: Literal["待筛选", "未私信", "已私信", "未回复", "已回复", "未成交", "已成交", "非客户", "无需跟进"]
     note: str = ""
+
+
+class TrafficSettingsUpdate(BaseModel):
+    values: dict[str, Any]
+
+
+class TrafficCampaignCreate(BaseModel):
+    name: str = ""
+    mode: Literal["targeted", "random"] = "targeted"
+    source_type: Literal["competitor", "keyword", "random_feed"] = "competitor"
+    keyword: str = ""
+    action_like: bool = True
+    action_follow: bool = False
+    action_comment: bool = True
+    comment_templates: list[str] = Field(default_factory=list)
+    image_asset_ids: list[int] = Field(default_factory=list)
+    per_run_limit: int = Field(default=20, ge=1, le=100)
+    daily_limit: int = Field(default=100, ge=1, le=500)
+    stay_seconds_min: float = Field(default=6, ge=0, le=120)
+    stay_seconds_max: float = Field(default=15, ge=0, le=300)
+    action_interval_seconds_min: float = Field(default=1, ge=0, le=60)
+    action_interval_seconds_max: float = Field(default=3, ge=0, le=120)
+
+
+class TrafficTargetBuild(BaseModel):
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class TrafficRunCreate(BaseModel):
+    campaign_id: int
+    limit: int | None = Field(default=None, ge=1, le=100)
+
+
+class TrafficAssetCreate(BaseModel):
+    name: str = ""
+    data_url: str

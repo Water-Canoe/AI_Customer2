@@ -12,8 +12,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app import database
-from app.schemas import AiBatchCreate, AiBulkDelete, AiJobCreate, BulkActionPreview, ClearDataRequest, CustomerFollowStatusUpdate, LicenseUpdate, SettingsUpdate, TableUpdate, TaskCreate
-from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility
+from app.schemas import (
+    AiBatchCreate,
+    AiBulkDelete,
+    AiJobCreate,
+    BulkActionPreview,
+    ClearDataRequest,
+    CustomerFollowStatusUpdate,
+    LicenseUpdate,
+    SettingsUpdate,
+    TableUpdate,
+    TaskCreate,
+    TrafficAssetCreate,
+    TrafficCampaignCreate,
+    TrafficRunCreate,
+    TrafficSettingsUpdate,
+    TrafficTargetBuild,
+)
+from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
 from app import views
 
 
@@ -21,6 +37,7 @@ from app import views
 async def lifespan(_: FastAPI):
     database.init_db()
     crawler_adapter.recover_interrupted_running_tasks()
+    traffic_workbench.recover_interrupted_running_runs()
     yield
 
 
@@ -86,6 +103,21 @@ def update_license(payload: LicenseUpdate) -> dict[str, object]:
 @app.post("/api/license/check")
 def check_license(payload: LicenseUpdate) -> dict[str, object]:
     return license_service.check_license(payload.license_code)
+
+
+@app.get("/api/traffic/license")
+def get_traffic_license() -> dict[str, object]:
+    return license_service.license_overview_for("traffic")
+
+
+@app.put("/api/traffic/license")
+def update_traffic_license(payload: LicenseUpdate) -> dict[str, object]:
+    return license_service.update_license_code_for("traffic", payload.license_code)
+
+
+@app.post("/api/traffic/license/check")
+def check_traffic_license(payload: LicenseUpdate) -> dict[str, object]:
+    return license_service.check_license_for("traffic", payload.license_code)
 
 
 @app.post("/api/tasks")
@@ -413,6 +445,89 @@ def message_workbench_customers(
 def message_workbench_customer_detail(lead_id: int) -> dict[str, object]:
     try:
         return message_workbench.customer_detail(lead_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/traffic/dashboard")
+def traffic_dashboard() -> dict[str, object]:
+    return traffic_workbench.dashboard()
+
+
+@app.get("/api/traffic/settings")
+def get_traffic_settings() -> dict[str, object]:
+    return traffic_workbench.get_settings()
+
+
+@app.put("/api/traffic/settings")
+def update_traffic_settings(payload: TrafficSettingsUpdate) -> dict[str, object]:
+    return traffic_workbench.update_settings(payload.values)
+
+
+@app.get("/api/traffic/assets")
+def traffic_assets() -> list[dict[str, object]]:
+    return traffic_workbench.list_assets()
+
+
+@app.post("/api/traffic/assets")
+def create_traffic_asset(payload: TrafficAssetCreate) -> dict[str, object]:
+    try:
+        return traffic_workbench.create_asset(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/traffic/campaigns")
+def traffic_campaigns() -> list[dict[str, object]]:
+    return traffic_workbench.list_campaigns()
+
+
+@app.post("/api/traffic/campaigns")
+def create_traffic_campaign(payload: TrafficCampaignCreate) -> dict[str, object]:
+    try:
+        return traffic_workbench.create_campaign(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/traffic/campaigns/{campaign_id}/targets/build")
+def build_traffic_targets(campaign_id: int, payload: TrafficTargetBuild) -> dict[str, object]:
+    try:
+        return traffic_workbench.build_targets(campaign_id, payload.limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/traffic/campaigns/{campaign_id}/targets")
+def traffic_targets(
+    campaign_id: int,
+    status: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=100),
+) -> dict[str, object]:
+    return traffic_workbench.list_targets(campaign_id, status=status, page=page, page_size=page_size)
+
+
+@app.post("/api/traffic/runs")
+def create_traffic_run(payload: TrafficRunCreate) -> dict[str, object]:
+    try:
+        return traffic_workbench.create_run(payload.campaign_id, payload.limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/traffic/runs/{run_id}")
+def traffic_run(run_id: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.get_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/traffic/runs/{run_id}/cancel")
+def cancel_traffic_run(run_id: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.cancel_run(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
