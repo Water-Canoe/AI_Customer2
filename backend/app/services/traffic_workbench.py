@@ -29,6 +29,7 @@ TRAFFIC_SETTING_KEYS = {
 
 TRAFFIC_IMAGE_DIR = database.BACKEND_ROOT / "runtime" / "traffic_images"
 TRAFFIC_DOUYIN_PROFILE_DIR = database.WORKSPACE_ROOT / "runtime" / "traffic_douyin_profile"
+TRAFFIC_LAST_VIDEO_URL_KEY = "traffic_last_douyin_video_url"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 300
@@ -403,7 +404,7 @@ def open_douyin_login_window() -> dict[str, Any]:
     if importlib.util.find_spec("playwright") is None:
         raise ValueError("缺少 Python Playwright 依赖，请先在引流设置执行环境检查并自动安装")
     if DOUYIN_LOGIN_PROCESS and DOUYIN_LOGIN_PROCESS.poll() is None:
-        return {"ok": True, "message": "抖音登录窗口已经打开，请在该窗口扫码登录。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
+        return {"ok": True, "message": "抖音登录窗口已经打开。扫码后请点开任意视频，关闭窗口，再启动批次。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
 
     runtime_dir = database.BACKEND_ROOT / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -421,7 +422,7 @@ def open_douyin_login_window() -> dict[str, Any]:
     time.sleep(1)
     if DOUYIN_LOGIN_PROCESS.poll() is not None:
         raise ValueError(f"抖音登录窗口启动失败，请先检查环境。日志：{log_path}")
-    return {"ok": True, "message": "抖音登录窗口已打开，请扫码登录后再启动引流批次。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
+    return {"ok": True, "message": "抖音登录窗口已打开。扫码后请点开任意视频，关闭窗口，再启动批次。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
 
 
 def source_keywords() -> list[dict[str, Any]]:
@@ -536,7 +537,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                     raise TrafficStop(
                         "连续没有找到可执行的视频，任务已停止。",
                         "当前停留在抖音精选页，未进入具体视频。" if is_jingxuan else "当前页面没有活跃视频节点。",
-                        "请在浏览器里完成登录，或点击抖音首页任意视频后再重新启动任务。" if is_jingxuan else "请确认抖音已经进入推荐流或视频详情页，再重新启动任务。",
+                        "请到引流设置打开抖音登录窗口，扫码后点开任意视频，关闭窗口，再重新启动批次。" if is_jingxuan else "请确认抖音已经进入推荐流或视频详情页，再重新启动任务。",
                         "probe",
                         {"url": page.url},
                     )
@@ -586,6 +587,11 @@ def _hold_douyin_login_window() -> None:
         page = context.pages[0] if context.pages else context.new_page()
         page.goto("https://www.douyin.com/?recommend=1", wait_until="domcontentloaded", timeout=60_000)
         while True:
+            video = _read_active_video(page)
+            if video["video_id"]:
+                _save_last_douyin_video_url(video["video_url"] if _is_douyin_video_url(video["video_url"]) else f"https://www.douyin.com/video/{video['video_id']}")
+            else:
+                _save_last_douyin_video_url(page.url)
             page.wait_for_timeout(1000)
 
 
@@ -617,6 +623,10 @@ def _target_url(plan: dict[str, Any]) -> str:
         return f"https://www.douyin.com/search/{quote(plan['source_value'])}"
     if plan["source_mode"] == "competitor_videos" and plan["source_value"].startswith("http"):
         return plan["source_value"]
+    if plan["source_mode"] == "random_feed":
+        saved_url = _last_douyin_video_url()
+        if saved_url:
+            return saved_url
     return "https://www.douyin.com/?recommend=1"
 
 
@@ -658,6 +668,14 @@ def _ensure_page_ready(page: Any) -> None:
 def _navigate_to_executable_video(page: Any, run_id: str) -> None:
     if _read_active_video(page)["video_id"]:
         return
+    if "douyin.com/jingxuan" in page.url:
+        raise TrafficStop(
+            "抖音停留在精选页，任务已停止。",
+            "当前页面不是具体视频页，无法稳定点赞或下滑。",
+            "请到引流设置打开抖音登录窗口，扫码后点开任意视频，关闭窗口，再重新启动批次。",
+            "probe",
+            {"url": page.url, "saved_video_url": _last_douyin_video_url()},
+        )
     candidates = _visible_video_links(page)
     if not candidates:
         return
@@ -689,6 +707,23 @@ def _visible_video_links(page: Any) -> list[dict[str, Any]]:
         }
         """
     ))
+
+
+def _last_douyin_video_url() -> str:
+    with database.connect() as conn:
+        url = database.get_setting(conn, TRAFFIC_LAST_VIDEO_URL_KEY, "")
+    return url if _is_douyin_video_url(url) else ""
+
+
+def _save_last_douyin_video_url(url: str) -> None:
+    if not _is_douyin_video_url(url):
+        return
+    with database.connect() as conn:
+        database.set_setting(conn, TRAFFIC_LAST_VIDEO_URL_KEY, url)
+
+
+def _is_douyin_video_url(url: str) -> bool:
+    return "douyin.com/video/" in url or "douyin.com/note/" in url
 
 
 def _read_active_video(page: Any) -> dict[str, Any]:

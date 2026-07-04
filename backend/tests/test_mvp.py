@@ -811,20 +811,25 @@ def test_traffic_douyin_login_route(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert response.json()["ok"] is True
 
 
-def test_traffic_jingxuan_page_enters_visible_video(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_traffic_random_feed_uses_last_video_url(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    traffic_workbench._save_last_douyin_video_url("https://www.douyin.com/video/7123")
+
+    assert traffic_workbench._target_url({"source_mode": "random_feed", "source_value": ""}) == "https://www.douyin.com/video/7123"
+
+
+def test_traffic_jingxuan_page_stops_without_saved_video(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
     from app.services import traffic_workbench
 
     class FakePage:
         url = "https://www.douyin.com/jingxuan"
-        target_url = ""
 
         def evaluate(self, script: str) -> object:
-            if 'querySelectorAll(\'a[href*="/video/"]' in script:
-                return [{"href": "https://www.douyin.com/video/7123", "text": "可执行视频", "visible": True}]
-            if "loginPrompt" in script:
-                return {"url": self.url, "title": "抖音", "loginPrompt": False, "verifyPrompt": False, "activeVideoId": "7123"}
             return {
-                "video_id": "7123" if self.target_url else "",
+                "video_id": "",
                 "video_url": self.url,
                 "author_id": "",
                 "author_name": "",
@@ -833,21 +838,8 @@ def test_traffic_jingxuan_page_enters_visible_video(monkeypatch: pytest.MonkeyPa
                 "comment_count": None,
             }
 
-        def goto(self, url: str, **_: object) -> None:
-            self.target_url = url
-            self.url = url
-
-        def wait_for_timeout(self, _: int) -> None:
-            return None
-
-    logs: list[tuple[object, ...]] = []
-    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
-
-    page = FakePage()
-    traffic_workbench._navigate_to_executable_video(page, "run-1")
-
-    assert page.target_url == "https://www.douyin.com/video/7123"
-    assert "随机进入一个视频" in str(logs[0][3])
+    with pytest.raises(traffic_workbench.TrafficStop, match="精选页"):
+        traffic_workbench._navigate_to_executable_video(FakePage(), "run-1")
 
 
 def test_traffic_developing_platform_cannot_start(tmp_path: Path) -> None:
