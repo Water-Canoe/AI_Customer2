@@ -4027,6 +4027,10 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
     from app.services import traffic_workbench
     from app.traffic_executor import DOUYIN_HOME, TrafficExecutor
 
+    class FakeContext:
+        def __init__(self, page: "FakePage") -> None:
+            self.pages = [page]
+
     class FakeKeyboard:
         def __init__(self) -> None:
             self.pressed: list[str] = []
@@ -4035,18 +4039,49 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
             self.pressed.append(key)
 
     class FakeLocator:
+        def __init__(self, page: "FakePage", selector: str, index: int = 0) -> None:
+            self.page = page
+            self.selector = selector
+            self.index = index
+
         @property
         def first(self) -> "FakeLocator":
             return self
 
+        def nth(self, index: int) -> "FakeLocator":
+            return FakeLocator(self.page, self.selector, index)
+
+        def count(self) -> int:
+            if "a[href*='/video/']" in self.selector:
+                return len(self.page.video_links)
+            if "waterfall-videoCardContainer" in self.selector:
+                return len(self.page.video_cards)
+            return 1
+
+        def wait_for(self, state: str = "", timeout: int = 0) -> None:
+            return None
+
         def get_attribute(self, name: str, timeout: int = 0) -> str:
+            if "a[href*='/video/']" in self.selector:
+                return self.page.video_links[self.index]
             return ""
+
+        def click(self, timeout: int = 0) -> None:
+            self.page.clicked.append(self.selector)
+            if "a[href*='/video/']" in self.selector:
+                self.page.url = self.page.video_links[self.index]
+            if "waterfall-videoCardContainer" in self.selector:
+                self.page.url = self.page.video_cards[self.index]
 
     class FakePage:
         def __init__(self) -> None:
             self.url = ""
             self.urls: list[str] = []
+            self.video_links: list[str] = []
+            self.video_cards = ["https://www.douyin.com/jingxuan?modal_id=unit-video-1"]
+            self.clicked: list[str] = []
             self.keyboard = FakeKeyboard()
+            self.context = FakeContext(self)
 
         def goto(self, url: str, wait_until: str = "", timeout: int = 0) -> None:
             self.url = url
@@ -4056,12 +4091,24 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
             return "随机推荐视频"
 
         def locator(self, selector: str) -> FakeLocator:
-            return FakeLocator()
+            return FakeLocator(self, selector)
 
         def wait_for_timeout(self, timeout: int) -> None:
             return None
 
-    campaign = traffic_workbench.create_campaign(TrafficCampaignCreate(name="随机引流", mode="random"))
+    campaign = traffic_workbench.create_campaign(
+        TrafficCampaignCreate(
+            name="随机引流",
+            mode="random",
+            action_like=True,
+            action_follow=False,
+            action_comment=False,
+            stay_seconds_min=0,
+            stay_seconds_max=0,
+            action_interval_seconds_min=0,
+            action_interval_seconds_max=0,
+        )
+    )
     run_id = "TRF-UNIT"
     with database.connect() as conn:
         conn.execute(
@@ -4079,7 +4126,16 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
     executor._run_random(page)
 
     assert page.urls[0] == DOUYIN_HOME
-    assert page.keyboard.pressed == ["ArrowDown"]
+    assert page.url == "https://www.douyin.com/jingxuan?modal_id=unit-video-1"
+    assert "[class*='waterfall-videoCardContainer']" in page.clicked
+    assert "[data-e2e='video-player-digg']" in page.clicked
+    assert page.keyboard.pressed == []
+    with database.connect() as conn:
+        target = conn.execute("SELECT content_url, status FROM traffic_targets WHERE run_id = ?", (run_id,)).fetchone()
+        ledger_count = conn.execute("SELECT COUNT(*) FROM traffic_action_ledger WHERE run_id = ?", (run_id,)).fetchone()[0]
+    assert target["content_url"] == "https://www.douyin.com/jingxuan?modal_id=unit-video-1"
+    assert target["status"] == "succeeded"
+    assert ledger_count == 0
 
 
 def test_traffic_settings_and_assets_are_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
@@ -91,30 +91,56 @@ class TrafficExecutor:
         if not keyword:
             raise RuntimeError("搜索关键词引流必须填写关键词")
         page.goto(DOUYIN_SEARCH.format(keyword=quote(keyword, safe="")), wait_until="domcontentloaded", timeout=45000)
-        page = self._open_first_search_video(page)
+        page = self._open_random_video(page)
         self._run_runtime_feed(page, page.url, "search_keyword", already_open=True)
 
     def _run_runtime_feed(self, page: Page, start_url: str, source_type: str, already_open: bool = False) -> None:
         if not already_open:
             page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
-        for _ in range(int(self.run_info["per_run_limit"])):
+            page = self._open_random_video(page)
+        limit = int(self.run_info["per_run_limit"])
+        for index in range(limit):
             target = self._create_runtime_target(page, source_type)
             self._execute_target(page, target, already_open=True)
-            page.keyboard.press("ArrowDown")
-            page.wait_for_timeout(int(self._random_interval() * 1000))
+            # 最后一条执行完停留在当前视频，方便人工核验操作结果。
+            if index < limit - 1:
+                page.keyboard.press("ArrowDown")
+                page.wait_for_timeout(int(self._random_interval() * 1000))
 
-    def _open_first_search_video(self, page: Page) -> Page:
-        # 抖音搜索页先展示结果列表，需要打开第一个视频后才能复用刷视频执行逻辑。
-        link = page.locator("a[href*='/video/']").first
-        link.wait_for(state="visible", timeout=15000)
-        before = list(page.context.pages)
-        link.click(timeout=5000)
-        page.wait_for_timeout(2000)
-        for candidate in page.context.pages:
-            if all(candidate is not existing for existing in before):
-                candidate.bring_to_front()
-                return candidate
-        return page
+    def _open_random_video(self, page: Page) -> Page:
+        if "/video/" in (page.url or "") or self._active_video_id(page):
+            return page
+        # 先从列表页随机进入一个视频页，再复用单视频动作执行流程。
+        selectors = ["a[href*='/video/']", "[class*='waterfall-videoCardContainer']"]
+        for selector in selectors:
+            try:
+                items = page.locator(selector)
+                items.first.wait_for(state="visible", timeout=5000)
+                indexes = list(range(min(items.count(), 30)))
+                random.shuffle(indexes)
+            except Exception:
+                continue
+            for index in indexes:
+                try:
+                    item = items.nth(index)
+                    href = str(item.get_attribute("href", timeout=1000) or "")
+                    before = list(page.context.pages)
+                    item.wait_for(state="visible", timeout=1000)
+                    item.click(timeout=5000)
+                    page.wait_for_timeout(2000)
+                    for candidate in page.context.pages:
+                        if all(candidate is not existing for existing in before):
+                            candidate.bring_to_front()
+                            page = candidate
+                            break
+                    if "/video/" in (page.url or "") or self._active_video_id(page):
+                        return page
+                    if "/video/" in href:
+                        page.goto(urljoin(DOUYIN_HOME, href), wait_until="domcontentloaded", timeout=45000)
+                        return page
+                except Exception:
+                    continue
+        raise RuntimeError("找不到可进入的抖音视频")
 
     def _execute_target(self, page: Page, target: dict[str, Any], already_open: bool = False) -> None:
         target_id = int(target["id"])
@@ -130,7 +156,8 @@ class TrafficExecutor:
                 self._mark_target(target_id, "skipped", reason)
                 self._update_counts()
                 return
-            if not traffic_workbench.claim_comment_action(self.campaign, target, self.run_id):
+            needs_comment_claim = bool(self.campaign["action_comment"] or self.campaign["action_image"])
+            if needs_comment_claim and not traffic_workbench.claim_comment_action(self.campaign, target, self.run_id):
                 self.skipped += 1
                 self._mark_target(target_id, "skipped", "重复视频")
                 self._update_counts()
@@ -141,17 +168,18 @@ class TrafficExecutor:
             self._event(target_id, "open", "succeeded", page.url)
             page.wait_for_timeout(int(self._random_stay() * 1000))
             if self.campaign["action_like"]:
-                self._click_required(page, ["button:has-text('点赞')", "[aria-label*='点赞']", "[data-e2e*='like']"], "like", target_id)
+                self._click_required(page, ["[data-e2e='video-player-digg']", "button:has-text('点赞')", "[aria-label*='点赞']", "[data-e2e*='like']"], "like", target_id)
             if self.campaign["action_follow"]:
                 self._click_required(page, ["button:has-text('关注')", "[aria-label*='关注']", "text=关注"], "follow", target_id)
-            if self.campaign["action_comment"] or self.campaign["action_image"]:
+            if needs_comment_claim:
                 comment_text = self._comment(page, target)
                 traffic_workbench.complete_comment_action(target, comment_text)
             self._mark_target(target_id, "succeeded")
             self.done += 1
             self._update_counts()
         except Exception as exc:
-            traffic_workbench.release_comment_action(target)
+            if self.campaign["action_comment"] or self.campaign["action_image"]:
+                traffic_workbench.release_comment_action(target)
             screenshot = self._screenshot(page, target_id)
             self.failed += 1
             self._mark_target(target_id, "failed", str(exc), screenshot)
@@ -255,6 +283,9 @@ class TrafficExecutor:
             return database.row_to_dict(row) or {}
 
     def _active_video_id(self, page: Page) -> str:
+        modal_id = parse_qs(urlparse(page.url or "").query).get("modal_id", [""])[0]
+        if modal_id:
+            return str(modal_id)
         try:
             return str(page.locator("[data-e2e='feed-active-video']").first.get_attribute("data-e2e-vid", timeout=1000) or "")
         except Exception:
