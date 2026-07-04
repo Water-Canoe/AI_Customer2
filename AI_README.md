@@ -242,7 +242,7 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个独立 Playwright 登录窗口，并复用执行器同一个 `runtime/traffic_douyin_profile`；用户扫码后需要点开任意视频并关闭登录窗口，登录窗口会把最后的 `/video/` 或 `/note/` 地址保存到 `settings.traffic_last_douyin_video_url`，随机引流批次会优先从这个可执行视频入口开始，避免每次落到 `douyin.com/jingxuan` 后再猜页面结构。
 
-执行器位于 `backend/app/services/traffic_workbench.py`，使用 Python Playwright 和独立浏览器 Profile `runtime/traffic_douyin_profile`。执行前会检查登录态、安全验证、页面类型和活跃视频 ID；如果随机引流没有保存过可执行视频入口且首页落到 `douyin.com/jingxuan`，会明确停机提示用户先在登录窗口点开任意视频，不再继续猜测精选页 DOM。遇到登录失效、人机验证、找不到活跃视频、翻页不变、连续动作失败或达到限额时自动停机，并在日志里写清楚“发生了什么、为什么停、用户下一步怎么做”。不会实现验证码或人机验证绕过。
+执行器位于 `backend/app/services/traffic_workbench.py`，使用 Python Playwright 和独立浏览器 Profile `runtime/traffic_douyin_profile`。执行前会检查登录态、安全验证、页面类型和活跃视频 ID；如果随机引流没有保存过可执行视频入口且首页落到 `douyin.com/jingxuan`，会明确停机提示用户先在登录窗口点开任意视频，不再继续猜测精选页 DOM。执行中参考 `GHkmmm/laizan` 的做法监听 `aweme/v1/web/tab/feed/` 和详情接口响应，把视频接口数据缓存后用活跃视频 ID 反查作者、文案、点赞和评论数；翻页和点赞优先使用抖音快捷键，并跳过直播、图文、广告等非常规 `aweme_type` 内容。遇到登录失效、人机验证、找不到活跃视频、翻页不变、连续动作失败或达到限额时自动停机，并在日志里写清楚“发生了什么、为什么停、用户下一步怎么做”。不会实现验证码或人机验证绕过。
 
 参考实现和探测依据见 `docs/traffic_workbench_rebuild_research.md`；根目录保留只读探测脚本 `script/douyin_probe.cjs`，用于在不点赞、不关注、不评论的前提下验证抖音页面结构。
 ## 授权服务

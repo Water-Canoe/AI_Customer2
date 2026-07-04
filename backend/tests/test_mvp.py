@@ -842,6 +842,41 @@ def test_traffic_jingxuan_page_stops_without_saved_video(tmp_path: Path) -> None
         traffic_workbench._navigate_to_executable_video(FakePage(), "run-1")
 
 
+def test_traffic_active_video_prefers_feed_api_cache() -> None:
+    from app.services import traffic_workbench
+
+    class FakePage:
+        def evaluate(self, _: str) -> dict[str, object]:
+            return {
+                "video_id": "7123",
+                "video_url": "https://www.douyin.com/video/7123",
+                "author_id": "",
+                "author_name": "DOM作者",
+                "video_desc": "DOM文案",
+                "like_count": None,
+                "comment_count": None,
+            }
+
+    cache = {
+        "7123": {
+            "aweme_id": "7123",
+            "aweme_type": 0,
+            "desc": "接口文案",
+            "author": {"uid": "author-1", "nickname": "接口作者"},
+            "statistics": {"digg_count": 12, "comment_count": 3},
+            "share_url": "https://www.douyin.com/video/7123",
+        }
+    }
+
+    video = traffic_workbench._read_active_video(FakePage(), cache)
+
+    assert video["video_desc"] == "接口文案"
+    assert video["author_name"] == "接口作者"
+    assert video["like_count"] == 12
+    assert traffic_workbench._is_regular_video(video) is True
+    assert traffic_workbench._is_regular_video({"aweme_type": 108}) is False
+
+
 def test_traffic_developing_platform_cannot_start(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficPlanCreate

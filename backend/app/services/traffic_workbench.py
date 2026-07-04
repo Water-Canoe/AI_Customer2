@@ -522,16 +522,17 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
     with sync_playwright() as playwright:
         context = _launch_context(playwright, TRAFFIC_DOUYIN_PROFILE_DIR)
         page = context.pages[0] if context.pages else context.new_page()
+        video_cache = _setup_video_data_cache(page)
         try:
             target_url = _target_url(plan)
             _append_log(run_id, "info", "login", "正在打开抖音页面。", "准备执行引流批次", "如果弹出登录，请先到引流设置完成扫码登录。", {"url": target_url})
             page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
             page.wait_for_timeout(4000)
             _ensure_page_ready(page)
-            _navigate_to_executable_video(page, run_id)
+            _navigate_to_executable_video(page, run_id, video_cache)
             for index in range(limit):
                 _raise_if_stop_requested(run_id)
-                video = _read_active_video(page)
+                video = _read_active_video(page, video_cache)
                 if not video["video_id"]:
                     is_jingxuan = "douyin.com/jingxuan" in page.url
                     raise TrafficStop(
@@ -541,6 +542,18 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                         "probe",
                         {"url": page.url},
                     )
+                if not _is_regular_video(video):
+                    _append_log(run_id, "warning", "browse", "当前不是常规视频，已跳过。", "可能是直播、图文或广告内容", "系统会尝试切换到下一个视频。", {"video_id": video["video_id"], "aweme_type": video.get("aweme_type")})
+                    _record_video(run_id, plan, video, ["跳过"], "", "", "skipped")
+                    if index < limit - 1 and not _advance_video(page, video["video_id"], video_cache):
+                        raise TrafficStop(
+                            "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
+                            "翻页后视频 ID 没有变化。",
+                            "请到引流设置重新打开抖音登录窗口，进入任意视频后再启动。",
+                            "advance",
+                            {"video_id": video["video_id"], "url": page.url},
+                        )
+                    continue
                 watch_seconds = random.randint(min_watch, max_watch)
                 _append_log(run_id, "info", "browse", f"正在浏览视频：{video['video_desc'][:36] or video['video_id']}。", "按设置随机停留", f"本次停留约 {watch_seconds} 秒。", {"video_id": video["video_id"]})
                 page.wait_for_timeout(watch_seconds * 1000)
@@ -559,7 +572,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                         "stop",
                         {"failure_count": failure_count},
                     )
-                if index < limit - 1 and not _advance_video(page, video["video_id"]):
+                if index < limit - 1 and not _advance_video(page, video["video_id"], video_cache):
                     raise TrafficStop(
                         "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
                         "翻页后视频 ID 没有变化。",
@@ -585,9 +598,10 @@ def _hold_douyin_login_window() -> None:
     with sync_playwright() as playwright:
         context = _launch_context(playwright, TRAFFIC_DOUYIN_PROFILE_DIR)
         page = context.pages[0] if context.pages else context.new_page()
+        video_cache = _setup_video_data_cache(page)
         page.goto("https://www.douyin.com/?recommend=1", wait_until="domcontentloaded", timeout=60_000)
         while True:
-            video = _read_active_video(page)
+            video = _read_active_video(page, video_cache)
             if video["video_id"]:
                 _save_last_douyin_video_url(video["video_url"] if _is_douyin_video_url(video["video_url"]) else f"https://www.douyin.com/video/{video['video_id']}")
             else:
@@ -665,8 +679,8 @@ def _ensure_page_ready(page: Any) -> None:
         )
 
 
-def _navigate_to_executable_video(page: Any, run_id: str) -> None:
-    if _read_active_video(page)["video_id"]:
+def _navigate_to_executable_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None) -> None:
+    if _read_active_video(page, video_cache)["video_id"]:
         return
     if "douyin.com/jingxuan" in page.url:
         raise TrafficStop(
@@ -726,7 +740,30 @@ def _is_douyin_video_url(url: str) -> bool:
     return "douyin.com/video/" in url or "douyin.com/note/" in url
 
 
-def _read_active_video(page: Any) -> dict[str, Any]:
+def _setup_video_data_cache(page: Any) -> dict[str, Any]:
+    cache: dict[str, Any] = {}
+
+    def remember(response: Any) -> None:
+        url = response.url
+        if "aweme/v1/web/tab/feed/" not in url and "aweme/v1/web/aweme/detail/" not in url:
+            return
+        try:
+            payload = response.json()
+        except Exception:
+            return
+        for item in payload.get("aweme_list", []) or []:
+            if item.get("aweme_id"):
+                cache[str(item["aweme_id"])] = item
+        detail = payload.get("aweme_detail") or payload.get("aweme")
+        if isinstance(detail, dict) and detail.get("aweme_id"):
+            cache[str(detail["aweme_id"])] = detail
+
+    # laizan 的可靠点：用接口数据缓存视频，再用当前活跃 ID 反查，不靠 DOM 文本猜。
+    page.on("response", remember)
+    return cache
+
+
+def _read_active_video(page: Any, video_cache: dict[str, Any] | None = None) -> dict[str, Any]:
     data = page.evaluate(
         """
         () => {
@@ -753,7 +790,38 @@ def _read_active_video(page: Any) -> dict[str, Any]:
         }
         """
     )
-    return dict(data)
+    video = dict(data)
+    cached = (video_cache or {}).get(str(video.get("video_id") or ""))
+    if isinstance(cached, dict):
+        return _video_from_aweme(cached, video["video_url"])
+    return video
+
+
+def _video_from_aweme(item: dict[str, Any], fallback_url: str) -> dict[str, Any]:
+    stats = item.get("statistics") or {}
+    author = item.get("author") or {}
+    share_info = item.get("share_info") or {}
+    return {
+        "video_id": str(item.get("aweme_id") or ""),
+        "video_url": item.get("share_url") or share_info.get("share_url") or fallback_url,
+        "author_id": str(author.get("uid") or author.get("sec_uid") or ""),
+        "author_name": str(author.get("nickname") or ""),
+        "video_desc": str(item.get("desc") or "").strip()[:800],
+        "like_count": _int_or_none(stats.get("digg_count")),
+        "comment_count": _int_or_none(stats.get("comment_count")),
+        "aweme_type": item.get("aweme_type"),
+    }
+
+
+def _is_regular_video(video: dict[str, Any]) -> bool:
+    return video.get("aweme_type") in (None, "", 0)
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _execute_actions(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any]) -> tuple[list[str], str, str]:
@@ -780,6 +848,12 @@ def _execute_click_action(run_id: str, page: Any, video: dict[str, Any], action:
     if _dedup_exists(video, action, ""):
         _append_log(run_id, "warning", action, f"这个视频已经执行过{label}，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
+    if action == "like":
+        page.keyboard.press("z")
+        page.wait_for_timeout(700)
+        _append_log(run_id, "success", action, f"{label}已执行。", "已使用抖音快捷键触发", "可以在操作记录中查看本视频结果。", {"video_id": video["video_id"]})
+        _insert_dedup(video, action, "", "done")
+        return True
     locator = page.locator(selector).first
     if not locator.is_visible(timeout=1500):
         _append_log(run_id, "warning", action, f"没有找到{label}按钮，已跳过当前动作。", "页面没有对应按钮", "如果频繁出现，可能是抖音页面改版或当前视频不支持该动作。", {"selector": selector})
@@ -837,16 +911,18 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
     return True
 
 
-def _advance_video(page: Any, previous_video_id: str) -> bool:
-    for action in ("wheel", "page_down", "arrow_down"):
-        if action == "wheel":
-            page.mouse.wheel(0, 1600)
-        elif action == "page_down":
-            page.keyboard.press("PageDown")
-        else:
+def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any] | None = None) -> bool:
+    page.keyboard.press("x")
+    page.wait_for_timeout(500)
+    for action in ("arrow_down", "wheel", "page_down"):
+        if action == "arrow_down":
             page.keyboard.press("ArrowDown")
+        elif action == "wheel":
+            page.mouse.wheel(0, 1600)
+        else:
+            page.keyboard.press("PageDown")
         page.wait_for_timeout(1400)
-        next_id = _read_active_video(page)["video_id"]
+        next_id = _read_active_video(page, video_cache)["video_id"]
         if next_id and next_id != previous_video_id:
             return True
     return False
@@ -916,10 +992,11 @@ def _record_video(
             SET total_videos = total_videos + 1,
                 browsed_count = browsed_count + 1,
                 action_success_count = action_success_count + ?,
+                skipped_count = skipped_count + ?,
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
             """,
-            (0 if actions == ["仅浏览"] else len(actions), run_id),
+            (0 if actions == ["仅浏览"] or status == "skipped" else len(actions), 1 if status == "skipped" else 0, run_id),
         )
 
 
