@@ -3851,6 +3851,37 @@ def test_traffic_build_targets_from_competitor_contents(tmp_path: Path) -> None:
     assert refreshed["comment_templates"] == ["新文案"]
 
 
+def test_traffic_keywords_api_lists_douyin_content_keywords(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.main import app
+
+    with database.connect() as conn:
+        account_id = conn.execute(
+            "INSERT INTO user_accounts(platform, platform_user_id, nickname) VALUES('dy', 'kw-author', '关键词作者')"
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, author_account_id, title, content_url, source_keyword)
+            VALUES('dy', 'kw-1', ?, '关键词视频', 'https://douyin.example/video/kw-1', 'AI客服')
+            """,
+            (account_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, title, content_url, source_keyword)
+            VALUES('xhs', 'xhs-1', '小红书视频', 'https://xhs.example/item/1', '不应出现')
+            """
+        )
+
+    client = TestClient(app)
+    payload = client.get("/api/traffic/keywords").json()
+
+    assert payload[0]["keyword"] == "AI客服"
+    assert payload[0]["target_count"] == 1
+    assert all(item["keyword"] != "不应出现" for item in payload)
+
+
 def test_traffic_settings_and_assets_are_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database

@@ -14,6 +14,7 @@ export default defineComponent({
     const loading = ref(false)
     const dashboard = ref<Dict>({ summary: {}, campaigns: [], runs: [] })
     const assets = ref<Dict[]>([])
+    const keywordOptions = ref<Dict[]>([])
     const targets = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 30 })
     const selectedCampaignId = ref<number | null>(null)
     const form = reactive<Dict>({
@@ -32,12 +33,14 @@ export default defineComponent({
     async function loadAll() {
       loading.value = true
       try {
-        const [dashboardResponse, assetsResponse] = await Promise.all([
+        const [dashboardResponse, assetsResponse, keywordsResponse] = await Promise.all([
           api.get('/traffic/dashboard'),
           api.get('/traffic/assets'),
+          api.get('/traffic/keywords'),
         ])
         dashboard.value = dashboardResponse.data
         assets.value = assetsResponse.data || []
+        keywordOptions.value = keywordsResponse.data || []
         if (!selectedCampaignId.value && campaigns.value.length) selectedCampaignId.value = Number(campaigns.value[0].id)
         if (selectedCampaignId.value) await loadTargets()
       } finally {
@@ -125,7 +128,7 @@ export default defineComponent({
       h('div', { class: 'traffic-grid' }, [
         h('section', { class: 'traffic-panel' }, [
           sectionTitle({ title: '创建计划', subtitle: '动作、文案、限额和停留时间统一在引流设置中配置', icon: Promotion, tone: 'teal', compact: true }),
-          renderCampaignForm(form, isRandom.value, assets.value),
+          renderCampaignForm(form, isRandom.value, assets.value, keywordOptions.value),
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', onClick: createCampaign }, [h(Promotion, { class: 'inline-icon' }), '创建计划']),
             !isRandom.value ? h('button', { class: 'secondary-action', disabled: !selectedCampaignId.value, onClick: buildTargets }, '生成队列') : null,
@@ -151,14 +154,14 @@ export default defineComponent({
   }
 })
 
-function renderCampaignForm(form: Dict, isRandom: boolean, assets: Dict[]) {
+function renderCampaignForm(form: Dict, isRandom: boolean, assets: Dict[], keywordOptions: Dict[]) {
   return h('div', { class: 'traffic-form' }, [
     field('计划名称', h('input', { value: form.name, placeholder: isRandom ? '随机引流计划' : '竞品视频引流计划', onInput: (event: Event) => form.name = (event.target as HTMLInputElement).value })),
     !isRandom ? field('来源', h('select', { value: form.source_type, onChange: (event: Event) => form.source_type = (event.target as HTMLSelectElement).value }, [
       h('option', { value: 'competitor' }, '竞品账号视频'),
       h('option', { value: 'keyword' }, '关键词视频'),
     ])) : null,
-    !isRandom && form.source_type === 'keyword' ? field('关键词', h('input', { value: form.keyword, placeholder: '必须与拓客采集入库关键词一致', onInput: (event: Event) => form.keyword = (event.target as HTMLInputElement).value })) : null,
+    !isRandom && form.source_type === 'keyword' ? field('关键词', renderKeywordPicker(form, keywordOptions)) : null,
     field('发送内容', h('div', { class: 'traffic-checks' }, [
       check(form, 'action_comment', '发送文案'),
       check(form, 'action_image', '发送图片'),
@@ -168,6 +171,22 @@ function renderCampaignForm(form: Dict, isRandom: boolean, assets: Dict[]) {
           ? h('div', { class: 'traffic-asset-checks' }, assets.map(asset => assetCheck(form, asset)))
           : h('small', '请先到“引流设置”上传图片素材'))
       : null,
+  ])
+}
+
+function renderKeywordPicker(form: Dict, keywordOptions: Dict[]) {
+  return h('div', { class: 'traffic-keyword-picker' }, [
+    h('input', { value: form.keyword, readonly: true, placeholder: '从下方关键词中选择' }),
+    keywordOptions.length
+      ? h('div', { class: 'traffic-keyword-list' }, keywordOptions.map(row => h('button', {
+          type: 'button',
+          class: ['traffic-keyword-chip', form.keyword === row.keyword ? 'active' : ''],
+          onClick: () => form.keyword = row.keyword,
+        }, [
+          h('strong', row.keyword),
+          h('span', `${row.target_count || 0} 条视频`),
+        ])))
+      : h('small', '暂无已入库的抖音关键词视频，请先通过拓客工作台采集关键词内容。'),
   ])
 }
 

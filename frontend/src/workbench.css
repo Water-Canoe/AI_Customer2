@@ -4565,6 +4565,53 @@ input[type='checkbox'] {
   color: var(--workbench-muted);
 }
 
+/* 关键词模式从后端列表点选，避免手动输入造成队列为空。 */
+.traffic-keyword-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.traffic-keyword-picker input[readonly] {
+  background: var(--workbench-panel-soft);
+}
+
+.traffic-keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.traffic-keyword-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--workbench-text);
+  cursor: pointer;
+}
+
+.traffic-keyword-chip:hover,
+.traffic-keyword-chip.active {
+  border-color: var(--workbench-primary);
+  background: var(--workbench-primary-soft);
+}
+
+.traffic-keyword-chip strong {
+  overflow: hidden;
+  max-width: 180px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traffic-keyword-chip span {
+  color: var(--workbench-muted);
+  font-size: 12px;
+}
+
 .traffic-campaign-list {
   display: grid;
   gap: 8px;

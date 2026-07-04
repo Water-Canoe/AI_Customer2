@@ -469,6 +469,11 @@ def traffic_assets() -> list[dict[str, object]]:
     return traffic_workbench.list_assets()
 
 
+@app.get("/api/traffic/keywords")
+def traffic_keywords() -> list[dict[str, object]]:
+    return traffic_workbench.list_keywords()
+
+
 @app.post("/api/traffic/assets")
 def create_traffic_asset(payload: TrafficAssetCreate) -> dict[str, object]:
     try:

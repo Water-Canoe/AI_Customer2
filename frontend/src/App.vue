@@ -31,7 +31,7 @@
     <el-container>
       <el-header class="topbar">
         <div class="topbar-heading">
-          <span class="topbar-kicker">AI 获客系统</span>
+          <span class="topbar-kicker">{{ topbarKicker }}</span>
           <h1>{{ viewTitle }}</h1>
           <p>{{ viewSubtitle }}</p>
         </div>
@@ -46,7 +46,12 @@
             <strong>{{ item.value }}</strong>
           </div>
         </div>
-        <div class="topbar-actions">
+        <div v-if="isTrafficView" class="topbar-actions">
+          <el-tag type="success" effect="light">抖音引流</el-tag>
+          <el-button :icon="Refresh" @click="refreshTrafficWorkbench">刷新</el-button>
+          <el-button type="primary" :icon="Setting" @click="router.push('/traffic-settings')">引流设置</el-button>
+        </div>
+        <div v-else class="topbar-actions">
           <el-tag :type="envReady ? 'success' : 'warning'" effect="light">
             {{ envReady ? '环境就绪' : '需要检查环境' }}
           </el-tag>
@@ -97,6 +102,7 @@ const tableLoading = ref(false)
 const overviewTree = ref<Dict[]>([])
 const aiJobs = ref<Dict[]>([])
 const aiWorkbench = ref<Dict>({})
+const trafficDashboard = ref<Dict>({ summary: {} })
 const selectedTask = ref<Dict | null>(null)
 const taskDiagnostics = ref<Dict>({})
 const taskDedupSummary = ref<Dict>({})
@@ -125,13 +131,25 @@ let autoSyncTimer: ReturnType<typeof window.setInterval> | null = null
 let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
+const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
+const topbarKicker = computed(() => isTrafficView.value ? '引流工作台' : '拓客工作台')
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.media_crawler_path?.ok && env.value?.media_crawler_db?.ok))
 const hasActiveAsyncWork = computed(() => {
-  return tasks.value.some(task => isActiveStatus(task.status)) || aiJobs.value.some(job => isActiveStatus(job.status))
+  const runningTrafficCount = Number(trafficDashboard.value?.summary?.running_runs || 0)
+  return tasks.value.some(task => isActiveStatus(task.status)) || aiJobs.value.some(job => isActiveStatus(job.status)) || runningTrafficCount > 0
 })
 const dashboardInsights = computed(() => {
+  if (isTrafficView.value) {
+    const trafficSummary = trafficDashboard.value?.summary || {}
+    return [
+      { label: '引流计划', value: compactCount(trafficSummary.campaigns || 0), tone: 'teal' },
+      { label: '待执行', value: compactCount(trafficSummary.pending_targets || 0), tone: 'amber' },
+      { label: '运行中', value: compactCount(trafficSummary.running_runs || 0), tone: 'blue' },
+      { label: '今日完成', value: compactCount(trafficSummary.today_done || 0), tone: 'green' },
+    ]
+  }
   const summary = aiWorkbench.value?.summary || {}
   const pendingAi = Number(summary.competitor_pending || 0) + Number(summary.lead_pending || 0)
   const failedAi = Number(summary.failed || 0)
@@ -273,7 +291,12 @@ function goToView(view: string) {
 
 async function refreshAll() {
   // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
-  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadMessageWorkbench(true), loadTombstoneSummary(), loadTombstones(), loadTable(activeLibrary.value)])
+  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadMessageWorkbench(true), loadTrafficDashboard(), loadTombstoneSummary(), loadTombstones(), loadTable(activeLibrary.value)])
+  lastAutoSyncAt.value = Date.now()
+}
+
+async function refreshTrafficWorkbench() {
+  await loadTrafficDashboard()
   lastAutoSyncAt.value = Date.now()
 }
 
@@ -307,6 +330,11 @@ async function loadAiJobs() {
   aiJobs.value = data
   const workbench = await api.get('/ai/workbench')
   aiWorkbench.value = workbench.data
+}
+
+async function loadTrafficDashboard() {
+  const { data } = await api.get('/traffic/dashboard')
+  trafficDashboard.value = data
 }
 
 async function loadOverview() {
@@ -438,6 +466,7 @@ async function syncCurrentView(reason: 'auto' | 'route' | 'visible') {
     if (activeView.value === 'overview') loaders.set('overview', loadOverview)
     if (activeView.value === 'message-workbench') loaders.set('message-workbench', () => loadMessageWorkbench(true))
     if (activeView.value === 'tables') loaders.set('table', () => loadTable(activeLibrary.value, true))
+    if (isTrafficView.value) loaders.set('traffic', loadTrafficDashboard)
     if (activeView.value === 'settings') {
       // 设置页有未保存草稿时，不用后台刷新覆盖本地输入。
       if (!settingsDraftDirty.value) loaders.set('settings', loadSettings)

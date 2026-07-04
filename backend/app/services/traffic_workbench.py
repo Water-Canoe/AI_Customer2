@@ -81,6 +81,25 @@ def dashboard() -> dict[str, Any]:
     return {"summary": summary, "campaigns": campaigns, "runs": runs}
 
 
+def list_keywords() -> list[dict[str, Any]]:
+    """返回可用于定向引流的抖音关键词视频分组。"""
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT source_keyword AS keyword,
+                   COUNT(*) AS content_count,
+                   SUM(CASE WHEN content_url != '' THEN 1 ELSE 0 END) AS target_count,
+                   MAX(updated_at) AS latest_at
+            FROM contents
+            WHERE platform = 'dy'
+              AND NULLIF(source_keyword, '') IS NOT NULL
+            GROUP BY source_keyword
+            ORDER BY target_count DESC, latest_at DESC
+            """
+        ).fetchall()
+    return database.rows_to_dicts(rows)
+
+
 def list_campaigns(conn=None) -> list[dict[str, Any]]:
     if conn is not None:
         return _list_campaigns(conn)
