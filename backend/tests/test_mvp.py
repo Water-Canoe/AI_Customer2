@@ -710,6 +710,88 @@ def test_traffic_comment_actions_require_materials(tmp_path: Path) -> None:
         traffic_workbench.create_run(plan["id"])
 
 
+def test_traffic_comment_text_is_inserted_as_whole_text(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    class FakeKeyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+            self.inserted = ""
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+        def insert_text(self, text: str) -> None:
+            self.inserted = text
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = FakeKeyboard()
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    class FakeComposer:
+        clicked = False
+
+        def click(self, **_: object) -> None:
+            self.clicked = True
+
+    page = FakePage()
+    composer = FakeComposer()
+
+    traffic_workbench._fill_comment_text(page, composer, "不错！")
+
+    assert composer.clicked is True
+    assert page.keyboard.pressed == ["Control+A", "Backspace"]
+    assert page.keyboard.inserted == "不错！"
+
+
+def test_traffic_goto_timeout_is_tolerated(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    TimeoutErrorType = type("TimeoutError", (Exception,), {})
+
+    class FakePage:
+        def goto(self, *_: object, **__: object) -> None:
+            raise TimeoutErrorType("Timeout 30000ms exceeded")
+
+    assert traffic_workbench._goto_with_timeout_tolerance(FakePage(), "https://www.douyin.com", 1) is False
+
+
+def test_traffic_action_timeout_twice_skips_current_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    TimeoutErrorType = type("TimeoutError", (Exception,), {})
+
+    class FakePage:
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    def timeout_action(*_: object, **__: object) -> bool:
+        raise TimeoutErrorType("Timeout 5000ms exceeded")
+
+    logs: list[tuple[object, ...]] = []
+    monkeypatch.setattr(traffic_workbench, "_execute_click_action", timeout_action)
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
+
+    done, comment_text, image_path, skipped = traffic_workbench._execute_actions_with_retry(
+        "run-1",
+        {"actions": ["collect"]},
+        FakePage(),
+        {"video_id": "ad-video"},
+    )
+
+    assert done == []
+    assert comment_text == ""
+    assert image_path == ""
+    assert skipped is True
+    assert "连续 2 次失败" in str(logs[-1][3])
+
+
 def test_traffic_material_image_upload_has_preview(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.main import app

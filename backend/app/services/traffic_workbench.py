@@ -528,7 +528,8 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
         try:
             target_url = _target_url(plan)
             _append_log(run_id, "info", "login", "正在打开抖音页面。", "准备执行引流批次", "如果弹出登录，请先到引流设置完成扫码登录。", {"url": target_url})
-            page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
+            if not _goto_with_timeout_tolerance(page, target_url, 60_000):
+                _append_log(run_id, "warning", "probe", "抖音页面加载超时，继续检查当前页面。", "页面可能已经可用，但浏览器没有收到加载完成信号", "系统会继续识别当前页面；如果确实没有内容，会再给出明确原因。", {"url": target_url, "current_url": page.url})
             page.wait_for_timeout(4000)
             _ensure_page_ready(page)
             navigation_source = _navigate_to_executable_video(page, run_id, plan["source_mode"], video_cache, author_cooldown_hours, project_author_keys)
@@ -560,7 +561,18 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                 watch_seconds = random.randint(min_watch, max_watch)
                 _append_log(run_id, "info", "browse", f"正在浏览视频：{video['video_desc'][:36] or video['video_id']}。", "按设置随机停留", f"本次停留约 {watch_seconds} 秒。", {"video_id": video["video_id"]})
                 page.wait_for_timeout(watch_seconds * 1000)
-                done_actions, comment_text, image_path = _execute_actions(run_id, plan, page, video)
+                done_actions, comment_text, image_path, skipped_by_error = _execute_actions_with_retry(run_id, plan, page, video)
+                if skipped_by_error:
+                    _record_video(run_id, plan, video, ["跳过"], comment_text, image_path, "skipped")
+                    if index < limit - 1 and not _next_video(page, run_id, video["video_id"], video_cache, use_project_queue, author_cooldown_hours, project_author_keys):
+                        raise TrafficStop(
+                            "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
+                            "跳过异常视频后仍无法切换到新视频。",
+                            "请到引流设置重新打开抖音并确认推荐流可以正常切换。",
+                            "advance",
+                            {"video_id": video["video_id"], "url": page.url},
+                        )
+                    continue
                 if plan["actions"] and not done_actions:
                     failure_count += 1
                     _append_log(run_id, "warning", "stop", f"当前视频没有完成任何动作，连续失败 {failure_count} 次。", "动作没有确认成功", "系统会继续尝试下一个视频，连续失败过多会自动停止。", {"video_id": video["video_id"]})
@@ -641,6 +653,22 @@ def _target_url(plan: dict[str, Any]) -> str:
     if plan["source_mode"] == "competitor_videos" and plan["source_value"].startswith("http"):
         return plan["source_value"]
     return "https://www.douyin.com/?recommend=1"
+
+
+def _goto_with_timeout_tolerance(page: Any, url: str, timeout_ms: int) -> bool:
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        return True
+    except Exception as exc:
+        if _is_recoverable_playwright_error(exc):
+            return False
+        raise
+
+
+def _is_recoverable_playwright_error(exc: Exception) -> bool:
+    name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    return "timeout" in name or "timeout" in message or "element is not attached" in message
 
 
 def _ensure_page_ready(page: Any) -> None:
@@ -751,8 +779,8 @@ def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], me
             """,
             url,
         )
-    if not clicked:
-        page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+    if not clicked and not _goto_with_timeout_tolerance(page, url, 60_000):
+        _append_log(run_id, "warning", "probe", "视频页面加载超时，继续检查当前页面。", "抖音可能已经打开视频，但没有返回加载完成信号", "系统会继续识别当前页面；如果不能执行，会自动换下一个视频。", {"target_url": url, "current_url": page.url})
     page.wait_for_timeout(3000)
     _ensure_page_ready(page)
     return True
@@ -773,7 +801,8 @@ def _next_video(page: Any, run_id: str, previous_video_id: str, video_cache: dic
 def _goto_video_candidate(page: Any, run_id: str, url: str, message: str) -> None:
     # ponytail: 先复用已有视频入口；后续需要纯随机推荐再接入接口队列。
     _append_log(run_id, "info", "probe", message, "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": url})
-    page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+    if not _goto_with_timeout_tolerance(page, url, 60_000):
+        _append_log(run_id, "warning", "probe", "视频页面加载超时，继续检查当前页面。", "抖音可能已经打开视频，但没有返回加载完成信号", "系统会继续识别当前页面；如果不能执行，会自动换下一个视频。", {"target_url": url, "current_url": page.url})
     page.wait_for_timeout(3000)
     _ensure_page_ready(page)
 
@@ -1023,24 +1052,60 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _execute_actions(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any]) -> tuple[list[str], str, str]:
+def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any]) -> tuple[list[str], str, str, bool]:
     if not plan["actions"]:
-        return [], "", ""
+        return [], "", "", False
     done: list[str] = []
     comment_text = ""
     image_path = ""
-    if "like" in plan["actions"] and _execute_click_action(run_id, page, video, "like", '[data-e2e="video-player-digg"]', "点赞视频"):
-        done.append("点赞视频")
-    if "collect" in plan["actions"] and _execute_click_action(run_id, page, video, "collect", '[data-e2e="video-player-collect"]', "收藏视频"):
-        done.append("收藏视频")
-    if "follow" in plan["actions"] and _execute_follow(run_id, page, video):
-        done.append("关注作者")
+    failed_twice = False
+    if "like" in plan["actions"]:
+        ok, failed = _run_action_with_retry(run_id, page, video, "点赞视频", "like", lambda: _execute_click_action(run_id, page, video, "like", '[data-e2e="video-player-digg"]', "点赞视频"))
+        failed_twice = failed_twice or failed
+        if ok:
+            done.append("点赞视频")
+        elif failed and not done:
+            return done, comment_text, image_path, True
+    if "collect" in plan["actions"]:
+        ok, failed = _run_action_with_retry(run_id, page, video, "收藏视频", "collect", lambda: _execute_click_action(run_id, page, video, "collect", '[data-e2e="video-player-collect"]', "收藏视频"))
+        failed_twice = failed_twice or failed
+        if ok:
+            done.append("收藏视频")
+        elif failed and not done:
+            return done, comment_text, image_path, True
+    if "follow" in plan["actions"]:
+        ok, failed = _run_action_with_retry(run_id, page, video, "关注作者", "follow", lambda: _execute_follow(run_id, page, video))
+        failed_twice = failed_twice or failed
+        if ok:
+            done.append("关注作者")
+        elif failed and not done:
+            return done, comment_text, image_path, True
     if "comment_text" in plan["actions"] or "comment_image" in plan["actions"]:
         comment_text = _pick_text() if "comment_text" in plan["actions"] else ""
         image_path = _pick_image() if "comment_image" in plan["actions"] else ""
-        if _execute_comment(run_id, page, video, comment_text, image_path):
+        ok, failed = _run_action_with_retry(run_id, page, video, "评论", "comment", lambda: _execute_comment(run_id, page, video, comment_text, image_path))
+        failed_twice = failed_twice or failed
+        if ok:
             done.append("评论")
-    return done, comment_text, image_path
+        elif failed and not done:
+            return done, comment_text, image_path, True
+    return done, comment_text, image_path, bool(failed_twice and not done)
+
+
+def _run_action_with_retry(run_id: str, page: Any, video: dict[str, Any], label: str, phase: str, action: Any) -> tuple[bool, bool]:
+    for attempt in range(2):
+        try:
+            return bool(action()), False
+        except Exception as exc:
+            if not _is_recoverable_playwright_error(exc):
+                raise
+            if attempt == 0:
+                _append_log(run_id, "warning", phase, f"{label}操作超时，正在重试一次。", "页面响应慢或当前视频不支持互动", "系统会再试一次；如果仍失败，会自动下滑跳过。", {"video_id": video.get("video_id"), "error": str(exc)})
+                page.wait_for_timeout(800)
+                continue
+            _append_log(run_id, "warning", "advance", f"{label}连续 2 次失败，当前视频已跳过。", "可能是广告、页面加载异常或当前视频不支持互动", "无需手动处理，系统会继续下滑处理后续视频。", {"video_id": video.get("video_id"), "error": str(exc)})
+            return False, True
+    return False, True
 
 
 def _execute_click_action(run_id: str, page: Any, video: dict[str, Any], action: str, selector: str, label: str) -> bool:
@@ -1086,13 +1151,12 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
         return False
     page.keyboard.press("x")
     page.wait_for_timeout(1000)
-    composer = page.locator(".comment-input-inner-container, textarea, [contenteditable='true']").first
+    composer = page.locator("textarea, [contenteditable='true'], .comment-input-inner-container").first
     if not composer.is_visible(timeout=3000):
         _append_log(run_id, "warning", "comment", "没有找到评论输入框，已跳过评论。", "评论区没有打开或当前视频不支持评论", "系统会继续浏览后续视频。", {"video_id": video["video_id"]})
         return False
-    composer.click(timeout=5000)
     if text:
-        composer.press_sequentially(text, delay=80)
+        _fill_comment_text(page, composer, text)
     if image_path:
         chooser_selector = ".commentInput-right-ct > div > span:nth-child(2)"
         if Path(image_path).exists():
@@ -1108,6 +1172,15 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
     _append_log(run_id, "success", "comment", "评论已发送。", "评论动作已提交", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
     _insert_dedup(video, "comment", content_hash, "done")
     return True
+
+
+def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
+    composer.click(timeout=5000)
+    # ponytail: 中文评论用整条插入，避免逐字键入时焦点丢失只留下末尾字符。
+    page.keyboard.press("Control+A")
+    page.keyboard.press("Backspace")
+    page.keyboard.insert_text(text)
+    page.wait_for_timeout(300)
 
 
 def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any] | None = None) -> bool:
