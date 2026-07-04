@@ -3,6 +3,7 @@ import { Check, DataAnalysis, Delete, Key, Monitor, Refresh, Setting, Tools, Use
 import { ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { api } from '../shared/api'
+import { LicenseDialog } from '../components/ui/LicenseDialog'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, splitTagText } from '../components/ui/TagInput'
 import { platformName } from '../shared/format'
@@ -189,58 +190,18 @@ export default defineComponent({
     })
 
     function renderLicenseDialog() {
-      if (!licenseDialogOpen.value) return null
-      const status = String(licenseInfo.value.status || 'unconfigured')
-      const statusText = licenseStatusText(status, Boolean(licenseInfo.value.authorized))
-      return h('div', { class: 'license-modal-backdrop', onClick: () => licenseDialogOpen.value = false }, [
-        h('div', { class: 'license-modal', onClick: (event: Event) => event.stopPropagation() }, [
-          h('div', { class: 'license-modal-head' }, [
-            h('div', [
-              h('h3', '授权与设备'),
-              h('p', '授权码可修改，设备码由本机生成且不可编辑')
-            ]),
-            h('button', { class: 'icon-button', onClick: () => licenseDialogOpen.value = false }, '×')
-          ]),
-          licenseLoading.value
-            ? h('div', { class: 'diagnostic-empty' }, '正在读取授权信息')
-            : h('div', { class: 'license-form' }, [
-              h('label', [
-                h('span', '授权码'),
-                h('input', {
-                  value: licenseCodeDraft.value,
-                  placeholder: '输入 Sealos 后端创建的授权码',
-                  onInput: (event: Event) => licenseCodeDraft.value = (event.target as HTMLInputElement).value
-                })
-              ]),
-              h('label', [
-                h('span', '设备码'),
-                h('div', { class: 'readonly-input-row' }, [
-                  h('input', {
-                    value: licenseInfo.value.device_code || '',
-                    readonly: true,
-                    title: '设备码由本机后端生成，不支持手动修改'
-                  }),
-                  h('button', { class: 'secondary-action compact-action', onClick: copyDeviceCode }, '复制')
-                ])
-              ]),
-              h('div', { class: ['license-status-card', licenseInfo.value.authorized ? 'authorized' : ''] }, [
-                h('strong', statusText),
-                h('span', licenseInfo.value.message || '尚未校验授权'),
-                licenseInfo.value.reason ? h('small', `原因：${licenseInfo.value.reason}`) : null,
-                licenseInfo.value.last_checked_at || licenseInfo.value.checked_at
-                  ? h('small', `最近校验：${licenseInfo.value.last_checked_at || licenseInfo.value.checked_at}`)
-                  : null,
-                licenseInfo.value.max_devices
-                  ? h('small', `设备数：${licenseInfo.value.active_device_count || 0} / ${licenseInfo.value.max_devices}`)
-                  : null
-              ]),
-              h('div', { class: 'license-actions' }, [
-                h('button', { class: 'secondary-action', disabled: licenseChecking.value, onClick: saveLicenseCode }, '保存授权码'),
-                h('button', { class: 'primary-action', disabled: licenseChecking.value, onClick: checkLicense }, licenseChecking.value ? '校验中' : '保存并校验')
-              ])
-            ])
-        ])
-      ])
+      return h(LicenseDialog, {
+        open: licenseDialogOpen.value,
+        loading: licenseLoading.value,
+        checking: licenseChecking.value,
+        info: licenseInfo.value,
+        code: licenseCodeDraft.value,
+        'onUpdate:code': (value: string) => licenseCodeDraft.value = value,
+        onClose: () => licenseDialogOpen.value = false,
+        onSave: saveLicenseCode,
+        onCheck: checkLicense,
+        onCopyDevice: copyDeviceCode,
+      })
     }
 
     return () => {
@@ -324,12 +285,6 @@ export default defineComponent({
     }
   }
 })
-
-function licenseStatusText(status: string, authorized: boolean) {
-  if (authorized || status === 'authorized') return '授权通过'
-  if (status === 'failed') return '授权失败'
-  return '未校验'
-}
 
 function renderOwnAccountField(accounts: Dict, platform: string, markDirty: () => void) {
   return h('label', { class: 'own-account-field' }, [

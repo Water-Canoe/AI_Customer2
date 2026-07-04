@@ -90,7 +90,7 @@ class TrafficExecutor:
                 self._click_required(page, ["button:has-text('点赞')", "[aria-label*='点赞']", "[data-e2e*='like']"], "like", target_id)
             if self.campaign["action_follow"]:
                 self._click_required(page, ["button:has-text('关注')", "[aria-label*='关注']", "text=关注"], "follow", target_id)
-            if self.campaign["action_comment"]:
+            if self.campaign["action_comment"] or self.campaign["action_image"]:
                 self._comment(page, target)
             self._mark_target(target_id, "succeeded")
             self.done += 1
@@ -105,16 +105,26 @@ class TrafficExecutor:
     def _comment(self, page: Page, target: dict[str, Any]) -> None:
         target_id = int(target["id"])
         self._click_required(page, ["button:has-text('评论')", "[aria-label*='评论']", "[data-e2e*='comment']"], "comment_open", target_id)
-        text = self._render_comment(target)
-        if not text:
-            raise RuntimeError("没有可用引流文案")
-        box = self._first_visible(page, ["textarea", "[contenteditable='true']", "[placeholder*='评论']", "[class*='comment'] [contenteditable='true']"])
-        if box is None:
-            raise RuntimeError("找不到评论输入框")
-        box.fill(text, timeout=5000)
+        detail_parts: list[str] = []
+        if self.campaign["action_comment"]:
+            text = self._render_comment(target)
+            if not text:
+                raise RuntimeError("没有可用引流文案")
+            box = self._first_visible(page, ["textarea", "[contenteditable='true']", "[placeholder*='评论']", "[class*='comment'] [contenteditable='true']"])
+            if box is None:
+                raise RuntimeError("找不到评论输入框")
+            box.fill(text, timeout=5000)
+            detail_parts.append(text)
+        if self.campaign["action_image"]:
+            asset = self._pick_image_asset()
+            uploader = self._first_file_input(page)
+            if uploader is None:
+                raise RuntimeError("找不到图片上传控件")
+            uploader.set_input_files(asset["path"])
+            detail_parts.append(f"图片：{asset['name']}")
         page.wait_for_timeout(int(self._random_interval() * 1000))
         self._click_required(page, ["button:has-text('发送')", "text=发送", "[data-e2e*='comment-submit']"], "comment_submit", target_id)
-        self._event(target_id, "comment", "succeeded", text)
+        self._event(target_id, "comment", "succeeded", " / ".join(detail_parts))
 
     def _click_required(self, page: Page, selectors: list[str], action: str, target_id: int) -> None:
         locator = self._first_visible(page, selectors)
@@ -135,6 +145,14 @@ class TrafficExecutor:
             except Exception:
                 continue
         return None
+
+    def _first_file_input(self, page: Page):
+        locator = page.locator("input[type='file']")
+        try:
+            locator.first.wait_for(state="attached", timeout=2500)
+            return locator.first
+        except PlaywrightTimeoutError:
+            return None
 
     def _claim_targets(self) -> list[dict[str, Any]]:
         with database.connect() as conn:
@@ -237,7 +255,9 @@ class TrafficExecutor:
             item["action_like"] = bool(item.get("action_like"))
             item["action_follow"] = bool(item.get("action_follow"))
             item["action_comment"] = bool(item.get("action_comment"))
+            item["action_image"] = bool(item.get("action_image"))
             item["comment_templates"] = _json_list(item.get("comment_templates"))
+            item["image_asset_ids"] = [int(value) for value in _json_list(item.get("image_asset_ids")) if str(value).isdigit()]
             return item
 
     def _update_run(self, status: str) -> None:
@@ -268,6 +288,24 @@ class TrafficExecutor:
             media_path = crawler_adapter.normalize_path(database.get_setting(conn, "media_crawler_path"))
         config = crawler_adapter._read_media_crawler_cdp_config(Path(media_path))
         return int(config.get("debug_port") or 9222)
+
+    def _pick_image_asset(self) -> dict[str, Any]:
+        ids = self.campaign.get("image_asset_ids") or []
+        if not ids:
+            raise RuntimeError("发送图片时没有选择图片素材")
+        placeholders = ",".join(["?"] * len(ids))
+        with database.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM traffic_assets WHERE enabled = 1 AND id IN ({placeholders})",
+                tuple(ids),
+            ).fetchall()
+        assets = database.rows_to_dicts(rows)
+        if not assets:
+            raise RuntimeError("图片素材不存在或已停用")
+        asset = random.choice(assets)
+        if not Path(str(asset["path"])).exists():
+            raise RuntimeError("图片素材文件不存在")
+        return asset
 
 
 def _json_list(value: Any) -> list[str]:

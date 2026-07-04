@@ -291,6 +291,7 @@ CREATE TABLE IF NOT EXISTS traffic_campaigns (
     action_like INTEGER NOT NULL DEFAULT 1,
     action_follow INTEGER NOT NULL DEFAULT 0,
     action_comment INTEGER NOT NULL DEFAULT 1,
+    action_image INTEGER NOT NULL DEFAULT 0,
     comment_templates TEXT NOT NULL DEFAULT '[]',
     image_asset_ids TEXT NOT NULL DEFAULT '[]',
     per_run_limit INTEGER NOT NULL DEFAULT 20,
@@ -448,6 +449,7 @@ def init_db() -> None:
         _ensure_column(conn, "analysis_jobs", "user_prompt", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "analysis_jobs", "model", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "analysis_jobs", "base_url", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "traffic_campaigns", "action_image", "INTEGER NOT NULL DEFAULT 0")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",

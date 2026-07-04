@@ -3885,3 +3885,24 @@ def test_traffic_settings_and_assets_are_scoped(tmp_path: Path, monkeypatch: pyt
     assert asset.json()["mime_type"] == "image/png"
     assert Path(asset.json()["path"]).exists()
     assert client.get("/api/traffic/assets").json()[0]["name"] == "评论图.png"
+
+    rejected = client.post(
+        "/api/traffic/campaigns",
+        json={"name": "缺图计划", "mode": "random", "action_comment": False, "action_image": True},
+    )
+    assert rejected.status_code == 400
+
+    campaign = client.post(
+        "/api/traffic/campaigns",
+        json={
+            "name": "图片引流计划",
+            "mode": "random",
+            "action_comment": False,
+            "action_image": True,
+            "image_asset_ids": [asset.json()["id"]],
+        },
+    )
+    assert campaign.status_code == 200
+    assert campaign.json()["action_comment"] is False
+    assert campaign.json()["action_image"] is True
+    assert campaign.json()["image_asset_ids"] == [asset.json()["id"]]

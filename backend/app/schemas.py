@@ -100,6 +100,7 @@ class TrafficCampaignCreate(BaseModel):
     action_like: bool | None = None
     action_follow: bool | None = None
     action_comment: bool | None = None
+    action_image: bool = False
     comment_templates: list[str] | None = None
     image_asset_ids: list[int] = Field(default_factory=list)
     per_run_limit: int | None = Field(default=None, ge=1, le=100)

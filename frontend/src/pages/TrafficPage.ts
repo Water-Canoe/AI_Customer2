@@ -13,12 +13,16 @@ export default defineComponent({
     const route = useRoute()
     const loading = ref(false)
     const dashboard = ref<Dict>({ summary: {}, campaigns: [], runs: [] })
+    const assets = ref<Dict[]>([])
     const targets = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 30 })
     const selectedCampaignId = ref<number | null>(null)
     const form = reactive<Dict>({
       name: '',
       source_type: 'competitor',
       keyword: '',
+      action_comment: true,
+      action_image: false,
+      image_asset_ids: [],
     })
 
     const isRandom = computed(() => route.name === 'traffic-random')
@@ -28,8 +32,12 @@ export default defineComponent({
     async function loadAll() {
       loading.value = true
       try {
-        const { data } = await api.get('/traffic/dashboard')
-        dashboard.value = data
+        const [dashboardResponse, assetsResponse] = await Promise.all([
+          api.get('/traffic/dashboard'),
+          api.get('/traffic/assets'),
+        ])
+        dashboard.value = dashboardResponse.data
+        assets.value = assetsResponse.data || []
         if (!selectedCampaignId.value && campaigns.value.length) selectedCampaignId.value = Number(campaigns.value[0].id)
         if (selectedCampaignId.value) await loadTargets()
       } finally {
@@ -50,6 +58,9 @@ export default defineComponent({
           mode: isRandom.value ? 'random' : 'targeted',
           source_type: isRandom.value ? 'random_feed' : form.source_type,
           keyword: form.keyword,
+          action_comment: Boolean(form.action_comment),
+          action_image: Boolean(form.action_image),
+          image_asset_ids: selectedAssetIds(form.image_asset_ids),
         }
         const { data } = await api.post('/traffic/campaigns', payload)
         selectedCampaignId.value = Number(data.id)
@@ -100,7 +111,7 @@ export default defineComponent({
     return () => h('section', { class: 'traffic-page' }, [
       pageAction({
         title: isRandom.value ? '随机引流批次' : '定向引流批次',
-        description: isRandom.value ? '打开抖音推荐流后，系统按限额自动执行点赞、关注和文本评论。' : '复用拓客工作台中的竞品视频或关键词视频，生成可自动执行的引流队列。',
+        description: isRandom.value ? '打开抖音推荐流后，系统按限额自动执行点赞、关注、文案或图片评论。' : '复用拓客工作台中的竞品视频或关键词视频，生成可自动执行的引流队列。',
         icon: Promotion,
         tone: isRandom.value ? 'purple' : 'teal',
         aside: h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新'])
@@ -114,7 +125,7 @@ export default defineComponent({
       h('div', { class: 'traffic-grid' }, [
         h('section', { class: 'traffic-panel' }, [
           sectionTitle({ title: '创建计划', subtitle: '动作、文案、限额和停留时间统一在引流设置中配置', icon: Promotion, tone: 'teal', compact: true }),
-          renderCampaignForm(form, isRandom.value),
+          renderCampaignForm(form, isRandom.value, assets.value),
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', onClick: createCampaign }, [h(Promotion, { class: 'inline-icon' }), '创建计划']),
             !isRandom.value ? h('button', { class: 'secondary-action', disabled: !selectedCampaignId.value, onClick: buildTargets }, '生成队列') : null,
@@ -140,7 +151,7 @@ export default defineComponent({
   }
 })
 
-function renderCampaignForm(form: Dict, isRandom: boolean) {
+function renderCampaignForm(form: Dict, isRandom: boolean, assets: Dict[]) {
   return h('div', { class: 'traffic-form' }, [
     field('计划名称', h('input', { value: form.name, placeholder: isRandom ? '随机引流计划' : '竞品视频引流计划', onInput: (event: Event) => form.name = (event.target as HTMLInputElement).value })),
     !isRandom ? field('来源', h('select', { value: form.source_type, onChange: (event: Event) => form.source_type = (event.target as HTMLSelectElement).value }, [
@@ -148,6 +159,15 @@ function renderCampaignForm(form: Dict, isRandom: boolean) {
       h('option', { value: 'keyword' }, '关键词视频'),
     ])) : null,
     !isRandom && form.source_type === 'keyword' ? field('关键词', h('input', { value: form.keyword, placeholder: '必须与拓客采集入库关键词一致', onInput: (event: Event) => form.keyword = (event.target as HTMLInputElement).value })) : null,
+    field('发送内容', h('div', { class: 'traffic-checks' }, [
+      check(form, 'action_comment', '发送文案'),
+      check(form, 'action_image', '发送图片'),
+    ])),
+    form.action_image
+      ? field('图片素材', assets.length
+          ? h('div', { class: 'traffic-asset-checks' }, assets.map(asset => assetCheck(form, asset)))
+          : h('small', '请先到“引流设置”上传图片素材'))
+      : null,
   ])
 }
 
@@ -181,4 +201,33 @@ function renderTargets(targets: Dict) {
 
 function field(label: string, control: any) {
   return h('label', { class: 'traffic-field' }, [h('span', label), control])
+}
+
+function check(form: Dict, key: string, label: string) {
+  return h('label', { class: 'traffic-check' }, [
+    h('input', { type: 'checkbox', checked: Boolean(form[key]), onChange: (event: Event) => form[key] = (event.target as HTMLInputElement).checked }),
+    label,
+  ])
+}
+
+function assetCheck(form: Dict, asset: Dict) {
+  const assetId = Number(asset.id)
+  const selected = selectedAssetIds(form.image_asset_ids)
+  return h('label', { class: 'traffic-check' }, [
+    h('input', {
+      type: 'checkbox',
+      checked: selected.includes(assetId),
+      onChange: (event: Event) => {
+        const current = selectedAssetIds(form.image_asset_ids)
+        form.image_asset_ids = (event.target as HTMLInputElement).checked
+          ? Array.from(new Set([...current, assetId]))
+          : current.filter(id => id !== assetId)
+      },
+    }),
+    asset.name || asset.file_name || `图片 ${asset.id}`,
+  ])
+}
+
+function selectedAssetIds(value: unknown) {
+  return Array.isArray(value) ? value.map(item => Number(item)).filter(Number.isFinite) : []
 }

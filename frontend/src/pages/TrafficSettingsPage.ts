@@ -1,7 +1,8 @@
 import { defineComponent, h, onMounted, reactive, ref } from 'vue'
-import { Check, CopyDocument, Key, Picture, Refresh, Setting, UploadFilled } from '@element-plus/icons-vue'
+import { Check, Key, Picture, Refresh, Setting, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
+import { LicenseDialog } from '../components/ui/LicenseDialog'
 import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
@@ -25,23 +26,22 @@ export default defineComponent({
   setup() {
     const loading = ref(false)
     const saving = ref(false)
-    const checking = ref(false)
     const uploading = ref(false)
-    const license = ref<Dict>({})
     const assets = ref<Dict[]>([])
-    const licenseCode = ref('')
+    const licenseDialogOpen = ref(false)
+    const licenseLoading = ref(false)
+    const licenseChecking = ref(false)
+    const licenseInfo = ref<Dict>({})
+    const licenseCodeDraft = ref('')
     const local = reactive<Dict>({ ...defaultSettings })
 
     async function loadAll() {
       loading.value = true
       try {
-        const [licenseResponse, settingsResponse, assetsResponse] = await Promise.all([
-          api.get('/traffic/license'),
+        const [settingsResponse, assetsResponse] = await Promise.all([
           api.get('/traffic/settings'),
           api.get('/traffic/assets'),
         ])
-        license.value = licenseResponse.data
-        licenseCode.value = String(license.value.license_code || '')
         applySettings(local, settingsResponse.data)
         assets.value = assetsResponse.data || []
       } finally {
@@ -49,37 +49,51 @@ export default defineComponent({
       }
     }
 
-    async function saveLicense() {
-      checking.value = true
+    async function openLicenseDialog() {
+      licenseDialogOpen.value = true
+      licenseLoading.value = true
       try {
-        const { data } = await api.put('/traffic/license', { license_code: licenseCode.value })
-        license.value = data
-        licenseCode.value = String(data.license_code || '')
+        const { data } = await api.get('/traffic/license')
+        licenseInfo.value = data
+        licenseCodeDraft.value = String(data.license_code || '')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '引流授权信息加载失败')
+      } finally {
+        licenseLoading.value = false
+      }
+    }
+
+    async function saveLicense() {
+      licenseChecking.value = true
+      try {
+        const { data } = await api.put('/traffic/license', { license_code: licenseCodeDraft.value })
+        licenseInfo.value = data
+        licenseCodeDraft.value = String(data.license_code || '')
         ElMessage.success('引流授权码已保存')
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '引流授权码保存失败')
       } finally {
-        checking.value = false
+        licenseChecking.value = false
       }
     }
 
     async function checkLicense() {
-      checking.value = true
+      licenseChecking.value = true
       try {
-        const { data } = await api.post('/traffic/license/check', { license_code: licenseCode.value })
-        license.value = data
-        licenseCode.value = String(data.license_code || '')
+        const { data } = await api.post('/traffic/license/check', { license_code: licenseCodeDraft.value })
+        licenseInfo.value = data
+        licenseCodeDraft.value = String(data.license_code || '')
         if (data.authorized) ElMessage.success(data.message || '引流授权校验通过')
         else ElMessage.error(data.message || '引流授权校验失败')
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '引流授权校验失败')
       } finally {
-        checking.value = false
+        licenseChecking.value = false
       }
     }
 
     async function copyDeviceCode() {
-      const code = String(license.value.device_code || '').trim()
+      const code = String(licenseInfo.value.device_code || '').trim()
       if (!code) {
         ElMessage.warning('当前没有可复制的设备码')
         return
@@ -139,19 +153,19 @@ export default defineComponent({
         title: '引流工作台设置',
         description: '引流授权、执行参数、文案和图片素材独立管理，不与拓客工作台共用授权码。',
         icon: Setting,
-        tone: license.value.authorized ? 'green' : 'amber',
-        aside: h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
+        tone: 'teal',
+        aside: [
+          h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
+          h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
+        ],
       }),
       h('div', { class: 'traffic-settings-grid' }, [
-        h('section', { class: 'traffic-panel' }, [
-          sectionTitle({ title: '授权与设备', subtitle: license.value.message || '设备码由本机生成', icon: Key, tone: license.value.authorized ? 'green' : 'amber', compact: true }),
-          renderLicenseForm(license.value, licenseCode.value, checking.value, value => licenseCode.value = value, saveLicense, checkLicense, copyDeviceCode),
-        ]),
         h('section', { class: 'traffic-panel' }, [
           sectionTitle({ title: '执行参数', subtitle: '定向引流和随机引流启动批次时统一使用', icon: Setting, tone: 'teal', compact: true }),
           renderSettingsForm(local),
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', disabled: saving.value, onClick: saveSettings }, [h(Check, { class: 'inline-icon' }), saving.value ? '保存中' : '保存设置']),
+            h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
           ]),
         ]),
       ]),
@@ -174,6 +188,19 @@ export default defineComponent({
           renderAssets(assets.value),
         ]),
       ]),
+      h(LicenseDialog, {
+        open: licenseDialogOpen.value,
+        loading: licenseLoading.value,
+        checking: licenseChecking.value,
+        info: licenseInfo.value,
+        code: licenseCodeDraft.value,
+        placeholder: '填写引流工作台授权码',
+        'onUpdate:code': (value: string) => licenseCodeDraft.value = value,
+        onClose: () => licenseDialogOpen.value = false,
+        onSave: saveLicense,
+        onCheck: checkLicense,
+        onCopyDevice: copyDeviceCode,
+      }),
     ])
   }
 })
@@ -183,49 +210,15 @@ function applySettings(local: Dict, data: Dict) {
   Object.assign(local, { ...defaultSettings, ...data, traffic_comment_templates_text: templates.join('\n') || defaultSettings.traffic_comment_templates_text })
 }
 
-function renderLicenseForm(
-  license: Dict,
-  licenseCode: string,
-  checking: boolean,
-  setLicenseCode: (value: string) => void,
-  saveLicense: () => void,
-  checkLicense: () => void,
-  copyDeviceCode: () => void,
-) {
-  const statusText = license.authorized ? '授权通过' : (license.status === 'failed' ? '授权失败' : '未校验')
-  return h('div', { class: 'traffic-form' }, [
-    field('引流授权码', h('input', {
-      value: licenseCode,
-      placeholder: '填写引流工作台授权码',
-      onInput: (event: Event) => setLicenseCode((event.target as HTMLInputElement).value),
-    })),
-    field('引流设备码', h('div', { class: 'readonly-input-row' }, [
-      h('input', { value: license.device_code || '', readonly: true }),
-      h('button', { class: 'secondary-action compact-action', onClick: copyDeviceCode }, [h(CopyDocument, { class: 'inline-icon' }), '复制']),
-    ])),
-    h('div', { class: ['license-status-card', license.authorized ? 'authorized' : ''] }, [
-      h('strong', statusText),
-      h('span', license.message || '请先填写并校验引流授权码'),
-      license.reason ? h('small', `原因：${license.reason}`) : null,
-      license.last_checked_at || license.checked_at ? h('small', `最近校验：${license.last_checked_at || license.checked_at}`) : null,
-    ]),
-    h('div', { class: 'license-actions' }, [
-      h('button', { class: 'secondary-action', disabled: checking, onClick: saveLicense }, '保存授权码'),
-      h('button', { class: 'primary-action', disabled: checking, onClick: checkLicense }, checking ? '校验中' : '保存并校验'),
-    ]),
-  ])
-}
-
 function renderSettingsForm(local: Dict) {
   return h('div', { class: 'traffic-form two-column' }, [
     field('每轮上限', numberInput(local, 'traffic_per_run_limit', 1, 100)),
     field('每日上限', numberInput(local, 'traffic_daily_limit', 1, 500)),
     field('停留秒数', pairInputs(local, 'traffic_stay_seconds_min', 'traffic_stay_seconds_max', 0, 300)),
     field('动作间隔秒数', pairInputs(local, 'traffic_action_interval_seconds_min', 'traffic_action_interval_seconds_max', 0, 120)),
-    field('默认动作', h('div', { class: 'traffic-checks' }, [
+    field('默认辅助动作', h('div', { class: 'traffic-checks' }, [
       check(local, 'traffic_action_like', '点赞'),
       check(local, 'traffic_action_follow', '关注作者'),
-      check(local, 'traffic_action_comment', '评论'),
     ])),
   ])
 }

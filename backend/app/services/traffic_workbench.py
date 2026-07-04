@@ -97,9 +97,12 @@ def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
     action_like = _setting_or_payload(payload.action_like, settings["traffic_action_like"])
     action_follow = _setting_or_payload(payload.action_follow, settings["traffic_action_follow"])
     action_comment = _setting_or_payload(payload.action_comment, settings["traffic_action_comment"])
+    action_image = bool(payload.action_image)
     templates = _template_list(payload.comment_templates if payload.comment_templates is not None else settings["traffic_comment_templates"])
     if action_comment and not templates:
         raise ValueError("至少需要一条引流文案")
+    if action_image and not payload.image_asset_ids:
+        raise ValueError("发送图片时至少选择一张图片素材")
     stay_min, stay_max = _ordered_pair(
         payload.stay_seconds_min if payload.stay_seconds_min is not None else settings["traffic_stay_seconds_min"],
         payload.stay_seconds_max if payload.stay_seconds_max is not None else settings["traffic_stay_seconds_max"],
@@ -115,11 +118,11 @@ def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
         cur = conn.execute(
             """
             INSERT INTO traffic_campaigns(
-                name, platform, mode, source_type, keyword, action_like, action_follow, action_comment,
+                name, platform, mode, source_type, keyword, action_like, action_follow, action_comment, action_image,
                 comment_templates, image_asset_ids, per_run_limit, daily_limit,
                 stay_seconds_min, stay_seconds_max, action_interval_seconds_min, action_interval_seconds_max
             )
-            VALUES(?, 'dy', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, 'dy', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 name,
@@ -129,6 +132,7 @@ def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
                 int(action_like),
                 int(action_follow),
                 int(action_comment),
+                int(action_image),
                 json.dumps(templates, ensure_ascii=False),
                 json.dumps(payload.image_asset_ids, ensure_ascii=False),
                 per_run_limit,
@@ -440,6 +444,7 @@ def _campaign_dict(row: Any) -> dict[str, Any]:
     item["action_like"] = bool(item.get("action_like"))
     item["action_follow"] = bool(item.get("action_follow"))
     item["action_comment"] = bool(item.get("action_comment"))
+    item["action_image"] = bool(item.get("action_image"))
     item["comment_templates"] = _json_list(item.get("comment_templates"), [])
     item["image_asset_ids"] = [int(value) for value in _json_list(item.get("image_asset_ids"), []) if str(value).isdigit()]
     return item
@@ -480,15 +485,16 @@ def _list_runs(conn) -> list[dict[str, Any]]:
 def _sync_campaign_runtime_settings(campaign_id: int) -> None:
     settings = get_settings()
     templates = _template_list(settings["traffic_comment_templates"])
-    if settings["traffic_action_comment"] and not templates:
-        raise ValueError("至少需要一条引流文案")
     stay_min, stay_max = _ordered_pair(settings["traffic_stay_seconds_min"], settings["traffic_stay_seconds_max"])
     interval_min, interval_max = _ordered_pair(settings["traffic_action_interval_seconds_min"], settings["traffic_action_interval_seconds_max"])
     with database.connect() as conn:
+        row = conn.execute("SELECT action_comment FROM traffic_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+        if row and row["action_comment"] and not templates:
+            raise ValueError("发送文案时至少需要一条引流文案")
         conn.execute(
             """
             UPDATE traffic_campaigns
-            SET action_like = ?, action_follow = ?, action_comment = ?, comment_templates = ?,
+            SET action_like = ?, action_follow = ?, comment_templates = ?,
                 per_run_limit = ?, daily_limit = ?, stay_seconds_min = ?, stay_seconds_max = ?,
                 action_interval_seconds_min = ?, action_interval_seconds_max = ?,
                 updated_at = datetime('now', 'localtime')
@@ -497,7 +503,6 @@ def _sync_campaign_runtime_settings(campaign_id: int) -> None:
             (
                 int(settings["traffic_action_like"]),
                 int(settings["traffic_action_follow"]),
-                int(settings["traffic_action_comment"]),
                 json.dumps(templates, ensure_ascii=False),
                 _safe_int(settings["traffic_per_run_limit"], 20, 1, 100),
                 _safe_int(settings["traffic_daily_limit"], 100, 1, 500),
