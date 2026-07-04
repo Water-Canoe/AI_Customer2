@@ -531,7 +531,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
             page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
             page.wait_for_timeout(4000)
             _ensure_page_ready(page)
-            navigation_source = _navigate_to_executable_video(page, run_id, video_cache, author_cooldown_hours, project_author_keys)
+            navigation_source = _navigate_to_executable_video(page, run_id, plan["source_mode"], video_cache, author_cooldown_hours, project_author_keys)
             use_project_queue = navigation_source == "project"
             for index in range(limit):
                 _raise_if_stop_requested(run_id)
@@ -640,10 +640,6 @@ def _target_url(plan: dict[str, Any]) -> str:
         return f"https://www.douyin.com/search/{quote(plan['source_value'])}"
     if plan["source_mode"] == "competitor_videos" and plan["source_value"].startswith("http"):
         return plan["source_value"]
-    if plan["source_mode"] == "random_feed":
-        saved_url = _last_douyin_video_url()
-        if saved_url:
-            return saved_url
     return "https://www.douyin.com/?recommend=1"
 
 
@@ -682,9 +678,19 @@ def _ensure_page_ready(page: Any) -> None:
         )
 
 
-def _navigate_to_executable_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None, cooldown_hours: int = 24, project_author_keys: set[str] | None = None) -> str:
+def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, video_cache: dict[str, Any] | None = None, cooldown_hours: int = 24, project_author_keys: set[str] | None = None) -> str:
     if _read_active_video(page, video_cache)["video_id"]:
         return "active"
+    if source_mode == "random_feed":
+        if _open_random_visible_video(page, run_id):
+            return "page"
+        raise TrafficStop(
+            "随机推荐流没有找到可点击的视频，任务已停止。",
+            "当前抖音首页或精选页没有可见的视频卡片。",
+            "请确认已经登录抖音，并且首页能正常显示视频后再重新启动随机引流。",
+            "probe",
+            {"url": page.url},
+        )
     if "douyin.com/jingxuan" in page.url:
         project = _random_project_video_candidate(cooldown_hours, project_author_keys)
         if project:
@@ -707,6 +713,46 @@ def _navigate_to_executable_video(page: Any, run_id: str, video_cache: dict[str,
         return "none"
     _goto_video_candidate(page, run_id, random.choice(candidates[:8])["href"], "已从当前页面随机跳转一个视频。")
     return "page"
+
+
+def _open_random_visible_video(page: Any, run_id: str) -> bool:
+    for _ in range(3):
+        candidates = _visible_video_links(page)
+        if candidates:
+            chosen = random.choice(candidates[:8])
+            _click_video_candidate(page, run_id, chosen, "已从抖音首页随机点击一个视频。")
+            return True
+        page.mouse.wheel(0, random.randint(500, 1100))
+        page.wait_for_timeout(1200)
+    return False
+
+
+def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], message: str) -> None:
+    # ponytail: 随机引流必须来自当前抖音页面，不能退回项目库视频。
+    url = str(candidate["href"])
+    _append_log(run_id, "info", "probe", message, "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": url})
+    clicked = False
+    if isinstance(candidate.get("x"), (int, float)) and isinstance(candidate.get("y"), (int, float)):
+        page.mouse.click(float(candidate["x"]), float(candidate["y"]))
+        clicked = True
+    if not clicked:
+        clicked = page.evaluate(
+            """
+            href => {
+              const link = Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/note/"]'))
+                .find(item => item.href === href);
+              if (!link) return false;
+              link.scrollIntoView({block: 'center', inline: 'center'});
+              link.click();
+              return true;
+            }
+            """,
+            url,
+        )
+    if not clicked:
+        page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+    page.wait_for_timeout(3000)
+    _ensure_page_ready(page)
 
 
 def _next_video(page: Any, run_id: str, previous_video_id: str, video_cache: dict[str, Any] | None, use_project_queue: bool, cooldown_hours: int, project_author_keys: set[str] | None = None) -> bool:
@@ -805,7 +851,12 @@ def _visible_video_links(page: Any) -> list[dict[str, Any]]:
               return {
                 href: link.href,
                 text: normalize(link.textContent).slice(0, 160),
-                visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2,
+                visible: rect.width > 0 && rect.height > 0
+                  && rect.bottom > 0 && rect.top < window.innerHeight
+                  && rect.right > 0 && rect.left < window.innerWidth
+                  && style.display !== 'none' && style.visibility !== 'hidden',
               };
             })
             .filter(item => item.href && item.visible)

@@ -811,16 +811,75 @@ def test_traffic_douyin_login_route(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert response.json()["ok"] is True
 
 
-def test_traffic_random_feed_uses_last_video_url(tmp_path: Path) -> None:
+def test_traffic_random_feed_starts_from_homepage(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.services import traffic_workbench
 
     traffic_workbench._save_last_douyin_video_url("https://www.douyin.com/video/7123")
 
-    assert traffic_workbench._target_url({"source_mode": "random_feed", "source_value": ""}) == "https://www.douyin.com/video/7123"
+    assert traffic_workbench._target_url({"source_mode": "random_feed", "source_value": ""}) == "https://www.douyin.com/?recommend=1"
 
 
-def test_traffic_jingxuan_page_jumps_to_project_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_traffic_random_feed_jingxuan_clicks_page_video_not_project_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import traffic_workbench
+
+    with database.connect() as conn:
+        conn.execute("DELETE FROM contents")
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, title, description, content_url)
+            VALUES('dy', 'project-video', '项目库视频', '', 'https://www.douyin.com/video/project-video')
+            """
+        )
+
+    class FakeMouse:
+        def wheel(self, _x: int, _y: int) -> None:
+            return None
+
+    class FakePage:
+        url = "https://www.douyin.com/jingxuan"
+        clicked_url = ""
+        mouse = FakeMouse()
+
+        def evaluate(self, script: str, arg: object = None) -> object:
+            if arg is not None:
+                self.clicked_url = str(arg)
+                self.url = str(arg)
+                return True
+            if "loginPrompt" in script:
+                return {"url": self.url, "title": "抖音", "loginPrompt": False, "verifyPrompt": False, "activeVideoId": "page-video"}
+            if "querySelectorAll" in script:
+                return [{"href": "https://www.douyin.com/video/page-video", "text": "精选页视频", "visible": True}]
+            return {
+                "video_id": "",
+                "video_url": self.url,
+                "author_id": "",
+                "author_name": "",
+                "video_desc": "",
+                "like_count": None,
+                "comment_count": None,
+            }
+
+        def goto(self, url: str, **_: object) -> None:
+            self.url = url
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    logs: list[tuple[object, ...]] = []
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
+
+    page = FakePage()
+    result = traffic_workbench._navigate_to_executable_video(page, "run-1", "random_feed")
+
+    assert result == "page"
+    assert page.clicked_url == "https://www.douyin.com/video/page-video"
+    assert "项目库" not in str(logs)
+
+
+def test_traffic_jingxuan_page_jumps_to_project_video_for_targeted_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database
     from app.services import traffic_workbench
@@ -862,7 +921,7 @@ def test_traffic_jingxuan_page_jumps_to_project_video(tmp_path: Path, monkeypatc
     monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
 
     page = FakePage()
-    traffic_workbench._navigate_to_executable_video(page, "run-1")
+    traffic_workbench._navigate_to_executable_video(page, "run-1", "competitor_videos")
 
     assert page.target_url == "https://www.douyin.com/video/7123"
     assert "项目库" in str(logs[0][3])
