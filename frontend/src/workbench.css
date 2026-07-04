@@ -4648,6 +4648,8 @@ input[type='checkbox'] {
 
 .traffic-campaign-item {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 4px;
   width: 100%;
   padding: 10px 12px;
@@ -4656,13 +4658,53 @@ input[type='checkbox'] {
   background: #fff;
   color: var(--workbench-text);
   text-align: left;
-  cursor: pointer;
 }
 
 .traffic-campaign-item:hover,
 .traffic-campaign-item.active {
   border-color: var(--workbench-primary);
   background: var(--workbench-primary-soft);
+}
+
+.traffic-campaign-select {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.traffic-campaign-select strong,
+.traffic-campaign-select span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traffic-campaign-delete {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--workbench-red);
+  cursor: pointer;
+}
+
+.traffic-campaign-delete:hover {
+  border-color: var(--workbench-red);
+  background: #fff1f2;
+}
+
+.traffic-campaign-delete svg {
+  width: 15px;
+  height: 15px;
 }
 
 .traffic-campaign-item span,

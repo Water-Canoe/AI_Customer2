@@ -3958,6 +3958,68 @@ def test_traffic_search_keyword_runs_without_prebuilt_targets(tmp_path: Path, mo
         traffic_workbench.RUNNING_TRAFFIC_PROCESSES.clear()
 
 
+def test_traffic_campaign_delete_rejects_running_and_cascades(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.main import app
+    from app.schemas import TrafficCampaignCreate
+    from app.services import traffic_workbench
+
+    campaign = traffic_workbench.create_campaign(TrafficCampaignCreate(name="待删除计划", mode="random"))
+    campaign_id = int(campaign["id"])
+    with database.connect() as conn:
+        target_id = conn.execute(
+            """
+            INSERT INTO traffic_targets(campaign_id, platform, source_type, target_key, content_url, title)
+            VALUES(?, 'dy', 'random_feed', 'dy:video:delete-test', 'https://www.douyin.com/video/delete-test', '删除测试视频')
+            """,
+            (campaign_id,),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO traffic_runs(id, campaign_id, status, per_run_limit, daily_limit, counts) VALUES('TRF-DELETE', ?, 'running', 1, 100, '{}')",
+            (campaign_id,),
+        )
+        conn.execute(
+            "INSERT INTO traffic_action_events(run_id, target_id, action, status, detail) VALUES('TRF-DELETE', ?, 'open', 'succeeded', 'ok')",
+            (int(target_id),),
+        )
+        conn.execute(
+            """
+            INSERT INTO traffic_action_ledger(
+                platform, target_key, action_type, campaign_id, run_id, target_id,
+                content_url, video_intro, author_name, like_count, comment_text, status
+            )
+            VALUES('dy', 'dy:video:delete-test', 'comment', ?, 'TRF-DELETE', ?, 'https://www.douyin.com/video/delete-test', '删除测试视频', '测试作者', 88, '测试评论', 'succeeded')
+            """,
+            (campaign_id, int(target_id)),
+        )
+
+    client = TestClient(app)
+    blocked = client.delete(f"/api/traffic/campaigns/{campaign_id}")
+    assert blocked.status_code == 400
+    assert "正在运行" in blocked.json()["detail"]
+
+    with database.connect() as conn:
+        conn.execute("UPDATE traffic_runs SET status = 'succeeded' WHERE id = 'TRF-DELETE'")
+
+    deleted = client.delete(f"/api/traffic/campaigns/{campaign_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] == 1
+
+    with database.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM traffic_campaigns WHERE id = ?", (campaign_id,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM traffic_targets WHERE campaign_id = ?", (campaign_id,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM traffic_runs WHERE campaign_id = ?", (campaign_id,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM traffic_action_events WHERE run_id = 'TRF-DELETE'").fetchone()[0] == 0
+        ledger = conn.execute("SELECT campaign_id, target_id, comment_text FROM traffic_action_ledger WHERE target_key = 'dy:video:delete-test'").fetchone()
+
+    # 防重复账本保留，但删除后的计划/目标外键会被置空。
+    assert ledger is not None
+    assert ledger["campaign_id"] is None
+    assert ledger["target_id"] is None
+    assert ledger["comment_text"] == "测试评论"
+
+
 def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database

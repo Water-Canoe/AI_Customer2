@@ -509,6 +509,14 @@ def create_traffic_campaign(payload: TrafficCampaignCreate) -> dict[str, object]
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.delete("/api/traffic/campaigns/{campaign_id}")
+def delete_traffic_campaign(campaign_id: int) -> dict[str, int]:
+    try:
+        return traffic_workbench.delete_campaign(campaign_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/traffic/campaigns/{campaign_id}/targets/build")
 def build_traffic_targets(campaign_id: int, payload: TrafficTargetBuild) -> dict[str, object]:
     try:

@@ -1,7 +1,7 @@
 import { computed, defineComponent, h, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { CaretRight, Close, DataLine, Promotion, Refresh, VideoCamera } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { CaretRight, Close, DataLine, Delete, Promotion, Refresh, VideoCamera } from '@element-plus/icons-vue'
 
 import { SplitPane } from '../components/ui/SplitPane'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
@@ -114,6 +114,29 @@ export default defineComponent({
       }
     }
 
+    async function deleteCampaign(item: Dict) {
+      try {
+        await ElMessageBox.confirm(`确认删除引流计划“${item.name || item.id}”？`, '删除计划', {
+          type: 'warning',
+          confirmButtonText: '删除',
+          cancelButtonText: '取消',
+        })
+      } catch {
+        return
+      }
+      try {
+        await api.delete(`/traffic/campaigns/${item.id}`)
+        if (Number(item.id) === selectedCampaignId.value) {
+          selectedCampaignId.value = null
+          targets.value = { rows: [], total: 0, page: 1, page_size: 30 }
+        }
+        ElMessage.success('引流计划已删除')
+        await loadAll()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '删除引流计划失败')
+      }
+    }
+
     onMounted(loadAll)
 
     return () => h(SplitPane, { storageKey: isRandom.value ? 'traffic-random' : 'traffic-targeted', side: 'right', defaultSideWidth: 380 }, {
@@ -145,12 +168,14 @@ export default defineComponent({
         h('aside', { class: 'pane side-pane' }, [
           sectionTitle({ title: '计划列表', subtitle: '选择一个计划查看队列', icon: DataLine, tone: 'blue' }),
           campaigns.value.length
-            ? h('div', { class: 'traffic-campaign-list' }, campaigns.value.map((item: Dict) => h('button', {
+            ? h('div', { class: 'traffic-campaign-list' }, campaigns.value.map((item: Dict) => h('div', {
                 class: ['traffic-campaign-item', Number(item.id) === selectedCampaignId.value ? 'active' : ''],
-                onClick: async () => { selectedCampaignId.value = Number(item.id); await loadTargets() }
               }, [
-                h('strong', item.name),
-                h('span', `${sourceTypeLabel(item.source_type)} · 待执行 ${item.pending_count || 0} · 已完成 ${item.succeeded_count || 0}`),
+                h('button', { class: 'traffic-campaign-select', onClick: async () => { selectedCampaignId.value = Number(item.id); await loadTargets() } }, [
+                  h('strong', item.name),
+                  h('span', `${sourceTypeLabel(item.source_type)} · 待执行 ${item.pending_count || 0} · 已完成 ${item.succeeded_count || 0}`),
+                ]),
+                h('button', { class: 'traffic-campaign-delete', title: '删除计划', onClick: () => deleteCampaign(item) }, [h(Delete)]),
               ])))
             : emptyState({ title: '还没有计划', description: '先创建一个引流计划。', icon: Promotion, tone: 'gray' }),
           renderRunPanel(latestRun.value, cancelRun),

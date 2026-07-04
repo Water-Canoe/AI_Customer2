@@ -200,6 +200,18 @@ def get_campaign(campaign_id: int) -> dict[str, Any]:
         return _campaign_dict(row)
 
 
+def delete_campaign(campaign_id: int) -> dict[str, int]:
+    with database.connect() as conn:
+        row = conn.execute("SELECT id FROM traffic_campaigns WHERE id = ?", (campaign_id,)).fetchone()
+        if not row:
+            raise ValueError("引流计划不存在")
+        running = _count(conn, "SELECT COUNT(*) FROM traffic_runs WHERE campaign_id = ? AND status IN ('pending', 'running')", (campaign_id,))
+        if running:
+            raise ValueError("该计划已有引流批次正在运行，请先停止批次")
+        deleted = conn.execute("DELETE FROM traffic_campaigns WHERE id = ?", (campaign_id,)).rowcount
+    return {"deleted": int(deleted or 0)}
+
+
 def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
     campaign = get_campaign(campaign_id)
     if campaign["mode"] == "random":
