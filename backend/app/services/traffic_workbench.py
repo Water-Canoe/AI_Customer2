@@ -6,6 +6,7 @@ import json
 import random
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,9 +28,11 @@ TRAFFIC_SETTING_KEYS = {
 }
 
 TRAFFIC_IMAGE_DIR = database.BACKEND_ROOT / "runtime" / "traffic_images"
+TRAFFIC_DOUYIN_PROFILE_DIR = database.WORKSPACE_ROOT / "runtime" / "traffic_douyin_profile"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 300
+DOUYIN_LOGIN_PROCESS: subprocess.Popen[Any] | None = None
 
 
 # 停机异常同时携带用户提示和技术详情，日志页面按这两个层级展示。
@@ -395,6 +398,32 @@ def install_environment() -> dict[str, Any]:
     return {"ok": all(step["ok"] for step in steps), "steps": steps, "check": environment_check()}
 
 
+def open_douyin_login_window() -> dict[str, Any]:
+    global DOUYIN_LOGIN_PROCESS
+    if importlib.util.find_spec("playwright") is None:
+        raise ValueError("缺少 Python Playwright 依赖，请先在引流设置执行环境检查并自动安装")
+    if DOUYIN_LOGIN_PROCESS and DOUYIN_LOGIN_PROCESS.poll() is None:
+        return {"ok": True, "message": "抖音登录窗口已经打开，请在该窗口扫码登录。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
+
+    runtime_dir = database.BACKEND_ROOT / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    log_path = runtime_dir / "traffic_douyin_login.log"
+    command = [sys.executable, "-c", "from app.services.traffic_workbench import _hold_douyin_login_window; _hold_douyin_login_window()"]
+    with log_path.open("a", encoding="utf-8") as log_file:
+        # ponytail: 独立登录进程即可，后续需要托盘控制时再做进程管理页。
+        DOUYIN_LOGIN_PROCESS = subprocess.Popen(
+            command,
+            cwd=str(database.BACKEND_ROOT),
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    time.sleep(1)
+    if DOUYIN_LOGIN_PROCESS.poll() is not None:
+        raise ValueError(f"抖音登录窗口启动失败，请先检查环境。日志：{log_path}")
+    return {"ok": True, "message": "抖音登录窗口已打开，请扫码登录后再启动引流批次。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
+
+
 def source_keywords() -> list[dict[str, Any]]:
     # 关键词直接来自拓客工作台已入库内容，计划页只负责点击填入。
     with database.connect() as conn:
@@ -487,11 +516,10 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
     min_watch = _int_setting(settings, "traffic_min_watch_seconds", 3, 0, 120)
     max_watch = _int_setting(settings, "traffic_max_watch_seconds", 8, min_watch, 300)
     stop_after_failures = _int_setting(settings, "traffic_stop_after_failures", 3, 1, 10)
-    profile_dir = database.WORKSPACE_ROOT / "runtime" / "traffic_douyin_profile"
     failure_count = 0
 
     with sync_playwright() as playwright:
-        context = _launch_context(playwright, profile_dir)
+        context = _launch_context(playwright, TRAFFIC_DOUYIN_PROFILE_DIR)
         page = context.pages[0] if context.pages else context.new_page()
         try:
             target_url = _target_url(plan)
@@ -548,6 +576,17 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
             ) from exc
         finally:
             context.close()
+
+
+def _hold_douyin_login_window() -> None:
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        context = _launch_context(playwright, TRAFFIC_DOUYIN_PROFILE_DIR)
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto("https://www.douyin.com/?recommend=1", wait_until="domcontentloaded", timeout=60_000)
+        while True:
+            page.wait_for_timeout(1000)
 
 
 def _launch_context(playwright: Any, profile_dir: Path) -> Any:

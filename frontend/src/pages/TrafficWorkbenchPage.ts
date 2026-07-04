@@ -67,6 +67,7 @@ export default defineComponent({
     const trafficEnv = ref<Dict>({})
     const envInstalling = ref(false)
     const envInstallResult = ref<Dict | null>(null)
+    const douyinLoginOpening = ref(false)
     const recordFilters = ref({ query: '', status: '', action: '', page: 1 })
     const loading = ref(false)
 
@@ -241,6 +242,18 @@ export default defineComponent({
       }
     }
 
+    async function openDouyinLogin() {
+      douyinLoginOpening.value = true
+      try {
+        const { data } = await api.post('/traffic/douyin-login')
+        ElMessage.success(data.message || '抖音登录窗口已打开')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '抖音登录窗口打开失败')
+      } finally {
+        douyinLoginOpening.value = false
+      }
+    }
+
     async function clearRecords() {
       await ElMessageBox.confirm('会清除引流批次、日志、操作记录和防重复账本，文案/图片/授权不会删除。', '清除引流记录', { type: 'warning' })
       await api.delete('/traffic/records')
@@ -398,6 +411,11 @@ export default defineComponent({
             h('strong', licenseInfo.value.authorized ? '授权通过' : '未授权'),
             h('span', licenseInfo.value.message || '请填写引流授权码'),
             h('small', `设备码：${licenseInfo.value.device_code || '-'}`),
+          ]),
+          sectionTitle({ title: '抖音登录态', subtitle: '扫码后用于引流执行', icon: VideoPlay, tone: 'blue', compact: true }),
+          h('p', { class: 'traffic-env-suggestion' }, '打开窗口后完成扫码登录，再重新启动引流批次。'),
+          h('div', { class: 'task-card-actions traffic-login-actions' }, [
+            h('button', { class: 'primary-action', disabled: douyinLoginOpening.value, onClick: openDouyinLogin }, douyinLoginOpening.value ? '打开中...' : '打开抖音登录窗口'),
           ]),
           renderTrafficEnvironment(),
           sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Delete, tone: 'red', compact: true }),

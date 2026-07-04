@@ -223,6 +223,14 @@ def traffic_environment_install() -> dict[str, object]:
     return traffic_workbench.install_environment()
 
 
+@app.post("/api/traffic/douyin-login")
+def open_traffic_douyin_login() -> dict[str, object]:
+    try:
+        return traffic_workbench.open_douyin_login_window()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/traffic/material-images")
 async def upload_traffic_material_image(request: Request, filename: str = Query(default="")) -> dict[str, object]:
     try:

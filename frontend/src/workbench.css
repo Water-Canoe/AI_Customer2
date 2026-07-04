@@ -973,6 +973,10 @@ input[type='checkbox'] {
   white-space: nowrap;
 }
 
+.traffic-login-actions button {
+  white-space: nowrap;
+}
+
 .traffic-env-suggestion {
   margin: 0;
   color: #64748b;

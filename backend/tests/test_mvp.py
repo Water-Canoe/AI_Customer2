@@ -761,6 +761,56 @@ def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, mo
     assert calls[2][1] == "-c"
 
 
+def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    calls: dict[str, object] = {}
+
+    class Proc:
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(command: list[str], **kwargs: object) -> Proc:
+        calls["command"] = command
+        calls["cwd"] = kwargs.get("cwd")
+        return Proc()
+
+    # 登录窗口只校验启动参数，不真实打开浏览器。
+    monkeypatch.setattr(traffic_workbench, "DOUYIN_LOGIN_PROCESS", None)
+    monkeypatch.setattr(traffic_workbench.time, "sleep", lambda _: None)
+    monkeypatch.setattr(traffic_workbench.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        traffic_workbench.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "playwright" else None,
+    )
+
+    result = traffic_workbench.open_douyin_login_window()
+
+    assert result["ok"] is True
+    assert "traffic_douyin_profile" in result["profile_dir"]
+    assert calls["cwd"] == str(BACKEND_ROOT)
+    assert calls["command"] == [
+        sys.executable,
+        "-c",
+        "from app.services.traffic_workbench import _hold_douyin_login_window; _hold_douyin_login_window()",
+    ]
+
+
+def test_traffic_douyin_login_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.services import traffic_workbench
+
+    monkeypatch.setattr(traffic_workbench, "open_douyin_login_window", lambda: {"ok": True, "message": "ok"})
+
+    response = TestClient(app).post("/api/traffic/douyin-login")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
 def test_traffic_jingxuan_page_enters_visible_video(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import traffic_workbench
 
