@@ -95,7 +95,7 @@ class TrafficSettingsUpdate(BaseModel):
 class TrafficCampaignCreate(BaseModel):
     name: str = ""
     mode: Literal["targeted", "random"] = "targeted"
-    source_type: Literal["competitor", "keyword", "random_feed"] = "competitor"
+    source_type: Literal["competitor", "keyword", "search_keyword", "random_feed"] = "competitor"
     keyword: str = ""
     action_like: bool | None = None
     action_follow: bool | None = None

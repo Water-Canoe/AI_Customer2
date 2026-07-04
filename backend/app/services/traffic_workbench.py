@@ -112,7 +112,9 @@ def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
     if payload.mode == "random":
         source_type = "random_feed"
     else:
-        source_type = payload.source_type if payload.source_type in {"competitor", "keyword"} else "competitor"
+        source_type = payload.source_type if payload.source_type in {"competitor", "keyword", "search_keyword"} else "competitor"
+    if source_type == "search_keyword" and not payload.keyword.strip():
+        raise ValueError("搜索关键词引流必须填写关键词")
     action_like = _setting_or_payload(payload.action_like, settings["traffic_action_like"])
     action_follow = _setting_or_payload(payload.action_follow, settings["traffic_action_follow"])
     action_comment = _setting_or_payload(payload.action_comment, settings["traffic_action_comment"])
@@ -178,6 +180,8 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
     campaign = get_campaign(campaign_id)
     if campaign["mode"] == "random":
         return {"created": 0, "skipped": 0, "message": "随机引流在运行时从推荐流写入目标"}
+    if campaign["source_type"] == "search_keyword":
+        return {"created": 0, "skipped": 0, "message": "搜索关键词引流在运行时从搜索结果写入目标"}
     safe_limit = max(1, min(int(limit or 50), 500))
     with database.connect() as conn:
         if campaign["source_type"] == "competitor":
@@ -195,7 +199,7 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
                 """,
                 (safe_limit,),
             ).fetchall()
-        else:
+        elif campaign["source_type"] == "keyword":
             keyword = str(campaign["keyword"] or "").strip()
             if not keyword:
                 raise ValueError("关键词定向引流必须填写关键词")
@@ -213,6 +217,8 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
                 """,
                 (keyword, safe_limit),
             ).fetchall()
+        else:
+            raise ValueError("不支持的引流来源")
         created = 0
         skipped = 0
         for row in rows:
@@ -281,7 +287,7 @@ def create_run(campaign_id: int, limit: int | None = None) -> dict[str, Any]:
     today_done = _today_done_count(campaign_id)
     if today_done >= int(campaign["daily_limit"]):
         raise ValueError("今日引流数量已达到该计划每日上限")
-    if campaign["mode"] == "targeted":
+    if campaign["mode"] == "targeted" and campaign["source_type"] != "search_keyword":
         build_targets(campaign_id, safe_limit)
         pending = _pending_target_count(campaign_id)
         if pending <= 0:

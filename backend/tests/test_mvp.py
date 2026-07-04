@@ -3882,6 +3882,41 @@ def test_traffic_keywords_api_lists_douyin_content_keywords(tmp_path: Path) -> N
     assert all(item["keyword"] != "不应出现" for item in payload)
 
 
+def test_traffic_search_keyword_runs_without_prebuilt_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.schemas import TrafficCampaignCreate
+    from app.services import traffic_workbench
+
+    class FakeProcess:
+        pid = 24680
+
+    monkeypatch.setattr(traffic_workbench.license_service, "ensure_traffic_authorized", lambda: {"authorized": True})
+    monkeypatch.setattr(traffic_workbench, "_start_executor", lambda run_id: FakeProcess())
+    monkeypatch.setattr(traffic_workbench, "_monitor_process", lambda run_id, process: None)
+
+    with pytest.raises(ValueError, match="搜索关键词引流必须填写关键词"):
+        traffic_workbench.create_campaign(TrafficCampaignCreate(source_type="search_keyword", keyword=" "))
+
+    campaign = traffic_workbench.create_campaign(
+        TrafficCampaignCreate(
+            name="搜索关键词引流",
+            mode="targeted",
+            source_type="search_keyword",
+            keyword="线控转向机",
+        )
+    )
+    try:
+        build_result = traffic_workbench.build_targets(int(campaign["id"]), limit=10)
+        run = traffic_workbench.create_run(int(campaign["id"]))
+
+        assert build_result["created"] == 0
+        assert "运行时" in build_result["message"]
+        assert traffic_workbench.list_targets(int(campaign["id"]))["total"] == 0
+        assert run["status"] == "running"
+    finally:
+        traffic_workbench.RUNNING_TRAFFIC_PROCESSES.clear()
+
+
 def test_traffic_settings_and_assets_are_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database

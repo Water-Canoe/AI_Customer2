@@ -28,6 +28,9 @@ export default defineComponent({
 
     const isRandom = computed(() => route.name === 'traffic-random')
     const campaigns = computed(() => (dashboard.value.campaigns || []).filter((item: Dict) => isRandom.value ? item.mode === 'random' : item.mode === 'targeted'))
+    const selectedCampaign = computed(() => campaigns.value.find((item: Dict) => Number(item.id) === selectedCampaignId.value) || null)
+    const activeSourceType = computed(() => selectedCampaign.value?.source_type || form.source_type)
+    const showBuildTargets = computed(() => !isRandom.value && activeSourceType.value !== 'search_keyword')
     const latestRun = computed(() => (dashboard.value.runs || [])[0] || null)
 
     async function loadAll() {
@@ -114,7 +117,7 @@ export default defineComponent({
     return () => h('section', { class: 'traffic-page' }, [
       pageAction({
         title: isRandom.value ? '随机引流批次' : '定向引流批次',
-        description: isRandom.value ? '打开抖音推荐流后，系统按限额自动执行点赞、关注、文案或图片评论。' : '复用拓客工作台中的竞品视频或关键词视频，生成可自动执行的引流队列。',
+        description: isRandom.value ? '打开抖音推荐流后，系统按限额自动执行点赞、关注、文案或图片评论。' : '复用已采集视频生成队列，或按关键词搜索抖音视频后自动引流。',
         icon: Promotion,
         tone: isRandom.value ? 'purple' : 'teal',
         aside: h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新'])
@@ -125,7 +128,7 @@ export default defineComponent({
           renderCampaignForm(form, isRandom.value, assets.value, keywordOptions.value),
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', onClick: createCampaign }, [h(Promotion, { class: 'inline-icon' }), '创建计划']),
-            !isRandom.value ? h('button', { class: 'secondary-action', disabled: !selectedCampaignId.value, onClick: buildTargets }, '生成队列') : null,
+            showBuildTargets.value ? h('button', { class: 'secondary-action', disabled: !selectedCampaignId.value, onClick: buildTargets }, '生成队列') : null,
             h('button', { class: 'primary-action', disabled: !selectedCampaignId.value, onClick: startRun }, [h(CaretRight, { class: 'inline-icon' }), '开始执行']),
           ]),
         ]),
@@ -137,7 +140,7 @@ export default defineComponent({
                 onClick: async () => { selectedCampaignId.value = Number(item.id); await loadTargets() }
               }, [
                 h('strong', item.name),
-                h('span', `${item.source_type} · 待执行 ${item.pending_count || 0} · 已完成 ${item.succeeded_count || 0}`),
+                h('span', `${sourceTypeLabel(item.source_type)} · 待执行 ${item.pending_count || 0} · 已完成 ${item.succeeded_count || 0}`),
               ])))
             : emptyState({ title: '还没有计划', description: '先创建一个引流计划。', icon: Promotion, tone: 'gray' }),
         ]),
@@ -153,9 +156,11 @@ function renderCampaignForm(form: Dict, isRandom: boolean, assets: Dict[], keywo
     field('计划名称', h('input', { value: form.name, placeholder: isRandom ? '随机引流计划' : '竞品视频引流计划', onInput: (event: Event) => form.name = (event.target as HTMLInputElement).value })),
     !isRandom ? field('来源', h('select', { value: form.source_type, onChange: (event: Event) => form.source_type = (event.target as HTMLSelectElement).value }, [
       h('option', { value: 'competitor' }, '竞品账号视频'),
-      h('option', { value: 'keyword' }, '关键词视频'),
+      h('option', { value: 'keyword' }, '已采集关键词视频'),
+      h('option', { value: 'search_keyword' }, '搜索关键词引流'),
     ])) : null,
     !isRandom && form.source_type === 'keyword' ? field('关键词', renderKeywordPicker(form, keywordOptions)) : null,
+    !isRandom && form.source_type === 'search_keyword' ? field('搜索关键词', h('input', { value: form.keyword, placeholder: '输入要在抖音搜索的视频关键词', onInput: (event: Event) => form.keyword = (event.target as HTMLInputElement).value })) : null,
     field('发送内容', h('div', { class: 'traffic-checks' }, [
       check(form, 'action_comment', '发送文案'),
       check(form, 'action_image', '发送图片'),
@@ -208,8 +213,15 @@ function renderTargets(targets: Dict) {
           h('span', row.selected_comment || '执行时随机选择文案'),
           h('em', row.status),
         ])))
-      : emptyState({ title: '队列为空', description: '定向引流需要先生成队列；随机引流会在运行时写入队列。', icon: VideoCamera, tone: 'gray' })
+      : emptyState({ title: '队列为空', description: '已采集定向引流需要先生成队列；搜索关键词和随机引流会在运行时写入队列。', icon: VideoCamera, tone: 'gray' })
   ])
+}
+
+function sourceTypeLabel(sourceType: string) {
+  if (sourceType === 'keyword') return '已采集关键词视频'
+  if (sourceType === 'search_keyword') return '搜索关键词引流'
+  if (sourceType === 'random_feed') return '随机推荐流'
+  return '竞品账号视频'
 }
 
 function field(label: string, control: any) {

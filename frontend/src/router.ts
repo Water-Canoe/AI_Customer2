@@ -61,7 +61,7 @@ export const routes = [
     path: '/traffic-targeted',
     name: 'traffic-targeted',
     component: TrafficPage,
-    meta: { title: '定向引流', subtitle: '从竞品视频或关键词视频生成队列，再启动自动引流批次。', hint: '先生成队列再执行' },
+    meta: { title: '定向引流', subtitle: '从已采集视频生成队列，或按关键词搜索抖音视频后自动引流。', hint: '选择来源后执行' },
   },
   {
     path: '/traffic-random',

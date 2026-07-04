@@ -6,6 +6,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
@@ -18,6 +19,7 @@ from app.services import crawler_adapter
 
 
 DOUYIN_HOME = "https://www.douyin.com/"
+DOUYIN_SEARCH = "https://www.douyin.com/search/{keyword}?type=video"
 
 
 def main(run_id: str) -> int:
@@ -45,7 +47,9 @@ class TrafficExecutor:
             browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             page = context.pages[-1] if context.pages else context.new_page()
-            if self.campaign["mode"] == "random":
+            if self.campaign["source_type"] == "search_keyword":
+                self._run_search_keyword(page)
+            elif self.campaign["mode"] == "random":
                 self._run_random(page)
             else:
                 self._run_targeted(page)
@@ -71,12 +75,37 @@ class TrafficExecutor:
             self._execute_target(page, target)
 
     def _run_random(self, page: Page) -> None:
-        page.goto(DOUYIN_HOME, wait_until="domcontentloaded", timeout=45000)
+        self._run_runtime_feed(page, DOUYIN_HOME, "random_feed")
+
+    def _run_search_keyword(self, page: Page) -> None:
+        keyword = str(self.campaign.get("keyword") or "").strip()
+        if not keyword:
+            raise RuntimeError("搜索关键词引流必须填写关键词")
+        page.goto(DOUYIN_SEARCH.format(keyword=quote(keyword, safe="")), wait_until="domcontentloaded", timeout=45000)
+        page = self._open_first_search_video(page)
+        self._run_runtime_feed(page, page.url, "search_keyword", already_open=True)
+
+    def _run_runtime_feed(self, page: Page, start_url: str, source_type: str, already_open: bool = False) -> None:
+        if not already_open:
+            page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
         for _ in range(int(self.run["per_run_limit"])):
-            target = self._create_random_target(page)
+            target = self._create_runtime_target(page, source_type)
             self._execute_target(page, target, already_open=True)
             page.keyboard.press("ArrowDown")
             page.wait_for_timeout(int(self._random_interval() * 1000))
+
+    def _open_first_search_video(self, page: Page) -> Page:
+        # 抖音搜索页先展示结果列表，需要打开第一个视频后才能复用刷视频执行逻辑。
+        link = page.locator("a[href*='/video/']").first
+        link.wait_for(state="visible", timeout=15000)
+        before = list(page.context.pages)
+        link.click(timeout=5000)
+        page.wait_for_timeout(2000)
+        for candidate in page.context.pages:
+            if all(candidate is not existing for existing in before):
+                candidate.bring_to_front()
+                return candidate
+        return page
 
     def _execute_target(self, page: Page, target: dict[str, Any], already_open: bool = False) -> None:
         target_id = int(target["id"])
@@ -175,17 +204,17 @@ class TrafficExecutor:
                 )
             return database.rows_to_dicts(rows)
 
-    def _create_random_target(self, page: Page) -> dict[str, Any]:
+    def _create_runtime_target(self, page: Page, source_type: str) -> dict[str, Any]:
         url = page.url or DOUYIN_HOME
-        title = page.title() or "随机推荐视频"
-        key = url if "/video/" in url else f"random:{int(time.time() * 1000)}"
+        title = page.title() or ("搜索关键词视频" if source_type == "search_keyword" else "随机推荐视频")
+        key = url if "/video/" in url else f"{source_type}:{int(time.time() * 1000)}"
         with database.connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO traffic_targets(campaign_id, platform, source_type, target_key, content_url, title, selected_comment, status, run_id)
-                VALUES(?, 'dy', 'random_feed', ?, ?, ?, ?, 'running', ?)
+                INSERT INTO traffic_targets(campaign_id, platform, source_type, target_key, content_url, title, keyword, selected_comment, status, run_id)
+                VALUES(?, 'dy', ?, ?, ?, ?, ?, ?, 'running', ?)
                 """,
-                (int(self.campaign["id"]), key, url, title, "", self.run_id),
+                (int(self.campaign["id"]), source_type, key, url, title, str(self.campaign.get("keyword") or ""), "", self.run_id),
             )
             row = conn.execute("SELECT * FROM traffic_targets WHERE id = ?", (int(cur.lastrowid),)).fetchone()
             return database.row_to_dict(row) or {}
