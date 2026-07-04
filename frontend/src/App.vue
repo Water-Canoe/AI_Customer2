@@ -4,25 +4,33 @@
       <div class="brand">
         <div class="brand-mark">AI</div>
         <div>
-          <strong>AI拓客工具</strong>
-          <span>采集 · 筛选 · 跟进</span>
+          <strong>AI获客系统</strong>
+          <span>拓客 · 引流 · 跟进</span>
         </div>
       </div>
-      <el-menu :default-active="activeView" class="nav" @select="goToView">
-        <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
-        <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
-        <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
-        <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
-        <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>私信工作台</span></el-menu-item>
-        <el-menu-item index="tables"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
-        <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
+      <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench']" class="nav" @select="goToView">
+        <el-sub-menu index="lead-workbench">
+          <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
+          <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
+          <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
+          <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
+          <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
+          <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>私信工作台</span></el-menu-item>
+          <el-menu-item index="tables"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
+          <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
+        </el-sub-menu>
+        <el-sub-menu index="traffic-workbench">
+          <template #title><el-icon><Promotion /></el-icon><span>引流工作台</span></template>
+          <el-menu-item index="traffic-targeted" disabled><el-icon><Promotion /></el-icon><span>定向引流</span></el-menu-item>
+          <el-menu-item index="traffic-random" disabled><el-icon><Share /></el-icon><span>随机引流</span></el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 
     <el-container>
       <el-header class="topbar">
         <div class="topbar-heading">
-          <span class="topbar-kicker">AI 客户开发工作台</span>
+          <span class="topbar-kicker">AI 获客系统</span>
           <h1>{{ viewTitle }}</h1>
           <p>{{ viewSubtitle }}</p>
         </div>
@@ -64,6 +72,7 @@ import {
   Message,
   Operation,
   Plus,
+  Promotion,
   Refresh,
   Setting,
   Share,
