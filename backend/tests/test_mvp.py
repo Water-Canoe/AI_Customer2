@@ -826,6 +826,7 @@ def test_traffic_jingxuan_page_jumps_to_project_video(tmp_path: Path, monkeypatc
     from app.services import traffic_workbench
 
     with database.connect() as conn:
+        conn.execute("DELETE FROM contents")
         conn.execute(
             """
             INSERT INTO contents(platform, content_id, title, description, content_url)
@@ -865,6 +866,48 @@ def test_traffic_jingxuan_page_jumps_to_project_video(tmp_path: Path, monkeypatc
 
     assert page.target_url == "https://www.douyin.com/video/7123"
     assert "项目库" in str(logs[0][3])
+
+
+def test_traffic_project_video_candidate_respects_author_cooldown(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="作者冷却", platform="dy"))
+    run = traffic_workbench.create_run(plan["id"])
+    with database.connect() as conn:
+        conn.execute("DELETE FROM contents")
+        conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname)
+            VALUES('dy', 'author-cool', '冷却作者'), ('dy', 'author-open', '可用作者')
+            """
+        )
+        cool_author = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'author-cool'").fetchone()["id"]
+        open_author = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'author-open'").fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, author_account_id, title, content_url)
+            VALUES
+              ('dy', 'cool-video', ?, '冷却视频', 'https://www.douyin.com/video/cool-video'),
+              ('dy', 'open-video', ?, '可用视频', 'https://www.douyin.com/video/open-video')
+            """,
+            (cool_author, open_author),
+        )
+        conn.execute(
+            """
+            INSERT INTO traffic_records(run_id, plan_id, platform, video_id, video_url, author_id, author_name, actions, status)
+            VALUES(?, ?, 'dy', 'old-video', 'https://www.douyin.com/video/old-video', 'author-cool', '冷却作者', '[]', 'done')
+            """,
+            (run["id"], plan["id"]),
+        )
+
+    candidate = traffic_workbench._random_project_video_candidate(24)
+
+    assert candidate is not None
+    assert candidate["url"] == "https://www.douyin.com/video/open-video"
+    assert traffic_workbench._random_project_video_candidate(0, {"author-cool"})["url"] == "https://www.douyin.com/video/open-video"
 
 
 def test_traffic_active_video_prefers_feed_api_cache() -> None:

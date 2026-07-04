@@ -517,7 +517,9 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
     min_watch = _int_setting(settings, "traffic_min_watch_seconds", 3, 0, 120)
     max_watch = _int_setting(settings, "traffic_max_watch_seconds", 8, min_watch, 300)
     stop_after_failures = _int_setting(settings, "traffic_stop_after_failures", 3, 1, 10)
+    author_cooldown_hours = _int_setting(settings, "traffic_author_cooldown_hours", 24, 0, 720)
     failure_count = 0
+    project_author_keys: set[str] = set()
 
     with sync_playwright() as playwright:
         context = _launch_context(playwright, TRAFFIC_DOUYIN_PROFILE_DIR)
@@ -529,7 +531,8 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
             page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
             page.wait_for_timeout(4000)
             _ensure_page_ready(page)
-            _navigate_to_executable_video(page, run_id, video_cache)
+            navigation_source = _navigate_to_executable_video(page, run_id, video_cache, author_cooldown_hours, project_author_keys)
+            use_project_queue = navigation_source == "project"
             for index in range(limit):
                 _raise_if_stop_requested(run_id)
                 video = _read_active_video(page, video_cache)
@@ -545,7 +548,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                 if not _is_regular_video(video):
                     _append_log(run_id, "warning", "browse", "当前不是常规视频，已跳过。", "可能是直播、图文或广告内容", "系统会尝试切换到下一个视频。", {"video_id": video["video_id"], "aweme_type": video.get("aweme_type")})
                     _record_video(run_id, plan, video, ["跳过"], "", "", "skipped")
-                    if index < limit - 1 and not _advance_video(page, video["video_id"], video_cache):
+                    if index < limit - 1 and not _next_video(page, run_id, video["video_id"], video_cache, use_project_queue, author_cooldown_hours, project_author_keys):
                         raise TrafficStop(
                             "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
                             "翻页后视频 ID 没有变化。",
@@ -572,7 +575,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                         "stop",
                         {"failure_count": failure_count},
                     )
-                if index < limit - 1 and not _advance_video(page, video["video_id"], video_cache):
+                if index < limit - 1 and not _next_video(page, run_id, video["video_id"], video_cache, use_project_queue, author_cooldown_hours, project_author_keys):
                     raise TrafficStop(
                         "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
                         "翻页后视频 ID 没有变化。",
@@ -679,18 +682,19 @@ def _ensure_page_ready(page: Any) -> None:
         )
 
 
-def _navigate_to_executable_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None) -> None:
+def _navigate_to_executable_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None, cooldown_hours: int = 24, project_author_keys: set[str] | None = None) -> str:
     if _read_active_video(page, video_cache)["video_id"]:
-        return
+        return "active"
     if "douyin.com/jingxuan" in page.url:
-        project_url = _random_project_video_url()
-        if project_url:
-            _goto_video_candidate(page, run_id, project_url, "已从项目库随机跳转一个视频。")
-            return
+        project = _random_project_video_candidate(cooldown_hours, project_author_keys)
+        if project:
+            _remember_project_author(project_author_keys, project)
+            _goto_video_candidate(page, run_id, project["url"], "已从项目库随机跳转一个视频。")
+            return "project"
         candidates = _visible_video_links(page)
         if candidates:
             _goto_video_candidate(page, run_id, random.choice(candidates[:8])["href"], "已从精选页随机跳转一个视频。")
-            return
+            return "page"
         raise TrafficStop(
             "抖音停留在精选页，任务已停止。",
             "精选页没有可跳转的视频链接，项目库也没有可用抖音视频。",
@@ -700,8 +704,21 @@ def _navigate_to_executable_video(page: Any, run_id: str, video_cache: dict[str,
         )
     candidates = _visible_video_links(page)
     if not candidates:
-        return
+        return "none"
     _goto_video_candidate(page, run_id, random.choice(candidates[:8])["href"], "已从当前页面随机跳转一个视频。")
+    return "page"
+
+
+def _next_video(page: Any, run_id: str, previous_video_id: str, video_cache: dict[str, Any] | None, use_project_queue: bool, cooldown_hours: int, project_author_keys: set[str] | None = None) -> bool:
+    if use_project_queue:
+        project = _random_project_video_candidate(cooldown_hours, project_author_keys)
+        if not project:
+            return False
+        _remember_project_author(project_author_keys, project)
+        _goto_video_candidate(page, run_id, project["url"], "已按作者冷却随机切换到项目库另一个视频。")
+        next_id = _read_active_video(page, video_cache)["video_id"]
+        return bool(next_id and next_id != previous_video_id)
+    return _advance_video(page, previous_video_id, video_cache)
 
 
 def _goto_video_candidate(page: Any, run_id: str, url: str, message: str) -> None:
@@ -713,28 +730,67 @@ def _goto_video_candidate(page: Any, run_id: str, url: str, message: str) -> Non
 
 
 def _random_project_video_url() -> str:
+    candidate = _random_project_video_candidate(0)
+    return candidate["url"] if candidate else ""
+
+
+def _random_project_video_candidate(cooldown_hours: int, exclude_author_keys: set[str] | None = None) -> dict[str, str] | None:
+    modifier = f"-{max(cooldown_hours, 0)} hours"
     with database.connect() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """
-            SELECT content_url, content_id
-            FROM contents
-            WHERE platform = 'dy'
+            SELECT c.content_url, c.content_id,
+                   COALESCE(u.platform_user_id, '') AS author_id,
+                   COALESCE(u.nickname, '') AS author_name
+            FROM contents c
+            LEFT JOIN user_accounts u ON u.id = c.author_account_id
+            WHERE c.platform = 'dy'
               AND (
-                content_url LIKE '%douyin.com/video/%'
-                OR content_url LIKE '%douyin.com/note/%'
-                OR content_id <> ''
+                c.content_url LIKE '%douyin.com/video/%'
+                OR c.content_url LIKE '%douyin.com/note/%'
+                OR c.content_id <> ''
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM traffic_records tr
+                WHERE tr.platform = 'dy'
+                  AND tr.created_at >= datetime('now', 'localtime', ?)
+                  AND (
+                    (c.content_id <> '' AND tr.video_id = c.content_id)
+                    OR (c.content_url <> '' AND tr.video_url = c.content_url)
+                    OR (u.platform_user_id <> '' AND tr.author_id = u.platform_user_id)
+                    OR (u.nickname <> '' AND tr.author_name = u.nickname)
+                  )
               )
             ORDER BY RANDOM()
-            LIMIT 1
-            """
-        ).fetchone()
-    if not row:
-        return ""
+            LIMIT 20
+            """,
+            (modifier,),
+        ).fetchall()
+    for row in rows:
+        candidate = _project_video_candidate_from_row(row)
+        if candidate and _project_author_key(candidate) not in (exclude_author_keys or set()):
+            return candidate
+    return None
+
+
+def _project_video_candidate_from_row(row: Any) -> dict[str, str] | None:
     url = str(row["content_url"] or "")
+    author_id = str(row["author_id"] or "")
+    author_name = str(row["author_name"] or "")
     if _is_douyin_video_url(url):
-        return url
+        return {"url": url, "author_id": author_id, "author_name": author_name}
     content_id = str(row["content_id"] or "")
-    return f"https://www.douyin.com/video/{content_id}" if content_id else ""
+    return {"url": f"https://www.douyin.com/video/{content_id}", "author_id": author_id, "author_name": author_name} if content_id else None
+
+
+def _remember_project_author(project_author_keys: set[str] | None, candidate: dict[str, str]) -> None:
+    key = _project_author_key(candidate)
+    if project_author_keys is not None and key:
+        project_author_keys.add(key)
+
+
+def _project_author_key(candidate: dict[str, str]) -> str:
+    return candidate.get("author_id") or candidate.get("author_name") or ""
 
 
 def _visible_video_links(page: Any) -> list[dict[str, Any]]:
