@@ -3,7 +3,8 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CaretRight, Close, DataLine, Promotion, Refresh, VideoCamera } from '@element-plus/icons-vue'
 
-import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
+import { SplitPane } from '../components/ui/SplitPane'
+import { emptyState, sectionTitle } from '../components/ui/Workbench'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 
@@ -81,7 +82,8 @@ export default defineComponent({
       if (!selectedCampaignId.value) return
       try {
         const { data } = await api.post(`/traffic/campaigns/${selectedCampaignId.value}/targets/build`, { limit: 100 })
-        ElMessage.success(`已生成 ${data.created || 0} 条，跳过 ${data.skipped || 0} 条`)
+        const duplicated = Number(data.duplicated || 0)
+        ElMessage.success(`已生成 ${data.created || 0} 条，跳过 ${data.skipped || 0} 条${duplicated ? `，重复 ${duplicated} 条` : ''}`)
         await loadTargets()
         await loadAll()
       } catch (error: any) {
@@ -114,16 +116,16 @@ export default defineComponent({
 
     onMounted(loadAll)
 
-    return () => h('section', { class: 'traffic-page' }, [
-      pageAction({
-        title: isRandom.value ? '随机引流批次' : '定向引流批次',
-        description: isRandom.value ? '打开抖音推荐流后，系统按限额自动执行点赞、关注、文案或图片评论。' : '复用已采集视频生成队列，或按关键词搜索抖音视频后自动引流。',
-        icon: Promotion,
-        tone: isRandom.value ? 'purple' : 'teal',
-        aside: h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新'])
-      }),
-      h('div', { class: 'traffic-grid' }, [
-        h('section', { class: 'traffic-panel' }, [
+    return () => h(SplitPane, { storageKey: isRandom.value ? 'traffic-random' : 'traffic-targeted', side: 'right', defaultSideWidth: 380 }, {
+      default: () => [
+        h('section', { class: 'pane primary-pane traffic-main-pane' }, [
+          sectionTitle({
+            title: isRandom.value ? '随机引流批次' : '定向引流批次',
+            subtitle: isRandom.value ? '打开抖音推荐流后按设置自动执行' : '复用已采集视频或搜索关键词生成执行队列',
+            icon: Promotion,
+            tone: isRandom.value ? 'purple' : 'teal',
+            aside: h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
+          }),
           sectionTitle({ title: '创建计划', subtitle: '动作、文案、限额和停留时间统一在引流设置中配置', icon: Promotion, tone: 'teal', compact: true }),
           renderCampaignForm(form, isRandom.value, assets.value, keywordOptions.value),
           h('div', { class: 'action-row' }, [
@@ -131,9 +133,12 @@ export default defineComponent({
             showBuildTargets.value ? h('button', { class: 'secondary-action', disabled: !selectedCampaignId.value, onClick: buildTargets }, '生成队列') : null,
             h('button', { class: 'primary-action', disabled: !selectedCampaignId.value, onClick: startRun }, [h(CaretRight, { class: 'inline-icon' }), '开始执行']),
           ]),
+          renderTargets(targets.value, loadTargets),
         ]),
-        h('section', { class: 'traffic-panel' }, [
-          sectionTitle({ title: '计划列表', subtitle: '选择一个计划查看队列', icon: DataLine, tone: 'blue', compact: true }),
+      ],
+      side: () => [
+        h('aside', { class: 'pane side-pane' }, [
+          sectionTitle({ title: '计划列表', subtitle: '选择一个计划查看队列', icon: DataLine, tone: 'blue' }),
           campaigns.value.length
             ? h('div', { class: 'traffic-campaign-list' }, campaigns.value.map((item: Dict) => h('button', {
                 class: ['traffic-campaign-item', Number(item.id) === selectedCampaignId.value ? 'active' : ''],
@@ -143,11 +148,10 @@ export default defineComponent({
                 h('span', `${sourceTypeLabel(item.source_type)} · 待执行 ${item.pending_count || 0} · 已完成 ${item.succeeded_count || 0}`),
               ])))
             : emptyState({ title: '还没有计划', description: '先创建一个引流计划。', icon: Promotion, tone: 'gray' }),
+          renderRunPanel(latestRun.value, cancelRun),
         ]),
-      ]),
-      renderRunPanel(latestRun.value, cancelRun),
-      renderTargets(targets.value),
-    ])
+      ],
+    })
   }
 })
 
@@ -190,7 +194,7 @@ function renderKeywordPicker(form: Dict, keywordOptions: Dict[]) {
 }
 
 function renderRunPanel(run: Dict | null, cancelRun: (run: Dict) => void) {
-  return h('section', { class: 'traffic-panel traffic-run-panel' }, [
+  return h('div', { class: 'traffic-side-block' }, [
     sectionTitle({ title: '最近批次', subtitle: run ? `${run.campaign_name || ''} · ${run.status}` : '暂无运行记录', icon: CaretRight, tone: 'green', compact: true }),
     run
       ? h('div', { class: 'traffic-run-card' }, [
@@ -202,19 +206,50 @@ function renderRunPanel(run: Dict | null, cancelRun: (run: Dict) => void) {
   ])
 }
 
-function renderTargets(targets: Dict) {
+function renderTargets(targets: Dict, loadTargets: (page?: number) => Promise<void>) {
   const rows = targets.rows || []
-  return h('section', { class: 'traffic-panel' }, [
+  const page = Number(targets.page || 1)
+  const pageSize = Number(targets.page_size || 30)
+  const total = Number(targets.total || 0)
+  const pageEnd = Math.min(page * pageSize, total)
+  const hasNext = pageEnd < total
+  return h('div', { class: 'table-content traffic-target-content' }, [
     sectionTitle({ title: '执行队列', subtitle: `共 ${targets.total || 0} 条`, icon: VideoCamera, tone: 'purple', compact: true }),
-    rows.length
-      ? h('div', { class: 'traffic-target-table' }, rows.map((row: Dict) => h('div', { class: ['traffic-target-row', `status-${row.status}`] }, [
-          h('strong', row.title || row.content_url || `视频 ${row.id}`),
-          h('span', row.author_name || row.keyword || row.source_type),
-          h('span', row.selected_comment || '执行时随机选择文案'),
-          h('em', row.status),
-        ])))
-      : emptyState({ title: '队列为空', description: '已采集定向引流需要先生成队列；搜索关键词和随机引流会在运行时写入队列。', icon: VideoCamera, tone: 'gray' })
+    h('div', { class: 'table-scroll' }, [
+      h('table', { class: 'data-table traffic-target-data-table' }, [
+        h('thead', [h('tr', [
+          h('th', '视频'),
+          h('th', '作者/来源'),
+          h('th', '发送内容'),
+          h('th', '状态'),
+        ])]),
+        h('tbody', rows.length ? rows.map((row: Dict) => h('tr', [
+          h('td', [renderTargetTitle(row)]),
+          h('td', [h('span', { class: 'table-muted-text' }, row.author_name || row.keyword || row.source_type || '-')]),
+          h('td', [h('span', { class: 'table-muted-text' }, row.selected_comment || '执行时随机选择文案/图片')]),
+          h('td', [h('span', { class: ['traffic-status-pill', `status-${row.status || 'pending'}`] }, row.status || 'pending')]),
+        ])) : [
+          h('tr', [h('td', { class: 'table-empty', colspan: 4 }, '队列为空；已采集定向引流先生成队列，搜索关键词和随机引流会在运行时写入队列。')]),
+        ]),
+      ]),
+    ]),
+    h('div', { class: 'table-pagination' }, [
+      h('span', total ? `显示 ${(page - 1) * pageSize + 1}-${pageEnd} / ${total}` : '0 条记录'),
+      h('div', { class: 'table-page-controls' }, [
+        h('button', { type: 'button', disabled: page <= 1, onClick: () => loadTargets(page - 1) }, '上一页'),
+        h('span', `${page} / ${Math.max(1, Math.ceil(total / pageSize))}`),
+        h('button', { type: 'button', disabled: !hasNext, onClick: () => loadTargets(page + 1) }, '下一页'),
+      ]),
+    ]),
   ])
+}
+
+function renderTargetTitle(row: Dict) {
+  const label = row.title || row.content_url || `视频 ${row.id}`
+  const attrs = { class: 'table-primary-text', title: label }
+  return row.content_url
+    ? h('a', { ...attrs, class: 'table-primary-link table-primary-text', href: row.content_url, target: '_blank', rel: 'noreferrer' }, label)
+    : h('span', attrs, label)
 }
 
 function sourceTypeLabel(sourceType: string) {

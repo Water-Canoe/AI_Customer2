@@ -3,6 +3,7 @@ import { Check, Delete, Key, Picture, Refresh, Setting, UploadFilled } from '@el
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { LicenseDialog } from '../components/ui/LicenseDialog'
+import { SplitPane } from '../components/ui/SplitPane'
 import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
@@ -186,51 +187,51 @@ export default defineComponent({
 
     onMounted(loadAll)
 
-    return () => h('section', { class: 'traffic-settings-page' }, [
-      pageAction({
-        title: '引流工作台设置',
-        description: '引流授权、执行参数、文案和图片素材独立管理，不与拓客工作台共用授权码。',
-        icon: Setting,
-        tone: 'teal',
-        aside: [
-          h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
-          h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
-        ],
-      }),
-      h('div', { class: 'traffic-settings-grid' }, [
-        h('section', { class: 'traffic-panel' }, [
-          sectionTitle({ title: '执行参数', subtitle: '定向引流和随机引流启动批次时统一使用', icon: Setting, tone: 'teal', compact: true }),
+    return () => [
+      h(SplitPane, { storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 380 }, {
+        default: () => [
+        h('section', { class: 'pane primary-pane traffic-settings-main' }, [
+          pageAction({
+            title: '引流工作台设置',
+            description: '引流授权、执行参数、文案和图片素材独立管理，不与拓客工作台共用授权码。',
+            icon: Setting,
+            tone: 'teal',
+          }),
+          sectionTitle({ title: '执行参数', subtitle: '定向引流和随机引流启动批次时统一使用', icon: Setting, tone: 'teal' }),
           renderSettingsForm(local),
+          sectionTitle({ title: '规则过滤', subtitle: '规则命中后才会进入队列或执行', icon: Check, tone: 'green', compact: true }),
+          renderRuleForm(local),
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', disabled: saving.value, onClick: saveSettings }, [h(Check, { class: 'inline-icon' }), saving.value ? '保存中' : '保存设置']),
             h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
-            h('button', { class: ['secondary-action', 'danger-action'], disabled: clearingRecords.value, onClick: clearCommentRecords }, [h(Delete, { class: 'inline-icon' }), clearingRecords.value ? '清除中' : '清除数据库']),
+            h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
           ]),
         ]),
-        h('section', { class: 'traffic-panel' }, [
-          sectionTitle({ title: '规则过滤', subtitle: '规则命中后才会进入队列或执行', icon: Check, tone: 'green', compact: true }),
-          renderRuleForm(local),
-        ]),
-      ]),
-      h('section', { class: 'traffic-panel' }, [
+        ],
+        side: () => [
+        h('aside', { class: 'pane side-pane traffic-settings-side' }, [
         sectionTitle({
           title: '文案与图片素材',
           subtitle: '一行一条文案，每次发送时随机选择；图片素材在计划中选择',
           icon: Picture,
           tone: 'blue',
-          compact: true,
           aside: renderUploadButton(uploading.value, uploadAsset),
         }),
-        h('div', { class: 'traffic-copy-grid' }, [
-          field('多文案', h('textarea', {
+        field('多文案', h('textarea', {
             value: local.traffic_comment_templates_text,
             rows: 6,
             placeholder: '一行一条，每次发送时随机选择',
             onInput: (event: Event) => local.traffic_comment_templates_text = (event.target as HTMLTextAreaElement).value,
-          })),
-          renderAssets(assets.value),
+        })),
+        renderAssets(assets.value),
+        h('div', { class: 'danger-zone' }, [
+          sectionTitle({ title: '危险操作', subtitle: '只影响引流评论记录', icon: Delete, tone: 'red', compact: true }),
+          h('p', '清除已评论视频数据表和防重复账本，不删除计划、素材或拓客数据。'),
+          h('button', { class: 'wide-action danger-action', disabled: clearingRecords.value, onClick: clearCommentRecords }, [h(Delete, { class: 'inline-icon' }), clearingRecords.value ? '清除中' : '清除数据库']),
         ]),
-      ]),
+        ]),
+        ],
+      }),
       h(LicenseDialog, {
         open: licenseDialogOpen.value,
         loading: licenseLoading.value,
@@ -244,7 +245,7 @@ export default defineComponent({
         onCheck: checkLicense,
         onCopyDevice: copyDeviceCode,
       }),
-    ])
+    ]
   }
 })
 

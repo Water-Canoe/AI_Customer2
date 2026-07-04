@@ -4480,6 +4480,22 @@ input[type='checkbox'] {
   box-shadow: var(--workbench-shadow);
 }
 
+.traffic-main-pane,
+.traffic-settings-main,
+.traffic-settings-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.traffic-side-block {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--workbench-border);
+}
+
 .traffic-run-panel {
   grid-template-columns: 1fr;
 }
@@ -4692,6 +4708,50 @@ input[type='checkbox'] {
   gap: 8px;
 }
 
+.traffic-target-content {
+  margin-top: 8px;
+}
+
+.traffic-target-data-table {
+  min-width: 760px;
+}
+
+.traffic-record-data-table {
+  min-width: 860px;
+}
+
+.traffic-status-pill {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: #eef2ff;
+  color: var(--workbench-blue);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.traffic-status-pill.status-succeeded {
+  background: #e7f7ec;
+  color: var(--workbench-green);
+}
+
+.traffic-status-pill.status-failed {
+  background: #fee2e2;
+  color: var(--workbench-red);
+}
+
+.traffic-status-pill.status-running {
+  background: #fff7ed;
+  color: var(--workbench-amber);
+}
+
+.traffic-status-pill.status-skipped {
+  background: var(--workbench-panel-soft);
+  color: var(--workbench-muted);
+}
+
 .traffic-target-row {
   display: grid;
   grid-template-columns: minmax(180px, 1.2fr) minmax(120px, 0.7fr) minmax(220px, 1.3fr) 82px;
@@ -4807,6 +4867,17 @@ input[type='checkbox'] {
 .traffic-record-pager {
   display: flex;
   gap: 8px;
+}
+
+.traffic-record-filters {
+  flex: 1 1 460px;
+  max-width: none;
+  justify-content: flex-end;
+}
+
+.traffic-record-filters button {
+  flex: 0 0 auto;
+  min-width: 76px;
 }
 
 .traffic-upload-button {
