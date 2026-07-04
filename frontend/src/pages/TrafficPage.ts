@@ -126,7 +126,12 @@ export default defineComponent({
             tone: isRandom.value ? 'purple' : 'teal',
             aside: h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
           }),
-          sectionTitle({ title: '创建计划', subtitle: '动作、文案、限额和停留时间统一在引流设置中配置', icon: Promotion, tone: 'teal', compact: true }),
+          h('div', { class: ['section-title', 'compact'] }, [
+            h('div', [
+              h('h2', '创建计划'),
+              h('span', '动作、文案、限额和停留时间统一在引流设置中配置'),
+            ]),
+          ]),
           renderCampaignForm(form, isRandom.value, assets.value, keywordOptions.value),
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', onClick: createCampaign }, [h(Promotion, { class: 'inline-icon' }), '创建计划']),
