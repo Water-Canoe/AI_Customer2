@@ -234,6 +234,8 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 后端新增 `/api/traffic/*` 接口和 `traffic_*` 数据表，覆盖计划、批次、视频项、用户可读动作日志、操作记录、文案库、图片库和防重复账本。引流授权独立于拓客授权，复用同一个 Sealos 授权服务和弹窗交互，但使用 `traffic` 业务字段：`traffic_license_code`、`traffic_device_code`、`traffic_license_last_status` 等；启动引流批次前会调用 `ensure_authorized_for("traffic")`，不会占用拓客工作台的 `lead` 授权码。
 
+如果本地库曾运行过早期引流原型，`init_db()` 会为旧 `traffic_runs` 表补齐 `plan_id`、统计列和停机原因列，避免执行监控页因为旧表缺列返回 500。引流分栏页面必须使用 `SplitPane` 的默认 slot 作为主区、`side` slot 作为右栏，否则主区会消失、右栏被压成竖排。
+
 执行器位于 `backend/app/services/traffic_workbench.py`，使用 Python Playwright 和独立浏览器 Profile `runtime/traffic_douyin_profile`。执行前会检查登录态、安全验证、页面类型和活跃视频 ID；遇到登录失效、人机验证、找不到活跃视频、翻页不变、连续动作失败或达到限额时自动停机，并在日志里写清楚“发生了什么、为什么停、用户下一步怎么做”。不会实现验证码或人机验证绕过。
 
 参考实现和探测依据见 `docs/traffic_workbench_rebuild_research.md`；根目录保留只读探测脚本 `script/douyin_probe.cjs`，用于在不点赞、不关注、不评论的前提下验证抖音页面结构。

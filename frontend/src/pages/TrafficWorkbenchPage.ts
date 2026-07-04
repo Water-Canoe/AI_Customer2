@@ -221,7 +221,7 @@ export default defineComponent({
 
     function renderPlanPage() {
       return h(SplitPane, { storageKey: 'traffic-plans', side: 'right', defaultSideWidth: 360 }, {
-        main: () => h('section', { class: 'content-pane' }, [
+        default: () => h('section', { class: 'content-pane' }, [
           sectionTitle({ title: '创建引流计划', subtitle: '不选动作时就是纯自动刷视频', icon: Promotion, tone: 'teal' }),
           renderPlatformTabs(),
           h('div', { class: 'form-grid' }, [
@@ -259,7 +259,7 @@ export default defineComponent({
     function renderMonitorPage() {
       const run = selectedRun.value
       return h(SplitPane, { storageKey: 'traffic-monitor', side: 'right', defaultSideWidth: 390 }, {
-        main: () => h('section', { class: 'content-pane' }, [
+        default: () => h('section', { class: 'content-pane' }, [
           sectionTitle({ title: '执行详情', subtitle: run?.plan_name || '选择右侧批次', icon: Monitor, tone: 'blue' }),
           run ? [
             h('div', { class: 'ai-summary-grid' }, [
@@ -310,7 +310,7 @@ export default defineComponent({
 
     function renderSettingsPage() {
       return h(SplitPane, { storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 360 }, {
-        main: () => h('section', { class: 'content-pane' }, [
+        default: () => h('section', { class: 'content-pane' }, [
           sectionTitle({ title: '引流设置', subtitle: '授权、文案、图片、限额统一在这里维护', icon: Setting, tone: 'teal' }),
           h('div', { class: 'task-card-actions' }, [
             h('button', { class: 'secondary-action', onClick: openLicense }, [h(Key, { class: 'inline-icon' }), '授权与设备']),

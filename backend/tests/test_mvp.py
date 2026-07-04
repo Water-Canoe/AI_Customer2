@@ -621,6 +621,33 @@ def test_traffic_license_scope_is_independent(tmp_path: Path) -> None:
     assert license_service.license_overview_for("lead")["device_code"] != license_service.license_overview_for("traffic")["device_code"]
 
 
+def test_traffic_runs_legacy_table_is_migrated(tmp_path: Path) -> None:
+    project_db = tmp_path / "legacy.sqlite3"
+    os.environ["AI_CUSTOMER_DB"] = str(project_db)
+    with sqlite3.connect(project_db) as conn:
+        # 旧引流原型表缺少新版监控页需要的 plan_id 和统计列。
+        conn.execute(
+            """
+            CREATE TABLE traffic_runs (
+                id TEXT PRIMARY KEY,
+                campaign_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'queued',
+                created_at TEXT
+            )
+            """
+        )
+
+    from app import database
+    from app.services import traffic_workbench
+
+    database.init_db()
+    with database.connect() as conn:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(traffic_runs)").fetchall()}
+
+    assert {"plan_id", "browsed_count", "stop_requested"} <= columns
+    assert traffic_workbench.list_runs() == []
+
+
 def test_traffic_browse_only_plan_can_start_and_logs_user_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficPlanCreate

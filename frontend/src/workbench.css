@@ -863,6 +863,12 @@ input[type='checkbox'] {
   background: #ecfdf5;
 }
 
+.task-card-actions .primary-action {
+  border-color: #0f766e;
+  color: #ffffff;
+  background: #0f766e;
+}
+
 .task-card-actions .warning-soft {
   border-color: #fed7aa;
   color: #9a3412;

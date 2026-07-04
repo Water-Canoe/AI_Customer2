@@ -480,6 +480,16 @@ def init_db() -> None:
         _ensure_column(conn, "analysis_jobs", "user_prompt", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "analysis_jobs", "model", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "analysis_jobs", "base_url", "TEXT NOT NULL DEFAULT ''")
+        # 早期引流原型已经创建过 traffic_runs，补齐新版监控页需要的批次列。
+        _ensure_column(conn, "traffic_runs", "plan_id", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "traffic_runs", "total_videos", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_runs", "browsed_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_runs", "action_success_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_runs", "skipped_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_runs", "failed_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_runs", "stop_reason", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "traffic_runs", "stop_suggestion", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "traffic_runs", "stop_requested", "INTEGER NOT NULL DEFAULT 0")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
