@@ -231,6 +231,10 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 引流工作台功能代码已移除。前端仅保留左侧栏入口：`定向引流`、`随机引流`、`任务与日志`、`数据表`、`引流设置`；这些路由统一指向 `frontend/src/pages/TrafficPlaceholderPage.ts`，组件不渲染内容、不请求后端接口。
 
 后端已删除 `/api/traffic/*` 路由、引流请求模型、引流服务层和 Playwright 执行器；新库初始化也不再创建 `traffic_*` 表或默认配置。旧本地数据库中如果已经存在 `traffic_*` 表或设置键，本次只是不再使用，不主动物理删除，避免破坏历史数据。
+
+后续重构依据见 `docs/traffic_workbench_rebuild_research.md`。该文档复盘了拓客工作台的页面结构、表格和日志规范，并对 `GHkmmm/laizan`、`paopaojun/Douyin_Curation_Assistant`、`tangooo/douyin.operator` 三个参考项目的规则、风控、刷视频、点赞、关注、评论和日志策略做了拆解。结论是新引流工作台应先重建数据层、任务/批次/队列/日志、防重复账本和设置页，再逐步接入浏览器自动化，不能在旧页面代码上继续修补。
+
+根目录新增安全探测脚本 `script/douyin_probe.cjs`，用于打开或连接抖音页面并采集登录态、安全验证、活跃视频节点、点赞/收藏/评论入口、关注入口和可选翻页结果。脚本默认不会触发点赞、关注、评论或图片上传；`--advance` 也只测试切换视频并比对 `data-e2e-vid` 是否变化。本次探测使用临时 Playwright 依赖和专用 Chrome Profile 成功打开抖音，但页面落点为 `https://www.douyin.com/jingxuan`，没有发现 `[data-e2e="feed-active-video"]` 或 `[data-e2e="slideList"]`，因此安全翻页未生效。后续真实执行前必须先扫码登录专用 Profile，并在执行器中强制校验“已登录、未触发安全验证、处于推荐流或详情页、存在活跃视频 ID”。
 ## 授权服务
 
 Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试地址为 `https://tfwqsfaegbdj.sealosbja.site`，接口详情见根目录 `sealos接口文档.md`。V1 只做授权码和绑定设备数限制，不做同时在线状态、心跳或强制下线。
