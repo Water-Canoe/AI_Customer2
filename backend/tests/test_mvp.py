@@ -4025,7 +4025,7 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
     from app import database
     from app.schemas import TrafficCampaignCreate
     from app.services import traffic_workbench
-    from app.traffic_executor import DOUYIN_HOME, TrafficExecutor
+    from app.traffic_executor import DOUYIN_HOME, PlaywrightTimeoutError, TrafficExecutor
 
     class FakeContext:
         def __init__(self, page: "FakePage") -> None:
@@ -4066,6 +4066,8 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
             return 1
 
         def wait_for(self, state: str = "", timeout: int = 0) -> None:
+            if not self.page.is_visible(self.selector):
+                raise PlaywrightTimeoutError(f"{self.selector} hidden")
             return None
 
         def get_attribute(self, name: str, timeout: int = 0) -> str:
@@ -4090,8 +4092,9 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
             self.video_links: list[str] = []
             self.current_card_index = 0
             self.video_cards = [
-                "https://www.douyin.com/jingxuan?modal_id=unit-video-1",
-                "https://www.douyin.com/jingxuan?modal_id=unit-video-2",
+                "https://www.douyin.com/jingxuan?modal_id=ad-video-1",
+                "https://www.douyin.com/jingxuan?modal_id=live-video-1",
+                "https://www.douyin.com/jingxuan?modal_id=normal-video-1",
             ]
             self.clicked: list[str] = []
             self.keyboard = FakeKeyboard()
@@ -4111,12 +4114,23 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
         def wait_for_timeout(self, timeout: int) -> None:
             return None
 
+        def is_visible(self, selector: str) -> bool:
+            if "waterfall-videoCardContainer" in selector:
+                return "modal_id=" not in self.url
+            if "video-switch-next-arrow" in selector:
+                return self.current_card_index < len(self.video_cards) - 1
+            if "video-player-digg" in selector:
+                return "live-video" not in self.url
+            if "关注" in selector:
+                return "normal-video" in self.url
+            return False
+
     campaign = traffic_workbench.create_campaign(
         TrafficCampaignCreate(
             name="随机引流",
             mode="random",
             action_like=True,
-            action_follow=False,
+            action_follow=True,
             action_comment=False,
             stay_seconds_min=0,
             stay_seconds_max=0,
@@ -4141,20 +4155,26 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
     executor._run_random(page)
 
     assert page.urls[0] == DOUYIN_HOME
-    assert page.url == "https://www.douyin.com/jingxuan?modal_id=unit-video-2"
+    assert page.url == "https://www.douyin.com/jingxuan?modal_id=normal-video-1"
     assert "[class*='waterfall-videoCardContainer']" in page.clicked
     assert page.clicked.count("[data-e2e='video-player-digg']") == 2
-    assert "[data-e2e='video-switch-next-arrow']" in page.clicked
+    assert page.clicked.count("[data-e2e='video-switch-next-arrow']") == 2
+    assert page.clicked.count("button:has-text('关注')") == 1
     assert page.keyboard.pressed == []
     assert page.mouse.wheels == []
     with database.connect() as conn:
         rows = conn.execute("SELECT content_url, status FROM traffic_targets WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()
+        run = conn.execute("SELECT counts FROM traffic_runs WHERE id = ?", (run_id,)).fetchone()
+        follow_events = conn.execute("SELECT status, detail FROM traffic_action_events WHERE run_id = ? AND action = 'follow' ORDER BY id", (run_id,)).fetchall()
         ledger_count = conn.execute("SELECT COUNT(*) FROM traffic_action_ledger WHERE run_id = ?", (run_id,)).fetchone()[0]
     assert [row["content_url"] for row in rows] == [
-        "https://www.douyin.com/jingxuan?modal_id=unit-video-1",
-        "https://www.douyin.com/jingxuan?modal_id=unit-video-2",
+        "https://www.douyin.com/jingxuan?modal_id=ad-video-1",
+        "https://www.douyin.com/jingxuan?modal_id=live-video-1",
+        "https://www.douyin.com/jingxuan?modal_id=normal-video-1",
     ]
-    assert [row["status"] for row in rows] == ["succeeded", "succeeded"]
+    assert [row["status"] for row in rows] == ["succeeded", "skipped", "succeeded"]
+    assert json.loads(run["counts"]) == {"succeeded": 2, "failed": 0, "skipped": 1}
+    assert [row["status"] for row in follow_events] == ["skipped", "succeeded"]
     assert ledger_count == 0
 
 

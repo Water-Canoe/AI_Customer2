@@ -25,6 +25,11 @@ DOUYIN_HOME = "https://www.douyin.com/"
 DOUYIN_SEARCH = "https://www.douyin.com/search/{keyword}?type=video"
 
 
+# 内容类型本身不支持动作时跳过当前目标，避免整个批次中断。
+class UnsupportedTrafficTarget(RuntimeError):
+    pass
+
+
 def main(run_id: str) -> int:
     runner = TrafficExecutor(run_id)
     try:
@@ -99,12 +104,15 @@ class TrafficExecutor:
             page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
             page = self._open_random_video(page)
         limit = int(self.run_info["per_run_limit"])
-        for index in range(limit):
+        attempts = 0
+        max_attempts = max(limit * 3, limit + 5)
+        while self.done < limit and attempts < max_attempts:
+            attempts += 1
             target = self._create_runtime_target(page, source_type)
             self._execute_target(page, target, already_open=True)
-            # 最后一条执行完停留在当前视频，方便人工核验操作结果。
-            if index < limit - 1:
-                self._switch_next_runtime_video(page, str(target.get("target_key") or ""))
+            if self.done < limit and attempts < max_attempts:
+                current_key = self._current_target_key(page) or str(target.get("target_key") or "")
+                self._switch_next_runtime_video(page, current_key)
 
     def _open_random_video(self, page: Page) -> Page:
         if "/video/" in (page.url or "") or self._active_video_id(page):
@@ -195,15 +203,27 @@ class TrafficExecutor:
             self._mark_target(target_id, "running")
             self._event(target_id, "open", "succeeded", page.url)
             page.wait_for_timeout(int(self._random_stay() * 1000))
+            performed = False
             if self.campaign["action_like"]:
                 self._like(page, target_id)
+                performed = True
             if self.campaign["action_follow"]:
-                self._click_required(page, ["button:has-text('关注')", "[aria-label*='关注']", "text=关注"], "follow", target_id)
+                followed = self._follow(page, target_id, required=not performed and not needs_comment_claim)
+                performed = performed or followed
             if needs_comment_claim:
                 comment_text = self._comment(page, target)
                 traffic_workbench.complete_comment_action(target, comment_text)
+                performed = True
+            if not performed:
+                raise UnsupportedTrafficTarget("当前内容没有可执行动作，已跳过")
             self._mark_target(target_id, "succeeded")
             self.done += 1
+            self._update_counts()
+        except UnsupportedTrafficTarget as exc:
+            if self.campaign["action_comment"] or self.campaign["action_image"]:
+                traffic_workbench.release_comment_action(target)
+            self.skipped += 1
+            self._mark_target(target_id, "skipped", str(exc))
             self._update_counts()
         except Exception as exc:
             if self.campaign["action_comment"] or self.campaign["action_image"]:
@@ -217,7 +237,7 @@ class TrafficExecutor:
     def _like(self, page: Page, target_id: int) -> None:
         locator = self._first_visible(page, ["[data-e2e='video-player-digg']", "button:has-text('点赞')", "[aria-label*='点赞']", "[data-e2e*='like']"])
         if locator is None:
-            raise RuntimeError("找不到点赞按钮")
+            raise UnsupportedTrafficTarget("当前内容不支持点赞，已跳过")
         try:
             state = str(locator.get_attribute("data-e2e-state", timeout=1000) or "")
             if "is-digged" in state:
@@ -228,6 +248,18 @@ class TrafficExecutor:
         locator.click(timeout=5000)
         self._event(target_id, "like", "succeeded", "")
         page.wait_for_timeout(int(self._random_interval() * 1000))
+
+    def _follow(self, page: Page, target_id: int, required: bool = False) -> bool:
+        locator = self._first_visible(page, ["button:has-text('关注')", "[aria-label*='关注']", "text=关注"])
+        if locator is None:
+            if required:
+                raise UnsupportedTrafficTarget("当前内容没有关注入口，已跳过")
+            self._event(target_id, "follow", "skipped", "无关注入口，可能是广告")
+            return False
+        locator.click(timeout=5000)
+        self._event(target_id, "follow", "succeeded", "")
+        page.wait_for_timeout(int(self._random_interval() * 1000))
+        return True
 
     def _comment(self, page: Page, target: dict[str, Any]) -> str:
         target_id = int(target["id"])
