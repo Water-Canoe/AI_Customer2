@@ -900,6 +900,45 @@ input[type='checkbox'] {
   resize: vertical;
 }
 
+.traffic-copy-manager {
+  gap: 10px;
+}
+
+.traffic-copy-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.traffic-copy-head .secondary-action {
+  min-height: 32px;
+}
+
+.traffic-copy-list {
+  display: grid;
+  gap: 8px;
+}
+
+.traffic-copy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.traffic-copy-empty {
+  min-height: 42px;
+  border: 1px dashed #bde9df;
+  border-radius: 6px;
+  background: #f8fffc;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: #64748b;
+  font-size: 13px;
+}
+
 .traffic-image-manager {
   gap: 8px;
 }

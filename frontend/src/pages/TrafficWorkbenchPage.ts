@@ -8,6 +8,7 @@ import {
   Key,
   Monitor,
   Operation,
+  Plus,
   Promotion,
   Refresh,
   Setting,
@@ -60,7 +61,7 @@ export default defineComponent({
     const videos = ref<Dict[]>([])
     const planDraft = ref<Dict>(defaultPlan())
     const settingsDraft = ref<Dict>({})
-    const textDraft = ref('')
+    const textDraft = ref<string[]>([])
     const imageDraft = ref('')
     const uploadedImages = ref<Dict[]>([])
     const imageUploading = ref(false)
@@ -120,7 +121,7 @@ export default defineComponent({
       settings.value = data
       uploadedImages.value = []
       settingsDraft.value = { ...(data.values || {}) }
-      textDraft.value = (data.texts || []).map((item: Dict) => item.text).join('\n')
+      textDraft.value = (data.texts || []).map((item: Dict) => String(item.text || ''))
       imageDraft.value = (data.images || []).map((item: Dict) => item.path).join('\n')
     }
 
@@ -191,7 +192,7 @@ export default defineComponent({
     }
 
     async function saveSettings() {
-      const texts = textDraft.value.split('\n').map(item => item.trim()).filter(Boolean)
+      const texts = textDraft.value.map(item => item.trim()).filter(Boolean)
       const images = imageLines()
       const { data } = await api.put('/traffic/settings', { values: settingsDraft.value, texts, images })
       settings.value = data
@@ -400,7 +401,7 @@ export default defineComponent({
             settingInput('traffic_max_watch_seconds', '最长停留秒数'),
             settingInput('traffic_author_cooldown_hours', '作者冷却小时'),
             settingInput('traffic_stop_after_failures', '连续失败停机次数'),
-            labelTextarea('多文案', textDraft.value, value => textDraft.value = value, '一行一条，发送时随机抽取'),
+            renderTextManager(),
             renderImageManager(),
           ]),
           renderLicenseDialog(),
@@ -580,11 +581,37 @@ export default defineComponent({
       ])
     }
 
-    function labelTextarea(text: string, value: string, update: (value: string) => void, placeholder = '') {
-      return h('label', { class: 'form-field field-full' }, [
-        h('span', text),
-        h('textarea', { rows: 6, placeholder, value, onInput: (event: Event) => update((event.target as HTMLTextAreaElement).value) }),
+    function renderTextManager() {
+      return h('div', { class: 'form-field field-full traffic-copy-manager' }, [
+        h('div', { class: 'traffic-copy-head' }, [
+          h('span', `多文案 (${textDraft.value.filter(item => item.trim()).length})`),
+          h('button', { class: 'secondary-action', type: 'button', onClick: addTextDraft }, [h(Plus, { class: 'inline-icon' }), '新增文案']),
+        ]),
+        textDraft.value.length
+          ? h('div', { class: 'traffic-copy-list' }, textDraft.value.map((item, index) => h('div', { class: 'traffic-copy-row', key: index }, [
+            h('input', {
+              value: item,
+              placeholder: `文案 ${index + 1}`,
+              onInput: (event: Event) => updateTextDraft(index, (event.target as HTMLInputElement).value),
+            }),
+            h('button', { class: 'text-icon-button danger', type: 'button', title: '删除文案', onClick: () => removeTextDraft(index) }, [h(Delete, { class: 'inline-icon' }), '删除']),
+          ])))
+          : h('div', { class: 'traffic-copy-empty' }, [
+            h('span', '还没有文案。添加后执行评论时会随机抽取一条。'),
+          ]),
       ])
+    }
+
+    function addTextDraft() {
+      textDraft.value = [...textDraft.value, '']
+    }
+
+    function updateTextDraft(index: number, value: string) {
+      textDraft.value = textDraft.value.map((item, itemIndex) => itemIndex === index ? value : item)
+    }
+
+    function removeTextDraft(index: number) {
+      textDraft.value = textDraft.value.filter((_, itemIndex) => itemIndex !== index)
     }
 
     function renderImageManager() {
