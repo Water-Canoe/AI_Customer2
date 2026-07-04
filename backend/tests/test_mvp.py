@@ -820,14 +820,26 @@ def test_traffic_random_feed_uses_last_video_url(tmp_path: Path) -> None:
     assert traffic_workbench._target_url({"source_mode": "random_feed", "source_value": ""}) == "https://www.douyin.com/video/7123"
 
 
-def test_traffic_jingxuan_page_stops_without_saved_video(tmp_path: Path) -> None:
+def test_traffic_jingxuan_page_jumps_to_project_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
+    from app import database
     from app.services import traffic_workbench
+
+    with database.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, title, description, content_url)
+            VALUES('dy', '7123', '项目库视频', '', 'https://www.douyin.com/video/7123')
+            """
+        )
 
     class FakePage:
         url = "https://www.douyin.com/jingxuan"
+        target_url = ""
 
         def evaluate(self, script: str) -> object:
+            if "loginPrompt" in script:
+                return {"url": self.url, "title": "抖音", "loginPrompt": False, "verifyPrompt": False, "activeVideoId": "7123"}
             return {
                 "video_id": "",
                 "video_url": self.url,
@@ -838,8 +850,21 @@ def test_traffic_jingxuan_page_stops_without_saved_video(tmp_path: Path) -> None
                 "comment_count": None,
             }
 
-    with pytest.raises(traffic_workbench.TrafficStop, match="精选页"):
-        traffic_workbench._navigate_to_executable_video(FakePage(), "run-1")
+        def goto(self, url: str, **_: object) -> None:
+            self.target_url = url
+            self.url = url
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    logs: list[tuple[object, ...]] = []
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
+
+    page = FakePage()
+    traffic_workbench._navigate_to_executable_video(page, "run-1")
+
+    assert page.target_url == "https://www.douyin.com/video/7123"
+    assert "项目库" in str(logs[0][3])
 
 
 def test_traffic_active_video_prefers_feed_api_cache() -> None:

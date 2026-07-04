@@ -683,22 +683,58 @@ def _navigate_to_executable_video(page: Any, run_id: str, video_cache: dict[str,
     if _read_active_video(page, video_cache)["video_id"]:
         return
     if "douyin.com/jingxuan" in page.url:
+        project_url = _random_project_video_url()
+        if project_url:
+            _goto_video_candidate(page, run_id, project_url, "已从项目库随机跳转一个视频。")
+            return
+        candidates = _visible_video_links(page)
+        if candidates:
+            _goto_video_candidate(page, run_id, random.choice(candidates[:8])["href"], "已从精选页随机跳转一个视频。")
+            return
         raise TrafficStop(
             "抖音停留在精选页，任务已停止。",
-            "当前页面不是具体视频页，无法稳定点赞或下滑。",
-            "请到引流设置打开抖音登录窗口，扫码后点开任意视频，关闭窗口，再重新启动批次。",
+            "精选页没有可跳转的视频链接，项目库也没有可用抖音视频。",
+            "请先通过拓客工作台采集一些抖音视频，或在引流设置打开登录窗口后进入任意视频。",
             "probe",
             {"url": page.url, "saved_video_url": _last_douyin_video_url()},
         )
     candidates = _visible_video_links(page)
     if not candidates:
         return
-    candidate = random.choice(candidates[:8])
-    # 从精选页先进入一个具体视频；后续动作层仍只处理详情页/推荐流里的当前视频。
-    _append_log(run_id, "info", "probe", "已从当前页面随机进入一个视频。", "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": candidate["href"]})
-    page.goto(candidate["href"], wait_until="domcontentloaded", timeout=60_000)
+    _goto_video_candidate(page, run_id, random.choice(candidates[:8])["href"], "已从当前页面随机跳转一个视频。")
+
+
+def _goto_video_candidate(page: Any, run_id: str, url: str, message: str) -> None:
+    # ponytail: 先复用已有视频入口；后续需要纯随机推荐再接入接口队列。
+    _append_log(run_id, "info", "probe", message, "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": url})
+    page.goto(url, wait_until="domcontentloaded", timeout=60_000)
     page.wait_for_timeout(3000)
     _ensure_page_ready(page)
+
+
+def _random_project_video_url() -> str:
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT content_url, content_id
+            FROM contents
+            WHERE platform = 'dy'
+              AND (
+                content_url LIKE '%douyin.com/video/%'
+                OR content_url LIKE '%douyin.com/note/%'
+                OR content_id <> ''
+              )
+            ORDER BY RANDOM()
+            LIMIT 1
+            """
+        ).fetchone()
+    if not row:
+        return ""
+    url = str(row["content_url"] or "")
+    if _is_douyin_video_url(url):
+        return url
+    content_id = str(row["content_id"] or "")
+    return f"https://www.douyin.com/video/{content_id}" if content_id else ""
 
 
 def _visible_video_links(page: Any) -> list[dict[str, Any]]:
