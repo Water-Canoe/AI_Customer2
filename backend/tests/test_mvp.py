@@ -3870,6 +3870,27 @@ def test_traffic_build_targets_from_competitor_contents(tmp_path: Path) -> None:
     assert matched["created"] == 1
     assert matched["skipped"] == 0
 
+    matched_target = traffic_workbench.list_targets(int(matched_campaign["id"]))["rows"][0]
+    assert traffic_workbench.claim_comment_action(matched_campaign, matched_target, "TRF-TEST")
+    traffic_workbench.complete_comment_action(matched_target, "测试评论")
+    records = traffic_workbench.list_comment_records()
+    assert records["total"] == 1
+    record = records["rows"][0]
+    assert record["comment_text"] == "测试评论"
+    assert record["author_name"] == "AI客服竞品号"
+    assert "AI客服" in record["video_intro"]
+
+    duplicated_campaign = traffic_workbench.create_campaign(TrafficCampaignCreate(name="重复过滤", mode="targeted", source_type="competitor"))
+    duplicated = traffic_workbench.build_targets(int(duplicated_campaign["id"]), limit=10)
+    assert duplicated["created"] == 0
+    assert duplicated["duplicated"] == 1
+
+    cleared = traffic_workbench.clear_comment_records()
+    assert cleared["deleted"] == 1
+    rebuilt_campaign = traffic_workbench.create_campaign(TrafficCampaignCreate(name="清除后重建", mode="targeted", source_type="competitor"))
+    rebuilt = traffic_workbench.build_targets(int(rebuilt_campaign["id"]), limit=10)
+    assert rebuilt["created"] == 1
+
 
 def test_traffic_keywords_api_lists_douyin_content_keywords(tmp_path: Path) -> None:
     prepare_project(tmp_path)

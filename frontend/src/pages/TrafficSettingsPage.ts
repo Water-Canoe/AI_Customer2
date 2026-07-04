@@ -1,6 +1,6 @@
 import { defineComponent, h, onMounted, reactive, ref } from 'vue'
-import { Check, Key, Picture, Refresh, Setting, UploadFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Check, Delete, Key, Picture, Refresh, Setting, UploadFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { LicenseDialog } from '../components/ui/LicenseDialog'
 import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
@@ -32,6 +32,7 @@ export default defineComponent({
   setup() {
     const loading = ref(false)
     const saving = ref(false)
+    const clearingRecords = ref(false)
     const uploading = ref(false)
     const assets = ref<Dict[]>([])
     const licenseDialogOpen = ref(false)
@@ -139,6 +140,31 @@ export default defineComponent({
       }
     }
 
+    async function clearCommentRecords() {
+      try {
+        await ElMessageBox.confirm(
+          '这只会清除引流已评论视频记录和防重复账本，不删除计划、素材或拓客数据。确认清除？',
+          '清除数据库',
+          {
+            type: 'warning',
+            confirmButtonText: '清除',
+            cancelButtonText: '取消',
+          },
+        )
+      } catch {
+        return
+      }
+      clearingRecords.value = true
+      try {
+        const { data } = await api.post('/traffic/comment-records/clear')
+        ElMessage.success(`已清除 ${Number(data?.deleted || 0)} 条评论记录`)
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '评论记录清除失败')
+      } finally {
+        clearingRecords.value = false
+      }
+    }
+
     async function uploadAsset(event: Event) {
       const input = event.target as HTMLInputElement
       const file = input.files?.[0]
@@ -178,6 +204,7 @@ export default defineComponent({
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', disabled: saving.value, onClick: saveSettings }, [h(Check, { class: 'inline-icon' }), saving.value ? '保存中' : '保存设置']),
             h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
+            h('button', { class: ['secondary-action', 'danger-action'], disabled: clearingRecords.value, onClick: clearCommentRecords }, [h(Delete, { class: 'inline-icon' }), clearingRecords.value ? '清除中' : '清除数据库']),
           ]),
         ]),
         h('section', { class: 'traffic-panel' }, [

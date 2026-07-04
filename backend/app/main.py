@@ -474,6 +474,20 @@ def traffic_keywords() -> list[dict[str, object]]:
     return traffic_workbench.list_keywords()
 
 
+@app.get("/api/traffic/comment-records")
+def traffic_comment_records(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=30, ge=1, le=100),
+    query: str = Query(default=""),
+) -> dict[str, object]:
+    return traffic_workbench.list_comment_records(page=page, page_size=page_size, query=query)
+
+
+@app.post("/api/traffic/comment-records/clear")
+def clear_traffic_comment_records() -> dict[str, int]:
+    return traffic_workbench.clear_comment_records()
+
+
 @app.post("/api/traffic/assets")
 def create_traffic_asset(payload: TrafficAssetCreate) -> dict[str, object]:
     try:

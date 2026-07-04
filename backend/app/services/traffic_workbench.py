@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -11,6 +12,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app import database
 from app.schemas import TrafficAssetCreate, TrafficCampaignCreate
@@ -36,6 +38,7 @@ TRAFFIC_SETTING_KEYS = (
     "traffic_match_rules",
 )
 RULE_FIELDS = {"author", "title", "keyword"}
+COMMENT_ACTION_TYPE = "comment"
 RUNNING_TRAFFIC_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 
 
@@ -243,12 +246,20 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
             raise ValueError("不支持的引流来源")
         created = 0
         skipped = 0
+        duplicated = 0
         for row in rows:
-            allowed, _reason = _target_allowed(database.row_to_dict(row) or {}, rule_config)
+            row_data = database.row_to_dict(row) or {}
+            target_key = normalize_target_key("dy", row_data.get("content_id"), row_data.get("content_url"))
+            if not target_key:
+                skipped += 1
+                continue
+            if has_comment_record("dy", target_key, conn=conn):
+                duplicated += 1
+                continue
+            allowed, _reason = _target_allowed(row_data, rule_config)
             if not allowed:
                 skipped += 1
                 continue
-            target_key = str(row["content_id"] or row["content_url"] or row["id"])
             title = _join_text(row["title"], row["description"])
             cur = conn.execute(
                 """
@@ -275,7 +286,7 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
                 created += 1
             else:
                 skipped += 1
-    return {"created": created, "skipped": skipped, "campaign_id": campaign_id}
+    return {"created": created, "skipped": skipped, "duplicated": duplicated, "campaign_id": campaign_id}
 
 
 def list_targets(campaign_id: int, status: str = "", page: int = 1, page_size: int = 30) -> dict[str, Any]:
@@ -425,6 +436,126 @@ def create_asset(payload: TrafficAssetCreate) -> dict[str, Any]:
         )
         row = conn.execute("SELECT * FROM traffic_assets WHERE id = ?", (int(cur.lastrowid),)).fetchone()
     return database.row_to_dict(row) or {}
+
+
+# 评论账本既给数据表展示，也用于跨计划防止同一视频重复评论。
+def list_comment_records(page: int = 1, page_size: int = 30, query: str = "") -> dict[str, Any]:
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 30), 100))
+    where = "WHERE l.action_type = ? AND l.status = 'succeeded'"
+    params: list[Any] = [COMMENT_ACTION_TYPE]
+    if query.strip():
+        where += " AND (l.video_intro LIKE ? OR l.comment_text LIKE ? OR l.author_name LIKE ?)"
+        pattern = f"%{query.strip()}%"
+        params.extend([pattern, pattern, pattern])
+    with database.connect() as conn:
+        total = int(conn.execute(f"SELECT COUNT(*) FROM traffic_action_ledger l {where}", params).fetchone()[0])
+        rows = conn.execute(
+            f"""
+            SELECT l.*, c.name AS campaign_name
+            FROM traffic_action_ledger l
+            LEFT JOIN traffic_campaigns c ON c.id = l.campaign_id
+            {where}
+            ORDER BY l.commented_at DESC, l.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, page_size, (page - 1) * page_size),
+        ).fetchall()
+    return {"rows": database.rows_to_dicts(rows), "total": total, "page": page, "page_size": page_size}
+
+
+def clear_comment_records() -> dict[str, int]:
+    with database.connect() as conn:
+        deleted = conn.execute("DELETE FROM traffic_action_ledger WHERE action_type = ?", (COMMENT_ACTION_TYPE,)).rowcount
+    return {"deleted": int(deleted or 0)}
+
+
+# 优先使用平台视频 ID，避免同一视频换 URL 后重复入队。
+def normalize_target_key(platform: str, content_id: Any = "", content_url: Any = "") -> str:
+    raw_id = str(content_id or "").strip()
+    if raw_id:
+        return f"{platform}:video:{raw_id}"
+    parsed_id = _video_id_from_url(str(content_url or ""))
+    if parsed_id:
+        return f"{platform}:video:{parsed_id}"
+    return ""
+
+
+def has_comment_record(platform: str, target_key: str, conn=None) -> bool:
+    if not target_key:
+        return False
+    sql = """
+        SELECT 1 FROM traffic_action_ledger
+        WHERE platform = ? AND target_key = ? AND action_type = ?
+          AND status IN ('running', 'succeeded', 'uncertain')
+        LIMIT 1
+    """
+    params = (platform, target_key, COMMENT_ACTION_TYPE)
+    if conn is not None:
+        return conn.execute(sql, params).fetchone() is not None
+    with database.connect() as owned_conn:
+        return owned_conn.execute(sql, params).fetchone() is not None
+
+
+def claim_comment_action(campaign: dict[str, Any], target: dict[str, Any], run_id: str) -> bool:
+    target_key = str(target.get("target_key") or "")
+    if not target_key:
+        return False
+    with database.connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO traffic_action_ledger(
+                platform, target_key, action_type, campaign_id, run_id, target_id,
+                content_url, video_intro, author_name, like_count, status
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')
+            """,
+            (
+                str(target.get("platform") or campaign.get("platform") or "dy"),
+                target_key,
+                COMMENT_ACTION_TYPE,
+                int(campaign["id"]),
+                run_id,
+                int(target["id"]),
+                str(target.get("content_url") or ""),
+                str(target.get("title") or ""),
+                str(target.get("author_name") or ""),
+                _safe_int(target.get("like_count"), 0, 0, 100000000),
+            ),
+        )
+    return bool(cur.rowcount)
+
+
+def complete_comment_action(target: dict[str, Any], comment_text: str) -> None:
+    with database.connect() as conn:
+        conn.execute(
+            """
+            UPDATE traffic_action_ledger
+            SET status = 'succeeded', comment_text = ?, commented_at = datetime('now', 'localtime')
+            WHERE platform = ? AND target_key = ? AND action_type = ?
+            """,
+            (comment_text, str(target.get("platform") or "dy"), str(target.get("target_key") or ""), COMMENT_ACTION_TYPE),
+        )
+        conn.execute(
+            "UPDATE traffic_targets SET selected_comment = ? WHERE id = ?",
+            (comment_text, int(target["id"])),
+        )
+
+
+def release_comment_action(target: dict[str, Any]) -> None:
+    with database.connect() as conn:
+        conn.execute(
+            "DELETE FROM traffic_action_ledger WHERE platform = ? AND target_key = ? AND action_type = ? AND status = 'running'",
+            (str(target.get("platform") or "dy"), str(target.get("target_key") or ""), COMMENT_ACTION_TYPE),
+        )
+
+
+def release_run_comment_claims(run_id: str) -> None:
+    with database.connect() as conn:
+        conn.execute(
+            "DELETE FROM traffic_action_ledger WHERE run_id = ? AND action_type = ? AND status = 'running'",
+            (run_id, COMMENT_ACTION_TYPE),
+        )
 
 
 def _start_executor(run_id: str) -> subprocess.Popen[str]:
@@ -632,6 +763,12 @@ def _rule_matches(rule: dict[str, str], author: str, title: str, keyword: str) -
 
 def _contains_any(text: str, keywords: Any) -> bool:
     return any(_lower_text(keyword) in text for keyword in _text_list(keywords))
+
+
+def _video_id_from_url(value: str) -> str:
+    parsed = urlparse(value)
+    match = re.search(r"/video/([^/?#]+)", parsed.path)
+    return match.group(1) if match else ""
 
 
 def _lower_text(value: Any) -> str:

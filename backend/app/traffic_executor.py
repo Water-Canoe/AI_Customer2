@@ -57,6 +57,7 @@ class TrafficExecutor:
         self._finish_run("succeeded")
 
     def fail_run(self, message: str) -> None:
+        traffic_workbench.release_run_comment_claims(self.run_id)
         with database.connect() as conn:
             conn.execute(
                 """
@@ -111,10 +112,20 @@ class TrafficExecutor:
     def _execute_target(self, page: Page, target: dict[str, Any], already_open: bool = False) -> None:
         target_id = int(target["id"])
         try:
+            if str(target.get("target_key") or "").startswith("unstable:"):
+                self.skipped += 1
+                self._mark_target(target_id, "skipped", "无稳定视频标识")
+                self._update_counts()
+                return
             allowed, reason = traffic_workbench._target_allowed(target, self.campaign.get("rule_config") or {})
             if not allowed:
                 self.skipped += 1
                 self._mark_target(target_id, "skipped", reason)
+                self._update_counts()
+                return
+            if not traffic_workbench.claim_comment_action(self.campaign, target, self.run_id):
+                self.skipped += 1
+                self._mark_target(target_id, "skipped", "重复视频")
                 self._update_counts()
                 return
             if not already_open:
@@ -127,18 +138,20 @@ class TrafficExecutor:
             if self.campaign["action_follow"]:
                 self._click_required(page, ["button:has-text('关注')", "[aria-label*='关注']", "text=关注"], "follow", target_id)
             if self.campaign["action_comment"] or self.campaign["action_image"]:
-                self._comment(page, target)
+                comment_text = self._comment(page, target)
+                traffic_workbench.complete_comment_action(target, comment_text)
             self._mark_target(target_id, "succeeded")
             self.done += 1
             self._update_counts()
         except Exception as exc:
+            traffic_workbench.release_comment_action(target)
             screenshot = self._screenshot(page, target_id)
             self.failed += 1
             self._mark_target(target_id, "failed", str(exc), screenshot)
             self._update_counts()
             raise RuntimeError(f"目标 {target_id} 执行失败：{exc}") from exc
 
-    def _comment(self, page: Page, target: dict[str, Any]) -> None:
+    def _comment(self, page: Page, target: dict[str, Any]) -> str:
         target_id = int(target["id"])
         self._click_required(page, ["button:has-text('评论')", "[aria-label*='评论']", "[data-e2e*='comment']"], "comment_open", target_id)
         detail_parts: list[str] = []
@@ -160,7 +173,9 @@ class TrafficExecutor:
             detail_parts.append(f"图片：{asset['name']}")
         page.wait_for_timeout(int(self._random_interval() * 1000))
         self._click_required(page, ["button:has-text('发送')", "text=发送", "[data-e2e*='comment-submit']"], "comment_submit", target_id)
-        self._event(target_id, "comment", "succeeded", " / ".join(detail_parts))
+        detail = " / ".join(detail_parts)
+        self._event(target_id, "comment", "succeeded", detail)
+        return detail
 
     def _click_required(self, page: Page, selectors: list[str], action: str, target_id: int) -> None:
         locator = self._first_visible(page, selectors)
@@ -214,18 +229,29 @@ class TrafficExecutor:
 
     def _create_runtime_target(self, page: Page, source_type: str) -> dict[str, Any]:
         url = page.url or DOUYIN_HOME
+        video_id = self._active_video_id(page)
         title = page.title() or ("搜索关键词视频" if source_type == "search_keyword" else "随机推荐视频")
-        key = url if "/video/" in url else f"{source_type}:{int(time.time() * 1000)}"
+        key = traffic_workbench.normalize_target_key("dy", video_id, url)
+        status = "running" if key else "skipped"
+        error = "" if key else "无稳定视频标识"
+        if not key:
+            key = f"unstable:{source_type}:{int(time.time() * 1000)}"
         with database.connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO traffic_targets(campaign_id, platform, source_type, target_key, content_url, title, keyword, selected_comment, status, run_id)
-                VALUES(?, 'dy', ?, ?, ?, ?, ?, ?, 'running', ?)
+                INSERT INTO traffic_targets(campaign_id, platform, source_type, target_key, content_url, title, keyword, selected_comment, status, error, run_id)
+                VALUES(?, 'dy', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (int(self.campaign["id"]), source_type, key, url, title, str(self.campaign.get("keyword") or ""), "", self.run_id),
+                (int(self.campaign["id"]), source_type, key, url, title, str(self.campaign.get("keyword") or ""), "", status, error, self.run_id),
             )
             row = conn.execute("SELECT * FROM traffic_targets WHERE id = ?", (int(cur.lastrowid),)).fetchone()
             return database.row_to_dict(row) or {}
+
+    def _active_video_id(self, page: Page) -> str:
+        try:
+            return str(page.locator("[data-e2e='feed-active-video']").first.get_attribute("data-e2e-vid", timeout=1000) or "")
+        except Exception:
+            return ""
 
     def _mark_target(self, target_id: int, status: str, error: str = "", screenshot: str = "") -> None:
         with database.connect() as conn:

@@ -8,6 +8,7 @@ import SettingsPage from './pages/SettingsPage'
 import TablesPage from './pages/TablesPage'
 import TaskPage from './pages/TaskPage'
 import TrafficPage from './pages/TrafficPage'
+import TrafficRecordsPage from './pages/TrafficRecordsPage'
 import TrafficSettingsPage from './pages/TrafficSettingsPage'
 
 export const routes = [
@@ -68,6 +69,12 @@ export const routes = [
     name: 'traffic-random',
     component: TrafficPage,
     meta: { title: '随机引流', subtitle: '打开抖音推荐流后，按配置自动处理刷到的视频。', hint: '手动启动，系统自动跑完批次' },
+  },
+  {
+    path: '/traffic-records',
+    name: 'traffic-records',
+    component: TrafficRecordsPage,
+    meta: { title: '引流数据表', subtitle: '查看已评论视频、评论内容、作者、点赞数和时间。', hint: '观察评论记录' },
   },
   {
     path: '/traffic-settings',

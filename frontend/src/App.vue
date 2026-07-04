@@ -23,6 +23,7 @@
           <template #title><el-icon><Promotion /></el-icon><span>引流工作台</span></template>
           <el-menu-item index="traffic-targeted"><el-icon><Promotion /></el-icon><span>定向引流</span></el-menu-item>
           <el-menu-item index="traffic-random"><el-icon><Share /></el-icon><span>随机引流</span></el-menu-item>
+          <el-menu-item index="traffic-records"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
           <el-menu-item index="traffic-settings"><el-icon><Setting /></el-icon><span>引流设置</span></el-menu-item>
         </el-sub-menu>
       </el-menu>

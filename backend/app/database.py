@@ -360,6 +360,27 @@ CREATE TABLE IF NOT EXISTS traffic_action_events (
     FOREIGN KEY(target_id) REFERENCES traffic_targets(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS traffic_action_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL DEFAULT 'dy',
+    target_key TEXT NOT NULL,
+    action_type TEXT NOT NULL DEFAULT 'comment',
+    campaign_id INTEGER,
+    run_id TEXT NOT NULL DEFAULT '',
+    target_id INTEGER,
+    content_url TEXT NOT NULL DEFAULT '',
+    video_intro TEXT NOT NULL DEFAULT '',
+    comment_text TEXT NOT NULL DEFAULT '',
+    author_name TEXT NOT NULL DEFAULT '',
+    like_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'running',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    commented_at TEXT NOT NULL DEFAULT '',
+    UNIQUE(platform, target_key, action_type),
+    FOREIGN KEY(campaign_id) REFERENCES traffic_campaigns(id) ON DELETE SET NULL,
+    FOREIGN KEY(target_id) REFERENCES traffic_targets(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS traffic_assets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
