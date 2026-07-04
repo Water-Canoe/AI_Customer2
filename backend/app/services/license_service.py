@@ -12,7 +12,7 @@ from app import database
 
 DEFAULT_LICENSE_SERVER_URL = "https://tfwqsfaegbdj.sealosbja.site/ai-customer"
 LICENSE_CHECK_TIMEOUT = 8.0
-LICENSE_SCOPES = {"lead"}
+LICENSE_SCOPES = {"lead", "traffic"}
 
 
 def license_overview() -> dict[str, Any]:
@@ -119,7 +119,12 @@ def check_license_for(scope: str, license_code: str | None = None) -> dict[str, 
 
 def ensure_authorized() -> dict[str, Any]:
     """Block task execution when the local device is not authorized."""
-    result = check_license_for("lead")
+    return ensure_authorized_for("lead")
+
+
+def ensure_authorized_for(scope: str) -> dict[str, Any]:
+    """Block execution for a specific business scope when unauthorized."""
+    result = check_license_for(scope)
     if not result.get("authorized"):
         raise ValueError(str(result.get("message") or "授权校验失败，请在设置页检查授权码"))
     return result
@@ -207,4 +212,6 @@ def _normalize_scope(scope: str) -> str:
 
 
 def _scoped_key(scope: str, key: str) -> str:
-    return key
+    if scope == "lead":
+        return key
+    return f"{scope}_{key}"

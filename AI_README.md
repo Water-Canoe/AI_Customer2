@@ -2,19 +2,19 @@
 
 ## 项目定位
 
-这是一个本地自用的 AI 获客系统。当前已实现“拓客工作台”。拓客工作台不替代 MediaCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选、私信话术和跟进状态管理；“引流工作台”功能代码已移除，只保留左侧栏入口。
+这是一个本地自用的 AI 获客系统。当前已实现“拓客工作台”和第一版“引流工作台”。拓客工作台不替代 MediaCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选、私信话术和跟进状态管理；引流工作台提供计划配置、执行监控、操作记录和独立授权设置。
 
 数据分三层：
 
 1. MediaCrawler 底层原始库：默认 `D:\Dev\Projects\MediaCrawler\database\sqlite_tables.db`，只做采集保底和追溯。
 2. 项目业务库：默认 `backend/runtime/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件。
-3. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台当前只保留左侧栏的“定向引流、随机引流、任务与日志、数据表、引流设置”入口，路由指向空占位页。
+3. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台下的计划工作台、执行监控、操作记录和引流设置共用 `traffic_*` 业务表和 `/api/traffic/*` 接口。
 
 版本控制只保留项目源码和文档；`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MediaCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 
 ## 前端结构
 
-前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts` 和 `TrafficPlaceholderPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
+前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts` 和 `TrafficWorkbenchPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
 `App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。
 
@@ -194,7 +194,7 @@ npm run dev
 4. 在数据表与总览树理解线索来源。
 5. 在 AI 分析工作台批量筛选并跟进。
 
-前端视觉 V1 采用“高密度中后台工作台”风格，不做营销页或大面积装饰。应用壳固定为左侧导航、顶部状态栏和可滚动主工作区：左侧入口收拢为“拓客工作台”和“引流工作台”两个折叠面板，拓客工作台承载任务管理、任务与日志、总览树、AI分析、私信工作台、数据表和设置；引流工作台只保留定向引流、随机引流、任务与日志、数据表和引流设置五个左侧栏入口，页面路由共用空占位组件，不再渲染业务内容或触发 API。顶部状态栏按当前工作台切换，小标签分别显示“拓客工作台”和“引流工作台”；拓客页面展示“运行任务 / AI待处理 / 待私信 / 失败待查”，引流页面不展示指标卡或操作按钮。横向工作流和页面级说明条已移除，避免重复解释压掉主要操作区。主色使用青绿色，配合蓝色运行、绿色成功、橙色待处理、红色风险等状态色；卡片圆角控制在 8px 内，使用浅边框和轻阴影，让表格、队列和详情面板保持可扫描。
+前端视觉 V1 采用“高密度中后台工作台”风格，不做营销页或大面积装饰。应用壳固定为左侧导航、顶部状态栏和可滚动主工作区：左侧入口收拢为“拓客工作台”和“引流工作台”两个折叠面板，拓客工作台承载任务管理、任务与日志、总览树、AI分析、私信工作台、数据表和设置；引流工作台承载计划工作台、执行监控、操作记录和引流设置四个入口。顶部状态栏按当前工作台切换，小标签分别显示“拓客工作台”和“引流工作台”；拓客页面展示“运行任务 / AI待处理 / 待私信 / 失败待查”，引流页面展示运行、成功、失败、操作记录等与执行批次相关的轻量指标。横向工作流和页面级说明条已移除，避免重复解释压掉主要操作区。主色使用青绿色，配合蓝色运行、绿色成功、橙色待处理、红色风险等状态色；卡片圆角控制在 8px 内，使用浅边框和轻阴影，让表格、队列和详情面板保持可扫描。
 
 核心页面继续沿用 Vue3 + Element Plus + 项目自定义 render function，不引入 React、Tailwind 或其它 UI 技术栈。任务页保留“模式卡片 -> 参数表单 -> 执行预览 -> 最近任务”的操作顺序。AI 分析页采用 KPI 卡片、分段 Tab、筛选工具栏、审核队列和右侧详情面板；危险操作使用红色轻量按钮，和批量分析主按钮区分。私信工作台采用关键词队列 + 客户表格的左右分栏，客户表格保留固定操作列，适合横向查看评论、视频和话术后立即推进状态。SplitPane 会把用户拖拽后的左右栏宽度保存到 `localStorage`，刷新后保留工作台布局。
 
@@ -228,13 +228,15 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 ## 引流工作台
 
-引流工作台功能代码已移除。前端仅保留左侧栏入口：`定向引流`、`随机引流`、`任务与日志`、`数据表`、`引流设置`；这些路由统一指向 `frontend/src/pages/TrafficPlaceholderPage.ts`，组件不渲染内容、不请求后端接口。
+引流工作台已按四页重组：`计划工作台`、`执行监控`、`操作记录`、`引流设置`。旧的 `定向引流 / 随机引流` 不再作为独立页面，而是在计划工作台里作为来源模式：`随机推荐流`、`拓客竞品视频`、`已采集关键词`、`手动搜索关键词`。前端页面统一由 `frontend/src/pages/TrafficWorkbenchPage.ts` 渲染，继续复用拓客工作台的 `SplitPane`、`sectionTitle`、`data-table`、固定高度日志窗口和紧凑卡片列表。
 
-后端已删除 `/api/traffic/*` 路由、引流请求模型、引流服务层和 Playwright 执行器；新库初始化也不再创建 `traffic_*` 表或默认配置。旧本地数据库中如果已经存在 `traffic_*` 表或设置键，本次只是不再使用，不主动物理删除，避免破坏历史数据。
+第一版只实际执行抖音；计划工作台仍展示抖音、快手、小红书平台入口，点击快手或小红书只提示“正在开发”。动作组合包括点赞视频、收藏视频、关注作者、评论文案、评论图片；一个动作都不选时允许启动，表示“纯自动刷视频”，只随机停留、切换视频并写入“仅浏览”记录。文案和图片在引流设置页维护，执行时随机抽取。
 
-后续重构依据见 `docs/traffic_workbench_rebuild_research.md`。该文档复盘了拓客工作台的页面结构、表格和日志规范，并对 `GHkmmm/laizan`、`paopaojun/Douyin_Curation_Assistant`、`tangooo/douyin.operator` 三个参考项目的规则、风控、刷视频、点赞、关注、评论和日志策略做了拆解。结论是新引流工作台应先重建数据层、任务/批次/队列/日志、防重复账本和设置页，再逐步接入浏览器自动化，不能在旧页面代码上继续修补。
+后端新增 `/api/traffic/*` 接口和 `traffic_*` 数据表，覆盖计划、批次、视频项、用户可读动作日志、操作记录、文案库、图片库和防重复账本。引流授权独立于拓客授权，复用同一个 Sealos 授权服务和弹窗交互，但使用 `traffic` 业务字段：`traffic_license_code`、`traffic_device_code`、`traffic_license_last_status` 等；启动引流批次前会调用 `ensure_authorized_for("traffic")`，不会占用拓客工作台的 `lead` 授权码。
 
-根目录新增安全探测脚本 `script/douyin_probe.cjs`，用于打开或连接抖音页面并采集登录态、安全验证、活跃视频节点、点赞/收藏/评论入口、关注入口和可选翻页结果。脚本默认不会触发点赞、关注、评论或图片上传；`--advance` 也只测试切换视频并比对 `data-e2e-vid` 是否变化。本次探测使用临时 Playwright 依赖和专用 Chrome Profile 成功打开抖音，但页面落点为 `https://www.douyin.com/jingxuan`，没有发现 `[data-e2e="feed-active-video"]` 或 `[data-e2e="slideList"]`，因此安全翻页未生效。后续真实执行前必须先扫码登录专用 Profile，并在执行器中强制校验“已登录、未触发安全验证、处于推荐流或详情页、存在活跃视频 ID”。
+执行器位于 `backend/app/services/traffic_workbench.py`，使用 Python Playwright 和独立浏览器 Profile `runtime/traffic_douyin_profile`。执行前会检查登录态、安全验证、页面类型和活跃视频 ID；遇到登录失效、人机验证、找不到活跃视频、翻页不变、连续动作失败或达到限额时自动停机，并在日志里写清楚“发生了什么、为什么停、用户下一步怎么做”。不会实现验证码或人机验证绕过。
+
+参考实现和探测依据见 `docs/traffic_workbench_rebuild_research.md`；根目录保留只读探测脚本 `script/douyin_probe.cjs`，用于在不点赞、不关注、不评论的前提下验证抖音页面结构。
 ## 授权服务
 
 Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试地址为 `https://tfwqsfaegbdj.sealosbja.site`，接口详情见根目录 `sealos接口文档.md`。V1 只做授权码和绑定设备数限制，不做同时在线状态、心跳或强制下线。

@@ -281,6 +281,129 @@ CREATE TABLE IF NOT EXISTS deletion_audit (
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS traffic_plans (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'dy',
+    source_mode TEXT NOT NULL DEFAULT 'random_feed',
+    source_value TEXT NOT NULL DEFAULT '',
+    action_like INTEGER NOT NULL DEFAULT 0,
+    action_collect INTEGER NOT NULL DEFAULT 0,
+    action_follow INTEGER NOT NULL DEFAULT 0,
+    action_comment_text INTEGER NOT NULL DEFAULT 0,
+    action_comment_image INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS traffic_runs (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    total_videos INTEGER NOT NULL DEFAULT 0,
+    browsed_count INTEGER NOT NULL DEFAULT 0,
+    action_success_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    stop_reason TEXT NOT NULL DEFAULT '',
+    stop_suggestion TEXT NOT NULL DEFAULT '',
+    stop_requested INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(plan_id) REFERENCES traffic_plans(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS traffic_run_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    video_id TEXT NOT NULL DEFAULT '',
+    video_url TEXT NOT NULL DEFAULT '',
+    author_id TEXT NOT NULL DEFAULT '',
+    author_name TEXT NOT NULL DEFAULT '',
+    video_desc TEXT NOT NULL DEFAULT '',
+    like_count INTEGER,
+    comment_count INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    actions_done TEXT NOT NULL DEFAULT '[]',
+    skip_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(run_id) REFERENCES traffic_runs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS traffic_action_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    level TEXT NOT NULL DEFAULT 'info',
+    phase TEXT NOT NULL DEFAULT 'browse',
+    message TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    suggestion TEXT NOT NULL DEFAULT '',
+    details TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(run_id) REFERENCES traffic_runs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS traffic_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    plan_id TEXT NOT NULL,
+    platform TEXT NOT NULL DEFAULT 'dy',
+    video_id TEXT NOT NULL DEFAULT '',
+    video_url TEXT NOT NULL DEFAULT '',
+    video_desc TEXT NOT NULL DEFAULT '',
+    author_id TEXT NOT NULL DEFAULT '',
+    author_name TEXT NOT NULL DEFAULT '',
+    like_count INTEGER,
+    comment_count INTEGER,
+    actions TEXT NOT NULL DEFAULT '[]',
+    comment_text TEXT NOT NULL DEFAULT '',
+    comment_image_path TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'browsed',
+    reason TEXT NOT NULL DEFAULT '',
+    screenshot_path TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(run_id) REFERENCES traffic_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY(plan_id) REFERENCES traffic_plans(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS traffic_material_texts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS traffic_material_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS traffic_dedup_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    video_id TEXT NOT NULL DEFAULT '',
+    author_id TEXT NOT NULL DEFAULT '',
+    action_type TEXT NOT NULL,
+    content_hash TEXT NOT NULL DEFAULT '',
+    run_id TEXT,
+    record_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'done',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(platform, video_id, author_id, action_type, content_hash),
+    FOREIGN KEY(run_id) REFERENCES traffic_runs(id) ON DELETE SET NULL,
+    FOREIGN KEY(record_id) REFERENCES traffic_records(id) ON DELETE SET NULL
+);
+
 """
 
 
@@ -313,6 +436,18 @@ DEFAULT_SETTINGS = {
     "license_last_reason": "",
     "license_last_message": "未填写授权码",
     "license_last_checked_at": "",
+    "traffic_license_code": "",
+    "traffic_device_code": "",
+    "traffic_license_last_status": "unconfigured",
+    "traffic_license_last_reason": "",
+    "traffic_license_last_message": "未填写授权码",
+    "traffic_license_last_checked_at": "",
+    "traffic_round_video_limit": "5",
+    "traffic_daily_action_limit": "50",
+    "traffic_min_watch_seconds": "3",
+    "traffic_max_watch_seconds": "8",
+    "traffic_author_cooldown_hours": "24",
+    "traffic_stop_after_failures": "3",
     "icp_profile": json.dumps(
         {
             "product": "",

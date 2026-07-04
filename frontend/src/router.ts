@@ -7,7 +7,7 @@ import OverviewPage from './pages/OverviewPage'
 import SettingsPage from './pages/SettingsPage'
 import TablesPage from './pages/TablesPage'
 import TaskPage from './pages/TaskPage'
-import TrafficPlaceholderPage from './pages/TrafficPlaceholderPage'
+import TrafficWorkbenchPage from './pages/TrafficWorkbenchPage'
 
 export const routes = [
   {
@@ -57,34 +57,28 @@ export const routes = [
     meta: { title: '设置', subtitle: '配置 AI 模型、MediaCrawler 路径、自动化和 ICP 画像。', hint: '开始前先把基础环境配好' },
   },
   {
-    path: '/traffic-targeted',
-    name: 'traffic-targeted',
-    component: TrafficPlaceholderPage,
-    meta: { title: '定向引流', subtitle: '', hint: '' },
+    path: '/traffic-plans',
+    name: 'traffic-plans',
+    component: TrafficWorkbenchPage,
+    meta: { title: '计划工作台', subtitle: '创建抖音引流计划，选择来源和动作组合。', hint: '先配置计划再启动批次' },
   },
   {
-    path: '/traffic-random',
-    name: 'traffic-random',
-    component: TrafficPlaceholderPage,
-    meta: { title: '随机引流', subtitle: '', hint: '' },
-  },
-  {
-    path: '/traffic-logs',
-    name: 'traffic-logs',
-    component: TrafficPlaceholderPage,
-    meta: { title: '任务与日志', subtitle: '', hint: '' },
+    path: '/traffic-monitor',
+    name: 'traffic-monitor',
+    component: TrafficWorkbenchPage,
+    meta: { title: '执行监控', subtitle: '查看批次状态、用户可读日志和已处理视频。', hint: '失败原因会写清楚' },
   },
   {
     path: '/traffic-records',
     name: 'traffic-records',
-    component: TrafficPlaceholderPage,
-    meta: { title: '数据表', subtitle: '', hint: '' },
+    component: TrafficWorkbenchPage,
+    meta: { title: '操作记录', subtitle: '查看每个视频的浏览和互动结果。', hint: '复盘每条视频' },
   },
   {
     path: '/traffic-settings',
     name: 'traffic-settings',
-    component: TrafficPlaceholderPage,
-    meta: { title: '引流设置', subtitle: '', hint: '' },
+    component: TrafficWorkbenchPage,
+    meta: { title: '引流设置', subtitle: '授权、登录态、文案图片和限额统一配置。', hint: '启动前先检查授权' },
   },
 ]
 

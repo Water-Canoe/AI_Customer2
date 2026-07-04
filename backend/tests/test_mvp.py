@@ -22,6 +22,7 @@ def allow_license_checks(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # API tests focus on业务逻辑，授权网络调用单独测试，避免真实公网请求影响稳定性。
     monkeypatch.setattr(license_service, "ensure_authorized", lambda: {"authorized": True})
+    monkeypatch.setattr(license_service, "ensure_authorized_for", lambda scope: {"authorized": True, "scope": scope})
 
 
 def prepare_project(tmp_path: Path) -> tuple[Path, Path]:
@@ -604,6 +605,93 @@ def test_task_preview_uses_same_parameter_normalization(tmp_path: Path) -> None:
     )
     assert response.status_code == 400
     assert "必须填写关键词" in response.json()["detail"]
+
+
+def test_traffic_license_scope_is_independent(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.services import license_service
+
+    lead = license_service.update_license_code_for("lead", "WATER_CANOE")
+    traffic = license_service.update_license_code_for("traffic", "CANOE_WATER")
+
+    assert lead["license_code"] == "WATER_CANOE"
+    assert traffic["license_code"] == "CANOE_WATER"
+    assert license_service.license_overview_for("lead")["license_code"] == "WATER_CANOE"
+    assert license_service.license_overview_for("traffic")["license_code"] == "CANOE_WATER"
+    assert license_service.license_overview_for("lead")["device_code"] != license_service.license_overview_for("traffic")["device_code"]
+
+
+def test_traffic_browse_only_plan_can_start_and_logs_user_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="纯刷视频", platform="dy"))
+    assert plan["action_label"] == "仅浏览"
+    run = traffic_workbench.create_run(plan["id"])
+
+    def fail_with_readable_reason(run_id: str, plan_payload: dict[str, object]) -> None:
+        raise traffic_workbench.TrafficStop(
+            "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
+            "翻页后视频 ID 没有变化。",
+            "请到引流设置重新打开抖音并确认推荐流可以正常切换。",
+            "advance",
+            {"plan": plan_payload["name"]},
+        )
+
+    monkeypatch.setattr(traffic_workbench, "_run_with_playwright", fail_with_readable_reason)
+    traffic_workbench.run_traffic_run(run["id"])
+    detail = traffic_workbench.get_run(run["id"])
+
+    assert detail is not None
+    assert detail["status"] == "failed"
+    assert detail["stop_reason"] == "翻页后视频 ID 没有变化。"
+    assert "引流设置" in detail["stop_suggestion"]
+    assert detail["logs"][-1]["message"].startswith("连续 3 次")
+    assert detail["logs"][-1]["suggestion"]
+
+
+def test_traffic_comment_actions_require_materials(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(
+        TrafficPlanCreate(name="评论计划", platform="dy", action_comment_text=True)
+    )
+
+    with pytest.raises(ValueError, match="还没有可用文案"):
+        traffic_workbench.create_run(plan["id"])
+
+
+def test_traffic_developing_platform_cannot_start(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="快手计划", platform="ks"))
+
+    with pytest.raises(ValueError, match="正在开发"):
+        traffic_workbench.create_run(plan["id"])
+
+
+def test_traffic_run_route_requires_traffic_license(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.schemas import TrafficPlanCreate
+    from app.services import license_service, traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="授权测试", platform="dy"))
+
+    def reject(scope: str) -> dict[str, object]:
+        raise ValueError(f"{scope} 未授权")
+
+    monkeypatch.setattr(license_service, "ensure_authorized_for", reject)
+    client = TestClient(app)
+    response = client.post(f"/api/traffic/plans/{plan['id']}/runs")
+
+    assert response.status_code == 403
+    assert "traffic 未授权" in response.json()["detail"]
 
 
 def test_profile_enrichment_task_uses_creator_mode_and_imports_signature(tmp_path: Path) -> None:

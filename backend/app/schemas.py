@@ -49,6 +49,25 @@ class LicenseUpdate(BaseModel):
     license_code: str = ""
 
 
+class TrafficPlanCreate(BaseModel):
+    name: str = ""
+    platform: Platform = "dy"
+    source_mode: Literal["random_feed", "competitor_videos", "collected_keyword", "search_keyword"] = "random_feed"
+    source_value: str = ""
+    action_like: bool = False
+    action_collect: bool = False
+    action_follow: bool = False
+    action_comment_text: bool = False
+    action_comment_image: bool = False
+    enabled: bool = True
+
+
+class TrafficSettingsUpdate(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+    texts: list[str] = Field(default_factory=list)
+    images: list[str] = Field(default_factory=list)
+
+
 class ClearDataRequest(BaseModel):
     confirm: str
 

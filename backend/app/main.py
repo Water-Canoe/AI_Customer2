@@ -23,8 +23,10 @@ from app.schemas import (
     SettingsUpdate,
     TableUpdate,
     TaskCreate,
+    TrafficPlanCreate,
+    TrafficSettingsUpdate,
 )
-from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility
+from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
 from app import views
 
 
@@ -54,6 +56,13 @@ def health() -> dict[str, str]:
 def require_license() -> None:
     try:
         license_service.ensure_authorized()
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+def require_license_for(scope: str) -> None:
+    try:
+        license_service.ensure_authorized_for(scope)
     except ValueError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -97,6 +106,121 @@ def update_license(payload: LicenseUpdate) -> dict[str, object]:
 @app.post("/api/license/check")
 def check_license(payload: LicenseUpdate) -> dict[str, object]:
     return license_service.check_license(payload.license_code)
+
+
+@app.get("/api/traffic/license")
+def get_traffic_license() -> dict[str, object]:
+    return license_service.license_overview_for("traffic")
+
+
+@app.put("/api/traffic/license")
+def update_traffic_license(payload: LicenseUpdate) -> dict[str, object]:
+    return license_service.update_license_code_for("traffic", payload.license_code)
+
+
+@app.post("/api/traffic/license")
+@app.post("/api/traffic/license/check")
+def check_traffic_license(payload: LicenseUpdate) -> dict[str, object]:
+    return license_service.check_license_for("traffic", payload.license_code)
+
+
+@app.get("/api/traffic/plans")
+def list_traffic_plans() -> list[dict[str, object]]:
+    return traffic_workbench.list_plans()
+
+
+@app.post("/api/traffic/plans")
+def create_traffic_plan(payload: TrafficPlanCreate) -> dict[str, object]:
+    try:
+        return traffic_workbench.create_plan(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/api/traffic/plans/{plan_id}")
+def update_traffic_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, object]:
+    try:
+        return traffic_workbench.update_plan(plan_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/traffic/plans/{plan_id}")
+def delete_traffic_plan(plan_id: str) -> dict[str, object]:
+    return traffic_workbench.delete_plan(plan_id)
+
+
+@app.post("/api/traffic/plans/{plan_id}/runs")
+def create_traffic_run(plan_id: str, background_tasks: BackgroundTasks) -> dict[str, object]:
+    require_license_for("traffic")
+    try:
+        run = traffic_workbench.create_run(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background_tasks.add_task(traffic_workbench.run_traffic_run, str(run["id"]))
+    return run
+
+
+@app.get("/api/traffic/runs")
+def list_traffic_runs() -> list[dict[str, object]]:
+    return traffic_workbench.list_runs()
+
+
+@app.get("/api/traffic/runs/{run_id}")
+def get_traffic_run(run_id: str) -> dict[str, object]:
+    run = traffic_workbench.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="引流批次不存在")
+    return run
+
+
+@app.post("/api/traffic/runs/{run_id}/stop")
+def stop_traffic_run(run_id: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.stop_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/traffic/runs/{run_id}/logs")
+def list_traffic_logs(run_id: str) -> list[dict[str, object]]:
+    return traffic_workbench.list_logs(run_id)
+
+
+@app.get("/api/traffic/records")
+def list_traffic_records(
+    query: str = "",
+    status: str = "",
+    action: str = "",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> dict[str, object]:
+    return traffic_workbench.list_records(query=query, status=status, action=action, page=page, page_size=page_size)
+
+
+@app.delete("/api/traffic/records")
+def clear_traffic_records() -> dict[str, object]:
+    return traffic_workbench.clear_records()
+
+
+@app.get("/api/traffic/settings")
+def get_traffic_settings() -> dict[str, object]:
+    return traffic_workbench.get_settings()
+
+
+@app.put("/api/traffic/settings")
+def update_traffic_settings(payload: TrafficSettingsUpdate) -> dict[str, object]:
+    return traffic_workbench.update_settings(payload)
+
+
+@app.get("/api/traffic/source-keywords")
+def list_traffic_source_keywords() -> list[dict[str, object]]:
+    return traffic_workbench.source_keywords()
+
+
+@app.get("/api/traffic/source-competitor-videos")
+def list_traffic_source_competitor_videos() -> list[dict[str, object]]:
+    return traffic_workbench.source_competitor_videos()
 
 
 @app.post("/api/tasks")
