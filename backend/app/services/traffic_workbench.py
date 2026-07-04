@@ -499,14 +499,16 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
             page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
             page.wait_for_timeout(4000)
             _ensure_page_ready(page)
+            _navigate_to_executable_video(page, run_id)
             for index in range(limit):
                 _raise_if_stop_requested(run_id)
                 video = _read_active_video(page)
                 if not video["video_id"]:
+                    is_jingxuan = "douyin.com/jingxuan" in page.url
                     raise TrafficStop(
                         "连续没有找到可执行的视频，任务已停止。",
-                        "当前页面没有活跃视频节点。",
-                        "请确认抖音已经进入推荐流或视频详情页，再重新启动任务。",
+                        "当前停留在抖音精选页，未进入具体视频。" if is_jingxuan else "当前页面没有活跃视频节点。",
+                        "请在浏览器里完成登录，或点击抖音首页任意视频后再重新启动任务。" if is_jingxuan else "请确认抖音已经进入推荐流或视频详情页，再重新启动任务。",
                         "probe",
                         {"url": page.url},
                     )
@@ -585,10 +587,11 @@ def _ensure_page_ready(page: Any) -> None:
         () => {
           const text = (document.body?.innerText || '').replace(/\\s+/g, ' ');
           const active = document.querySelector('[data-e2e="feed-active-video"]');
+          const pathId = location.pathname.match(/\\/(?:video|note)\\/([^/?#]+)/)?.[1] || '';
           return {
             url: location.href,
             title: document.title,
-            activeVideoId: active?.getAttribute('data-e2e-vid') || '',
+            activeVideoId: active?.getAttribute('data-e2e-vid') || pathId,
             loginPrompt: /扫码登录|立即登录|登录后|手机号登录/.test(text),
             verifyPrompt: /安全验证|人机验证|验证码中间页|verify_check|secsdk-captcha|captcha/.test(location.href + text),
           };
@@ -613,18 +616,59 @@ def _ensure_page_ready(page: Any) -> None:
         )
 
 
+def _navigate_to_executable_video(page: Any, run_id: str) -> None:
+    if _read_active_video(page)["video_id"]:
+        return
+    candidates = _visible_video_links(page)
+    if not candidates:
+        return
+    candidate = random.choice(candidates[:8])
+    # 从精选页先进入一个具体视频；后续动作层仍只处理详情页/推荐流里的当前视频。
+    _append_log(run_id, "info", "probe", "已从当前页面随机进入一个视频。", "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": candidate["href"]})
+    page.goto(candidate["href"], wait_until="domcontentloaded", timeout=60_000)
+    page.wait_for_timeout(3000)
+    _ensure_page_ready(page)
+
+
+def _visible_video_links(page: Any) -> list[dict[str, Any]]:
+    return list(page.evaluate(
+        """
+        () => {
+          const normalize = value => (value || '').replace(/\\s+/g, ' ').trim();
+          return Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/note/"]'))
+            .map(link => {
+              const rect = link.getBoundingClientRect();
+              const style = window.getComputedStyle(link);
+              return {
+                href: link.href,
+                text: normalize(link.textContent).slice(0, 160),
+                visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+              };
+            })
+            .filter(item => item.href && item.visible)
+            .slice(0, 20);
+        }
+        """
+    ))
+
+
 def _read_active_video(page: Any) -> dict[str, Any]:
     data = page.evaluate(
         """
         () => {
-          const active = document.querySelector('[data-e2e="feed-active-video"]');
+          const active = document.querySelector('[data-e2e="feed-active-video"]')
+            || document.querySelector('[data-e2e-vid]')
+            || document.querySelector('video')?.closest('[data-e2e-vid]')
+            || document.querySelector('video')?.parentElement;
           const normalize = value => (value || '').replace(/\\s+/g, ' ').trim();
-          const desc = active?.querySelector('[data-e2e="video-desc"], .title')?.textContent || active?.textContent || '';
-          const author = active?.querySelector('[data-e2e="feed-video-nickname"], .account-name')?.textContent || '';
-          const like = active?.querySelector('[data-e2e="video-player-digg"]')?.textContent || '';
-          const comment = active?.querySelector('[data-e2e="feed-comment-icon"]')?.textContent || '';
+          const root = active || document;
+          const pathId = location.pathname.match(/\\/(?:video|note)\\/([^/?#]+)/)?.[1] || '';
+          const desc = root.querySelector?.('[data-e2e="video-desc"], [data-e2e="detail-video-desc"], .title, h1')?.textContent || active?.textContent || document.title || '';
+          const author = root.querySelector?.('[data-e2e="feed-video-nickname"], .account-name, [data-e2e="user-info"]')?.textContent || '';
+          const like = root.querySelector?.('[data-e2e="video-player-digg"]')?.textContent || document.querySelector('[data-e2e="video-player-digg"]')?.textContent || '';
+          const comment = root.querySelector?.('[data-e2e="feed-comment-icon"]')?.textContent || document.querySelector('[data-e2e="feed-comment-icon"]')?.textContent || '';
           return {
-            video_id: active?.getAttribute('data-e2e-vid') || '',
+            video_id: active?.getAttribute('data-e2e-vid') || pathId,
             video_url: location.href,
             author_id: '',
             author_name: normalize(author).replace(/^@/, ''),
@@ -728,7 +772,7 @@ def _advance_video(page: Any, previous_video_id: str) -> bool:
         else:
             page.keyboard.press("ArrowDown")
         page.wait_for_timeout(1400)
-        next_id = page.evaluate("() => document.querySelector('[data-e2e=\"feed-active-video\"]')?.getAttribute('data-e2e-vid') || ''")
+        next_id = _read_active_video(page)["video_id"]
         if next_id and next_id != previous_video_id:
             return True
     return False
