@@ -104,8 +104,7 @@ class TrafficExecutor:
             self._execute_target(page, target, already_open=True)
             # 最后一条执行完停留在当前视频，方便人工核验操作结果。
             if index < limit - 1:
-                page.keyboard.press("ArrowDown")
-                page.wait_for_timeout(int(self._random_interval() * 1000))
+                self._switch_next_runtime_video(page, str(target.get("target_key") or ""))
 
     def _open_random_video(self, page: Page) -> Page:
         if "/video/" in (page.url or "") or self._active_video_id(page):
@@ -142,6 +141,35 @@ class TrafficExecutor:
                     continue
         raise RuntimeError("找不到可进入的抖音视频")
 
+    def _switch_next_runtime_video(self, page: Page, previous_key: str) -> None:
+        selectors = ["[data-e2e='video-switch-next-arrow']", "[data-e2e='feed-switch-next-arrow']"]
+        for selector in selectors:
+            locator = self._first_visible(page, [selector])
+            if locator is None:
+                continue
+            try:
+                locator.click(timeout=3000)
+                if self._wait_video_changed(page, previous_key):
+                    return
+            except Exception:
+                continue
+        for action in (lambda: page.keyboard.press("ArrowDown"), lambda: page.mouse.wheel(0, 900)):
+            try:
+                action()
+                if self._wait_video_changed(page, previous_key):
+                    return
+            except Exception:
+                continue
+        raise RuntimeError("切换下一条抖音视频失败")
+
+    def _wait_video_changed(self, page: Page, previous_key: str) -> bool:
+        for _ in range(12):
+            page.wait_for_timeout(500)
+            key = self._current_target_key(page)
+            if key and key != previous_key:
+                return True
+        return False
+
     def _execute_target(self, page: Page, target: dict[str, Any], already_open: bool = False) -> None:
         target_id = int(target["id"])
         try:
@@ -168,7 +196,7 @@ class TrafficExecutor:
             self._event(target_id, "open", "succeeded", page.url)
             page.wait_for_timeout(int(self._random_stay() * 1000))
             if self.campaign["action_like"]:
-                self._click_required(page, ["[data-e2e='video-player-digg']", "button:has-text('点赞')", "[aria-label*='点赞']", "[data-e2e*='like']"], "like", target_id)
+                self._like(page, target_id)
             if self.campaign["action_follow"]:
                 self._click_required(page, ["button:has-text('关注')", "[aria-label*='关注']", "text=关注"], "follow", target_id)
             if needs_comment_claim:
@@ -185,6 +213,21 @@ class TrafficExecutor:
             self._mark_target(target_id, "failed", str(exc), screenshot)
             self._update_counts()
             raise RuntimeError(f"目标 {target_id} 执行失败：{exc}") from exc
+
+    def _like(self, page: Page, target_id: int) -> None:
+        locator = self._first_visible(page, ["[data-e2e='video-player-digg']", "button:has-text('点赞')", "[aria-label*='点赞']", "[data-e2e*='like']"])
+        if locator is None:
+            raise RuntimeError("找不到点赞按钮")
+        try:
+            state = str(locator.get_attribute("data-e2e-state", timeout=1000) or "")
+            if "is-digged" in state:
+                self._event(target_id, "like", "succeeded", "已点赞")
+                return
+        except Exception:
+            pass
+        locator.click(timeout=5000)
+        self._event(target_id, "like", "succeeded", "")
+        page.wait_for_timeout(int(self._random_interval() * 1000))
 
     def _comment(self, page: Page, target: dict[str, Any]) -> str:
         target_id = int(target["id"])
@@ -264,9 +307,8 @@ class TrafficExecutor:
 
     def _create_runtime_target(self, page: Page, source_type: str) -> dict[str, Any]:
         url = page.url or DOUYIN_HOME
-        video_id = self._active_video_id(page)
         title = page.title() or ("搜索关键词视频" if source_type == "search_keyword" else "随机推荐视频")
-        key = traffic_workbench.normalize_target_key("dy", video_id, url)
+        key = self._current_target_key(page)
         status = "running" if key else "skipped"
         error = "" if key else "无稳定视频标识"
         if not key:
@@ -281,6 +323,9 @@ class TrafficExecutor:
             )
             row = conn.execute("SELECT * FROM traffic_targets WHERE id = ?", (int(cur.lastrowid),)).fetchone()
             return database.row_to_dict(row) or {}
+
+    def _current_target_key(self, page: Page) -> str:
+        return traffic_workbench.normalize_target_key("dy", self._active_video_id(page), page.url or "")
 
     def _active_video_id(self, page: Page) -> str:
         modal_id = parse_qs(urlparse(page.url or "").query).get("modal_id", [""])[0]

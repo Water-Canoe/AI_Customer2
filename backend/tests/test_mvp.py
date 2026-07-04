@@ -4038,6 +4038,13 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
         def press(self, key: str) -> None:
             self.pressed.append(key)
 
+    class FakeMouse:
+        def __init__(self) -> None:
+            self.wheels: list[tuple[int, int]] = []
+
+        def wheel(self, delta_x: int, delta_y: int) -> None:
+            self.wheels.append((delta_x, delta_y))
+
     class FakeLocator:
         def __init__(self, page: "FakePage", selector: str, index: int = 0) -> None:
             self.page = page
@@ -4055,7 +4062,7 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
             if "a[href*='/video/']" in self.selector:
                 return len(self.page.video_links)
             if "waterfall-videoCardContainer" in self.selector:
-                return len(self.page.video_cards)
+                return 1
             return 1
 
         def wait_for(self, state: str = "", timeout: int = 0) -> None:
@@ -4072,15 +4079,23 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
                 self.page.url = self.page.video_links[self.index]
             if "waterfall-videoCardContainer" in self.selector:
                 self.page.url = self.page.video_cards[self.index]
+            if "video-switch-next-arrow" in self.selector:
+                self.page.current_card_index = min(self.page.current_card_index + 1, len(self.page.video_cards) - 1)
+                self.page.url = self.page.video_cards[self.page.current_card_index]
 
     class FakePage:
         def __init__(self) -> None:
             self.url = ""
             self.urls: list[str] = []
             self.video_links: list[str] = []
-            self.video_cards = ["https://www.douyin.com/jingxuan?modal_id=unit-video-1"]
+            self.current_card_index = 0
+            self.video_cards = [
+                "https://www.douyin.com/jingxuan?modal_id=unit-video-1",
+                "https://www.douyin.com/jingxuan?modal_id=unit-video-2",
+            ]
             self.clicked: list[str] = []
             self.keyboard = FakeKeyboard()
+            self.mouse = FakeMouse()
             self.context = FakeContext(self)
 
         def goto(self, url: str, wait_until: str = "", timeout: int = 0) -> None:
@@ -4112,7 +4127,7 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
     run_id = "TRF-UNIT"
     with database.connect() as conn:
         conn.execute(
-            "INSERT INTO traffic_runs(id, campaign_id, status, per_run_limit, daily_limit, counts) VALUES(?, ?, 'pending', 1, 100, '{}')",
+            "INSERT INTO traffic_runs(id, campaign_id, status, per_run_limit, daily_limit, counts) VALUES(?, ?, 'pending', 2, 100, '{}')",
             (run_id, int(campaign["id"])),
         )
 
@@ -4126,15 +4141,20 @@ def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
     executor._run_random(page)
 
     assert page.urls[0] == DOUYIN_HOME
-    assert page.url == "https://www.douyin.com/jingxuan?modal_id=unit-video-1"
+    assert page.url == "https://www.douyin.com/jingxuan?modal_id=unit-video-2"
     assert "[class*='waterfall-videoCardContainer']" in page.clicked
-    assert "[data-e2e='video-player-digg']" in page.clicked
+    assert page.clicked.count("[data-e2e='video-player-digg']") == 2
+    assert "[data-e2e='video-switch-next-arrow']" in page.clicked
     assert page.keyboard.pressed == []
+    assert page.mouse.wheels == []
     with database.connect() as conn:
-        target = conn.execute("SELECT content_url, status FROM traffic_targets WHERE run_id = ?", (run_id,)).fetchone()
+        rows = conn.execute("SELECT content_url, status FROM traffic_targets WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()
         ledger_count = conn.execute("SELECT COUNT(*) FROM traffic_action_ledger WHERE run_id = ?", (run_id,)).fetchone()[0]
-    assert target["content_url"] == "https://www.douyin.com/jingxuan?modal_id=unit-video-1"
-    assert target["status"] == "succeeded"
+    assert [row["content_url"] for row in rows] == [
+        "https://www.douyin.com/jingxuan?modal_id=unit-video-1",
+        "https://www.douyin.com/jingxuan?modal_id=unit-video-2",
+    ]
+    assert [row["status"] for row in rows] == ["succeeded", "succeeded"]
     assert ledger_count == 0
 
 
