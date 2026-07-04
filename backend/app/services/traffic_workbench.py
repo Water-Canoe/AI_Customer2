@@ -326,6 +326,31 @@ def list_targets(campaign_id: int, status: str = "", page: int = 1, page_size: i
     return {"rows": database.rows_to_dicts(rows), "total": total, "page": page, "page_size": page_size}
 
 
+# 按批次查询目标，避免日志页混入同一计划下其它批次的队列。
+def list_run_targets(run_id: str, page: int = 1, page_size: int = 30) -> dict[str, Any]:
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or 30), 100))
+    with database.connect() as conn:
+        row = conn.execute("SELECT id FROM traffic_runs WHERE id = ?", (run_id,)).fetchone()
+        if not row:
+            raise ValueError("引流批次不存在")
+        total = int(conn.execute("SELECT COUNT(*) AS c FROM traffic_targets WHERE run_id = ?", (run_id,)).fetchone()["c"])
+        rows = conn.execute(
+            """
+            SELECT t.*, c.name AS campaign_name
+            FROM traffic_targets t
+            LEFT JOIN traffic_campaigns c ON c.id = t.campaign_id
+            WHERE t.run_id = ?
+            ORDER BY
+              CASE t.status WHEN 'running' THEN 0 WHEN 'failed' THEN 1 WHEN 'skipped' THEN 2 WHEN 'succeeded' THEN 3 ELSE 4 END,
+              t.updated_at DESC, t.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (run_id, page_size, (page - 1) * page_size),
+        ).fetchall()
+    return {"rows": database.rows_to_dicts(rows), "total": total, "page": page, "page_size": page_size}
+
+
 def create_run(campaign_id: int, limit: int | None = None) -> dict[str, Any]:
     license_service.ensure_traffic_authorized()
     _sync_campaign_runtime_settings(campaign_id)
@@ -666,7 +691,7 @@ def _list_runs(conn) -> list[dict[str, Any]]:
         FROM traffic_runs r
         LEFT JOIN traffic_campaigns c ON c.id = r.campaign_id
         ORDER BY r.created_at DESC
-        LIMIT 20
+        LIMIT 100
         """
     ).fetchall()
     result = []

@@ -895,6 +895,16 @@ input[type='checkbox'] {
   color: #1d4ed8;
 }
 
+.status.pending {
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.status.cancelled {
+  background: #f1f5f9;
+  color: #475569;
+}
+
 .metric-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -4787,6 +4797,16 @@ input[type='checkbox'] {
 .traffic-status-pill.status-running {
   background: #fff7ed;
   color: var(--workbench-amber);
+}
+
+.traffic-status-pill.status-pending {
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.traffic-status-pill.status-cancelled {
+  background: #f1f5f9;
+  color: #475569;
 }
 
 .traffic-status-pill.status-skipped {

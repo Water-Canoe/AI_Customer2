@@ -4020,6 +4020,57 @@ def test_traffic_campaign_delete_rejects_running_and_cascades(tmp_path: Path) ->
     assert ledger["comment_text"] == "测试评论"
 
 
+def test_traffic_run_logs_api_lists_runs_and_run_targets(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.main import app
+    from app.schemas import TrafficCampaignCreate
+    from app.services import traffic_workbench
+
+    campaign = traffic_workbench.create_campaign(TrafficCampaignCreate(name="日志计划", mode="random"))
+    campaign_id = int(campaign["id"])
+    with database.connect() as conn:
+        target_id = conn.execute(
+            """
+            INSERT INTO traffic_targets(
+                campaign_id, platform, source_type, target_key, content_url,
+                author_name, title, selected_comment, status, run_id, last_action_at
+            )
+            VALUES(?, 'dy', 'random_feed', 'dy:video:run-log', 'https://www.douyin.com/video/run-log',
+                   '测试作者', '日志页测试视频', '测试引流文案', 'succeeded', 'TRF-LOG', datetime('now', 'localtime'))
+            """,
+            (campaign_id,),
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO traffic_runs(id, campaign_id, status, per_run_limit, daily_limit, counts, started_at, finished_at)
+            VALUES('TRF-LOG', ?, 'succeeded', 3, 30, '{"succeeded": 1, "failed": 0, "skipped": 0}', datetime('now', 'localtime'), datetime('now', 'localtime'))
+            """,
+            (campaign_id,),
+        )
+        conn.execute(
+            "INSERT INTO traffic_action_events(run_id, target_id, action, status, detail) VALUES('TRF-LOG', ?, 'comment', 'succeeded', '评论已发送')",
+            (int(target_id),),
+        )
+
+    client = TestClient(app)
+    runs = client.get("/api/traffic/runs")
+    assert runs.status_code == 200
+    assert runs.json()[0]["id"] == "TRF-LOG"
+    assert runs.json()[0]["campaign_name"] == "日志计划"
+    assert runs.json()[0]["counts"]["succeeded"] == 1
+
+    detail = client.get("/api/traffic/runs/TRF-LOG")
+    assert detail.status_code == 200
+    assert detail.json()["events"][0]["detail"] == "评论已发送"
+
+    targets = client.get("/api/traffic/runs/TRF-LOG/targets")
+    assert targets.status_code == 200
+    assert targets.json()["total"] == 1
+    assert targets.json()["rows"][0]["title"] == "日志页测试视频"
+    assert targets.json()["rows"][0]["selected_comment"] == "测试引流文案"
+
+
 def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
