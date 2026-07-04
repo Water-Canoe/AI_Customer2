@@ -300,6 +300,7 @@ CREATE TABLE IF NOT EXISTS traffic_campaigns (
     stay_seconds_max REAL NOT NULL DEFAULT 15,
     action_interval_seconds_min REAL NOT NULL DEFAULT 1,
     action_interval_seconds_max REAL NOT NULL DEFAULT 3,
+    rule_config TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
@@ -417,6 +418,12 @@ DEFAULT_SETTINGS = {
     "traffic_action_follow": "false",
     "traffic_action_comment": "true",
     "traffic_comment_templates": json.dumps(["想了解一下，方便看下主页吗？"], ensure_ascii=False),
+    "traffic_only_active_video": "false",
+    "traffic_active_comment_min": "5",
+    "traffic_video_block_keywords": "[]",
+    "traffic_author_block_keywords": "[]",
+    "traffic_rule_relation": "or",
+    "traffic_match_rules": "[]",
     "icp_profile": json.dumps(
         {
             "product": "",
@@ -450,6 +457,7 @@ def init_db() -> None:
         _ensure_column(conn, "analysis_jobs", "model", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "analysis_jobs", "base_url", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "traffic_campaigns", "action_image", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_campaigns", "rule_config", "TEXT NOT NULL DEFAULT '{}'")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",

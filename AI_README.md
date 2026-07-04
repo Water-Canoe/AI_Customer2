@@ -232,13 +232,13 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 ## 引流工作台
 
-引流工作台 V1 只执行抖音链路，分为“定向引流”“随机引流”和“引流设置”三个页面。定向引流支持三种来源：竞品视频计划筛选 `competitor_status=竞品` 且有 `content_url` 的抖音内容；已采集关键词视频计划筛选 `contents.source_keyword` 等于计划关键词的抖音内容，前端通过 `/api/traffic/keywords` 读取已入库的抖音关键词分组并点击填入；搜索关键词引流计划不依赖拓客入库队列，用户手动输入抖音搜索关键词，执行器运行时打开抖音搜索结果并写入 `traffic_targets`。每个计划可选择发送文案、发送图片或二者都发；文案不在队列生成时写死，而是在执行器每次真正发送评论前从“引流设置”的多文案中随机选择。随机引流不预先生成队列，启动后由执行器在抖音推荐流页面边刷边写入目标记录。
+引流工作台 V1 只执行抖音链路，分为“定向引流”“随机引流”和“引流设置”三个页面。定向引流支持三种来源：竞品视频计划筛选 `competitor_status=竞品` 且有 `content_url` 的抖音内容；已采集关键词视频计划筛选 `contents.source_keyword` 等于计划关键词的抖音内容，前端通过 `/api/traffic/keywords` 读取已入库的抖音关键词分组并点击填入；搜索关键词引流计划不依赖拓客入库队列，用户手动输入抖音搜索关键词，执行器运行时打开抖音搜索结果并写入 `traffic_targets`。每个计划可选择发送文案、发送图片或二者都发；文案不在队列生成时写死，而是在执行器每次真正发送评论前从“引流设置”的多文案中随机选择。随机引流不预先生成队列，启动后由执行器在抖音推荐流页面边刷边写入目标记录。规则设计参考 `GHkmmm/laizan` 的“屏蔽关键词 + 手动命中规则 + 活跃视频 + 随机文案”思路，但当前系统只保留扁平规则：作者屏蔽词、视频屏蔽词、作者/视频内容/来源关键词命中条件、`and/or` 关系和最低评论数阈值，不引入递归规则组或行业模板。
 
-引流数据独立落在项目业务库中：`traffic_campaigns` 保存计划来源、发送文案/图片选择、图片素材 ID，以及启动批次时同步过来的辅助动作、文案、每轮/每日上限和随机等待参数；`traffic_targets` 保存具体视频、作者、关键词、状态、失败原因和最后执行时间；`traffic_runs` 保存批次状态、进程 ID、计数和错误；`traffic_action_events` 保存打开视频、点赞、关注、评论、发送、失败截图等事件；`traffic_assets` 保存上传图片素材的本地文件路径和元数据。图片素材在设置页管理，在计划页选择。
+引流数据独立落在项目业务库中：`traffic_campaigns` 保存计划来源、发送文案/图片选择、图片素材 ID，以及启动批次时同步过来的辅助动作、文案、每轮/每日上限、随机等待参数和 `rule_config` 规则快照；`traffic_targets` 保存具体视频、作者、关键词、状态、失败原因和最后执行时间，不匹配规则的目标会标记为 `skipped`；`traffic_runs` 保存批次状态、进程 ID、成功/失败/跳过计数和错误；`traffic_action_events` 保存打开视频、点赞、关注、评论、发送、失败截图等事件；`traffic_assets` 保存上传图片素材的本地文件路径和元数据。图片素材在设置页管理，在计划页选择。
 
 后端接口统一挂在 `/api/traffic`：授权为 `GET/PUT/POST /license(/check)`，设置为 `GET/PUT /settings`，素材为 `GET/POST /assets`，关键词为 `GET /keywords`，计划为 `GET/POST /campaigns`，队列为 `POST /campaigns/{id}/targets/build` 和 `GET /campaigns/{id}/targets`，批次为 `POST /runs`、`GET /runs/{id}`、`POST /runs/{id}/cancel`。引流授权使用同一个 Sealos 授权服务 URL，但本地存储键和设备码前缀独立于拓客工作台：拓客设备码是 `AI-CUS-*`，引流设备码是 `AI-TRF-*`，校验请求会带 `business=traffic`。
 
-批次启动前会调用 `ensure_traffic_authorized()`，因此引流工作台必须先通过自己的授权码校验。启动批次时后端会把“引流设置”中的辅助动作、多文案、每轮/每日上限、停留秒数和动作间隔同步到计划快照，旧计划不需要重建也能使用最新设置；发送文案/图片选择保留计划自己的配置。执行器位于 `backend/app/traffic_executor.py`，由 `traffic_workbench.create_run()` 使用 `MediaCrawler/.venv/Scripts/python.exe` 启动；启动前复用现有 MediaCrawler CDP 浏览器配置和 `_ensure_cdp_browser_for_existing_mode()`，不额外创建一套浏览器依赖。执行器通过 Playwright CDP 连接浏览器，按设置随机停留、随机动作间隔、点赞、关注和评论；选择发送图片时会尝试使用页面中的 `input[type=file]` 上传计划选择的图片素材。必要 selector、文件输入控件找不到、页面异常或执行失败时会把截图写到 `runtime/traffic_screenshots/` 并把批次标为失败。
+批次启动前会调用 `ensure_traffic_authorized()`，因此引流工作台必须先通过自己的授权码校验。启动批次时后端会把“引流设置”中的辅助动作、多文案、每轮/每日上限、停留秒数、动作间隔和规则配置同步到计划快照，旧计划不需要重建也能使用最新设置；发送文案/图片选择保留计划自己的配置。定向队列生成时会先按规则过滤已采集视频；执行器运行时还会对目标再做一次规则判断，不匹配时写入 `skipped` 并继续处理后续目标。执行器位于 `backend/app/traffic_executor.py`，由 `traffic_workbench.create_run()` 使用 `MediaCrawler/.venv/Scripts/python.exe` 启动；启动前复用现有 MediaCrawler CDP 浏览器配置和 `_ensure_cdp_browser_for_existing_mode()`，不额外创建一套浏览器依赖。执行器通过 Playwright CDP 连接浏览器，按设置随机停留、随机动作间隔、点赞、关注和评论；选择发送图片时会尝试使用页面中的 `input[type=file]` 上传计划选择的图片素材。必要 selector、文件输入控件找不到、页面异常或执行失败时会把截图写到 `runtime/traffic_screenshots/` 并把批次标为失败。
 
 V1 不做代理池、多账号轮换、验证码绕过、平台风控绕过或自动处理平台安全提醒；遇到这些情况应停止批次并查看事件日志。随机等待和多文案只用于让批次表现不机械，不代表能规避平台规则。测试默认只覆盖计划、队列、授权、设置和素材接口，不启动真实 Playwright 执行器。
 

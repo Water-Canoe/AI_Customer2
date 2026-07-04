@@ -15,7 +15,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
 
 from app import database
-from app.services import crawler_adapter
+from app.services import crawler_adapter, traffic_workbench
 
 
 DOUYIN_HOME = "https://www.douyin.com/"
@@ -39,6 +39,7 @@ class TrafficExecutor:
         self.campaign = self._load_campaign(int(self.run["campaign_id"]))
         self.done = 0
         self.failed = 0
+        self.skipped = 0
 
     def run(self) -> None:
         self._update_run("running")
@@ -110,6 +111,12 @@ class TrafficExecutor:
     def _execute_target(self, page: Page, target: dict[str, Any], already_open: bool = False) -> None:
         target_id = int(target["id"])
         try:
+            allowed, reason = traffic_workbench._target_allowed(target, self.campaign.get("rule_config") or {})
+            if not allowed:
+                self.skipped += 1
+                self._mark_target(target_id, "skipped", reason)
+                self._update_counts()
+                return
             if not already_open:
                 page.goto(str(target["content_url"]), wait_until="domcontentloaded", timeout=45000)
             self._mark_target(target_id, "running")
@@ -187,10 +194,11 @@ class TrafficExecutor:
         with database.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT *
-                FROM traffic_targets
-                WHERE campaign_id = ? AND status = 'pending'
-                ORDER BY id ASC
+                SELECT t.*, c.comment_count, c.description
+                FROM traffic_targets t
+                LEFT JOIN contents c ON c.id = t.content_row_id
+                WHERE t.campaign_id = ? AND t.status = 'pending'
+                ORDER BY t.id ASC
                 LIMIT ?
                 """,
                 (int(self.campaign["id"]), int(self.run["per_run_limit"])),
@@ -287,6 +295,7 @@ class TrafficExecutor:
             item["action_image"] = bool(item.get("action_image"))
             item["comment_templates"] = _json_list(item.get("comment_templates"))
             item["image_asset_ids"] = [int(value) for value in _json_list(item.get("image_asset_ids")) if str(value).isdigit()]
+            item["rule_config"] = traffic_workbench._json_dict(item.get("rule_config"))
             return item
 
     def _update_run(self, status: str) -> None:
@@ -310,7 +319,7 @@ class TrafficExecutor:
             conn.execute("UPDATE traffic_runs SET counts = ?, updated_at = datetime('now', 'localtime') WHERE id = ?", (self._counts_json(), self.run_id))
 
     def _counts_json(self) -> str:
-        return json.dumps({"succeeded": self.done, "failed": self.failed}, ensure_ascii=False)
+        return json.dumps({"succeeded": self.done, "failed": self.failed, "skipped": self.skipped}, ensure_ascii=False)
 
     def _cdp_port(self) -> int:
         with database.connect() as conn:

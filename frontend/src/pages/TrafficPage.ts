@@ -194,7 +194,7 @@ function renderRunPanel(run: Dict | null, cancelRun: (run: Dict) => void) {
     sectionTitle({ title: '最近批次', subtitle: run ? `${run.campaign_name || ''} · ${run.status}` : '暂无运行记录', icon: CaretRight, tone: 'green', compact: true }),
     run
       ? h('div', { class: 'traffic-run-card' }, [
-          h('div', [h('strong', run.id), h('span', `成功 ${run.counts?.succeeded || 0} / 失败 ${run.counts?.failed || 0}`)]),
+          h('div', [h('strong', run.id), h('span', `成功 ${run.counts?.succeeded || 0} / 失败 ${run.counts?.failed || 0} / 跳过 ${run.counts?.skipped || 0}`)]),
           run.status === 'running' ? h('button', { class: 'secondary-action danger-action', onClick: () => cancelRun(run) }, [h(Close, { class: 'inline-icon' }), '停止']) : null,
           h('div', { class: 'traffic-events' }, (run.events || []).slice(0, 8).map((event: Dict) => h('p', [h('b', event.status), ` ${event.action} ${event.detail || ''}`]))),
         ])

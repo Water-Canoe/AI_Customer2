@@ -4559,6 +4559,18 @@ input[type='checkbox'] {
   color: var(--workbench-muted);
 }
 
+.traffic-rule-list {
+  display: grid;
+  gap: 8px;
+}
+
+.traffic-rule-row {
+  display: grid;
+  grid-template-columns: 140px minmax(160px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 /* 关键词模式从后端列表点选，避免手动输入造成队列为空。 */
 .traffic-keyword-picker {
   display: grid;
@@ -4717,6 +4729,11 @@ input[type='checkbox'] {
   color: var(--workbench-amber);
 }
 
+.traffic-target-row.status-skipped em {
+  background: var(--workbench-panel-soft);
+  color: var(--workbench-muted);
+}
+
 .traffic-upload-button {
   position: relative;
   overflow: hidden;
@@ -4757,6 +4774,10 @@ input[type='checkbox'] {
   }
 
   .traffic-target-row {
+    grid-template-columns: 1fr;
+  }
+
+  .traffic-rule-row {
     grid-template-columns: 1fr;
   }
 

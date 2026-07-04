@@ -3813,6 +3813,7 @@ def test_traffic_build_targets_from_competitor_contents(tmp_path: Path) -> None:
     import_for_task(str(task["id"]))
     with database.connect() as conn:
         conn.execute("UPDATE user_accounts SET competitor_status = '竞品' WHERE platform_user_id = 'creator-1'")
+        conn.execute("UPDATE contents SET comment_count = 6 WHERE content_id = '10001'")
     traffic_workbench.update_settings(
         {
             "traffic_per_run_limit": 7,
@@ -3849,6 +3850,25 @@ def test_traffic_build_targets_from_competitor_contents(tmp_path: Path) -> None:
     refreshed = traffic_workbench.get_campaign(int(campaign["id"]))
     assert refreshed["per_run_limit"] == 9
     assert refreshed["comment_templates"] == ["新文案"]
+
+    traffic_workbench.update_settings({"traffic_author_block_keywords": ["AI客服竞品号"]})
+    blocked_campaign = traffic_workbench.create_campaign(TrafficCampaignCreate(name="屏蔽规则", mode="targeted", source_type="competitor"))
+    blocked = traffic_workbench.build_targets(int(blocked_campaign["id"]), limit=10)
+    assert blocked["created"] == 0
+    assert blocked["skipped"] == 1
+
+    traffic_workbench.update_settings(
+        {
+            "traffic_author_block_keywords": [],
+            "traffic_only_active_video": True,
+            "traffic_active_comment_min": 5,
+            "traffic_match_rules": [{"field": "author", "keyword": "AI客服竞品号"}],
+        }
+    )
+    matched_campaign = traffic_workbench.create_campaign(TrafficCampaignCreate(name="命中规则", mode="targeted", source_type="competitor"))
+    matched = traffic_workbench.build_targets(int(matched_campaign["id"]), limit=10)
+    assert matched["created"] == 1
+    assert matched["skipped"] == 0
 
 
 def test_traffic_keywords_api_lists_douyin_content_keywords(tmp_path: Path) -> None:

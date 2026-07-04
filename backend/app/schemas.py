@@ -109,6 +109,12 @@ class TrafficCampaignCreate(BaseModel):
     stay_seconds_max: float | None = Field(default=None, ge=0, le=300)
     action_interval_seconds_min: float | None = Field(default=None, ge=0, le=60)
     action_interval_seconds_max: float | None = Field(default=None, ge=0, le=120)
+    only_active_video: bool | None = None
+    active_comment_min: int | None = Field(default=None, ge=0, le=100000)
+    video_block_keywords: list[str] | None = None
+    author_block_keywords: list[str] | None = None
+    rule_relation: Literal["and", "or"] | None = None
+    match_rules: list[dict[str, Any]] | None = None
 
 
 class TrafficTargetBuild(BaseModel):

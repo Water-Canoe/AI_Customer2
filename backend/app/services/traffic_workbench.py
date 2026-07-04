@@ -28,7 +28,14 @@ TRAFFIC_SETTING_KEYS = (
     "traffic_action_follow",
     "traffic_action_comment",
     "traffic_comment_templates",
+    "traffic_only_active_video",
+    "traffic_active_comment_min",
+    "traffic_video_block_keywords",
+    "traffic_author_block_keywords",
+    "traffic_rule_relation",
+    "traffic_match_rules",
 )
+RULE_FIELDS = {"author", "title", "keyword"}
 RUNNING_TRAFFIC_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 
 
@@ -38,9 +45,15 @@ def get_settings() -> dict[str, Any]:
     values["traffic_action_like"] = values.get("traffic_action_like", "true") == "true"
     values["traffic_action_follow"] = values.get("traffic_action_follow", "false") == "true"
     values["traffic_action_comment"] = values.get("traffic_action_comment", "true") == "true"
+    values["traffic_only_active_video"] = values.get("traffic_only_active_video", "false") == "true"
     values["traffic_comment_templates"] = _json_list(values.get("traffic_comment_templates"), ["想了解一下，方便看下主页吗？"])
+    values["traffic_video_block_keywords"] = _text_list(_json_list(values.get("traffic_video_block_keywords"), []))
+    values["traffic_author_block_keywords"] = _text_list(_json_list(values.get("traffic_author_block_keywords"), []))
+    values["traffic_rule_relation"] = values.get("traffic_rule_relation") if values.get("traffic_rule_relation") in {"and", "or"} else "or"
+    values["traffic_match_rules"] = _normalize_rules(_json_list(values.get("traffic_match_rules"), []))
     for key in ("traffic_per_run_limit", "traffic_daily_limit"):
         values[key] = _safe_int(values.get(key), 20 if key == "traffic_per_run_limit" else 100, 1, 500)
+    values["traffic_active_comment_min"] = _safe_int(values.get("traffic_active_comment_min"), 5, 0, 100000)
     for key in (
         "traffic_stay_seconds_min",
         "traffic_stay_seconds_max",
@@ -58,7 +71,13 @@ def update_settings(values: dict[str, Any]) -> dict[str, Any]:
                 continue
             value = values[key]
             if key == "traffic_comment_templates":
-                value = json.dumps([str(item).strip() for item in value if str(item).strip()], ensure_ascii=False)
+                value = json.dumps(_text_list(value), ensure_ascii=False)
+            elif key in {"traffic_video_block_keywords", "traffic_author_block_keywords"}:
+                value = json.dumps(_text_list(value), ensure_ascii=False)
+            elif key == "traffic_match_rules":
+                value = json.dumps(_normalize_rules(value), ensure_ascii=False)
+            elif key == "traffic_rule_relation":
+                value = value if value in {"and", "or"} else "or"
             elif isinstance(value, bool):
                 value = "true" if value else "false"
             database.set_setting(conn, key, value)
@@ -134,6 +153,7 @@ def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
     )
     per_run_limit = _safe_int(payload.per_run_limit if payload.per_run_limit is not None else settings["traffic_per_run_limit"], 20, 1, 100)
     daily_limit = _safe_int(payload.daily_limit if payload.daily_limit is not None else settings["traffic_daily_limit"], 100, 1, 500)
+    rule_config = _rule_config_from_payload(payload, settings)
     name = payload.name.strip() or ("随机引流" if payload.mode == "random" else f"定向引流-{source_type}")
     with database.connect() as conn:
         cur = conn.execute(
@@ -141,9 +161,9 @@ def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
             INSERT INTO traffic_campaigns(
                 name, platform, mode, source_type, keyword, action_like, action_follow, action_comment, action_image,
                 comment_templates, image_asset_ids, per_run_limit, daily_limit,
-                stay_seconds_min, stay_seconds_max, action_interval_seconds_min, action_interval_seconds_max
+                stay_seconds_min, stay_seconds_max, action_interval_seconds_min, action_interval_seconds_max, rule_config
             )
-            VALUES(?, 'dy', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, 'dy', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 name,
@@ -162,6 +182,7 @@ def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
                 stay_max,
                 interval_min,
                 interval_max,
+                json.dumps(rule_config, ensure_ascii=False),
             ),
         )
         campaign_id = int(cur.lastrowid)
@@ -183,6 +204,7 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
     if campaign["source_type"] == "search_keyword":
         return {"created": 0, "skipped": 0, "message": "搜索关键词引流在运行时从搜索结果写入目标"}
     safe_limit = max(1, min(int(limit or 50), 500))
+    rule_config = _rule_config_from_settings(get_settings())
     with database.connect() as conn:
         if campaign["source_type"] == "competitor":
             rows = conn.execute(
@@ -222,6 +244,10 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
         created = 0
         skipped = 0
         for row in rows:
+            allowed, _reason = _target_allowed(database.row_to_dict(row) or {}, rule_config)
+            if not allowed:
+                skipped += 1
+                continue
             target_key = str(row["content_id"] or row["content_url"] or row["id"])
             title = _join_text(row["title"], row["description"])
             cur = conn.execute(
@@ -472,6 +498,7 @@ def _campaign_dict(row: Any) -> dict[str, Any]:
     item["action_image"] = bool(item.get("action_image"))
     item["comment_templates"] = _json_list(item.get("comment_templates"), [])
     item["image_asset_ids"] = [int(value) for value in _json_list(item.get("image_asset_ids"), []) if str(value).isdigit()]
+    item["rule_config"] = _json_dict(item.get("rule_config"))
     return item
 
 
@@ -512,6 +539,7 @@ def _sync_campaign_runtime_settings(campaign_id: int) -> None:
     templates = _template_list(settings["traffic_comment_templates"])
     stay_min, stay_max = _ordered_pair(settings["traffic_stay_seconds_min"], settings["traffic_stay_seconds_max"])
     interval_min, interval_max = _ordered_pair(settings["traffic_action_interval_seconds_min"], settings["traffic_action_interval_seconds_max"])
+    rule_config = _rule_config_from_settings(settings)
     with database.connect() as conn:
         row = conn.execute("SELECT action_comment FROM traffic_campaigns WHERE id = ?", (campaign_id,)).fetchone()
         if row and row["action_comment"] and not templates:
@@ -521,7 +549,7 @@ def _sync_campaign_runtime_settings(campaign_id: int) -> None:
             UPDATE traffic_campaigns
             SET action_like = ?, action_follow = ?, comment_templates = ?,
                 per_run_limit = ?, daily_limit = ?, stay_seconds_min = ?, stay_seconds_max = ?,
-                action_interval_seconds_min = ?, action_interval_seconds_max = ?,
+                action_interval_seconds_min = ?, action_interval_seconds_max = ?, rule_config = ?,
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
             """,
@@ -535,9 +563,79 @@ def _sync_campaign_runtime_settings(campaign_id: int) -> None:
                 stay_max,
                 interval_min,
                 interval_max,
+                json.dumps(rule_config, ensure_ascii=False),
                 campaign_id,
             ),
         )
+
+
+def _rule_config_from_payload(payload: TrafficCampaignCreate, settings: dict[str, Any]) -> dict[str, Any]:
+    # 引流规则保持扁平结构；当前计划层级不需要递归规则组。
+    config = _rule_config_from_settings(settings)
+    if payload.only_active_video is not None:
+        config["only_active_video"] = bool(payload.only_active_video)
+    if payload.active_comment_min is not None:
+        config["active_comment_min"] = _safe_int(payload.active_comment_min, 5, 0, 100000)
+    if payload.video_block_keywords is not None:
+        config["video_block_keywords"] = _text_list(payload.video_block_keywords)
+    if payload.author_block_keywords is not None:
+        config["author_block_keywords"] = _text_list(payload.author_block_keywords)
+    if payload.rule_relation is not None:
+        config["rule_relation"] = payload.rule_relation if payload.rule_relation in {"and", "or"} else "or"
+    if payload.match_rules is not None:
+        config["match_rules"] = _normalize_rules(payload.match_rules)
+    return config
+
+
+def _rule_config_from_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "only_active_video": bool(settings.get("traffic_only_active_video")),
+        "active_comment_min": _safe_int(settings.get("traffic_active_comment_min"), 5, 0, 100000),
+        "video_block_keywords": _text_list(settings.get("traffic_video_block_keywords")),
+        "author_block_keywords": _text_list(settings.get("traffic_author_block_keywords")),
+        "rule_relation": settings.get("traffic_rule_relation") if settings.get("traffic_rule_relation") in {"and", "or"} else "or",
+        "match_rules": _normalize_rules(settings.get("traffic_match_rules")),
+    }
+
+
+def _target_allowed(target: dict[str, Any], config: dict[str, Any]) -> tuple[bool, str]:
+    author = _lower_text(target.get("author_name"))
+    title = _lower_text(_join_text(target.get("title"), target.get("description"), target.get("content_url")))
+    keyword = _lower_text(_join_text(target.get("keyword"), target.get("source_keyword")))
+    if _contains_any(author, config.get("author_block_keywords")):
+        return False, "作者命中屏蔽词"
+    if _contains_any(title, config.get("video_block_keywords")):
+        return False, "视频命中屏蔽词"
+    comment_count = target.get("comment_count")
+    if config.get("only_active_video") and comment_count is not None:
+        if _safe_int(comment_count, 0, 0, 100000000) < _safe_int(config.get("active_comment_min"), 5, 0, 100000):
+            return False, "视频评论数不足"
+    rules = _normalize_rules(config.get("match_rules"))
+    if not rules:
+        return True, ""
+    matches = [_rule_matches(rule, author, title, keyword) for rule in rules]
+    matched = all(matches) if config.get("rule_relation") == "and" else any(matches)
+    return (True, "") if matched else (False, "未命中引流规则")
+
+
+def _rule_matches(rule: dict[str, str], author: str, title: str, keyword: str) -> bool:
+    field = rule.get("field")
+    value = _lower_text(rule.get("keyword"))
+    if not value:
+        return False
+    if field == "author":
+        return value in author
+    if field == "keyword":
+        return value in keyword
+    return value in title
+
+
+def _contains_any(text: str, keywords: Any) -> bool:
+    return any(_lower_text(keyword) in text for keyword in _text_list(keywords))
+
+
+def _lower_text(value: Any) -> str:
+    return str(value or "").strip().lower()
 
 
 def _setting_or_payload(value: Any, default: Any) -> Any:
@@ -548,6 +646,27 @@ def _template_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _text_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _normalize_rules(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    rules: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        field = str(item.get("field") or "title")
+        keyword = str(item.get("keyword") or "").strip()
+        if field not in RULE_FIELDS or not keyword:
+            continue
+        rules.append({"field": field, "keyword": keyword})
+    return rules
 
 
 def _decode_data_url(data_url: str) -> tuple[str, bytes]:

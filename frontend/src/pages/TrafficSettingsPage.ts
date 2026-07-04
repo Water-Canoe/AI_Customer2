@@ -19,6 +19,12 @@ const defaultSettings: Dict = {
   traffic_action_follow: false,
   traffic_action_comment: true,
   traffic_comment_templates_text: '想了解一下，方便看下主页吗？',
+  traffic_only_active_video: false,
+  traffic_active_comment_min: 5,
+  traffic_video_block_keywords_text: '',
+  traffic_author_block_keywords_text: '',
+  traffic_rule_relation: 'or',
+  traffic_match_rules: [],
 }
 
 export default defineComponent({
@@ -116,6 +122,12 @@ export default defineComponent({
           traffic_action_follow: Boolean(local.traffic_action_follow),
           traffic_action_comment: Boolean(local.traffic_action_comment),
           traffic_comment_templates: splitTemplates(String(local.traffic_comment_templates_text || '')),
+          traffic_only_active_video: Boolean(local.traffic_only_active_video),
+          traffic_active_comment_min: Number(local.traffic_active_comment_min || 0),
+          traffic_video_block_keywords: splitTemplates(String(local.traffic_video_block_keywords_text || '')),
+          traffic_author_block_keywords: splitTemplates(String(local.traffic_author_block_keywords_text || '')),
+          traffic_rule_relation: local.traffic_rule_relation === 'and' ? 'and' : 'or',
+          traffic_match_rules: normalizeRules(local.traffic_match_rules),
         }
         const { data } = await api.put('/traffic/settings', { values: payload })
         applySettings(local, data)
@@ -168,11 +180,15 @@ export default defineComponent({
             h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
           ]),
         ]),
+        h('section', { class: 'traffic-panel' }, [
+          sectionTitle({ title: '规则过滤', subtitle: '规则命中后才会进入队列或执行', icon: Check, tone: 'green', compact: true }),
+          renderRuleForm(local),
+        ]),
       ]),
       h('section', { class: 'traffic-panel' }, [
         sectionTitle({
           title: '文案与图片素材',
-          subtitle: '一行一条文案，每次发送时随机选择；V1 只自动发送文本评论',
+          subtitle: '一行一条文案，每次发送时随机选择；图片素材在计划中选择',
           icon: Picture,
           tone: 'blue',
           compact: true,
@@ -207,7 +223,16 @@ export default defineComponent({
 
 function applySettings(local: Dict, data: Dict) {
   const templates = Array.isArray(data.traffic_comment_templates) ? data.traffic_comment_templates : []
-  Object.assign(local, { ...defaultSettings, ...data, traffic_comment_templates_text: templates.join('\n') || defaultSettings.traffic_comment_templates_text })
+  const videoBlocks = Array.isArray(data.traffic_video_block_keywords) ? data.traffic_video_block_keywords : []
+  const authorBlocks = Array.isArray(data.traffic_author_block_keywords) ? data.traffic_author_block_keywords : []
+  Object.assign(local, {
+    ...defaultSettings,
+    ...data,
+    traffic_comment_templates_text: templates.join('\n') || defaultSettings.traffic_comment_templates_text,
+    traffic_video_block_keywords_text: videoBlocks.join('\n'),
+    traffic_author_block_keywords_text: authorBlocks.join('\n'),
+    traffic_match_rules: normalizeRules(data.traffic_match_rules),
+  })
 }
 
 function renderSettingsForm(local: Dict) {
@@ -219,6 +244,53 @@ function renderSettingsForm(local: Dict) {
     field('默认辅助动作', h('div', { class: 'traffic-checks' }, [
       check(local, 'traffic_action_like', '点赞'),
       check(local, 'traffic_action_follow', '关注作者'),
+    ])),
+  ])
+}
+
+function renderRuleForm(local: Dict) {
+  // 规则保持扁平编辑；递归规则组等到单计划需要多套话术时再加。
+  const rules = ensureRules(local)
+  return h('div', { class: 'traffic-form' }, [
+    field('活跃视频', h('div', { class: 'traffic-inline' }, [
+      check(local, 'traffic_only_active_video', '只执行活跃视频'),
+      numberInput(local, 'traffic_active_comment_min', 0, 100000),
+    ])),
+    field('作者屏蔽词', h('textarea', {
+      value: local.traffic_author_block_keywords_text,
+      rows: 3,
+      onInput: (event: Event) => local.traffic_author_block_keywords_text = (event.target as HTMLTextAreaElement).value,
+    })),
+    field('视频屏蔽词', h('textarea', {
+      value: local.traffic_video_block_keywords_text,
+      rows: 3,
+      onInput: (event: Event) => local.traffic_video_block_keywords_text = (event.target as HTMLTextAreaElement).value,
+    })),
+    field('命中关系', h('select', {
+      value: local.traffic_rule_relation,
+      onChange: (event: Event) => local.traffic_rule_relation = (event.target as HTMLSelectElement).value,
+    }, [
+      h('option', { value: 'or' }, '任一命中'),
+      h('option', { value: 'and' }, '全部命中'),
+    ])),
+    field('命中规则', h('div', { class: 'traffic-rule-list' }, [
+      ...rules.map((rule: Dict, index: number) => h('div', { class: 'traffic-rule-row' }, [
+        h('select', {
+          value: rule.field || 'title',
+          onChange: (event: Event) => rule.field = (event.target as HTMLSelectElement).value,
+        }, [
+          h('option', { value: 'title' }, '视频内容'),
+          h('option', { value: 'author' }, '作者昵称'),
+          h('option', { value: 'keyword' }, '来源关键词'),
+        ]),
+        h('input', {
+          value: rule.keyword || '',
+          placeholder: '关键词',
+          onInput: (event: Event) => rule.keyword = (event.target as HTMLInputElement).value,
+        }),
+        h('button', { class: 'secondary-action danger-action', type: 'button', onClick: () => removeRule(local, index) }, '删除'),
+      ])),
+      h('button', { class: 'secondary-action', type: 'button', onClick: () => addRule(local) }, '添加条件'),
     ])),
   ])
 }
@@ -272,6 +344,29 @@ function check(local: Dict, key: string, label: string) {
 
 function splitTemplates(value: string) {
   return value.split(/\r?\n/).map(item => item.trim()).filter(Boolean)
+}
+
+function ensureRules(local: Dict) {
+  if (!Array.isArray(local.traffic_match_rules)) local.traffic_match_rules = []
+  return local.traffic_match_rules
+}
+
+function addRule(local: Dict) {
+  local.traffic_match_rules = [...ensureRules(local), { field: 'title', keyword: '' }]
+}
+
+function removeRule(local: Dict, index: number) {
+  local.traffic_match_rules = ensureRules(local).filter((_: Dict, itemIndex: number) => itemIndex !== index)
+}
+
+function normalizeRules(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item: any) => ({
+      field: ['author', 'title', 'keyword'].includes(item?.field) ? item.field : 'title',
+      keyword: String(item?.keyword || '').trim(),
+    }))
+    .filter(item => item.keyword)
 }
 
 function readFileAsDataUrl(file: File) {
