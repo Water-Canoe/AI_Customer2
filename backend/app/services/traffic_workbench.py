@@ -129,13 +129,7 @@ def create_run(plan_id: str) -> dict[str, Any]:
     _validate_run_plan(plan)
     run_id = uuid.uuid4().hex
     with database.connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO traffic_runs(id, plan_id, status)
-            VALUES(?, ?, 'queued')
-            """,
-            (run_id, plan_id),
-        )
+        _insert_run(conn, run_id, plan_id)
         _insert_log(
             conn,
             run_id,
@@ -149,6 +143,35 @@ def create_run(plan_id: str) -> dict[str, Any]:
     run = get_run(run_id)
     assert run is not None
     return run
+
+
+def _insert_run(conn: Any, run_id: str, plan_id: str) -> None:
+    columns = {"id": run_id, "plan_id": plan_id, "status": "queued"}
+    table_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(traffic_runs)").fetchall()}
+    if "campaign_id" in table_columns:
+        # 早期原型表保留了 NOT NULL 旧列；写入占位值即可，不参与新版逻辑。
+        columns.update({"campaign_id": _legacy_campaign_id(conn), "counts": "{}", "error": ""})
+    active_columns = [key for key in columns if key in table_columns]
+    placeholders = ", ".join("?" for _ in active_columns)
+    conn.execute(
+        f"INSERT INTO traffic_runs({', '.join(active_columns)}) VALUES({placeholders})",
+        [columns[key] for key in active_columns],
+    )
+
+
+def _legacy_campaign_id(conn: Any) -> int:
+    table = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'traffic_campaigns'").fetchone()
+    if not table:
+        return 0
+    row = conn.execute("SELECT id FROM traffic_campaigns WHERE name = ? LIMIT 1", ("__traffic_plan_bridge__",)).fetchone()
+    if row:
+        return int(row["id"])
+    return int(conn.execute(
+        """
+        INSERT INTO traffic_campaigns(name, mode, source_type, keyword, action_like, action_follow, action_comment)
+        VALUES('__traffic_plan_bridge__', 'random_feed', 'compat', '', 0, 0, 0)
+        """
+    ).lastrowid)
 
 
 def list_runs() -> list[dict[str, Any]]:

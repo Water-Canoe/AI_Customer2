@@ -234,7 +234,7 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 后端新增 `/api/traffic/*` 接口和 `traffic_*` 数据表，覆盖计划、批次、视频项、用户可读动作日志、操作记录、文案库、图片库和防重复账本。引流授权独立于拓客授权，复用同一个 Sealos 授权服务和弹窗交互，但使用 `traffic` 业务字段：`traffic_license_code`、`traffic_device_code`、`traffic_license_last_status` 等；启动引流批次前会调用 `ensure_authorized_for("traffic")`，不会占用拓客工作台的 `lead` 授权码。
 
-如果本地库曾运行过早期引流原型，`init_db()` 会为旧 `traffic_runs` 表补齐 `plan_id`、统计列和停机原因列，避免执行监控页因为旧表缺列返回 500。引流分栏页面必须使用 `SplitPane` 的默认 slot 作为主区、`side` slot 作为右栏，否则主区会消失、右栏被压成竖排。
+如果本地库曾运行过早期引流原型，`init_db()` 会为旧 `traffic_runs` 表补齐 `plan_id`、统计列和停机原因列，避免执行监控页因为旧表缺列返回 500。旧原型表还可能保留 `campaign_id NOT NULL` 和 `traffic_campaigns` 外键，新版创建批次会自动写入内部桥接 campaign，满足旧约束但不参与新版业务。引流分栏页面必须使用 `SplitPane` 的默认 slot 作为主区、`side` slot 作为右栏，否则主区会消失、右栏被压成竖排。
 
 引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `backend/runtime/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。
 

@@ -628,16 +628,32 @@ def test_traffic_runs_legacy_table_is_migrated(tmp_path: Path) -> None:
         # 旧引流原型表缺少新版监控页需要的 plan_id 和统计列。
         conn.execute(
             """
+            CREATE TABLE traffic_campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                keyword TEXT NOT NULL DEFAULT '',
+                action_like INTEGER NOT NULL DEFAULT 1,
+                action_follow INTEGER NOT NULL DEFAULT 0,
+                action_comment INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE traffic_runs (
                 id TEXT PRIMARY KEY,
-                campaign_id INTEGER,
+                campaign_id INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'queued',
-                created_at TEXT
+                created_at TEXT,
+                FOREIGN KEY(campaign_id) REFERENCES traffic_campaigns(id) ON DELETE CASCADE
             )
             """
         )
 
     from app import database
+    from app.schemas import TrafficPlanCreate
     from app.services import traffic_workbench
 
     database.init_db()
@@ -646,6 +662,9 @@ def test_traffic_runs_legacy_table_is_migrated(tmp_path: Path) -> None:
 
     assert {"plan_id", "browsed_count", "stop_requested"} <= columns
     assert traffic_workbench.list_runs() == []
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="旧表启动", platform="dy"))
+    run = traffic_workbench.create_run(plan["id"])
+    assert run["status"] == "queued"
 
 
 def test_traffic_browse_only_plan_can_start_and_logs_user_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
