@@ -879,6 +879,52 @@ def test_traffic_random_feed_jingxuan_clicks_page_video_not_project_video(tmp_pa
     assert "项目库" not in str(logs)
 
 
+def test_traffic_random_feed_clicks_visible_card_without_video_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    class FakeMouse:
+        clicked = False
+
+        def click(self, _x: float, _y: float) -> None:
+            self.clicked = True
+
+        def wheel(self, _x: int, _y: int) -> None:
+            return None
+
+    class FakePage:
+        url = "https://www.douyin.com/jingxuan"
+        mouse = FakeMouse()
+
+        def evaluate(self, script: str, arg: object = None) -> object:
+            if "loginPrompt" in script:
+                return {"url": self.url, "title": "抖音", "loginPrompt": False, "verifyPrompt": False, "activeVideoId": "card-video"}
+            if "video_id" in script:
+                return {
+                    "video_id": "card-video" if self.mouse.clicked else "",
+                    "video_url": "https://www.douyin.com/video/card-video" if self.mouse.clicked else self.url,
+                    "author_id": "",
+                    "author_name": "",
+                    "video_desc": "",
+                    "like_count": None,
+                    "comment_count": None,
+                }
+            if "backgroundImage" in script:
+                return [{"href": "", "kind": "card", "text": "视频封面", "x": 640, "y": 420}]
+            return []
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: None)
+
+    page = FakePage()
+    result = traffic_workbench._navigate_to_executable_video(page, "run-1", "random_feed")
+
+    assert result == "page"
+    assert page.mouse.clicked is True
+
+
 def test_traffic_jingxuan_page_jumps_to_project_video_for_targeted_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database

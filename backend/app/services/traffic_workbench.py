@@ -682,7 +682,7 @@ def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, vide
     if _read_active_video(page, video_cache)["video_id"]:
         return "active"
     if source_mode == "random_feed":
-        if _open_random_visible_video(page, run_id):
+        if _open_random_visible_video(page, run_id, video_cache):
             return "page"
         raise TrafficStop(
             "随机推荐流没有找到可点击的视频，任务已停止。",
@@ -715,27 +715,29 @@ def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, vide
     return "page"
 
 
-def _open_random_visible_video(page: Any, run_id: str) -> bool:
-    for _ in range(3):
-        candidates = _visible_video_links(page)
-        if candidates:
-            chosen = random.choice(candidates[:8])
-            _click_video_candidate(page, run_id, chosen, "已从抖音首页随机点击一个视频。")
-            return True
+def _open_random_visible_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None) -> bool:
+    for _ in range(4):
+        candidates = _visible_video_candidates(page)
+        random.shuffle(candidates)
+        for candidate in candidates[:6]:
+            if _click_video_candidate(page, run_id, candidate, "已从抖音首页随机点击一个视频。") and (
+                _read_active_video(page, video_cache)["video_id"] or _is_douyin_video_url(page.url)
+            ):
+                return True
         page.mouse.wheel(0, random.randint(500, 1100))
         page.wait_for_timeout(1200)
     return False
 
 
-def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], message: str) -> None:
+def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], message: str) -> bool:
     # ponytail: 随机引流必须来自当前抖音页面，不能退回项目库视频。
-    url = str(candidate["href"])
+    url = str(candidate.get("href") or page.url)
     _append_log(run_id, "info", "probe", message, "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": url})
     clicked = False
     if isinstance(candidate.get("x"), (int, float)) and isinstance(candidate.get("y"), (int, float)):
         page.mouse.click(float(candidate["x"]), float(candidate["y"]))
         clicked = True
-    if not clicked:
+    if not clicked and candidate.get("href"):
         clicked = page.evaluate(
             """
             href => {
@@ -753,6 +755,7 @@ def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], me
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
     page.wait_for_timeout(3000)
     _ensure_page_ready(page)
+    return True
 
 
 def _next_video(page: Any, run_id: str, previous_video_id: str, video_cache: dict[str, Any] | None, use_project_queue: bool, cooldown_hours: int, project_author_keys: set[str] | None = None) -> bool:
@@ -861,6 +864,59 @@ def _visible_video_links(page: Any) -> list[dict[str, Any]]:
             })
             .filter(item => item.href && item.visible)
             .slice(0, 20);
+        }
+        """
+    ))
+
+
+def _visible_video_candidates(page: Any) -> list[dict[str, Any]]:
+    return list(page.evaluate(
+        """
+        () => {
+          const normalize = value => (value || '').replace(/\\s+/g, ' ').trim();
+          const isVisible = (node, rect) => {
+            const style = window.getComputedStyle(node);
+            const centerX = rect.left + rect.width / 2;
+            const leftGuard = Math.min(260, Math.max(180, window.innerWidth * 0.16));
+            return rect.width >= 120 && rect.height >= 90
+              && rect.bottom > 80 && rect.top < window.innerHeight - 20
+              && rect.right > 80 && rect.left < window.innerWidth - 20
+              && centerX > leftGuard
+              && rect.width < window.innerWidth * 0.95
+              && rect.height < window.innerHeight * 0.95
+              && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          };
+          const asItem = (node, kind) => {
+            const rect = node.getBoundingClientRect();
+            if (!isVisible(node, rect)) return null;
+            const link = node.closest('a[href*="/video/"], a[href*="/note/"]') || node.querySelector?.('a[href*="/video/"], a[href*="/note/"]');
+            return {
+              href: link?.href || '',
+              kind,
+              text: normalize(node.textContent).slice(0, 160),
+              x: Math.min(Math.max(rect.left + rect.width / 2, 24), window.innerWidth - 24),
+              y: Math.min(Math.max(rect.top + rect.height / 2, 24), window.innerHeight - 24),
+            };
+          };
+          const items = [
+            ...Array.from(document.querySelectorAll('a[href*="/video/"], a[href*="/note/"]')).map(node => asItem(node, 'link')),
+            ...Array.from(document.querySelectorAll('article, li, section, div')).map(node => {
+              const style = window.getComputedStyle(node);
+              const mediaCount = node.querySelectorAll('video, img, picture, canvas').length + (style.backgroundImage !== 'none' ? 1 : 0);
+              if (mediaCount < 1 || mediaCount > 3) return null;
+              return asItem(node, 'card');
+            }),
+          ].filter(Boolean);
+          const seen = new Set();
+          return items
+            .filter(item => {
+              const key = `${Math.round(item.x)}:${Math.round(item.y)}:${item.href}`;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            })
+            .sort((a, b) => Number(Boolean(b.href)) - Number(Boolean(a.href)))
+            .slice(0, 30);
         }
         """
     ))
