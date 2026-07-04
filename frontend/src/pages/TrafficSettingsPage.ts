@@ -148,7 +148,7 @@ export default defineComponent({
           renderLicenseForm(license.value, licenseCode.value, checking.value, value => licenseCode.value = value, saveLicense, checkLicense, copyDeviceCode),
         ]),
         h('section', { class: 'traffic-panel' }, [
-          sectionTitle({ title: '执行参数', subtitle: '计划创建时默认带入这些参数', icon: Setting, tone: 'teal', compact: true }),
+          sectionTitle({ title: '执行参数', subtitle: '定向引流和随机引流启动批次时统一使用', icon: Setting, tone: 'teal', compact: true }),
           renderSettingsForm(local),
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', disabled: saving.value, onClick: saveSettings }, [h(Check, { class: 'inline-icon' }), saving.value ? '保存中' : '保存设置']),
@@ -158,17 +158,17 @@ export default defineComponent({
       h('section', { class: 'traffic-panel' }, [
         sectionTitle({
           title: '文案与图片素材',
-          subtitle: '图片素材可关联计划；V1 执行器只自动发送文本评论',
+          subtitle: '一行一条文案，每次发送时随机选择；V1 只自动发送文本评论',
           icon: Picture,
           tone: 'blue',
           compact: true,
           aside: renderUploadButton(uploading.value, uploadAsset),
         }),
         h('div', { class: 'traffic-copy-grid' }, [
-          field('引流文案', h('textarea', {
+          field('多文案', h('textarea', {
             value: local.traffic_comment_templates_text,
             rows: 6,
-            placeholder: '一行一条，计划执行时随机选择',
+            placeholder: '一行一条，每次发送时随机选择',
             onInput: (event: Event) => local.traffic_comment_templates_text = (event.target as HTMLTextAreaElement).value,
           })),
           renderAssets(assets.value),

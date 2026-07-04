@@ -3813,25 +3813,42 @@ def test_traffic_build_targets_from_competitor_contents(tmp_path: Path) -> None:
     import_for_task(str(task["id"]))
     with database.connect() as conn:
         conn.execute("UPDATE user_accounts SET competitor_status = '竞品' WHERE platform_user_id = 'creator-1'")
+    traffic_workbench.update_settings(
+        {
+            "traffic_per_run_limit": 7,
+            "traffic_daily_limit": 33,
+            "traffic_stay_seconds_min": 8,
+            "traffic_stay_seconds_max": 18,
+            "traffic_comment_templates": ["A {昵称}", "B {视频标题}"],
+        }
+    )
 
     campaign = traffic_workbench.create_campaign(
         TrafficCampaignCreate(
             name="竞品视频引流",
             mode="targeted",
             source_type="competitor",
-            comment_templates=["A {昵称}", "B {视频标题}"],
         )
     )
     result = traffic_workbench.build_targets(int(campaign["id"]), limit=10)
     targets = traffic_workbench.list_targets(int(campaign["id"]))
 
+    assert campaign["per_run_limit"] == 7
+    assert campaign["daily_limit"] == 33
+    assert campaign["comment_templates"] == ["A {昵称}", "B {视频标题}"]
     assert result["created"] == 1
     assert targets["total"] == 1
     row = targets["rows"][0]
     assert row["content_url"] == "https://douyin.example/video/10001"
     assert row["author_name"] == "AI客服竞品号"
-    assert row["selected_comment"].startswith(("A ", "B "))
+    assert row["selected_comment"] == ""
     assert row["status"] == "pending"
+
+    traffic_workbench.update_settings({"traffic_per_run_limit": 9, "traffic_comment_templates": ["新文案"]})
+    traffic_workbench._sync_campaign_runtime_settings(int(campaign["id"]))
+    refreshed = traffic_workbench.get_campaign(int(campaign["id"]))
+    assert refreshed["per_run_limit"] == 9
+    assert refreshed["comment_templates"] == ["新文案"]
 
 
 def test_traffic_settings_and_assets_are_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

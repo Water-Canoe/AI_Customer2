@@ -198,7 +198,7 @@ npm run dev
 4. 在数据表与总览树理解线索来源。
 5. 在 AI 分析工作台批量筛选并跟进。
 
-前端视觉 V1 采用“高密度中后台工作台”风格，不做营销页或大面积装饰。应用壳固定为左侧导航、顶部状态栏和可滚动主工作区：左侧入口收拢为“拓客工作台”和“引流工作台”两个折叠面板，拓客工作台承载任务管理、任务与日志、总览树、AI分析、私信工作台、数据表和设置，引流工作台先放置定向引流、随机引流的禁用入口，等待后续功能接入；顶部保留“运行任务 / AI待处理 / 待私信 / 失败待查”四个全局指标，用于快速判断当前是否有需要处理的队列；横向工作流和页面级说明条已移除，避免重复解释压掉主要操作区。主色使用青绿色，配合蓝色运行、绿色成功、橙色待处理、红色风险等状态色；卡片圆角控制在 8px 内，使用浅边框和轻阴影，让表格、队列和详情面板保持可扫描。
+前端视觉 V1 采用“高密度中后台工作台”风格，不做营销页或大面积装饰。应用壳固定为左侧导航、顶部状态栏和可滚动主工作区：左侧入口收拢为“拓客工作台”和“引流工作台”两个折叠面板，拓客工作台承载任务管理、任务与日志、总览树、AI分析、私信工作台、数据表和设置，引流工作台承载定向引流、随机引流和引流设置；顶部保留“运行任务 / AI待处理 / 待私信 / 失败待查”四个全局指标，用于快速判断当前是否有需要处理的队列；横向工作流和页面级说明条已移除，避免重复解释压掉主要操作区。主色使用青绿色，配合蓝色运行、绿色成功、橙色待处理、红色风险等状态色；卡片圆角控制在 8px 内，使用浅边框和轻阴影，让表格、队列和详情面板保持可扫描。
 
 核心页面继续沿用 Vue3 + Element Plus + 项目自定义 render function，不引入 React、Tailwind 或其它 UI 技术栈。任务页保留“模式卡片 -> 参数表单 -> 执行预览 -> 最近任务”的操作顺序。AI 分析页采用 KPI 卡片、分段 Tab、筛选工具栏、审核队列和右侧详情面板；危险操作使用红色轻量按钮，和批量分析主按钮区分。私信工作台采用关键词队列 + 客户表格的左右分栏，客户表格保留固定操作列，适合横向查看评论、视频和话术后立即推进状态。SplitPane 会把用户拖拽后的左右栏宽度保存到 `localStorage`，刷新后保留工作台布局。
 
@@ -232,13 +232,13 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 ## 引流工作台
 
-引流工作台 V1 只执行抖音链路，分为“定向引流”“随机引流”和“引流设置”三个页面。定向引流复用拓客工作台已经入库的 `contents` 和 `user_accounts`：竞品视频计划筛选 `competitor_status=竞品` 且有 `content_url` 的抖音内容；关键词视频计划筛选 `contents.source_keyword` 等于计划关键词的抖音内容。筛选结果写入 `traffic_targets`，并为每条目标预先生成一条本次要发送的文本评论。随机引流不预先生成队列，启动后由执行器在抖音推荐流页面边刷边写入目标记录。
+引流工作台 V1 只执行抖音链路，分为“定向引流”“随机引流”和“引流设置”三个页面。定向引流复用拓客工作台已经入库的 `contents` 和 `user_accounts`：竞品视频计划筛选 `competitor_status=竞品` 且有 `content_url` 的抖音内容；关键词视频计划筛选 `contents.source_keyword` 等于计划关键词的抖音内容。筛选结果写入 `traffic_targets`，文案不在队列生成时写死，而是在执行器每次真正发送评论前从“引流设置”的多文案中随机选择。随机引流不预先生成队列，启动后由执行器在抖音推荐流页面边刷边写入目标记录。
 
-引流数据独立落在项目业务库中：`traffic_campaigns` 保存计划、动作开关、文案、图片素材 ID、每轮/每日上限和随机等待参数；`traffic_targets` 保存具体视频、作者、关键词、选中的评论文案、状态、失败原因和最后执行时间；`traffic_runs` 保存批次状态、进程 ID、计数和错误；`traffic_action_events` 保存打开视频、点赞、关注、评论、发送、失败截图等事件；`traffic_assets` 保存上传图片素材的本地文件路径和元数据。图片素材 V1 可在设置页上传并关联到计划，但执行器当前只自动发送文本评论，不自动上传图片评论。
+引流数据独立落在项目业务库中：`traffic_campaigns` 保存计划来源和启动批次时同步过来的动作开关、文案、每轮/每日上限和随机等待参数；`traffic_targets` 保存具体视频、作者、关键词、状态、失败原因和最后执行时间；`traffic_runs` 保存批次状态、进程 ID、计数和错误；`traffic_action_events` 保存打开视频、点赞、关注、评论、发送、失败截图等事件；`traffic_assets` 保存上传图片素材的本地文件路径和元数据。图片素材 V1 在设置页管理，执行器当前只自动发送文本评论，不自动上传图片评论。
 
 后端接口统一挂在 `/api/traffic`：授权为 `GET/PUT/POST /license(/check)`，设置为 `GET/PUT /settings`，素材为 `GET/POST /assets`，计划为 `GET/POST /campaigns`，队列为 `POST /campaigns/{id}/targets/build` 和 `GET /campaigns/{id}/targets`，批次为 `POST /runs`、`GET /runs/{id}`、`POST /runs/{id}/cancel`。引流授权使用同一个 Sealos 授权服务 URL，但本地存储键和设备码前缀独立于拓客工作台：拓客设备码是 `AI-CUS-*`，引流设备码是 `AI-TRF-*`，校验请求会带 `business=traffic`。
 
-批次启动前会调用 `ensure_traffic_authorized()`，因此引流工作台必须先通过自己的授权码校验。执行器位于 `backend/app/traffic_executor.py`，由 `traffic_workbench.create_run()` 使用 `MediaCrawler/.venv/Scripts/python.exe` 启动；启动前复用现有 MediaCrawler CDP 浏览器配置和 `_ensure_cdp_browser_for_existing_mode()`，不额外创建一套浏览器依赖。执行器通过 Playwright CDP 连接浏览器，按计划随机停留、随机动作间隔、点赞、关注和文本评论；必要 selector 找不到、页面异常或执行失败时会把截图写到 `runtime/traffic_screenshots/` 并把批次标为失败。
+批次启动前会调用 `ensure_traffic_authorized()`，因此引流工作台必须先通过自己的授权码校验。启动批次时后端会把“引流设置”中的动作开关、多文案、每轮/每日上限、停留秒数和动作间隔同步到计划快照，旧计划不需要重建也能使用最新设置。执行器位于 `backend/app/traffic_executor.py`，由 `traffic_workbench.create_run()` 使用 `MediaCrawler/.venv/Scripts/python.exe` 启动；启动前复用现有 MediaCrawler CDP 浏览器配置和 `_ensure_cdp_browser_for_existing_mode()`，不额外创建一套浏览器依赖。执行器通过 Playwright CDP 连接浏览器，按设置随机停留、随机动作间隔、点赞、关注和文本评论；必要 selector 找不到、页面异常或执行失败时会把截图写到 `runtime/traffic_screenshots/` 并把批次标为失败。
 
 V1 不做代理池、多账号轮换、验证码绕过、平台风控绕过或自动处理平台安全提醒；遇到这些情况应停止批次并查看事件日志。随机等待和多文案只用于让批次表现不机械，不代表能规避平台规则。测试默认只覆盖计划、队列、授权、设置和素材接口，不启动真实 Playwright 执行器。
 

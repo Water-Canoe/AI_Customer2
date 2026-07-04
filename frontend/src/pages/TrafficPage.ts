@@ -12,26 +12,13 @@ export default defineComponent({
   setup() {
     const route = useRoute()
     const loading = ref(false)
-    const settingsApplied = ref(false)
     const dashboard = ref<Dict>({ summary: {}, campaigns: [], runs: [] })
-    const assets = ref<Dict[]>([])
     const targets = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 30 })
     const selectedCampaignId = ref<number | null>(null)
     const form = reactive<Dict>({
       name: '',
       source_type: 'competitor',
       keyword: '',
-      action_like: true,
-      action_follow: false,
-      action_comment: true,
-      image_asset_ids: [],
-      comment_templates_text: '想了解一下，方便看下主页吗？',
-      per_run_limit: 20,
-      daily_limit: 100,
-      stay_seconds_min: 6,
-      stay_seconds_max: 15,
-      action_interval_seconds_min: 1,
-      action_interval_seconds_max: 3,
     })
 
     const isRandom = computed(() => route.name === 'traffic-random')
@@ -41,18 +28,8 @@ export default defineComponent({
     async function loadAll() {
       loading.value = true
       try {
-        const [dashboardResponse, settingsResponse, assetsResponse] = await Promise.all([
-          api.get('/traffic/dashboard'),
-          api.get('/traffic/settings'),
-          api.get('/traffic/assets'),
-        ])
-        dashboard.value = dashboardResponse.data
-        assets.value = assetsResponse.data || []
-        if (!settingsApplied.value) {
-          // 设置页保存的是创建计划时的默认参数，不覆盖用户正在编辑的表单。
-          applyTrafficSettings(form, settingsResponse.data || {})
-          settingsApplied.value = true
-        }
+        const { data } = await api.get('/traffic/dashboard')
+        dashboard.value = data
         if (!selectedCampaignId.value && campaigns.value.length) selectedCampaignId.value = Number(campaigns.value[0].id)
         if (selectedCampaignId.value) await loadTargets()
       } finally {
@@ -73,17 +50,6 @@ export default defineComponent({
           mode: isRandom.value ? 'random' : 'targeted',
           source_type: isRandom.value ? 'random_feed' : form.source_type,
           keyword: form.keyword,
-          action_like: form.action_like,
-          action_follow: form.action_follow,
-          action_comment: form.action_comment,
-          comment_templates: splitTemplates(form.comment_templates_text),
-          image_asset_ids: selectedAssetIds(form.image_asset_ids),
-          per_run_limit: Number(form.per_run_limit || 20),
-          daily_limit: Number(form.daily_limit || 100),
-          stay_seconds_min: Number(form.stay_seconds_min || 6),
-          stay_seconds_max: Number(form.stay_seconds_max || 15),
-          action_interval_seconds_min: Number(form.action_interval_seconds_min || 1),
-          action_interval_seconds_max: Number(form.action_interval_seconds_max || 3),
         }
         const { data } = await api.post('/traffic/campaigns', payload)
         selectedCampaignId.value = Number(data.id)
@@ -147,8 +113,8 @@ export default defineComponent({
       ]),
       h('div', { class: 'traffic-grid' }, [
         h('section', { class: 'traffic-panel' }, [
-          sectionTitle({ title: '创建计划', subtitle: 'V1 只支持抖音，启动后自动跑完整批次', icon: Promotion, tone: 'teal', compact: true }),
-          renderCampaignForm(form, isRandom.value, assets.value),
+          sectionTitle({ title: '创建计划', subtitle: '动作、文案、限额和停留时间统一在引流设置中配置', icon: Promotion, tone: 'teal', compact: true }),
+          renderCampaignForm(form, isRandom.value),
           h('div', { class: 'action-row' }, [
             h('button', { class: 'primary-action', onClick: createCampaign }, [h(Promotion, { class: 'inline-icon' }), '创建计划']),
             !isRandom.value ? h('button', { class: 'secondary-action', disabled: !selectedCampaignId.value, onClick: buildTargets }, '生成队列') : null,
@@ -174,7 +140,7 @@ export default defineComponent({
   }
 })
 
-function renderCampaignForm(form: Dict, isRandom: boolean, assets: Dict[]) {
+function renderCampaignForm(form: Dict, isRandom: boolean) {
   return h('div', { class: 'traffic-form' }, [
     field('计划名称', h('input', { value: form.name, placeholder: isRandom ? '随机引流计划' : '竞品视频引流计划', onInput: (event: Event) => form.name = (event.target as HTMLInputElement).value })),
     !isRandom ? field('来源', h('select', { value: form.source_type, onChange: (event: Event) => form.source_type = (event.target as HTMLSelectElement).value }, [
@@ -182,24 +148,6 @@ function renderCampaignForm(form: Dict, isRandom: boolean, assets: Dict[]) {
       h('option', { value: 'keyword' }, '关键词视频'),
     ])) : null,
     !isRandom && form.source_type === 'keyword' ? field('关键词', h('input', { value: form.keyword, placeholder: '必须与拓客采集入库关键词一致', onInput: (event: Event) => form.keyword = (event.target as HTMLInputElement).value })) : null,
-    field('执行动作', h('div', { class: 'traffic-checks' }, [
-      check(form, 'action_like', '点赞'),
-      check(form, 'action_follow', '关注作者'),
-      check(form, 'action_comment', '评论'),
-    ])),
-    field('文案', h('textarea', { value: form.comment_templates_text, rows: 4, placeholder: '一行一条，执行时随机选择', onInput: (event: Event) => form.comment_templates_text = (event.target as HTMLTextAreaElement).value })),
-    assets.length ? field('图片素材', h('div', { class: 'traffic-asset-checks' }, [
-      h('small', 'V1 自动执行文本评论，图片仅记录为计划素材。'),
-      ...assets.map(asset => assetCheck(form, asset)),
-    ])) : null,
-    field('每轮/每日上限', h('div', { class: 'traffic-inline' }, [
-      h('input', { type: 'number', value: form.per_run_limit, onInput: (event: Event) => form.per_run_limit = (event.target as HTMLInputElement).value }),
-      h('input', { type: 'number', value: form.daily_limit, onInput: (event: Event) => form.daily_limit = (event.target as HTMLInputElement).value }),
-    ])),
-    field('停留秒数', h('div', { class: 'traffic-inline' }, [
-      h('input', { type: 'number', value: form.stay_seconds_min, onInput: (event: Event) => form.stay_seconds_min = (event.target as HTMLInputElement).value }),
-      h('input', { type: 'number', value: form.stay_seconds_max, onInput: (event: Event) => form.stay_seconds_max = (event.target as HTMLInputElement).value }),
-    ])),
   ])
 }
 
@@ -224,7 +172,7 @@ function renderTargets(targets: Dict) {
       ? h('div', { class: 'traffic-target-table' }, rows.map((row: Dict) => h('div', { class: ['traffic-target-row', `status-${row.status}`] }, [
           h('strong', row.title || row.content_url || `视频 ${row.id}`),
           h('span', row.author_name || row.keyword || row.source_type),
-          h('span', row.selected_comment || '无评论文案'),
+          h('span', row.selected_comment || '执行时随机选择文案'),
           h('em', row.status),
         ])))
       : emptyState({ title: '队列为空', description: '定向引流需要先生成队列；随机引流会在运行时写入队列。', icon: VideoCamera, tone: 'gray' })
@@ -233,51 +181,4 @@ function renderTargets(targets: Dict) {
 
 function field(label: string, control: any) {
   return h('label', { class: 'traffic-field' }, [h('span', label), control])
-}
-
-function check(form: Dict, key: string, label: string) {
-  return h('label', { class: 'traffic-check' }, [
-    h('input', { type: 'checkbox', checked: form[key], onChange: (event: Event) => form[key] = (event.target as HTMLInputElement).checked }),
-    label,
-  ])
-}
-
-function assetCheck(form: Dict, asset: Dict) {
-  const assetId = Number(asset.id)
-  const selected = selectedAssetIds(form.image_asset_ids)
-  return h('label', { class: 'traffic-check' }, [
-    h('input', {
-      type: 'checkbox',
-      checked: selected.includes(assetId),
-      onChange: (event: Event) => {
-        const current = selectedAssetIds(form.image_asset_ids)
-        form.image_asset_ids = (event.target as HTMLInputElement).checked
-          ? Array.from(new Set([...current, assetId]))
-          : current.filter(id => id !== assetId)
-      },
-    }),
-    asset.name || asset.file_name || `图片 ${asset.id}`,
-  ])
-}
-
-function splitTemplates(value: string) {
-  return String(value || '').split(/\r?\n/).map(item => item.trim()).filter(Boolean)
-}
-
-function selectedAssetIds(value: unknown) {
-  return Array.isArray(value) ? value.map(item => Number(item)).filter(Number.isFinite) : []
-}
-
-function applyTrafficSettings(form: Dict, settings: Dict) {
-  const templates = Array.isArray(settings.traffic_comment_templates) ? settings.traffic_comment_templates : []
-  form.action_like = Boolean(settings.traffic_action_like)
-  form.action_follow = Boolean(settings.traffic_action_follow)
-  form.action_comment = Boolean(settings.traffic_action_comment)
-  form.comment_templates_text = templates.join('\n') || form.comment_templates_text
-  form.per_run_limit = Number(settings.traffic_per_run_limit || form.per_run_limit)
-  form.daily_limit = Number(settings.traffic_daily_limit || form.daily_limit)
-  form.stay_seconds_min = Number(settings.traffic_stay_seconds_min || form.stay_seconds_min)
-  form.stay_seconds_max = Number(settings.traffic_stay_seconds_max || form.stay_seconds_max)
-  form.action_interval_seconds_min = Number(settings.traffic_action_interval_seconds_min || form.action_interval_seconds_min)
-  form.action_interval_seconds_max = Number(settings.traffic_action_interval_seconds_max || form.action_interval_seconds_max)
 }

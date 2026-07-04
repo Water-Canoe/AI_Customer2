@@ -4,7 +4,6 @@ import base64
 import json
 import os
 import platform
-import random
 import subprocess
 import sys
 import threading
@@ -90,17 +89,27 @@ def list_campaigns(conn=None) -> list[dict[str, Any]]:
 
 
 def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
+    settings = get_settings()
     if payload.mode == "random":
         source_type = "random_feed"
     else:
         source_type = payload.source_type if payload.source_type in {"competitor", "keyword"} else "competitor"
-    templates = [item.strip() for item in payload.comment_templates if item.strip()]
-    if payload.action_comment and not templates:
-        templates = get_settings()["traffic_comment_templates"]
-    if payload.action_comment and not templates:
+    action_like = _setting_or_payload(payload.action_like, settings["traffic_action_like"])
+    action_follow = _setting_or_payload(payload.action_follow, settings["traffic_action_follow"])
+    action_comment = _setting_or_payload(payload.action_comment, settings["traffic_action_comment"])
+    templates = _template_list(payload.comment_templates if payload.comment_templates is not None else settings["traffic_comment_templates"])
+    if action_comment and not templates:
         raise ValueError("至少需要一条引流文案")
-    stay_min, stay_max = _ordered_pair(payload.stay_seconds_min, payload.stay_seconds_max)
-    interval_min, interval_max = _ordered_pair(payload.action_interval_seconds_min, payload.action_interval_seconds_max)
+    stay_min, stay_max = _ordered_pair(
+        payload.stay_seconds_min if payload.stay_seconds_min is not None else settings["traffic_stay_seconds_min"],
+        payload.stay_seconds_max if payload.stay_seconds_max is not None else settings["traffic_stay_seconds_max"],
+    )
+    interval_min, interval_max = _ordered_pair(
+        payload.action_interval_seconds_min if payload.action_interval_seconds_min is not None else settings["traffic_action_interval_seconds_min"],
+        payload.action_interval_seconds_max if payload.action_interval_seconds_max is not None else settings["traffic_action_interval_seconds_max"],
+    )
+    per_run_limit = _safe_int(payload.per_run_limit if payload.per_run_limit is not None else settings["traffic_per_run_limit"], 20, 1, 100)
+    daily_limit = _safe_int(payload.daily_limit if payload.daily_limit is not None else settings["traffic_daily_limit"], 100, 1, 500)
     name = payload.name.strip() or ("随机引流" if payload.mode == "random" else f"定向引流-{source_type}")
     with database.connect() as conn:
         cur = conn.execute(
@@ -117,13 +126,13 @@ def create_campaign(payload: TrafficCampaignCreate) -> dict[str, Any]:
                 payload.mode,
                 source_type,
                 payload.keyword.strip(),
-                int(payload.action_like),
-                int(payload.action_follow),
-                int(payload.action_comment),
+                int(action_like),
+                int(action_follow),
+                int(action_comment),
                 json.dumps(templates, ensure_ascii=False),
                 json.dumps(payload.image_asset_ids, ensure_ascii=False),
-                payload.per_run_limit,
-                payload.daily_limit,
+                per_run_limit,
+                daily_limit,
                 stay_min,
                 stay_max,
                 interval_min,
@@ -186,7 +195,6 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
         for row in rows:
             target_key = str(row["content_id"] or row["content_url"] or row["id"])
             title = _join_text(row["title"], row["description"])
-            comment = _render_comment(campaign, {"title": title, "keyword": row["source_keyword"], "author_name": row["author_name"]})
             cur = conn.execute(
                 """
                 INSERT OR IGNORE INTO traffic_targets(
@@ -205,7 +213,7 @@ def build_targets(campaign_id: int, limit: int = 50) -> dict[str, Any]:
                     row["author_name"] or "",
                     title,
                     row["source_keyword"] or campaign["keyword"] or "",
-                    comment,
+                    "",
                 ),
             )
             if cur.rowcount:
@@ -242,6 +250,7 @@ def list_targets(campaign_id: int, status: str = "", page: int = 1, page_size: i
 
 def create_run(campaign_id: int, limit: int | None = None) -> dict[str, Any]:
     license_service.ensure_traffic_authorized()
+    _sync_campaign_runtime_settings(campaign_id)
     campaign = get_campaign(campaign_id)
     if campaign["platform"] != "dy":
         raise ValueError("V1 只支持抖音引流执行")
@@ -468,16 +477,47 @@ def _list_runs(conn) -> list[dict[str, Any]]:
     return result
 
 
-def _render_comment(campaign: dict[str, Any], target: dict[str, Any]) -> str:
-    templates = campaign.get("comment_templates") or []
-    # 队列生成时预先落库本次目标的文案，执行器只负责按目标发送。
-    template = random.choice(templates) if templates else ""
-    return (
-        str(template)
-        .replace("{昵称}", str(target.get("author_name") or ""))
-        .replace("{关键词}", str(target.get("keyword") or campaign.get("keyword") or ""))
-        .replace("{视频标题}", str(target.get("title") or ""))
-    )
+def _sync_campaign_runtime_settings(campaign_id: int) -> None:
+    settings = get_settings()
+    templates = _template_list(settings["traffic_comment_templates"])
+    if settings["traffic_action_comment"] and not templates:
+        raise ValueError("至少需要一条引流文案")
+    stay_min, stay_max = _ordered_pair(settings["traffic_stay_seconds_min"], settings["traffic_stay_seconds_max"])
+    interval_min, interval_max = _ordered_pair(settings["traffic_action_interval_seconds_min"], settings["traffic_action_interval_seconds_max"])
+    with database.connect() as conn:
+        conn.execute(
+            """
+            UPDATE traffic_campaigns
+            SET action_like = ?, action_follow = ?, action_comment = ?, comment_templates = ?,
+                per_run_limit = ?, daily_limit = ?, stay_seconds_min = ?, stay_seconds_max = ?,
+                action_interval_seconds_min = ?, action_interval_seconds_max = ?,
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+            """,
+            (
+                int(settings["traffic_action_like"]),
+                int(settings["traffic_action_follow"]),
+                int(settings["traffic_action_comment"]),
+                json.dumps(templates, ensure_ascii=False),
+                _safe_int(settings["traffic_per_run_limit"], 20, 1, 100),
+                _safe_int(settings["traffic_daily_limit"], 100, 1, 500),
+                stay_min,
+                stay_max,
+                interval_min,
+                interval_max,
+                campaign_id,
+            ),
+        )
+
+
+def _setting_or_payload(value: Any, default: Any) -> Any:
+    return default if value is None else value
+
+
+def _template_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _decode_data_url(data_url: str) -> tuple[str, bytes]:

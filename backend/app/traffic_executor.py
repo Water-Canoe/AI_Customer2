@@ -105,7 +105,9 @@ class TrafficExecutor:
     def _comment(self, page: Page, target: dict[str, Any]) -> None:
         target_id = int(target["id"])
         self._click_required(page, ["button:has-text('评论')", "[aria-label*='评论']", "[data-e2e*='comment']"], "comment_open", target_id)
-        text = str(target.get("selected_comment") or "").strip() or self._render_comment(target)
+        text = self._render_comment(target)
+        if not text:
+            raise RuntimeError("没有可用引流文案")
         box = self._first_visible(page, ["textarea", "[contenteditable='true']", "[placeholder*='评论']", "[class*='comment'] [contenteditable='true']"])
         if box is None:
             raise RuntimeError("找不到评论输入框")
@@ -159,14 +161,13 @@ class TrafficExecutor:
         url = page.url or DOUYIN_HOME
         title = page.title() or "随机推荐视频"
         key = url if "/video/" in url else f"random:{int(time.time() * 1000)}"
-        comment = self._render_comment({"title": title, "keyword": "", "author_name": ""})
         with database.connect() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO traffic_targets(campaign_id, platform, source_type, target_key, content_url, title, selected_comment, status, run_id)
                 VALUES(?, 'dy', 'random_feed', ?, ?, ?, ?, 'running', ?)
                 """,
-                (int(self.campaign["id"]), key, url, title, comment, self.run_id),
+                (int(self.campaign["id"]), key, url, title, "", self.run_id),
             )
             row = conn.execute("SELECT * FROM traffic_targets WHERE id = ?", (int(cur.lastrowid),)).fetchone()
             return database.row_to_dict(row) or {}

@@ -97,17 +97,17 @@ class TrafficCampaignCreate(BaseModel):
     mode: Literal["targeted", "random"] = "targeted"
     source_type: Literal["competitor", "keyword", "random_feed"] = "competitor"
     keyword: str = ""
-    action_like: bool = True
-    action_follow: bool = False
-    action_comment: bool = True
-    comment_templates: list[str] = Field(default_factory=list)
+    action_like: bool | None = None
+    action_follow: bool | None = None
+    action_comment: bool | None = None
+    comment_templates: list[str] | None = None
     image_asset_ids: list[int] = Field(default_factory=list)
-    per_run_limit: int = Field(default=20, ge=1, le=100)
-    daily_limit: int = Field(default=100, ge=1, le=500)
-    stay_seconds_min: float = Field(default=6, ge=0, le=120)
-    stay_seconds_max: float = Field(default=15, ge=0, le=300)
-    action_interval_seconds_min: float = Field(default=1, ge=0, le=60)
-    action_interval_seconds_max: float = Field(default=3, ge=0, le=120)
+    per_run_limit: int | None = Field(default=None, ge=1, le=100)
+    daily_limit: int | None = Field(default=None, ge=1, le=500)
+    stay_seconds_min: float | None = Field(default=None, ge=0, le=120)
+    stay_seconds_max: float | None = Field(default=None, ge=0, le=300)
+    action_interval_seconds_min: float | None = Field(default=None, ge=0, le=60)
+    action_interval_seconds_max: float | None = Field(default=None, ge=0, le=120)
 
 
 class TrafficTargetBuild(BaseModel):
