@@ -12,7 +12,10 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+try:
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+except ModuleNotFoundError:
+    PlaywrightTimeoutError = TimeoutError
 
 from app import database
 from app.services import crawler_adapter, traffic_workbench
@@ -35,13 +38,17 @@ def main(run_id: str) -> int:
 class TrafficExecutor:
     def __init__(self, run_id: str) -> None:
         self.run_id = run_id
-        self.run = self._load_run()
-        self.campaign = self._load_campaign(int(self.run["campaign_id"]))
+        self.run_info = self._load_run()
+        self.campaign = self._load_campaign(int(self.run_info["campaign_id"]))
         self.done = 0
         self.failed = 0
         self.skipped = 0
 
     def run(self) -> None:
+        try:
+            from playwright.sync_api import sync_playwright
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("引流执行器缺少 Playwright 依赖，请确认 MediaCrawler 虚拟环境已安装 Playwright") from exc
         self._update_run("running")
         with sync_playwright() as playwright:
             port = self._cdp_port()
@@ -90,7 +97,7 @@ class TrafficExecutor:
     def _run_runtime_feed(self, page: Page, start_url: str, source_type: str, already_open: bool = False) -> None:
         if not already_open:
             page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
-        for _ in range(int(self.run["per_run_limit"])):
+        for _ in range(int(self.run_info["per_run_limit"])):
             target = self._create_runtime_target(page, source_type)
             self._execute_target(page, target, already_open=True)
             page.keyboard.press("ArrowDown")
@@ -216,7 +223,7 @@ class TrafficExecutor:
                 ORDER BY t.id ASC
                 LIMIT ?
                 """,
-                (int(self.campaign["id"]), int(self.run["per_run_limit"])),
+                (int(self.campaign["id"]), int(self.run_info["per_run_limit"])),
             ).fetchall()
             ids = [int(row["id"]) for row in rows]
             if ids:

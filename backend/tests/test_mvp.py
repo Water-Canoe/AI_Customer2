@@ -3958,6 +3958,68 @@ def test_traffic_search_keyword_runs_without_prebuilt_targets(tmp_path: Path, mo
         traffic_workbench.RUNNING_TRAFFIC_PROCESSES.clear()
 
 
+def test_traffic_executor_run_entrypoint_is_callable(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficCampaignCreate
+    from app.services import traffic_workbench
+    from app.traffic_executor import DOUYIN_HOME, TrafficExecutor
+
+    class FakeKeyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+    class FakeLocator:
+        @property
+        def first(self) -> "FakeLocator":
+            return self
+
+        def get_attribute(self, name: str, timeout: int = 0) -> str:
+            return ""
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = ""
+            self.urls: list[str] = []
+            self.keyboard = FakeKeyboard()
+
+        def goto(self, url: str, wait_until: str = "", timeout: int = 0) -> None:
+            self.url = url
+            self.urls.append(url)
+
+        def title(self) -> str:
+            return "随机推荐视频"
+
+        def locator(self, selector: str) -> FakeLocator:
+            return FakeLocator()
+
+        def wait_for_timeout(self, timeout: int) -> None:
+            return None
+
+    campaign = traffic_workbench.create_campaign(TrafficCampaignCreate(name="随机引流", mode="random"))
+    run_id = "TRF-UNIT"
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO traffic_runs(id, campaign_id, status, per_run_limit, daily_limit, counts) VALUES(?, ?, 'pending', 1, 100, '{}')",
+            (run_id, int(campaign["id"])),
+        )
+
+    executor = TrafficExecutor(run_id)
+
+    assert callable(executor.run)
+    assert executor.run_info["id"] == run_id
+    assert executor.campaign["mode"] == "random"
+
+    page = FakePage()
+    executor._run_random(page)
+
+    assert page.urls[0] == DOUYIN_HOME
+    assert page.keyboard.pressed == ["ArrowDown"]
+
+
 def test_traffic_settings_and_assets_are_scoped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database
