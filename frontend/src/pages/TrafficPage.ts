@@ -3,7 +3,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CaretRight, Close, DataLine, Promotion, Refresh, VideoCamera } from '@element-plus/icons-vue'
 
-import { emptyState, metricTile, pageAction, sectionTitle } from '../components/ui/Workbench'
+import { emptyState, pageAction, sectionTitle } from '../components/ui/Workbench'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 
@@ -119,12 +119,6 @@ export default defineComponent({
         tone: isRandom.value ? 'purple' : 'teal',
         aside: h('button', { class: 'secondary-action', disabled: loading.value, onClick: loadAll }, [h(Refresh, { class: 'inline-icon' }), '刷新'])
       }),
-      h('div', { class: 'traffic-metrics' }, [
-        metricTile({ label: '引流计划', value: dashboard.value.summary?.campaigns || 0, icon: DataLine, tone: 'teal' }),
-        metricTile({ label: '待执行', value: dashboard.value.summary?.pending_targets || 0, icon: VideoCamera, tone: 'amber' }),
-        metricTile({ label: '运行中', value: dashboard.value.summary?.running_runs || 0, icon: CaretRight, tone: 'blue' }),
-        metricTile({ label: '今日完成', value: dashboard.value.summary?.today_done || 0, icon: Promotion, tone: 'green' }),
-      ]),
       h('div', { class: 'traffic-grid' }, [
         h('section', { class: 'traffic-panel' }, [
           sectionTitle({ title: '创建计划', subtitle: '动作、文案、限额和停留时间统一在引流设置中配置', icon: Promotion, tone: 'teal', compact: true }),

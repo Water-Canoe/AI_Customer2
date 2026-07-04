@@ -4454,12 +4454,6 @@ input[type='checkbox'] {
   gap: 16px;
 }
 
-.traffic-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
 .traffic-grid,
 .traffic-settings-grid,
 .traffic-copy-grid {
@@ -4756,7 +4750,6 @@ input[type='checkbox'] {
     min-width: 0;
   }
 
-  .traffic-metrics,
   .traffic-grid,
   .traffic-settings-grid,
   .traffic-copy-grid {
@@ -4802,8 +4795,7 @@ input[type='checkbox'] {
     margin-left: 0;
   }
 
-  .traffic-form.two-column,
-  .traffic-metrics {
+  .traffic-form.two-column {
     grid-template-columns: 1fr;
   }
 }
