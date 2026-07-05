@@ -1080,6 +1080,52 @@ def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
     assert page.keyboard.pressed == []
 
 
+def test_traffic_publish_comment_falls_back_to_keyboard_when_button_has_no_response() -> None:
+    from app.services import traffic_workbench
+
+    class ResponseInfo:
+        value = type("Response", (), {"json": lambda self: {"status_code": 0, "comment": {"cid": "c1", "text": "不错！"}}})()
+
+        def __init__(self, page: "FakePage") -> None:
+            self.page = page
+
+        def __enter__(self) -> "ResponseInfo":
+            self.page.attempts += 1
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            if self.page.attempts == 1:
+                raise TimeoutError("button click did not publish")
+            return None
+
+    class Keyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = Keyboard()
+            self.attempts = 0
+
+        def expect_response(self, *_: object, **__: object) -> ResponseInfo:
+            return ResponseInfo(self)
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+        def evaluate(self, *_: object) -> bool:
+            return True
+
+    page = FakePage()
+
+    assert traffic_workbench._publish_comment_and_confirm(page, "不错！") is not None
+    assert page.attempts == 2
+    assert page.keyboard.pressed == ["Control+Enter"]
+
+
 def test_traffic_publish_comment_requires_visible_text() -> None:
     from app.services import traffic_workbench
 

@@ -1761,43 +1761,72 @@ def _comment_image_ready(page: Any) -> bool:
 
 
 def _publish_comment_and_confirm(page: Any, text: str = "") -> dict[str, Any] | None:
+    payload = _comment_publish_response(page, lambda: _click_comment_send_button(page), 5000)
+    if payload is None:
+        payload = _comment_publish_response(page, lambda: _press_comment_submit_key(page, "Control+Enter"), 5000)
+    if payload is None:
+        payload = _comment_publish_response(page, lambda: _press_comment_submit_key(page, "Enter"), 5000)
+    if payload is None:
+        return None
+    if not _payload_status_ok(payload) or not _comment_publish_has_result(payload, text):
+        return None
+    page.wait_for_timeout(1000)
+    if text and not _comment_text_visible(page, text):
+        return None
+    return payload
+
+
+def _comment_publish_response(page: Any, action: Any, timeout: int) -> dict[str, Any] | None:
     try:
-        with page.expect_response(lambda response: "aweme/v1/web/comment/publish" in response.url, timeout=8000) as response_info:
-            if not page.evaluate(
-                """
-                () => {
-                  const roots = [document.querySelector('#videoSideCard'), document].filter(Boolean);
-                  const visible = el => {
-                    const rect = el.getBoundingClientRect();
-                    const style = window.getComputedStyle(el);
-                    return rect.width > 8 && rect.height > 8 && rect.top < innerHeight
-                      && style.display !== 'none' && style.visibility !== 'hidden'
-                      && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-                  };
-                  for (const root of roots) {
-                    const items = Array.from(root.querySelectorAll('button, [role="button"], span, div'));
-                    const target = items.find(el => visible(el) && /^(发布|发送)$/.test((el.innerText || el.textContent || '').trim()));
-                    if (target) {
-                      target.click();
-                      return true;
-                    }
-                  }
-                  return false;
-                }
-                """
-            ):
-                page.keyboard.press("Control+Enter")
-                page.wait_for_timeout(200)
-                page.keyboard.press("Enter")
+        with page.expect_response(lambda response: "aweme/v1/web/comment/publish" in response.url, timeout=timeout) as response_info:
+            if not action():
+                return None
         payload = _response_json(response_info.value)
-        if not _payload_status_ok(payload) or not _comment_publish_has_result(payload, text):
-            return None
-        page.wait_for_timeout(1000)
-        if text and not _comment_text_visible(page, text):
-            return None
         return payload
     except Exception:
         return None
+
+
+def _press_comment_submit_key(page: Any, key: str) -> bool:
+    page.keyboard.press(key)
+    return True
+
+
+def _click_comment_send_button(page: Any) -> bool:
+    return bool(page.evaluate(
+        """
+        () => {
+          const roots = [document.querySelector('#videoSideCard'), document.querySelector('#videoSideBar'), document].filter(Boolean);
+          const visible = el => {
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 8 && rect.height > 8 && rect.top < innerHeight
+              && style.display !== 'none' && style.visibility !== 'hidden';
+          };
+          const disabled = el => Boolean(el?.disabled) || el?.getAttribute?.('aria-disabled') === 'true'
+            || /disabled|disable/.test(String(el?.className || '').toLowerCase());
+          const textOf = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '').replace(/\\s+/g, '');
+          const clickableOf = el => el?.closest?.('button, [role="button"]') || el;
+          for (const root of roots) {
+            for (const el of Array.from(root.querySelectorAll('button, [role="button"], span, div'))) {
+              const text = textOf(el);
+              if (!/^(发布|发送|发布评论|发送评论)$/.test(text)) continue;
+              const target = clickableOf(el);
+              if (!visible(target) || disabled(target)) continue;
+              // ponytail: 点击真正的 button/role=button，避免点到里面的 span 后没有提交。
+              target.scrollIntoView({block: 'center', inline: 'center'});
+              target.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
+              target.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+              target.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
+              target.click();
+              return true;
+            }
+          }
+          return false;
+        }
+        """
+    ))
 
 
 def _comment_publish_has_result(payload: dict[str, Any], text: str) -> bool:
