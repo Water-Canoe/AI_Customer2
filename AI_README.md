@@ -240,7 +240,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `backend/runtime/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。操作记录页会把点赞、收藏、关注、评论渲染为不同颜色的标签；评论内容为图片时，如果图片来自素材库，会直接显示同一个预览地址的缩略图。操作记录表包含平台列，并提供抖音、小红书、快手平台筛选；当前只有抖音会产生真实执行记录，其余平台先保留筛选入口。
 
-引流设置页提供“失败后关闭浏览器”开关，默认开启以保持原有行为；关闭后，批次异常停止或停机时会保留当前抖音 CloakBrowser 窗口，便于复盘已经浏览和互动过的视频。复盘完成后需要手动关闭该浏览器，再启动新的引流批次。
+引流设置页提供“失败后关闭浏览器”开关，默认开启以保持原有行为；关闭后，批次异常停止或停机时会保留当前抖音 CloakBrowser 窗口，便于复盘已经浏览和互动过的视频。复盘完成后需要手动关闭该浏览器，再启动新的引流批次。引流设置页也提供“无头浏览器执行”开关，默认关闭；开启后仅引流批次使用无头 CloakBrowser，抖音登录窗口仍强制有头，方便扫码登录和处理安全验证。
 
 引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、CloakBrowser Python 包、CloakBrowser 专用浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `python -m cloakbrowser install`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
 

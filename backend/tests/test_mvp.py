@@ -1020,6 +1020,9 @@ def test_traffic_launch_context_uses_cloakbrowser(tmp_path: Path, monkeypatch: p
     assert calls["user_data_dir"] == str(profile)
     assert calls["kwargs"] == {"headless": False, "viewport": {"width": 1440, "height": 900}, "locale": "zh-CN"}
 
+    traffic_workbench._launch_context(profile, True)
+    assert calls["kwargs"]["headless"] is True
+
 
 def test_traffic_like_button_click_does_not_press_shortcut(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import traffic_workbench

@@ -27,6 +27,7 @@ TRAFFIC_SETTING_KEYS = {
     "traffic_author_cooldown_hours": "24",
     "traffic_stop_after_failures": "3",
     "traffic_close_browser_on_failure": "true",
+    "traffic_headless": "false",
     "traffic_action_probability": "60",
 }
 
@@ -674,6 +675,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     stop_after_failures = _int_setting(settings, "traffic_stop_after_failures", 3, 1, 10)
     author_cooldown_hours = _int_setting(settings, "traffic_author_cooldown_hours", 24, 0, 720)
     close_browser_on_failure = _bool_setting(settings, "traffic_close_browser_on_failure", True)
+    headless = _bool_setting(settings, "traffic_headless", False)
     action_probability = _int_setting(settings, "traffic_action_probability", 60, 0, 100)
     action_budget = max(0, daily_action_limit - _daily_action_count())
     failure_count = 0
@@ -683,7 +685,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     context = None
     close_context = True
     try:
-        context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR)
+        context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR, headless)
         page = context.pages[0] if context.pages else context.new_page()
         video_cache = _setup_video_data_cache(page)
         try:
@@ -814,7 +816,8 @@ def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
 
 
 def _hold_douyin_login_window() -> None:
-    context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR)
+    # 登录和安全验证必须可见，执行批次才允许无头。
+    context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR, False)
     page = context.pages[0] if context.pages else context.new_page()
     video_cache = _setup_video_data_cache(page)
     page.goto("https://www.douyin.com/?recommend=1", wait_until="domcontentloaded", timeout=60_000)
@@ -827,7 +830,7 @@ def _hold_douyin_login_window() -> None:
         page.wait_for_timeout(1000)
 
 
-def _launch_context(profile_dir: Path) -> Any:
+def _launch_context(profile_dir: Path, headless: bool = False) -> Any:
     profile_dir.mkdir(parents=True, exist_ok=True)
     try:
         from cloakbrowser import launch_persistent_context
@@ -843,7 +846,7 @@ def _launch_context(profile_dir: Path) -> Any:
         # CloakBrowser 内部会启动 Playwright，并在 context.close() 时清理驱动。
         return launch_persistent_context(
             str(profile_dir),
-            headless=False,
+            headless=headless,
             viewport={"width": 1440, "height": 900},
             locale="zh-CN",
         )

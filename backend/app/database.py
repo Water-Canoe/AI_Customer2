@@ -500,6 +500,7 @@ DEFAULT_SETTINGS = {
     "traffic_author_cooldown_hours": "24",
     "traffic_stop_after_failures": "3",
     "traffic_close_browser_on_failure": "true",
+    "traffic_headless": "false",
     "traffic_action_probability": "60",
     "icp_profile": json.dumps(
         {

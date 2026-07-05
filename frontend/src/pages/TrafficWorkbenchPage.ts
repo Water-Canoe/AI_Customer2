@@ -522,6 +522,7 @@ export default defineComponent({
             settingInput('traffic_stop_after_failures', '连续失败停机次数'),
             h('div', { class: 'toggles field-full' }, [
               settingToggle('traffic_close_browser_on_failure', '失败后关闭浏览器'),
+              settingToggle('traffic_headless', '无头浏览器执行'),
             ]),
             renderTextManager(),
             renderImageManager(),
