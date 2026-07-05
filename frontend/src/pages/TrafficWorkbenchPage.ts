@@ -494,10 +494,6 @@ export default defineComponent({
               h('button', { disabled: page >= totalPages, onClick: () => { recordFilters.value.page += 1; loadRecords() } }, '下一页'),
             ]),
           ]),
-          h('div', { class: 'traffic-danger-panel' }, [
-            sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Delete, tone: 'red', compact: true }),
-            h('button', { class: 'text-icon-button danger', onClick: clearRecords }, [h(Delete, { class: 'inline-icon' }), '清除引流记录']),
-          ]),
         ]),
       ])
     }
