@@ -26,6 +26,7 @@ TRAFFIC_SETTING_KEYS = {
     "traffic_max_watch_seconds": "8",
     "traffic_author_cooldown_hours": "24",
     "traffic_stop_after_failures": "3",
+    "traffic_close_browser_on_failure": "true",
 }
 
 TRAFFIC_IMAGE_DIR = database.BACKEND_ROOT / "runtime" / "traffic_images"
@@ -35,6 +36,7 @@ TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 300
 DOUYIN_LOGIN_PROCESS: subprocess.Popen[Any] | None = None
+TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
 
 
 # 停机异常同时携带用户提示和技术详情，日志页面按这两个层级展示。
@@ -520,12 +522,16 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     max_watch = _int_setting(settings, "traffic_max_watch_seconds", 8, min_watch, 300)
     stop_after_failures = _int_setting(settings, "traffic_stop_after_failures", 3, 1, 10)
     author_cooldown_hours = _int_setting(settings, "traffic_author_cooldown_hours", 24, 0, 720)
+    close_browser_on_failure = _bool_setting(settings, "traffic_close_browser_on_failure", True)
     action_budget = max(0, daily_action_limit - _daily_action_count())
     failure_count = 0
     no_progress_count = 0
     project_author_keys: set[str] = set()
 
-    with sync_playwright() as playwright:
+    playwright = sync_playwright().start()
+    context = None
+    close_context = True
+    try:
         context = _launch_context(playwright, TRAFFIC_DOUYIN_PROFILE_DIR)
         page = context.pages[0] if context.pages else context.new_page()
         video_cache = _setup_video_data_cache(page)
@@ -622,6 +628,9 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                         {"video_id": video["video_id"], "url": page.url},
                     )
         except PlaywrightTimeoutError as exc:
+            if not close_browser_on_failure:
+                close_context = False
+                _append_log(run_id, "warning", "stop", "任务已停止，浏览器已保留用于复盘。", "引流设置关闭了“失败后关闭浏览器”", "请复盘完成后手动关闭浏览器，再启动新的引流批次。", {"url": getattr(page, "url", "")})
             raise TrafficStop(
                 "抖音页面加载超时，任务已停止。",
                 "浏览器等待页面响应超时。",
@@ -629,9 +638,30 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                 "probe",
                 {"error": str(exc)},
             ) from exc
-        finally:
-            context.close()
+        except Exception:
+            if not close_browser_on_failure:
+                close_context = False
+                _append_log(run_id, "warning", "stop", "任务已停止，浏览器已保留用于复盘。", "引流设置关闭了“失败后关闭浏览器”", "请复盘完成后手动关闭浏览器，再启动新的引流批次。", {"url": getattr(page, "url", "")})
+            raise
+    finally:
+        if close_context:
+            try:
+                if context is not None:
+                    context.close()
+            finally:
+                playwright.stop()
+        elif context is not None:
+            TRAFFIC_REVIEW_SESSIONS.append({"playwright": playwright, "context": context})
     return {}
+
+
+def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
+    value = str(settings.get(key, "true" if default else "false")).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _hold_douyin_login_window() -> None:

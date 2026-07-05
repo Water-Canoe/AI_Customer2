@@ -238,6 +238,8 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `backend/runtime/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。
 
+引流设置页提供“失败后关闭浏览器”开关，默认开启以保持原有行为；关闭后，批次异常停止或停机时会保留当前抖音浏览器窗口，便于复盘已经浏览和互动过的视频。复盘完成后需要手动关闭该浏览器，再启动新的引流批次。
+
 引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、Chromium 浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `playwright install chromium`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
 
 引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个独立 Playwright 登录窗口，并复用执行器同一个 `runtime/traffic_douyin_profile`；用户扫码后可以确认首页能正常展示内容，后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。

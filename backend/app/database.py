@@ -448,6 +448,7 @@ DEFAULT_SETTINGS = {
     "traffic_max_watch_seconds": "8",
     "traffic_author_cooldown_hours": "24",
     "traffic_stop_after_failures": "3",
+    "traffic_close_browser_on_failure": "true",
     "icp_profile": json.dumps(
         {
             "product": "",

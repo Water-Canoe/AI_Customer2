@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -790,6 +791,81 @@ def test_traffic_action_timeout_twice_skips_current_video(tmp_path: Path, monkey
     assert image_path == ""
     assert skipped is True
     assert "连续 2 次失败" in str(logs[-1][3])
+
+
+def test_traffic_failure_can_keep_browser_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import traffic_workbench
+
+    class FakePlaywright:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    class FakeSyncPlaywright:
+        def __init__(self, playwright: FakePlaywright) -> None:
+            self.playwright = playwright
+
+        def start(self) -> FakePlaywright:
+            return self.playwright
+
+    class FakePage:
+        url = "https://www.douyin.com/video/review"
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    class FakeContext:
+        pages: list[FakePage] = []
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def new_page(self) -> FakePage:
+            return FakePage()
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_playwright = FakePlaywright()
+    fake_context = FakeContext()
+    fake_sync_api = types.ModuleType("playwright.sync_api")
+    fake_sync_api.TimeoutError = type("TimeoutError", (Exception,), {})
+    fake_sync_api.sync_playwright = lambda: FakeSyncPlaywright(fake_playwright)
+    fake_playwright_package = types.ModuleType("playwright")
+    fake_playwright_package.sync_api = fake_sync_api
+    logs: list[tuple[object, ...]] = []
+
+    with database.connect() as conn:
+        database.set_setting(conn, "traffic_close_browser_on_failure", "false")
+
+    traffic_workbench.TRAFFIC_REVIEW_SESSIONS.clear()
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright_package)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(traffic_workbench, "_launch_context", lambda *_: fake_context)
+    monkeypatch.setattr(traffic_workbench, "_setup_video_data_cache", lambda *_: {})
+    monkeypatch.setattr(traffic_workbench, "_goto_with_timeout_tolerance", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_ensure_page_ready", lambda *_: None)
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
+
+    def fail_navigation(*_: object) -> None:
+        raise traffic_workbench.TrafficStop("失败", "测试失败", "复盘浏览器", "probe", {})
+
+    monkeypatch.setattr(traffic_workbench, "_navigate_to_executable_video", fail_navigation)
+
+    with pytest.raises(traffic_workbench.TrafficStop):
+        traffic_workbench._run_with_playwright("run-1", {"source_mode": "random_feed", "source_value": "", "actions": []})
+
+    assert fake_context.closed is False
+    assert fake_playwright.stopped is False
+    assert traffic_workbench.TRAFFIC_REVIEW_SESSIONS[-1]["context"] is fake_context
+    assert any("浏览器已保留" in str(item[3]) for item in logs)
+    fake_context.close()
+    fake_playwright.stop()
+    traffic_workbench.TRAFFIC_REVIEW_SESSIONS.clear()
 
 
 def test_traffic_like_button_click_does_not_press_shortcut(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -401,6 +401,9 @@ export default defineComponent({
             settingInput('traffic_max_watch_seconds', '最长停留秒数'),
             settingInput('traffic_author_cooldown_hours', '作者冷却小时'),
             settingInput('traffic_stop_after_failures', '连续失败停机次数'),
+            h('div', { class: 'toggles field-full' }, [
+              settingToggle('traffic_close_browser_on_failure', '失败后关闭浏览器'),
+            ]),
             renderTextManager(),
             renderImageManager(),
           ]),
@@ -572,6 +575,15 @@ export default defineComponent({
 
     function settingInput(key: string, text: string) {
       return labelInput(text, settingsDraft.value[key] || '', value => settingsDraft.value[key] = value)
+    }
+
+    function settingToggle(key: string, text: string) {
+      const value = String(settingsDraft.value[key] ?? 'true').toLowerCase()
+      return h('label', [h('input', {
+        type: 'checkbox',
+        checked: !['0', 'false', 'no', 'off'].includes(value),
+        onChange: (event: Event) => settingsDraft.value[key] = (event.target as HTMLInputElement).checked ? 'true' : 'false',
+      }), text])
     }
 
     function labelInput(text: string, value: string, update: (value: string) => void, extraClass = '') {
