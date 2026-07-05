@@ -792,6 +792,121 @@ def test_traffic_action_timeout_twice_skips_current_video(tmp_path: Path, monkey
     assert "连续 2 次失败" in str(logs[-1][3])
 
 
+def test_traffic_like_button_click_does_not_press_shortcut(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    class Keyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = Keyboard()
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    calls: dict[str, object] = {}
+
+    def fake_click_control(*_: object, require_confirm: bool = True) -> bool:
+        calls["require_confirm"] = require_confirm
+        return not require_confirm
+
+    monkeypatch.setattr(traffic_workbench, "_dedup_exists", lambda *_: False)
+    monkeypatch.setattr(traffic_workbench, "_click_current_control", fake_click_control)
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: None)
+    monkeypatch.setattr(traffic_workbench, "_insert_dedup", lambda *args: None)
+
+    page = FakePage()
+
+    ok = traffic_workbench._execute_click_action("run-1", page, {"video_id": "v1"}, "like", '[data-e2e="video-player-digg"]', "点赞视频")
+
+    assert ok is True
+    assert calls["require_confirm"] is False
+    assert page.keyboard.pressed == []
+
+
+def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
+    from app.services import traffic_workbench
+
+    class ResponseInfo:
+        value = type("Response", (), {"json": lambda self: {"status_code": 0}})()
+
+        def __enter__(self) -> "ResponseInfo":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    class Keyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = Keyboard()
+            self.clicked_send = False
+
+        def expect_response(self, *_: object, **__: object) -> ResponseInfo:
+            return ResponseInfo()
+
+        def evaluate(self, *_: object) -> bool:
+            self.clicked_send = True
+            return True
+
+    page = FakePage()
+
+    assert traffic_workbench._publish_comment_and_confirm(page) is True
+    assert page.clicked_send is True
+    assert page.keyboard.pressed == []
+
+
+def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    class Keyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+    class Mouse:
+        def wheel(self, *_: object) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = Keyboard()
+            self.mouse = Mouse()
+            self.blurred = False
+
+        def evaluate(self, script: str, *_: object) -> None:
+            if "activeElement" in script:
+                self.blurred = True
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    reads = iter([{"video_id": "new-video"}])
+    states = iter([True, False])
+    page = FakePage()
+
+    monkeypatch.setattr(traffic_workbench, "_is_comment_panel_open", lambda *_: next(states, False))
+    monkeypatch.setattr(traffic_workbench, "_detect_douyin_page_mode", lambda *_: "jingxuan_modal_feed")
+    monkeypatch.setattr(traffic_workbench, "_read_active_video", lambda *_: next(reads))
+
+    assert traffic_workbench._advance_video(page, "old-video") is True
+    assert page.blurred is True
+    assert page.keyboard.pressed == ["x", "ArrowDown"]
+
+
 def test_traffic_material_image_upload_has_preview(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.main import app

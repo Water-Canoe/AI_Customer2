@@ -1292,7 +1292,7 @@ def _execute_click_action(run_id: str, page: Any, video: dict[str, Any], action:
     if _dedup_exists(video, action, ""):
         _append_log(run_id, "warning", action, f"这个视频已经执行过{label}，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    confirmed = _click_current_control(page, video.get("video_id", ""), action, [selector])
+    confirmed = _click_current_control(page, video.get("video_id", ""), action, [selector], require_confirm=action != "like")
     if not confirmed and action == "like":
         before = _current_control_snapshot(page, video.get("video_id", ""), action)
         page.keyboard.press("z")
@@ -1324,37 +1324,40 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
     if _dedup_exists(video, "comment", content_hash):
         _append_log(run_id, "warning", "comment", "这个视频已经发送过相同评论，已跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    _open_comment_panel(page, video.get("video_id", ""))
-    page.wait_for_timeout(1000)
-    composer = page.locator("textarea, [contenteditable='true'], .comment-input-inner-container").first
-    if not composer.is_visible(timeout=3000):
-        _append_log(run_id, "warning", "comment", "没有找到评论输入框，已跳过评论。", "评论区没有打开或当前视频不支持评论", "系统会继续浏览后续视频。", {"video_id": video["video_id"]})
-        return False
-    if text:
-        _fill_comment_text(page, composer, text)
-        actual_text = _current_comment_text(page, composer)
-        if actual_text != text:
-            _append_log(run_id, "warning", "comment", "评论文案没有完整写入，已取消发送。", "输入框内容和文案库内容不一致", "系统不会发送半截文案；请稍后重试或降低执行频率。", {"expected": text, "actual": actual_text})
+    try:
+        _open_comment_panel(page, video.get("video_id", ""))
+        page.wait_for_timeout(1000)
+        composer = page.locator("textarea, [contenteditable='true'], .comment-input-inner-container").first
+        if not composer.is_visible(timeout=3000):
+            _append_log(run_id, "warning", "comment", "没有找到评论输入框，已跳过评论。", "评论区没有打开或当前视频不支持评论", "系统会继续浏览后续视频。", {"video_id": video["video_id"]})
             return False
-    if image_path:
-        chooser_selector = ".commentInput-right-ct > div > span:nth-child(2)"
-        if Path(image_path).exists():
-            with page.expect_file_chooser(timeout=5000) as chooser:
-                page.locator(chooser_selector).first.click(timeout=5000)
-            chooser.value.set_files(image_path)
-            page.wait_for_timeout(1500)
-            if not _comment_image_ready(page):
-                _append_log(run_id, "warning", "comment", "评论图片没有完成预览，已取消发送。", "图片上传后没有出现预览", "请到引流设置检查图片格式或换一张图片。", {"image_path": image_path})
+        if text:
+            _fill_comment_text(page, composer, text)
+            actual_text = _current_comment_text(page, composer)
+            if actual_text != text:
+                _append_log(run_id, "warning", "comment", "评论文案没有完整写入，已取消发送。", "输入框内容和文案库内容不一致", "系统不会发送半截文案；请稍后重试或降低执行频率。", {"expected": text, "actual": actual_text})
                 return False
-        else:
-            _append_log(run_id, "warning", "comment", "评论图片文件不存在，已取消本次评论。", "图片路径无效", "请到引流设置检查图片路径。", {"image_path": image_path})
+        if image_path:
+            chooser_selector = ".commentInput-right-ct > div > span:nth-child(2)"
+            if Path(image_path).exists():
+                with page.expect_file_chooser(timeout=5000) as chooser:
+                    page.locator(chooser_selector).first.click(timeout=5000)
+                chooser.value.set_files(image_path)
+                page.wait_for_timeout(1500)
+                if not _comment_image_ready(page):
+                    _append_log(run_id, "warning", "comment", "评论图片没有完成预览，已取消发送。", "图片上传后没有出现预览", "请到引流设置检查图片格式或换一张图片。", {"image_path": image_path})
+                    return False
+            else:
+                _append_log(run_id, "warning", "comment", "评论图片文件不存在，已取消本次评论。", "图片路径无效", "请到引流设置检查图片路径。", {"image_path": image_path})
+                return False
+        if not _publish_comment_and_confirm(page):
+            _append_log(run_id, "warning", "comment", "评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应", "系统不会把未确认评论写为成功；如果频繁出现，请检查账号限制或安全验证。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
             return False
-    if not _publish_comment_and_confirm(page):
-        _append_log(run_id, "warning", "comment", "评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应", "系统不会把未确认评论写为成功；如果频繁出现，请检查账号限制或安全验证。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
-        return False
-    _append_log(run_id, "success", "comment", "评论已发送。", "评论发布接口返回成功", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
-    _insert_dedup(video, "comment", content_hash, "done")
-    return True
+        _append_log(run_id, "success", "comment", "评论已发送。", "评论发布接口返回成功", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
+        _insert_dedup(video, "comment", content_hash, "done")
+        return True
+    finally:
+        _close_comment_panel(page)
 
 
 def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
@@ -1366,7 +1369,7 @@ def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
     page.wait_for_timeout(300)
 
 
-def _click_current_control(page: Any, video_id: str, action: str, extra_selectors: list[str] | None = None) -> bool:
+def _click_current_control(page: Any, video_id: str, action: str, extra_selectors: list[str] | None = None, require_confirm: bool = True) -> bool:
     before = _current_control_snapshot(page, video_id, action)
     clicked = page.evaluate(
         """
@@ -1413,7 +1416,7 @@ def _click_current_control(page: Any, video_id: str, action: str, extra_selector
     if not clicked:
         return False
     page.wait_for_timeout(1200)
-    if action == "comment":
+    if action == "comment" or not require_confirm:
         return True
     return _control_changed(before, _current_control_snapshot(page, video_id, action))
 
@@ -1460,13 +1463,46 @@ def _control_changed(before: dict[str, str], after: dict[str, str]) -> bool:
 
 
 def _open_comment_panel(page: Any, video_id: str) -> None:
+    if _is_comment_panel_open(page):
+        return
     if not _click_current_control(page, video_id, "comment", ['[data-e2e="feed-comment-icon"]']):
         page.keyboard.press("x")
 
 
 def _close_comment_panel(page: Any) -> None:
+    if not _is_comment_panel_open(page):
+        return
+    # ponytail: 先移出评论输入框焦点，否则 x/方向键可能被输入框吞掉。
+    try:
+        page.evaluate("() => document.activeElement?.blur?.()")
+    except Exception:
+        pass
     page.keyboard.press("x")
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(700)
+    if _is_comment_panel_open(page):
+        _click_current_control(page, "", "comment", ['[data-e2e="feed-comment-icon"]'])
+        page.wait_for_timeout(700)
+
+
+def _is_comment_panel_open(page: Any) -> bool:
+    try:
+        return bool(page.evaluate(
+            """
+            () => {
+              const side = document.querySelector('#videoSideCard');
+              if (side && side.clientWidth > 0) return true;
+              return Array.from(document.querySelectorAll('textarea, [contenteditable="true"], .comment-input-inner-container'))
+                .some(el => {
+                  const rect = el.getBoundingClientRect();
+                  const style = window.getComputedStyle(el);
+                  return rect.width > 20 && rect.height > 12 && rect.top < innerHeight
+                    && style.display !== 'none' && style.visibility !== 'hidden';
+                });
+            }
+            """
+        ))
+    except Exception:
+        return False
 
 
 def _current_comment_text(page: Any, composer: Any) -> str:
@@ -1507,7 +1543,32 @@ def _comment_image_ready(page: Any) -> bool:
 def _publish_comment_and_confirm(page: Any) -> bool:
     try:
         with page.expect_response(lambda response: "aweme/v1/web/comment/publish" in response.url, timeout=8000) as response_info:
-            page.keyboard.press("Enter")
+            if not page.evaluate(
+                """
+                () => {
+                  const roots = [document.querySelector('#videoSideCard'), document].filter(Boolean);
+                  const visible = el => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    return rect.width > 8 && rect.height > 8 && rect.top < innerHeight
+                      && style.display !== 'none' && style.visibility !== 'hidden'
+                      && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+                  };
+                  for (const root of roots) {
+                    const items = Array.from(root.querySelectorAll('button, [role="button"], span, div'));
+                    const target = items.find(el => visible(el) && /^(发布|发送)$/.test((el.innerText || el.textContent || '').trim()));
+                    if (target) {
+                      target.click();
+                      return true;
+                    }
+                  }
+                  return false;
+                }
+                """
+            ):
+                page.keyboard.press("Control+Enter")
+                page.wait_for_timeout(200)
+                page.keyboard.press("Enter")
         payload = response_info.value.json()
         return isinstance(payload, dict) and payload.get("status_code") == 0
     except Exception:
