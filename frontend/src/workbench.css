@@ -991,6 +991,29 @@ input[type='checkbox'] {
   flex-wrap: wrap;
 }
 
+.traffic-record-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.traffic-record-bar .section-title {
+  margin-bottom: 0;
+}
+
+.traffic-record-filters {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(110px, 120px) minmax(110px, 120px) 72px;
+  min-width: 0;
+}
+
+.traffic-record-filters select,
+.traffic-record-filters input,
+.traffic-record-filters button {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .traffic-material-table {
   min-width: 620px;
 }
@@ -1050,6 +1073,83 @@ input[type='checkbox'] {
   display: block;
   margin-top: 4px;
   color: #94a3b8;
+}
+
+.traffic-monitor-pane {
+  overflow: auto;
+}
+
+.traffic-monitor-pane .log-console {
+  height: clamp(180px, 28vh, 280px);
+  margin-bottom: 14px;
+}
+
+.traffic-monitor-pane .traffic-detail-table {
+  max-height: none;
+  overflow: auto;
+}
+
+.traffic-action-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.traffic-action-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.traffic-action-tag.like {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.traffic-action-tag.collect {
+  color: #a16207;
+  background: #fef3c7;
+}
+
+.traffic-action-tag.follow {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.traffic-action-tag.comment {
+  color: #7e22ce;
+  background: #f3e8ff;
+}
+
+.traffic-action-tag.browse {
+  color: #475569;
+  background: #e2e8f0;
+}
+
+.traffic-action-tag.skipped {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.traffic-comment-preview {
+  display: grid;
+  gap: 6px;
+  max-width: 140px;
+}
+
+.traffic-comment-preview img {
+  display: block;
+  width: 96px;
+  height: 72px;
+  object-fit: cover;
+  border: 1px solid #dbe7e2;
+  border-radius: 6px;
+  background: #f8fafc;
 }
 
 .traffic-env-panel {
@@ -3627,6 +3727,11 @@ input[type='checkbox'] {
   .split-pane {
     grid-template-columns: 1fr !important;
     row-gap: 16px;
+  }
+
+  .traffic-record-bar,
+  .traffic-record-filters {
+    grid-template-columns: 1fr;
   }
 
   .split-resizer {

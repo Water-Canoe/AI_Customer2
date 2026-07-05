@@ -36,6 +36,13 @@ TRAFFIC_LAST_VIDEO_URL_KEY = "traffic_last_douyin_video_url"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 300
+ACTION_FILTER_TERMS = {
+    "like": ["like", "点赞视频"],
+    "collect": ["collect", "收藏视频"],
+    "follow": ["follow", "关注作者"],
+    "comment_text": ["comment_text", "评论"],
+    "comment_image": ["comment_image", "评论"],
+}
 DOUYIN_LOGIN_PROCESS: subprocess.Popen[Any] | None = None
 TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
 COMMENT_EDITOR_SELECTOR = "#videoSideCard textarea, #videoSideCard [contenteditable='true'], #videoSideBar textarea, #videoSideBar [contenteditable='true'], textarea, [contenteditable='true']"
@@ -397,8 +404,9 @@ def list_records(
         clauses.append("tr.status = ?")
         params.append(status)
     if action:
-        clauses.append("tr.actions LIKE ?")
-        params.append(f"%{action}%")
+        terms = ACTION_FILTER_TERMS.get(action, [action])
+        clauses.append("(" + " OR ".join("tr.actions LIKE ?" for _ in terms) + ")")
+        params.extend(f"%{term}%" for term in terms)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with database.connect() as conn:
         total = conn.execute(f"SELECT COUNT(*) AS c FROM traffic_records tr {where}", params).fetchone()["c"]
@@ -2155,6 +2163,10 @@ def _format_record(row: Any) -> dict[str, Any]:
         data["actions"] = json.loads(data.get("actions") or "[]")
     except json.JSONDecodeError:
         data["actions"] = []
+    # 评论图片来自本地素材库时，前端可直接用预览地址展示缩略图。
+    preview_url = _image_preview_url(Path(str(data.get("comment_image_path") or "")))
+    if preview_url:
+        data["comment_image_preview_url"] = preview_url
     return data
 
 

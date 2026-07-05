@@ -362,7 +362,7 @@ export default defineComponent({
 
     function renderPlanPage() {
       return h(SplitPane, { storageKey: 'traffic-plans', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
-        default: () => h('section', { class: 'content-pane' }, [
+        default: () => h('section', { class: 'pane content-pane traffic-split-main' }, [
           sectionTitle({ title: '创建引流计划', subtitle: '不选动作时就是纯自动刷视频', icon: Promotion, tone: 'teal' }),
           renderPlatformTabs(),
           h('div', { class: 'form-grid' }, [
@@ -390,7 +390,7 @@ export default defineComponent({
             h('button', { class: 'primary-action', disabled: loading.value, onClick: () => createPlan(true) }, '保存并启动'),
           ]),
         ]),
-        side: () => h('aside', { class: 'side-pane' }, [
+        side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
           sectionTitle({ title: '计划列表', subtitle: `${visiblePlans.value.length} 个计划`, icon: Tickets, tone: 'blue' }),
           renderArchiveTabs(planArchiveFilter.value, async value => { planArchiveFilter.value = value; await loadPlans() }),
           renderPlanTable(),
@@ -401,7 +401,7 @@ export default defineComponent({
     function renderMonitorPage() {
       const run = selectedRun.value
       return h(SplitPane, { storageKey: 'traffic-monitor', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
-        default: () => h('section', { class: 'content-pane' }, [
+        default: () => h('section', { class: 'pane content-pane traffic-split-main traffic-monitor-pane' }, [
           sectionTitle({ title: '执行详情', subtitle: run?.plan_name || '选择右侧批次', icon: Monitor, tone: 'blue' }),
           run ? [
             h('div', { class: 'ai-summary-grid' }, [
@@ -418,7 +418,7 @@ export default defineComponent({
             h('div', { class: 'table-scroll traffic-detail-table' }, renderItemsTable(run.items || [])),
           ] : emptyState({ title: '请选择批次', description: '右侧选择一个批次查看日志', icon: Monitor }),
         ]),
-        side: () => h('aside', { class: 'side-pane' }, [
+        side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
           sectionTitle({ title: '批次列表', subtitle: '运行状态与历史', icon: Tickets, tone: 'blue' }),
           h('div', { class: 'traffic-list-toolbar' }, [
             renderArchiveTabs(runArchiveFilter.value, async value => { runArchiveFilter.value = value; await loadRuns() }),
@@ -433,7 +433,7 @@ export default defineComponent({
       const page = records.value.page || 1
       const totalPages = records.value.total_pages || 1
       return h('section', { class: 'pane table-workspace' }, [
-        h('div', { class: 'table-library-bar' }, [
+        h('div', { class: 'table-library-bar traffic-record-bar' }, [
           sectionTitle({ title: '操作记录', subtitle: `共 ${records.value.total || 0} 条`, icon: DataLine, tone: 'green' }),
           h('div', { class: 'table-filters traffic-record-filters' }, [
             h('input', { placeholder: '搜索视频/作者/评论', value: recordFilters.value.query, onInput: (event: Event) => recordFilters.value.query = (event.target as HTMLInputElement).value }),
@@ -484,7 +484,7 @@ export default defineComponent({
 
     function renderSettingsPage() {
       return h(SplitPane, { storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 320, minSideWidth: 280, maxSideWidth: 420 }, {
-        default: () => h('section', { class: 'content-pane traffic-settings-pane' }, [
+        default: () => h('section', { class: 'pane content-pane traffic-settings-pane traffic-split-main' }, [
           sectionTitle({ title: '引流设置', subtitle: '授权、文案、图片、限额统一在这里维护', icon: Setting, tone: 'teal' }),
           h('div', { class: 'task-card-actions' }, [
             h('button', { class: 'secondary-action', onClick: openLicense }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
@@ -506,7 +506,7 @@ export default defineComponent({
           ]),
           renderLicenseDialog(),
         ]),
-        side: () => h('aside', { class: 'side-pane traffic-settings-side' }, [
+        side: () => h('aside', { class: 'pane side-pane traffic-settings-side traffic-split-side' }, [
           sectionTitle({ title: '授权状态', subtitle: licenseInfo.value.message || '尚未读取', icon: Key, tone: licenseInfo.value.authorized ? 'green' : 'amber' }),
           h('div', { class: ['license-status-card', licenseInfo.value.authorized ? 'authorized' : ''] }, [
             h('strong', licenseInfo.value.authorized ? '授权通过' : '未授权'),
@@ -629,7 +629,7 @@ export default defineComponent({
           h('td', tableText(item.author_name || '-')),
           h('td', item.like_count ?? '-'),
           h('td', item.comment_count ?? '-'),
-          h('td', tableText(actionsLabel(item.actions_done))),
+          h('td', renderActionTags(item.actions_done)),
           h('td', h('span', { class: ['status', recordStatusClass(item.status)] }, recordStatusText(item.status))),
           h('td', tableText(item.skip_reason || '-')),
         ]))),
@@ -647,8 +647,8 @@ export default defineComponent({
           h('td', row.author_name || '-'),
           h('td', row.like_count ?? '-'),
           h('td', row.comment_count ?? '-'),
-          h('td', actionsLabel(row.actions)),
-          h('td', tableText(row.comment_text || imageName(row.comment_image_path || '') || '-')),
+          h('td', renderActionTags(row.actions)),
+          h('td', renderCommentCell(row)),
           h('td', h('span', { class: ['status', recordStatusClass(row.status)] }, recordStatusText(row.status))),
           h('td', tableText(row.reason || '-')),
           h('td', [
@@ -910,7 +910,7 @@ export default defineComponent({
       return row.video_url ? h('a', { class: 'table-primary-link', href: row.video_url, target: '_blank' }, [content]) : content
     }
 
-    function actionsLabel(value: unknown) {
+    function parseActions(value: unknown) {
       let actions = value
       if (typeof value === 'string') {
         try {
@@ -919,9 +919,50 @@ export default defineComponent({
           actions = value ? [value] : []
         }
       }
-      const labels: Dict = { like: '点赞', collect: '收藏', follow: '关注', comment_text: '评论文案', comment_image: '评论图片' }
-      const items = Array.isArray(actions) ? actions : []
-      return items.map(item => labels[item] || item).join('、') || '仅浏览'
+      return Array.isArray(actions) ? actions.map(item => String(item)) : []
+    }
+
+    function renderActionTags(value: unknown) {
+      const items = parseActions(value)
+      const labels: Dict = {
+        like: '点赞',
+        '点赞视频': '点赞',
+        collect: '收藏',
+        '收藏视频': '收藏',
+        follow: '关注',
+        '关注作者': '关注',
+        comment: '评论',
+        comment_text: '评论',
+        comment_image: '评论',
+        '评论': '评论',
+        '仅浏览': '仅浏览',
+        '跳过': '跳过',
+      }
+      const tags = items.length ? items : ['仅浏览']
+      return h('div', { class: 'traffic-action-tags' }, tags.map(item => {
+        const text = labels[item] || item
+        return h('span', { class: ['traffic-action-tag', actionTagClass(text)] }, text)
+      }))
+    }
+
+    function actionTagClass(text: string) {
+      if (text === '点赞') return 'like'
+      if (text === '收藏') return 'collect'
+      if (text === '关注') return 'follow'
+      if (text === '评论') return 'comment'
+      if (text === '跳过') return 'skipped'
+      return 'browse'
+    }
+
+    function renderCommentCell(row: Dict) {
+      if (row.comment_image_preview_url) {
+        return h('div', { class: 'traffic-comment-preview' }, [
+          h('img', { src: row.comment_image_preview_url, alt: imageName(row.comment_image_path || '评论图片') }),
+          row.comment_text ? h('span', { class: 'table-muted-text', title: row.comment_text }, row.comment_text) : null,
+        ])
+      }
+      if (row.comment_image_path) return tableText(imageName(row.comment_image_path))
+      return tableText(row.comment_text || '-')
     }
 
     function shortId(value: unknown) {

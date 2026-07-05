@@ -1332,6 +1332,38 @@ def test_traffic_material_image_upload_has_preview(tmp_path: Path) -> None:
     assert client.get(payload["preview_url"]).content == content
 
 
+def test_traffic_records_filter_actions_and_image_preview(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="记录筛选", platform="dy"))
+    run = traffic_workbench.create_run(plan["id"])
+    image = traffic_workbench.save_material_image("record.png", b"\x89PNG\r\n\x1a\nrecord")
+    with database.connect() as conn:
+        conn.execute("UPDATE traffic_runs SET status = 'completed' WHERE id = ?", (run["id"],))
+        conn.execute(
+            """
+            INSERT INTO traffic_records(run_id, plan_id, platform, video_id, actions, status)
+            VALUES(?, ?, 'dy', 'like-video', ?, 'done')
+            """,
+            (run["id"], plan["id"], json.dumps(["点赞视频"], ensure_ascii=False)),
+        )
+        conn.execute(
+            """
+            INSERT INTO traffic_records(run_id, plan_id, platform, video_id, actions, comment_image_path, status)
+            VALUES(?, ?, 'dy', 'comment-video', ?, ?, 'done')
+            """,
+            (run["id"], plan["id"], json.dumps(["评论"], ensure_ascii=False), image["path"]),
+        )
+
+    like_rows = traffic_workbench.list_records(action="like")["rows"]
+    comment_rows = traffic_workbench.list_records(action="comment_image")["rows"]
+    assert [row["video_id"] for row in like_rows] == ["like-video"]
+    assert comment_rows[0]["comment_image_preview_url"].startswith("/api/traffic/material-images/")
+
+
 def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.services import traffic_workbench
