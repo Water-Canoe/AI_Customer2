@@ -1338,6 +1338,9 @@ def test_traffic_records_filter_actions_and_image_preview(tmp_path: Path) -> Non
     from app.schemas import TrafficPlanCreate
     from app.services import traffic_workbench
 
+    auto_plan = traffic_workbench.create_plan(TrafficPlanCreate(name="", platform="dy", source_mode="collected_keyword"))
+    assert auto_plan["name"] == f"已采集关键词-{auto_plan['id'][:8]}"
+
     plan = traffic_workbench.create_plan(TrafficPlanCreate(name="记录筛选", platform="dy"))
     run = traffic_workbench.create_run(plan["id"])
     image = traffic_workbench.save_material_image("record.png", b"\x89PNG\r\n\x1a\nrecord")
@@ -1357,14 +1360,26 @@ def test_traffic_records_filter_actions_and_image_preview(tmp_path: Path) -> Non
             """,
             (run["id"], plan["id"], json.dumps(["评论"], ensure_ascii=False), image["path"]),
         )
+        conn.execute(
+            """
+            INSERT INTO traffic_records(run_id, plan_id, platform, video_id, actions, status)
+            VALUES(?, ?, 'xhs', 'xhs-video', ?, 'done')
+            """,
+            (run["id"], plan["id"], json.dumps(["仅浏览"], ensure_ascii=False)),
+        )
 
     like_rows = traffic_workbench.list_records(action="like")["rows"]
     comment_rows = traffic_workbench.list_records(action="comment_image")["rows"]
+    dy_rows = traffic_workbench.list_records(platform="dy")["rows"]
+    xhs_rows = traffic_workbench.list_records(platform="xhs")["rows"]
     detail = traffic_workbench.get_run(run["id"])
     assert [row["video_id"] for row in like_rows] == ["like-video"]
+    assert {row["video_id"] for row in dy_rows} == {"like-video", "comment-video"}
+    assert [row["video_id"] for row in xhs_rows] == ["xhs-video"]
     assert comment_rows[0]["comment_image_preview_url"].startswith("/api/traffic/material-images/")
     assert detail is not None
-    assert detail["records"][0]["comment_image_preview_url"].startswith("/api/traffic/material-images/")
+    detail_image_rows = [row for row in detail["records"] if row["video_id"] == "comment-video"]
+    assert detail_image_rows[0]["comment_image_preview_url"].startswith("/api/traffic/material-images/")
 
 
 def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

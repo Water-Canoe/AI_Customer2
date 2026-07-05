@@ -233,12 +233,13 @@ def list_traffic_logs(run_id: str) -> list[dict[str, object]]:
 @app.get("/api/traffic/records")
 def list_traffic_records(
     query: str = "",
+    platform: str = "",
     status: str = "",
     action: str = "",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> dict[str, object]:
-    return traffic_workbench.list_records(query=query, status=status, action=action, page=page, page_size=page_size)
+    return traffic_workbench.list_records(query=query, platform=platform, status=status, action=action, page=page, page_size=page_size)
 
 
 @app.delete("/api/traffic/records")

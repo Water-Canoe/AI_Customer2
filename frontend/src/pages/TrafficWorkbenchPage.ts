@@ -22,7 +22,7 @@ import { LicenseDialog } from '../components/ui/LicenseDialog'
 import { emptyState, metricTile, sectionTitle } from '../components/ui/Workbench'
 
 const defaultPlan = () => ({
-  name: '随机推荐引流',
+  name: '',
   platform: 'dy',
   source_mode: 'random_feed',
   source_value: '',
@@ -70,7 +70,7 @@ export default defineComponent({
     const douyinLoginOpening = ref(false)
     const planArchiveFilter = ref('active')
     const runArchiveFilter = ref('active')
-    const recordFilters = ref({ query: '', status: '', action: '', page: 1, page_size: 20 })
+    const recordFilters = ref({ query: '', platform: '', status: '', action: '', page: 1, page_size: 20 })
     const loading = ref(false)
     const trafficLogRef = ref<HTMLElement | null>(null)
     const trafficLogAutoFollow = ref(true)
@@ -386,7 +386,7 @@ export default defineComponent({
           sectionTitle({ title: '创建引流计划', subtitle: '不选动作时就是纯自动刷视频', icon: Promotion, tone: 'teal' }),
           renderPlatformTabs(),
           h('div', { class: 'form-grid traffic-plan-form' }, [
-            labelInput('计划名称', planDraft.value.name, value => planDraft.value.name = value, 'field-wide'),
+            labelInput('计划名称', planDraft.value.name, value => planDraft.value.name = value, 'field-wide', `留空自动生成：${sourceLabel(planDraft.value.source_mode)}-计划ID`),
             labelSelect('来源模式', planDraft.value.source_mode, sourceOptions, value => planDraft.value.source_mode = value),
             labelInput(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide'),
             h('label', { class: 'form-field field-full' }, [
@@ -457,6 +457,12 @@ export default defineComponent({
           sectionTitle({ title: '操作记录', subtitle: `共 ${records.value.total || 0} 条`, icon: DataLine, tone: 'green' }),
           h('div', { class: 'table-filters traffic-record-filters' }, [
             h('input', { placeholder: '搜索视频/作者/评论', value: recordFilters.value.query, onInput: (event: Event) => recordFilters.value.query = (event.target as HTMLInputElement).value }),
+            h('select', { value: recordFilters.value.platform, onChange: (event: Event) => { recordFilters.value.platform = (event.target as HTMLSelectElement).value; recordFilters.value.page = 1 } }, [
+              h('option', { value: '' }, '全部平台'),
+              h('option', { value: 'dy' }, '抖音'),
+              h('option', { value: 'xhs' }, '小红书'),
+              h('option', { value: 'ks' }, '快手'),
+            ]),
             h('select', { value: recordFilters.value.status, onChange: (event: Event) => { recordFilters.value.status = (event.target as HTMLSelectElement).value; recordFilters.value.page = 1 } }, [
               h('option', { value: '' }, '全部状态'),
               h('option', { value: 'browsed' }, '仅浏览'),
@@ -660,9 +666,10 @@ export default defineComponent({
     function renderRecordsTable(rows: Dict[], emptyTitle: string) {
       if (!rows.length) return emptyState({ title: emptyTitle, description: '执行批次后会自动写入记录', icon: DataLine })
       return h('table', { class: 'data-table resizable-table traffic-record-table' }, [
-        h('thead', [h('tr', ['时间', '视频简介', '作者', '点赞数', '评论数', '动作', '评论内容/图片', '状态', '原因', '计划/批次'].map(text => h('th', text)))]),
+        h('thead', [h('tr', ['时间', '平台', '视频简介', '作者', '点赞数', '评论数', '动作', '评论内容/图片', '状态', '原因', '计划/批次'].map(text => h('th', text)))]),
         h('tbody', rows.map((row: Dict) => h('tr', [
           h('td', tableText(row.created_at || '-')),
+          h('td', platformLabel(row.platform)),
           h('td', renderVideoCell(row)),
           h('td', row.author_name || '-'),
           h('td', row.like_count ?? '-'),
@@ -753,10 +760,10 @@ export default defineComponent({
       }), text])
     }
 
-    function labelInput(text: string, value: string, update: (value: string) => void, extraClass = '') {
+    function labelInput(text: string, value: string, update: (value: string) => void, extraClass = '', placeholder = '') {
       return h('label', { class: ['form-field', extraClass] }, [
         h('span', text),
-        h('input', { value, onInput: (event: Event) => update((event.target as HTMLInputElement).value) }),
+        h('input', { value, placeholder, onInput: (event: Event) => update((event.target as HTMLInputElement).value) }),
       ])
     }
 

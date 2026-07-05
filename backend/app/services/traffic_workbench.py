@@ -43,6 +43,12 @@ ACTION_FILTER_TERMS = {
     "comment_text": ["comment_text", "评论"],
     "comment_image": ["comment_image", "评论"],
 }
+SOURCE_MODE_LABELS = {
+    "random_feed": "随机推荐流",
+    "competitor_videos": "拓客竞品视频",
+    "collected_keyword": "已采集关键词",
+    "search_keyword": "手动搜索关键词",
+}
 DOUYIN_LOGIN_PROCESS: subprocess.Popen[Any] | None = None
 TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
 COMMENT_EDITOR_SELECTOR = "#videoSideCard textarea, #videoSideCard [contenteditable='true'], #videoSideBar textarea, #videoSideBar [contenteditable='true'], textarea, [contenteditable='true']"
@@ -76,8 +82,8 @@ def get_plan(plan_id: str) -> dict[str, Any] | None:
 
 
 def create_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
-    plan = _normalize_plan(payload)
     plan_id = uuid.uuid4().hex
+    plan = _normalize_plan(payload, plan_id)
     with database.connect() as conn:
         conn.execute(
             """
@@ -108,7 +114,7 @@ def create_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
 
 
 def update_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, Any]:
-    plan = _normalize_plan(payload)
+    plan = _normalize_plan(payload, plan_id)
     with database.connect() as conn:
         row = conn.execute("SELECT id FROM traffic_plans WHERE id = ?", (plan_id,)).fetchone()
         if not row:
@@ -401,6 +407,7 @@ def list_logs(run_id: str) -> list[dict[str, Any]]:
 def list_records(
     *,
     query: str = "",
+    platform: str = "",
     status: str = "",
     action: str = "",
     page: int = 1,
@@ -414,6 +421,9 @@ def list_records(
         clauses.append("(tr.video_desc LIKE ? OR tr.author_name LIKE ? OR tr.comment_text LIKE ?)")
         like = f"%{query}%"
         params.extend([like, like, like])
+    if platform:
+        clauses.append("tr.platform = ?")
+        params.append(platform)
     if status:
         clauses.append("tr.status = ?")
         params.append(status)
@@ -2134,8 +2144,10 @@ def _validate_run_plan(plan: dict[str, Any]) -> None:
         raise ValueError("已选择评论图片，但引流设置里还没有可用图片")
 
 
-def _normalize_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
-    name = payload.name.strip() or "引流计划"
+def _normalize_plan(payload: TrafficPlanCreate, plan_id: str = "") -> dict[str, Any]:
+    name = payload.name.strip()
+    if not name or name == "随机推荐引流":
+        name = _default_plan_name(payload.source_mode, plan_id)
     return {
         "name": name,
         "platform": payload.platform,
@@ -2148,6 +2160,11 @@ def _normalize_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
         "action_comment_image": payload.action_comment_image,
         "enabled": payload.enabled,
     }
+
+
+def _default_plan_name(source_mode: str, plan_id: str) -> str:
+    source = SOURCE_MODE_LABELS.get(source_mode, source_mode or "引流计划")
+    return f"{source}-{plan_id[:8]}" if plan_id else source
 
 
 def _format_plan(row: Any) -> dict[str, Any]:
