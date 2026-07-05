@@ -64,8 +64,8 @@ class TrafficPlanCreate(BaseModel):
 
 class TrafficSettingsUpdate(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
-    texts: list[str] = Field(default_factory=list)
-    images: list[str] = Field(default_factory=list)
+    texts: list[Any] = Field(default_factory=list)
+    images: list[Any] = Field(default_factory=list)
 
 
 class ClearDataRequest(BaseModel):

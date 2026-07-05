@@ -698,6 +698,78 @@ def test_traffic_browse_only_plan_can_start_and_logs_user_reason(tmp_path: Path,
     assert detail["logs"][-1]["suggestion"]
 
 
+def test_traffic_plan_and_run_archive_filters(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="可归档计划", platform="dy"))
+    run = traffic_workbench.create_run(plan["id"])
+    with pytest.raises(ValueError, match="先停止"):
+        traffic_workbench.archive_plan(plan["id"])
+
+    with database.connect() as conn:
+        conn.execute("UPDATE traffic_runs SET status = 'completed' WHERE id = ?", (run["id"],))
+
+    archived_plan = traffic_workbench.archive_plan(plan["id"])
+    archived_run = traffic_workbench.archive_run(run["id"])
+    assert archived_plan["archived"] is True
+    assert archived_run["archived"] is True
+    assert traffic_workbench.list_plans() == []
+    assert traffic_workbench.list_runs() == []
+    assert len(traffic_workbench.list_plans(include_archived=True)) == 1
+    assert len(traffic_workbench.list_runs(include_archived=True)) == 1
+
+    assert traffic_workbench.restore_plan(plan["id"])["archived"] is False
+    assert traffic_workbench.restore_run(run["id"])["archived"] is False
+    assert len(traffic_workbench.list_plans()) == 1
+    assert len(traffic_workbench.list_runs()) == 1
+
+
+def test_traffic_hard_delete_clears_related_rows_and_dedup(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="删除计划", platform="dy"))
+    run = traffic_workbench.create_run(plan["id"])
+    with pytest.raises(ValueError, match="先停止"):
+        traffic_workbench.delete_run(run["id"])
+
+    with database.connect() as conn:
+        conn.execute("UPDATE traffic_runs SET status = 'completed' WHERE id = ?", (run["id"],))
+        record_id = conn.execute(
+            """
+            INSERT INTO traffic_records(run_id, plan_id, platform, video_id, author_id, actions, status)
+            VALUES(?, ?, 'dy', 'video-1', 'author-1', '["like"]', 'done')
+            """,
+            (run["id"], plan["id"]),
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO traffic_dedup_ledger(platform, video_id, author_id, action_type, content_hash, run_id, record_id)
+            VALUES('dy', 'video-1', 'author-1', 'like', '', ?, ?)
+            """,
+            (run["id"], record_id),
+        )
+
+    assert traffic_workbench.delete_run(run["id"])["deleted"] is True
+    with database.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) AS c FROM traffic_runs").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM traffic_records").fetchone()["c"] == 0
+        assert conn.execute("SELECT COUNT(*) AS c FROM traffic_dedup_ledger").fetchone()["c"] == 0
+
+    run = traffic_workbench.create_run(plan["id"])
+    with pytest.raises(ValueError, match="先停止"):
+        traffic_workbench.delete_plan(plan["id"])
+    with database.connect() as conn:
+        conn.execute("UPDATE traffic_runs SET status = 'completed' WHERE id = ?", (run["id"],))
+    assert traffic_workbench.delete_plan(plan["id"])["deleted"] is True
+    assert traffic_workbench.list_plans(include_archived=True) == []
+
+
 def test_traffic_comment_actions_require_materials(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficPlanCreate
@@ -716,6 +788,20 @@ def test_traffic_action_probability_default_is_sixty(tmp_path: Path) -> None:
     from app.services import traffic_workbench
 
     assert traffic_workbench.get_settings()["values"]["traffic_action_probability"] == "60"
+
+
+def test_traffic_material_settings_preserve_enabled_state(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.schemas import TrafficSettingsUpdate
+    from app.services import traffic_workbench
+
+    settings = traffic_workbench.update_settings(TrafficSettingsUpdate(
+        texts=[{"text": "不错！", "enabled": False}],
+        images=[{"path": "C:/tmp/a.png", "enabled": False}],
+    ))
+
+    assert settings["texts"][0]["enabled"] == 0
+    assert settings["images"][0]["enabled"] == 0
 
 
 def test_traffic_comment_text_is_inserted_as_whole_text(tmp_path: Path) -> None:

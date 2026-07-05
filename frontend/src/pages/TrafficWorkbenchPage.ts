@@ -4,7 +4,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   DataLine,
   Delete,
-  Document,
   Key,
   Monitor,
   Operation,
@@ -61,27 +60,23 @@ export default defineComponent({
     const videos = ref<Dict[]>([])
     const planDraft = ref<Dict>(defaultPlan())
     const settingsDraft = ref<Dict>({})
-    const textDraft = ref<string[]>([])
-    const imageDraft = ref('')
+    const textDraft = ref<Dict[]>([])
+    const imageDraft = ref<Dict[]>([])
     const uploadedImages = ref<Dict[]>([])
     const imageUploading = ref(false)
     const trafficEnv = ref<Dict>({})
     const envInstalling = ref(false)
     const envInstallResult = ref<Dict | null>(null)
     const douyinLoginOpening = ref(false)
-    const recordFilters = ref({ query: '', status: '', action: '', page: 1 })
+    const planArchiveFilter = ref('active')
+    const runArchiveFilter = ref('active')
+    const recordFilters = ref({ query: '', status: '', action: '', page: 1, page_size: 20 })
     const loading = ref(false)
 
     const view = computed(() => String(route.name || 'traffic-plans'))
-    const imagePreviewItems = computed(() => {
-      const previews = new Map<string, string>()
-      ;[...(settings.value.images || []), ...uploadedImages.value].forEach((item: Dict) => {
-        if (item.path && item.preview_url) previews.set(String(item.path), String(item.preview_url))
-      })
-      return imageLines()
-        .map(path => ({ path, preview_url: previews.get(path) || '' }))
-        .filter(item => item.preview_url)
-    })
+    // 归档数据默认隐藏，只有用户切换到“已归档”时才展示。
+    const visiblePlans = computed(() => plans.value.filter(plan => planArchiveFilter.value === 'archived' ? plan.archived : !plan.archived))
+    const visibleRuns = computed(() => runs.value.filter(run => runArchiveFilter.value === 'archived' ? run.archived : !run.archived))
 
     onMounted(loadPage)
     watch(view, () => loadPage())
@@ -95,14 +90,16 @@ export default defineComponent({
     }
 
     async function loadPlans() {
-      const { data } = await api.get('/traffic/plans')
+      const { data } = await api.get('/traffic/plans', { params: { include_archived: planArchiveFilter.value === 'archived' } })
       plans.value = data
     }
 
     async function loadRuns() {
-      const { data } = await api.get('/traffic/runs')
+      const { data } = await api.get('/traffic/runs', { params: { include_archived: runArchiveFilter.value === 'archived' } })
       runs.value = data
-      if (!selectedRun.value && data.length) await selectRun(data[0].id)
+      if (selectedRun.value && !visibleRuns.value.some(run => run.id === selectedRun.value?.id)) selectedRun.value = null
+      const firstVisible = visibleRuns.value[0]
+      if (!selectedRun.value && firstVisible) await selectRun(firstVisible.id)
       if (selectedRun.value) await selectRun(selectedRun.value.id)
     }
 
@@ -112,7 +109,7 @@ export default defineComponent({
     }
 
     async function loadRecords() {
-      const { data } = await api.get('/traffic/records', { params: { ...recordFilters.value, page_size: 20 } })
+      const { data } = await api.get('/traffic/records', { params: recordFilters.value })
       records.value = data
     }
 
@@ -121,8 +118,13 @@ export default defineComponent({
       settings.value = data
       uploadedImages.value = []
       settingsDraft.value = { ...(data.values || {}) }
-      textDraft.value = (data.texts || []).map((item: Dict) => String(item.text || ''))
-      imageDraft.value = (data.images || []).map((item: Dict) => item.path).join('\n')
+      textDraft.value = (data.texts || []).map((item: Dict) => ({ text: String(item.text || ''), enabled: materialEnabled(item.enabled), used_count: item.used_count || 0 }))
+      imageDraft.value = (data.images || []).map((item: Dict) => ({
+        path: String(item.path || ''),
+        preview_url: String(item.preview_url || ''),
+        enabled: materialEnabled(item.enabled),
+        used_count: item.used_count || 0,
+      }))
     }
 
     async function loadTrafficLicense() {
@@ -180,9 +182,35 @@ export default defineComponent({
     }
 
     async function deletePlan(planId: string) {
-      await api.delete(`/traffic/plans/${planId}`)
-      ElMessage.success('计划已删除')
-      await loadPlans()
+      try {
+        await ElMessageBox.confirm('硬删除会同步删除该计划下的批次、日志、视频明细、操作记录和防重复账本。确认继续？', '删除引流计划', { type: 'warning' })
+        await api.delete(`/traffic/plans/${planId}`)
+        ElMessage.success('计划已删除')
+        await Promise.all([loadPlans(), loadRuns(), loadRecords()])
+      } catch (error: any) {
+        if (isUserCancel(error)) return
+        ElMessage.error(error?.response?.data?.detail || '计划删除失败')
+      }
+    }
+
+    async function archivePlan(planId: string) {
+      try {
+        await api.post(`/traffic/plans/${planId}/archive`)
+        ElMessage.success('计划已归档')
+        await loadPlans()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '计划归档失败')
+      }
+    }
+
+    async function restorePlan(planId: string) {
+      try {
+        await api.post(`/traffic/plans/${planId}/restore`)
+        ElMessage.success('计划已恢复')
+        await loadPlans()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '计划恢复失败')
+      }
     }
 
     async function stopRun(runId: string) {
@@ -191,9 +219,44 @@ export default defineComponent({
       await loadRuns()
     }
 
+    async function archiveRun(runId: string) {
+      try {
+        await api.post(`/traffic/runs/${runId}/archive`)
+        ElMessage.success('批次已归档')
+        await loadRuns()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '批次归档失败')
+      }
+    }
+
+    async function restoreRun(runId: string) {
+      try {
+        await api.post(`/traffic/runs/${runId}/restore`)
+        ElMessage.success('批次已恢复')
+        await loadRuns()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '批次恢复失败')
+      }
+    }
+
+    async function deleteRun(runId: string) {
+      try {
+        await ElMessageBox.confirm('硬删除会同步删除该批次的日志、视频明细、操作记录和防重复账本。确认继续？', '删除引流批次', { type: 'warning' })
+        await api.delete(`/traffic/runs/${runId}`)
+        ElMessage.success('批次已删除')
+        if (selectedRun.value?.id === runId) selectedRun.value = null
+        await Promise.all([loadRuns(), loadRecords()])
+      } catch (error: any) {
+        if (isUserCancel(error)) return
+        ElMessage.error(error?.response?.data?.detail || '批次删除失败')
+      }
+    }
+
     async function saveSettings() {
-      const texts = textDraft.value.map(item => item.trim()).filter(Boolean)
-      const images = imageLines()
+      const texts = textDraft.value
+        .map(item => ({ text: String(item.text || '').trim(), enabled: Boolean(item.enabled) }))
+        .filter(item => item.text)
+      const images = imageLines().map(item => ({ path: item.path, enabled: Boolean(item.enabled) }))
       const { data } = await api.put('/traffic/settings', { values: settingsDraft.value, texts, images })
       settings.value = data
       uploadedImages.value = []
@@ -215,7 +278,7 @@ export default defineComponent({
             params: { filename: file.name },
             headers: { 'Content-Type': 'application/octet-stream' },
           })
-          appendImagePath(String(data.path || ''))
+          appendImagePath(data)
           uploadedImages.value = [data, ...uploadedImages.value.filter(item => item.path !== data.path)]
         }
         ElMessage.success('图片已上传，请保存设置')
@@ -259,7 +322,7 @@ export default defineComponent({
       await ElMessageBox.confirm('会清除引流批次、日志、操作记录和防重复账本，文案/图片/授权不会删除。', '清除引流记录', { type: 'warning' })
       await api.delete('/traffic/records')
       ElMessage.success('引流记录已清除')
-      await loadRecords()
+      await Promise.all([loadRecords(), loadRuns()])
     }
 
     async function openLicense() {
@@ -298,7 +361,7 @@ export default defineComponent({
     }
 
     function renderPlanPage() {
-      return h(SplitPane, { storageKey: 'traffic-plans', side: 'right', defaultSideWidth: 360 }, {
+      return h(SplitPane, { storageKey: 'traffic-plans', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
         default: () => h('section', { class: 'content-pane' }, [
           sectionTitle({ title: '创建引流计划', subtitle: '不选动作时就是纯自动刷视频', icon: Promotion, tone: 'teal' }),
           renderPlatformTabs(),
@@ -328,15 +391,16 @@ export default defineComponent({
           ]),
         ]),
         side: () => h('aside', { class: 'side-pane' }, [
-          sectionTitle({ title: '计划列表', subtitle: `${plans.value.length} 个计划`, icon: Tickets, tone: 'blue' }),
-          plans.value.length ? h('div', { class: 'task-list' }, plans.value.map(plan => renderPlanCard(plan))) : emptyState({ title: '暂无计划', description: '先在左侧创建一个引流计划', icon: Document }),
+          sectionTitle({ title: '计划列表', subtitle: `${visiblePlans.value.length} 个计划`, icon: Tickets, tone: 'blue' }),
+          renderArchiveTabs(planArchiveFilter.value, async value => { planArchiveFilter.value = value; await loadPlans() }),
+          renderPlanTable(),
         ]),
       })
     }
 
     function renderMonitorPage() {
       const run = selectedRun.value
-      return h(SplitPane, { storageKey: 'traffic-monitor', side: 'right', defaultSideWidth: 390 }, {
+      return h(SplitPane, { storageKey: 'traffic-monitor', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
         default: () => h('section', { class: 'content-pane' }, [
           sectionTitle({ title: '执行详情', subtitle: run?.plan_name || '选择右侧批次', icon: Monitor, tone: 'blue' }),
           run ? [
@@ -351,37 +415,69 @@ export default defineComponent({
             ]) : null,
             h('div', { class: 'log-console' }, (run.logs || []).length ? run.logs.map(renderLogLine) : [h('p', '暂无日志')]),
             sectionTitle({ title: '已处理视频', subtitle: `${(run.items || []).length} 条`, icon: VideoPlay, tone: 'green', compact: true }),
-            renderItemsTable(run.items || []),
+            h('div', { class: 'table-scroll traffic-detail-table' }, renderItemsTable(run.items || [])),
           ] : emptyState({ title: '请选择批次', description: '右侧选择一个批次查看日志', icon: Monitor }),
         ]),
         side: () => h('aside', { class: 'side-pane' }, [
           sectionTitle({ title: '批次列表', subtitle: '运行状态与历史', icon: Tickets, tone: 'blue' }),
-          h('button', { class: 'secondary-action', onClick: loadRuns }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
-          runs.value.length ? h('div', { class: 'task-list' }, runs.value.map(renderRunCard)) : emptyState({ title: '暂无批次', description: '启动计划后会出现在这里', icon: Tickets }),
+          h('div', { class: 'traffic-list-toolbar' }, [
+            renderArchiveTabs(runArchiveFilter.value, async value => { runArchiveFilter.value = value; await loadRuns() }),
+            h('button', { class: 'secondary-action', onClick: loadRuns }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
+          ]),
+          renderRunTable(),
         ]),
       })
     }
 
     function renderRecordsPage() {
-      return h('section', { class: 'table-workspace' }, [
+      const page = records.value.page || 1
+      const totalPages = records.value.total_pages || 1
+      return h('section', { class: 'pane table-workspace' }, [
         h('div', { class: 'table-library-bar' }, [
           sectionTitle({ title: '操作记录', subtitle: `共 ${records.value.total || 0} 条`, icon: DataLine, tone: 'green' }),
-          h('div', { class: 'table-filters' }, [
+          h('div', { class: 'table-filters traffic-record-filters' }, [
             h('input', { placeholder: '搜索视频/作者/评论', value: recordFilters.value.query, onInput: (event: Event) => recordFilters.value.query = (event.target as HTMLInputElement).value }),
-            h('select', { value: recordFilters.value.status, onChange: (event: Event) => recordFilters.value.status = (event.target as HTMLSelectElement).value }, [
+            h('select', { value: recordFilters.value.status, onChange: (event: Event) => { recordFilters.value.status = (event.target as HTMLSelectElement).value; recordFilters.value.page = 1 } }, [
               h('option', { value: '' }, '全部状态'),
               h('option', { value: 'browsed' }, '仅浏览'),
               h('option', { value: 'done' }, '已执行'),
+              h('option', { value: 'skipped' }, '已跳过'),
+              h('option', { value: 'failed' }, '失败'),
             ]),
-            h('button', { class: 'secondary-action', onClick: loadRecords }, '筛选'),
-            h('button', { class: 'text-icon-button danger', onClick: clearRecords }, [h(Delete, { class: 'inline-icon' }), '清除记录']),
+            h('select', { value: recordFilters.value.action, onChange: (event: Event) => { recordFilters.value.action = (event.target as HTMLSelectElement).value; recordFilters.value.page = 1 } }, [
+              h('option', { value: '' }, '全部动作'),
+              h('option', { value: 'like' }, '点赞'),
+              h('option', { value: 'collect' }, '收藏'),
+              h('option', { value: 'follow' }, '关注'),
+              h('option', { value: 'comment_text' }, '评论文案'),
+              h('option', { value: 'comment_image' }, '评论图片'),
+            ]),
+            h('button', { class: 'filter-button', onClick: () => { recordFilters.value.page = 1; loadRecords() } }, '筛选'),
           ]),
         ]),
-        h('div', { class: 'table-scroll' }, renderRecordsTable()),
-        h('div', { class: 'task-list-pagination' }, [
-          h('button', { disabled: records.value.page <= 1, onClick: () => { recordFilters.value.page -= 1; loadRecords() } }, '上一页'),
-          h('span', `第 ${records.value.page || 1} / ${records.value.total_pages || 1} 页`),
-          h('button', { disabled: records.value.page >= records.value.total_pages, onClick: () => { recordFilters.value.page += 1; loadRecords() } }, '下一页'),
+        h('div', { class: 'table-content' }, [
+          sectionTitle({ title: '记录表', subtitle: `${records.value.rows?.length || 0} / ${records.value.total || 0} 条`, icon: DataLine, tone: 'teal', compact: true }),
+          h('div', { class: 'table-scroll' }, renderRecordsTable()),
+          h('div', { class: 'table-pagination' }, [
+            h('div', { class: 'table-page-size' }, [
+              h('span', '每页'),
+              h('select', { value: String(recordFilters.value.page_size), onChange: (event: Event) => { recordFilters.value.page_size = Number((event.target as HTMLSelectElement).value); recordFilters.value.page = 1; loadRecords() } }, [
+                h('option', { value: '10' }, '10'),
+                h('option', { value: '20' }, '20'),
+                h('option', { value: '50' }, '50'),
+              ]),
+              h('span', '条'),
+            ]),
+            h('div', { class: 'table-page-controls' }, [
+              h('button', { disabled: page <= 1, onClick: () => { recordFilters.value.page -= 1; loadRecords() } }, '上一页'),
+              h('span', `${page} / ${totalPages}`),
+              h('button', { disabled: page >= totalPages, onClick: () => { recordFilters.value.page += 1; loadRecords() } }, '下一页'),
+            ]),
+          ]),
+          h('div', { class: 'traffic-danger-panel' }, [
+            sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Delete, tone: 'red', compact: true }),
+            h('button', { class: 'text-icon-button danger', onClick: clearRecords }, [h(Delete, { class: 'inline-icon' }), '清除引流记录']),
+          ]),
         ]),
       ])
     }
@@ -439,38 +535,77 @@ export default defineComponent({
 
     function renderSourceShortcuts() {
       if (planDraft.value.source_mode === 'collected_keyword') {
-        return h('div', { class: 'library-list' }, keywords.value.slice(0, 20).map(item => h('button', { onClick: () => planDraft.value.source_value = item.keyword }, `${item.keyword} (${item.content_count})`)))
+        return h('div', { class: 'table-scroll traffic-source-shortcuts' }, [
+          h('table', { class: 'data-table resizable-table' }, [
+            h('thead', [h('tr', ['关键词', '视频数', '操作'].map(text => h('th', text)))]),
+            h('tbody', keywords.value.slice(0, 20).length ? keywords.value.slice(0, 20).map(item => h('tr', [
+              h('td', tableText(item.keyword || '-')),
+              h('td', String(item.content_count || 0)),
+              h('td', h('button', { class: 'text-icon-button reserved', onClick: () => planDraft.value.source_value = item.keyword }, '填入')),
+            ])) : [emptyTableRow(3, '暂无已采集关键词')]),
+          ]),
+        ])
       }
       if (planDraft.value.source_mode === 'competitor_videos') {
-        return h('div', { class: 'task-list' }, videos.value.slice(0, 6).map(item => h('button', { class: 'task-row', onClick: () => planDraft.value.source_value = item.content_url || item.content_id }, [
-          h('strong', item.title || item.description || item.content_id),
-          h('small', item.author_name || '未知作者'),
-        ])))
+        return h('div', { class: 'table-scroll traffic-source-shortcuts' }, [
+          h('table', { class: 'data-table resizable-table' }, [
+            h('thead', [h('tr', ['视频', '作者', '操作'].map(text => h('th', text)))]),
+            h('tbody', videos.value.slice(0, 8).length ? videos.value.slice(0, 8).map(item => h('tr', [
+              h('td', tableText(item.title || item.description || item.content_id)),
+              h('td', tableText(item.author_name || '未知作者')),
+              h('td', h('button', { class: 'text-icon-button reserved', onClick: () => planDraft.value.source_value = item.content_url || item.content_id }, '填入')),
+            ])) : [emptyTableRow(3, '暂无竞品视频')]),
+          ]),
+        ])
       }
       return null
     }
 
-    function renderPlanCard(plan: Dict) {
-      return h('article', { class: 'task-row' }, [
-        h('div', { class: 'task-row-head' }, [
-          h('div', { class: 'task-title' }, [h('strong', plan.name), h('small', `${sourceLabel(plan.source_mode)} · ${plan.action_label}`)]),
-          h('span', { class: 'status pending' }, plan.platform === 'dy' ? '抖音' : '开发中'),
-        ]),
-        h('div', { class: 'task-card-actions' }, [
-          h('button', { class: 'primary-soft', onClick: () => startRun(plan.id) }, '启动'),
-          h('button', { class: 'danger', onClick: () => deletePlan(plan.id) }, '删除'),
+    function renderPlanTable() {
+      return h('div', { class: 'table-scroll traffic-side-scroll' }, [
+        h('table', { class: 'data-table resizable-table traffic-side-table' }, [
+          h('thead', [h('tr', ['计划名称', '平台', '来源模式', '来源内容', '动作组合', '状态', '创建时间', '操作'].map(text => h('th', text)))]),
+          h('tbody', visiblePlans.value.length ? visiblePlans.value.map(plan => h('tr', [
+            h('td', [h('strong', { class: 'table-primary-text', title: plan.name }, plan.name || '-')]),
+            h('td', platformLabel(plan.platform)),
+            h('td', sourceLabel(plan.source_mode)),
+            h('td', tableText(plan.source_value || '随机推荐流')),
+            h('td', tableText(plan.action_label || planActionLabel(plan))),
+            h('td', h('span', { class: ['status', plan.archived ? 'cancelled' : 'pending'] }, plan.archived ? '已归档' : '可启动')),
+            h('td', tableText(plan.created_at || '-')),
+            h('td', { class: 'traffic-row-actions' }, plan.archived ? [
+              h('button', { class: 'text-icon-button', onClick: () => restorePlan(plan.id) }, '恢复'),
+              h('button', { class: 'text-icon-button danger', onClick: () => deletePlan(plan.id) }, '删除'),
+            ] : [
+              h('button', { class: 'text-icon-button reserved', onClick: () => startRun(plan.id) }, '启动'),
+              h('button', { class: 'text-icon-button', onClick: () => archivePlan(plan.id) }, '归档'),
+            ]),
+          ])) : [emptyTableRow(8, planArchiveFilter.value === 'archived' ? '暂无已归档计划' : '暂无计划，先在左侧创建')]),
         ]),
       ])
     }
 
-    function renderRunCard(run: Dict) {
-      return h('article', { class: ['task-row', selectedRun.value?.id === run.id ? 'selected' : ''], onClick: () => selectRun(run.id) }, [
-        h('div', { class: 'task-row-head' }, [
-          h('div', { class: 'task-title' }, [h('strong', run.plan_name), h('small', run.stop_reason || sourceLabel(run.source_mode))]),
-          h('span', { class: ['status', statusClass(run.status)] }, statusText(run.status)),
-        ]),
-        h('div', { class: 'task-card-actions' }, [
-          isActiveStatus(run.status) ? h('button', { class: 'warning-soft', onClick: (event: Event) => { event.stopPropagation(); stopRun(run.id) } }, '停止') : null,
+    function renderRunTable() {
+      return h('div', { class: 'table-scroll traffic-side-scroll' }, [
+        h('table', { class: 'data-table resizable-table traffic-side-table' }, [
+          h('thead', [h('tr', ['批次', '计划', '状态', '浏览', '成功', '跳过/失败', '停机原因', '开始时间', '操作'].map(text => h('th', text)))]),
+          h('tbody', visibleRuns.value.length ? visibleRuns.value.map(run => h('tr', { class: selectedRun.value?.id === run.id ? 'selected-table-row' : '', onClick: () => selectRun(run.id) }, [
+            h('td', [h('strong', { class: 'table-primary-text', title: run.id }, shortId(run.id))]),
+            h('td', tableText(run.plan_name || '-')),
+            h('td', h('span', { class: ['status', statusClass(run.status)] }, statusText(run.status))),
+            h('td', String(run.browsed_count || 0)),
+            h('td', String(run.action_success_count || 0)),
+            h('td', `${run.skipped_count || 0}/${run.failed_count || 0}`),
+            h('td', tableText(run.stop_reason || '-')),
+            h('td', tableText(run.started_at || run.created_at || '-')),
+            h('td', { class: 'traffic-row-actions' }, run.archived ? [
+              h('button', { class: 'text-icon-button', onClick: stopClick(() => restoreRun(run.id)) }, '恢复'),
+              h('button', { class: 'text-icon-button danger', onClick: stopClick(() => deleteRun(run.id)) }, '删除'),
+            ] : [
+              isActiveStatus(run.status) ? h('button', { class: 'text-icon-button', onClick: stopClick(() => stopRun(run.id)) }, '停止') : h('button', { class: 'text-icon-button reserved', onClick: stopClick(() => startRun(run.plan_id)) }, '重试'),
+              !isActiveStatus(run.status) ? h('button', { class: 'text-icon-button', onClick: stopClick(() => archiveRun(run.id)) }, '归档') : null,
+            ]),
+          ])) : [emptyTableRow(9, runArchiveFilter.value === 'archived' ? '暂无已归档批次' : '暂无批次，启动计划后会出现')]),
         ]),
       ])
     }
@@ -486,13 +621,17 @@ export default defineComponent({
 
     function renderItemsTable(items: Dict[]) {
       if (!items.length) return emptyState({ title: '暂无视频记录', description: '任务开始处理视频后会显示在这里', icon: VideoPlay })
-      return h('table', { class: 'data-table' }, [
-        h('thead', [h('tr', ['视频', '作者', '动作', '状态'].map(text => h('th', text)))]),
+      return h('table', { class: 'data-table resizable-table traffic-detail-data-table' }, [
+        h('thead', [h('tr', ['时间', '视频', '作者', '点赞数', '评论数', '动作结果', '状态', '原因'].map(text => h('th', text)))]),
         h('tbody', items.map(item => h('tr', [
-          h('td', item.video_desc || item.video_id),
-          h('td', item.author_name || '-'),
-          h('td', item.actions_done || '[]'),
-          h('td', h('span', { class: 'status succeeded' }, item.status || '-')),
+          h('td', tableText(item.created_at || '-')),
+          h('td', renderVideoCell(item)),
+          h('td', tableText(item.author_name || '-')),
+          h('td', item.like_count ?? '-'),
+          h('td', item.comment_count ?? '-'),
+          h('td', tableText(actionsLabel(item.actions_done))),
+          h('td', h('span', { class: ['status', recordStatusClass(item.status)] }, recordStatusText(item.status))),
+          h('td', tableText(item.skip_reason || '-')),
         ]))),
       ])
     }
@@ -500,16 +639,22 @@ export default defineComponent({
     function renderRecordsTable() {
       const rows = records.value.rows || []
       if (!rows.length) return emptyState({ title: '暂无操作记录', description: '执行批次后会自动写入记录', icon: DataLine })
-      return h('table', { class: 'data-table resizable-table' }, [
-        h('thead', [h('tr', ['视频简介', '评论内容', '作者', '视频点赞数', '评论数', '操作', '时间'].map(text => h('th', text)))]),
+      return h('table', { class: 'data-table resizable-table traffic-record-table' }, [
+        h('thead', [h('tr', ['时间', '视频简介', '作者', '点赞数', '评论数', '动作', '评论内容/图片', '状态', '原因', '计划/批次'].map(text => h('th', text)))]),
         h('tbody', rows.map((row: Dict) => h('tr', [
-          h('td', row.video_url ? h('a', { class: 'table-primary-link', href: row.video_url, target: '_blank' }, row.video_desc || row.video_id) : (row.video_desc || row.video_id)),
-          h('td', row.comment_text || row.comment_image_path || '-'),
+          h('td', tableText(row.created_at || '-')),
+          h('td', renderVideoCell(row)),
           h('td', row.author_name || '-'),
           h('td', row.like_count ?? '-'),
           h('td', row.comment_count ?? '-'),
-          h('td', (row.actions || []).join('、') || '仅浏览'),
-          h('td', row.created_at || '-'),
+          h('td', actionsLabel(row.actions)),
+          h('td', tableText(row.comment_text || imageName(row.comment_image_path || '') || '-')),
+          h('td', h('span', { class: ['status', recordStatusClass(row.status)] }, recordStatusText(row.status))),
+          h('td', tableText(row.reason || '-')),
+          h('td', [
+            h('span', { class: 'table-muted-text', title: row.plan_name || '-' }, row.plan_name || '-'),
+            h('small', { class: 'traffic-subtext' }, shortId(row.run_id)),
+          ]),
         ]))),
       ])
     }
@@ -598,57 +743,90 @@ export default defineComponent({
     function renderTextManager() {
       return h('div', { class: 'form-field field-full traffic-copy-manager' }, [
         h('div', { class: 'traffic-copy-head' }, [
-          h('span', `多文案 (${textDraft.value.filter(item => item.trim()).length})`),
+          h('span', `多文案 (${textDraft.value.filter(item => String(item.text || '').trim()).length})`),
           h('button', { class: 'secondary-action', type: 'button', onClick: addTextDraft }, [h(Plus, { class: 'inline-icon' }), '新增文案']),
         ]),
-        textDraft.value.length
-          ? h('div', { class: 'traffic-copy-list' }, textDraft.value.map((item, index) => h('div', { class: 'traffic-copy-row', key: index }, [
-            h('input', {
-              value: item,
-              placeholder: `文案 ${index + 1}`,
-              onInput: (event: Event) => updateTextDraft(index, (event.target as HTMLInputElement).value),
-            }),
-            h('button', { class: 'text-icon-button danger', type: 'button', title: '删除文案', onClick: () => removeTextDraft(index) }, [h(Delete, { class: 'inline-icon' }), '删除']),
-          ])))
-          : h('div', { class: 'traffic-copy-empty' }, [
-            h('span', '还没有文案。添加后执行评论时会随机抽取一条。'),
+        h('div', { class: 'table-scroll traffic-material-scroll' }, [
+          h('table', { class: 'data-table resizable-table traffic-material-table' }, [
+            h('thead', [h('tr', ['序号', '文案内容', '启用', '操作'].map(text => h('th', text)))]),
+            h('tbody', textDraft.value.length ? textDraft.value.map((item, index) => h('tr', { key: index }, [
+              h('td', String(index + 1)),
+              h('td', h('input', {
+                value: item.text,
+                placeholder: `文案 ${index + 1}`,
+                onInput: (event: Event) => updateTextDraft(index, { text: (event.target as HTMLInputElement).value }),
+              })),
+              h('td', h('label', { class: 'traffic-switch' }, [
+                h('input', {
+                  type: 'checkbox',
+                  checked: Boolean(item.enabled),
+                  onChange: (event: Event) => updateTextDraft(index, { enabled: (event.target as HTMLInputElement).checked }),
+                }),
+                '启用',
+              ])),
+              h('td', h('button', { class: 'text-icon-button danger', type: 'button', title: '删除文案', onClick: () => removeTextDraft(index) }, [h(Delete, { class: 'inline-icon' }), '删除'])),
+            ])) : [emptyTableRow(4, '还没有文案。添加后执行评论时会随机抽取一条。')]),
           ]),
+        ]),
       ])
     }
 
     function addTextDraft() {
-      textDraft.value = [...textDraft.value, '']
+      textDraft.value = [...textDraft.value, { text: '', enabled: true }]
     }
 
-    function updateTextDraft(index: number, value: string) {
-      textDraft.value = textDraft.value.map((item, itemIndex) => itemIndex === index ? value : item)
+    function updateTextDraft(index: number, patch: Dict) {
+      textDraft.value = textDraft.value.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)
     }
 
     function removeTextDraft(index: number) {
       textDraft.value = textDraft.value.filter((_, itemIndex) => itemIndex !== index)
     }
 
+    function addImageDraft() {
+      imageDraft.value = [...imageDraft.value, { path: '', preview_url: '', enabled: true }]
+    }
+
+    function updateImageDraft(index: number, patch: Dict) {
+      imageDraft.value = imageDraft.value.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)
+    }
+
+    function removeImageDraft(index: number) {
+      imageDraft.value = imageDraft.value.filter((_, itemIndex) => itemIndex !== index)
+    }
+
     function renderImageManager() {
       return h('div', { class: 'form-field field-full traffic-image-manager' }, [
         h('div', { class: 'traffic-image-head' }, [
-          h('span', '图片路径'),
+          h('span', `图片库 (${imageDraft.value.length})`),
           h('label', { class: ['secondary-action', imageUploading.value ? 'is-disabled' : ''] }, [
             h('input', { class: 'traffic-image-input', type: 'file', accept: 'image/*', multiple: true, disabled: imageUploading.value, onChange: uploadImages }),
             imageUploading.value ? '上传中...' : '上传图片',
           ]),
         ]),
-        h('textarea', {
-          rows: 5,
-          placeholder: '上传图片后自动填入；也可以一行一个本地图片路径',
-          value: imageDraft.value,
-          onInput: (event: Event) => imageDraft.value = (event.target as HTMLTextAreaElement).value,
-        }),
-        imagePreviewItems.value.length
-          ? h('div', { class: 'traffic-image-preview-grid' }, imagePreviewItems.value.map(item => h('figure', { class: 'traffic-image-preview' }, [
-            h('img', { src: item.preview_url, alt: imageName(item.path) }),
-            h('figcaption', imageName(item.path)),
-          ])))
-          : h('small', { class: 'traffic-image-help' }, '上传到图片库后会在这里显示预览。'),
+        h('div', { class: 'table-scroll traffic-material-scroll' }, [
+          h('table', { class: 'data-table resizable-table traffic-material-table' }, [
+            h('thead', [h('tr', ['预览', '文件名/路径', '启用', '操作'].map(text => h('th', text)))]),
+            h('tbody', imageDraft.value.length ? imageDraft.value.map((item, index) => h('tr', { key: item.path || index }, [
+              h('td', item.preview_url ? h('img', { class: 'traffic-image-thumb', src: item.preview_url, alt: imageName(item.path) }) : h('span', { class: 'table-muted-text' }, '无预览')),
+              h('td', h('input', {
+                value: item.path,
+                placeholder: '本地图片路径',
+                onInput: (event: Event) => updateImageDraft(index, { path: (event.target as HTMLInputElement).value }),
+              })),
+              h('td', h('label', { class: 'traffic-switch' }, [
+                h('input', {
+                  type: 'checkbox',
+                  checked: Boolean(item.enabled),
+                  onChange: (event: Event) => updateImageDraft(index, { enabled: (event.target as HTMLInputElement).checked }),
+                }),
+                '启用',
+              ])),
+              h('td', h('button', { class: 'text-icon-button danger', type: 'button', title: '删除图片', onClick: () => removeImageDraft(index) }, [h(Delete, { class: 'inline-icon' }), '删除'])),
+            ])) : [emptyTableRow(4, '上传图片后会显示预览；也可以新增后手动填写本地路径。')]),
+          ]),
+        ]),
+        h('button', { class: 'secondary-action traffic-add-row-button', type: 'button', onClick: addImageDraft }, [h(Plus, { class: 'inline-icon' }), '新增路径']),
       ])
     }
 
@@ -679,6 +857,10 @@ export default defineComponent({
       return Object.fromEntries(sourceOptions)[value] || value
     }
 
+    function platformLabel(value: string) {
+      return ({ dy: '抖音', ks: '快手', xhs: '小红书' } as Dict)[value] || value || '-'
+    }
+
     function statusText(status: string) {
       return ({ queued: '排队中', running: '运行中', completed: '已完成', failed: '失败', stopped: '已停止' } as Dict)[status] || status
     }
@@ -691,23 +873,94 @@ export default defineComponent({
       return 'pending'
     }
 
+    function recordStatusText(status: string) {
+      return ({ browsed: '仅浏览', done: '已执行', skipped: '已跳过', failed: '失败', pending: '待处理' } as Dict)[status] || status || '-'
+    }
+
+    function recordStatusClass(status: string) {
+      if (status === 'done' || status === 'browsed') return 'succeeded'
+      if (status === 'failed') return 'failed'
+      if (status === 'skipped') return 'cancelled'
+      return 'pending'
+    }
+
     function isActiveStatus(status: string) {
       return status === 'queued' || status === 'running'
     }
 
-    function imageLines() {
-      return imageDraft.value.split('\n').map(item => item.trim()).filter(Boolean)
+    function renderArchiveTabs(value: string, update: (value: string) => unknown) {
+      return h('div', { class: 'library-list traffic-archive-tabs' }, [
+        h('button', { class: value === 'active' ? 'selected' : '', onClick: () => update('active') }, '未归档'),
+        h('button', { class: value === 'archived' ? 'selected' : '', onClick: () => update('archived') }, '已归档'),
+      ])
     }
 
-    function appendImagePath(path: string) {
-      if (!path) return
+    function tableText(value: unknown) {
+      const text = String(value || '-')
+      return h('span', { class: 'table-muted-text', title: text }, text)
+    }
+
+    function emptyTableRow(colspan: number, text: string) {
+      return h('tr', [h('td', { class: 'table-empty', colspan }, text)])
+    }
+
+    function renderVideoCell(row: Dict) {
+      const label = row.video_desc || row.video_id || row.video_url || '-'
+      const content = h('span', { class: 'table-primary-text', title: label }, label)
+      return row.video_url ? h('a', { class: 'table-primary-link', href: row.video_url, target: '_blank' }, [content]) : content
+    }
+
+    function actionsLabel(value: unknown) {
+      let actions = value
+      if (typeof value === 'string') {
+        try {
+          actions = JSON.parse(value)
+        } catch {
+          actions = value ? [value] : []
+        }
+      }
+      const labels: Dict = { like: '点赞', collect: '收藏', follow: '关注', comment_text: '评论文案', comment_image: '评论图片' }
+      const items = Array.isArray(actions) ? actions : []
+      return items.map(item => labels[item] || item).join('、') || '仅浏览'
+    }
+
+    function shortId(value: unknown) {
+      const text = String(value || '-')
+      return text.length > 10 ? text.slice(0, 8) : text
+    }
+
+    function imageLines() {
+      return imageDraft.value
+        .map(item => ({ path: String(item.path || '').trim(), enabled: Boolean(item.enabled), preview_url: String(item.preview_url || '') }))
+        .filter(item => item.path)
+    }
+
+    function appendImagePath(image: Dict | string) {
+      const path = typeof image === 'string' ? image : String(image.path || '')
+      if (!path.trim()) return
       const lines = imageLines()
-      if (!lines.includes(path)) lines.push(path)
-      imageDraft.value = lines.join('\n')
+      if (!lines.some(item => item.path === path)) {
+        imageDraft.value = [{ path, preview_url: typeof image === 'string' ? '' : String(image.preview_url || ''), enabled: true }, ...imageDraft.value]
+      }
     }
 
     function imageName(path: string) {
       return path.split(/[\\/]/).pop() || path
+    }
+
+    function materialEnabled(value: unknown) {
+      return !['0', 'false', 'no', 'off'].includes(String(value ?? true).toLowerCase())
+    }
+
+    function stopClick(action: () => unknown) {
+      return (event: Event) => {
+        event.stopPropagation()
+        action()
+      }
+    }
+
+    function isUserCancel(error: unknown) {
+      return error === 'cancel' || error === 'close'
     }
 
     return () => {

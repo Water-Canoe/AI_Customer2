@@ -125,8 +125,8 @@ def check_traffic_license(payload: LicenseUpdate) -> dict[str, object]:
 
 
 @app.get("/api/traffic/plans")
-def list_traffic_plans() -> list[dict[str, object]]:
-    return traffic_workbench.list_plans()
+def list_traffic_plans(include_archived: bool = False) -> list[dict[str, object]]:
+    return traffic_workbench.list_plans(include_archived)
 
 
 @app.post("/api/traffic/plans")
@@ -147,7 +147,26 @@ def update_traffic_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, o
 
 @app.delete("/api/traffic/plans/{plan_id}")
 def delete_traffic_plan(plan_id: str) -> dict[str, object]:
-    return traffic_workbench.delete_plan(plan_id)
+    try:
+        return traffic_workbench.delete_plan(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/traffic/plans/{plan_id}/archive")
+def archive_traffic_plan(plan_id: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.archive_plan(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/traffic/plans/{plan_id}/restore")
+def restore_traffic_plan(plan_id: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.restore_plan(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/traffic/plans/{plan_id}/runs")
@@ -162,8 +181,8 @@ def create_traffic_run(plan_id: str, background_tasks: BackgroundTasks) -> dict[
 
 
 @app.get("/api/traffic/runs")
-def list_traffic_runs() -> list[dict[str, object]]:
-    return traffic_workbench.list_runs()
+def list_traffic_runs(include_archived: bool = False) -> list[dict[str, object]]:
+    return traffic_workbench.list_runs(include_archived)
 
 
 @app.get("/api/traffic/runs/{run_id}")
@@ -180,6 +199,30 @@ def stop_traffic_run(run_id: str) -> dict[str, object]:
         return traffic_workbench.stop_run(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/traffic/runs/{run_id}/archive")
+def archive_traffic_run(run_id: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.archive_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/traffic/runs/{run_id}/restore")
+def restore_traffic_run(run_id: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.restore_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/traffic/runs/{run_id}")
+def delete_traffic_run(run_id: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.delete_run(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/traffic/runs/{run_id}/logs")

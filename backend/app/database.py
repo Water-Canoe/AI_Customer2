@@ -293,6 +293,7 @@ CREATE TABLE IF NOT EXISTS traffic_plans (
     action_comment_text INTEGER NOT NULL DEFAULT 0,
     action_comment_image INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
+    archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -309,6 +310,7 @@ CREATE TABLE IF NOT EXISTS traffic_runs (
     stop_reason TEXT NOT NULL DEFAULT '',
     stop_suggestion TEXT NOT NULL DEFAULT '',
     stop_requested INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
     started_at TEXT,
     finished_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -492,6 +494,8 @@ def init_db() -> None:
         _ensure_column(conn, "traffic_runs", "stop_reason", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "traffic_runs", "stop_suggestion", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "traffic_runs", "stop_requested", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_plans", "archived", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_runs", "archived", "INTEGER NOT NULL DEFAULT 0")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",

@@ -52,9 +52,13 @@ class TrafficStop(Exception):
     details: dict[str, Any] | None = None
 
 
-def list_plans() -> list[dict[str, Any]]:
+ACTIVE_RUN_STATUSES = {"queued", "running"}
+
+
+def list_plans(include_archived: bool = False) -> list[dict[str, Any]]:
     with database.connect() as conn:
-        rows = conn.execute("SELECT * FROM traffic_plans ORDER BY created_at DESC").fetchall()
+        where = "" if include_archived else "WHERE archived = 0"
+        rows = conn.execute(f"SELECT * FROM traffic_plans {where} ORDER BY created_at DESC").fetchall()
     return [_format_plan(row) for row in rows]
 
 
@@ -132,14 +136,66 @@ def update_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, Any]:
 
 def delete_plan(plan_id: str) -> dict[str, Any]:
     with database.connect() as conn:
+        active = conn.execute(
+            """
+            SELECT 1 FROM traffic_runs
+            WHERE plan_id = ? AND status IN ('queued', 'running')
+            LIMIT 1
+            """,
+            (plan_id,),
+        ).fetchone()
+        if active:
+            raise ValueError("该计划仍有运行中的批次，请先停止批次后再删除")
+        # 防重复账本外键会保留空引用，硬删除时必须主动清掉本计划痕迹。
+        conn.execute(
+            """
+            DELETE FROM traffic_dedup_ledger
+            WHERE run_id IN (SELECT id FROM traffic_runs WHERE plan_id = ?)
+               OR record_id IN (SELECT id FROM traffic_records WHERE plan_id = ?)
+            """,
+            (plan_id, plan_id),
+        )
         conn.execute("DELETE FROM traffic_plans WHERE id = ?", (plan_id,))
     return {"deleted": True}
+
+
+def archive_plan(plan_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        active = conn.execute(
+            """
+            SELECT 1 FROM traffic_runs
+            WHERE plan_id = ? AND status IN ('queued', 'running')
+            LIMIT 1
+            """,
+            (plan_id,),
+        ).fetchone()
+        if active:
+            raise ValueError("该计划仍有运行中的批次，请先停止批次后再归档")
+        return _set_plan_archived(conn, plan_id, True)
+
+
+def restore_plan(plan_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        return _set_plan_archived(conn, plan_id, False)
+
+
+def _set_plan_archived(conn: Any, plan_id: str, archived: bool) -> dict[str, Any]:
+    cursor = conn.execute(
+        "UPDATE traffic_plans SET archived = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+        (1 if archived else 0, plan_id),
+    )
+    if cursor.rowcount == 0:
+        raise ValueError("引流计划不存在")
+    row = conn.execute("SELECT * FROM traffic_plans WHERE id = ?", (plan_id,)).fetchone()
+    return _format_plan(row)
 
 
 def create_run(plan_id: str) -> dict[str, Any]:
     plan = get_plan(plan_id)
     if not plan:
         raise ValueError("引流计划不存在")
+    if plan.get("archived"):
+        raise ValueError("该计划已归档，请先恢复后再启动")
     _validate_run_plan(plan)
     run_id = uuid.uuid4().hex
     with database.connect() as conn:
@@ -188,13 +244,15 @@ def _legacy_campaign_id(conn: Any) -> int:
     ).lastrowid)
 
 
-def list_runs() -> list[dict[str, Any]]:
+def list_runs(include_archived: bool = False) -> list[dict[str, Any]]:
     with database.connect() as conn:
+        where = "" if include_archived else "WHERE r.archived = 0"
         rows = conn.execute(
-            """
+            f"""
             SELECT r.*, p.name AS plan_name, p.platform, p.source_mode
             FROM traffic_runs r
             JOIN traffic_plans p ON p.id = r.plan_id
+            {where}
             ORDER BY r.created_at DESC
             """
         ).fetchall()
@@ -255,7 +313,59 @@ def stop_run(run_id: str) -> dict[str, Any]:
             "无需重复点击，稍等几秒后查看最终状态。",
             {},
         )
-    return get_run(run_id) or {}
+        return get_run(run_id) or {}
+
+
+def archive_run(run_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        return _set_run_archived(conn, run_id, True)
+
+
+def restore_run(run_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        return _set_run_archived(conn, run_id, False)
+
+
+def _set_run_archived(conn: Any, run_id: str, archived: bool) -> dict[str, Any]:
+    row = conn.execute("SELECT status FROM traffic_runs WHERE id = ?", (run_id,)).fetchone()
+    if not row:
+        raise ValueError("引流批次不存在")
+    if archived and row["status"] in ACTIVE_RUN_STATUSES:
+        raise ValueError("批次仍在运行或排队，请先停止后再归档")
+    conn.execute(
+        "UPDATE traffic_runs SET archived = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+        (1 if archived else 0, run_id),
+    )
+    updated = conn.execute(
+        """
+        SELECT r.*, p.name AS plan_name, p.platform, p.source_mode
+        FROM traffic_runs r
+        JOIN traffic_plans p ON p.id = r.plan_id
+        WHERE r.id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    return _format_run(updated)
+
+
+def delete_run(run_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        row = conn.execute("SELECT status FROM traffic_runs WHERE id = ?", (run_id,)).fetchone()
+        if not row:
+            raise ValueError("引流批次不存在")
+        if row["status"] in ACTIVE_RUN_STATUSES:
+            raise ValueError("批次仍在运行或排队，请先停止后再删除")
+        # 单个批次硬删除时同步清理防重复账本，避免记录删了但动作仍被判重。
+        conn.execute(
+            """
+            DELETE FROM traffic_dedup_ledger
+            WHERE run_id = ?
+               OR record_id IN (SELECT id FROM traffic_records WHERE run_id = ?)
+            """,
+            (run_id, run_id),
+        )
+        conn.execute("DELETE FROM traffic_runs WHERE id = ?", (run_id,))
+    return {"deleted": True}
 
 
 def list_logs(run_id: str) -> list[dict[str, Any]]:
@@ -280,23 +390,26 @@ def list_records(
     clauses: list[str] = []
     params: list[Any] = []
     if query:
-        clauses.append("(video_desc LIKE ? OR author_name LIKE ? OR comment_text LIKE ?)")
+        clauses.append("(tr.video_desc LIKE ? OR tr.author_name LIKE ? OR tr.comment_text LIKE ?)")
         like = f"%{query}%"
         params.extend([like, like, like])
     if status:
-        clauses.append("status = ?")
+        clauses.append("tr.status = ?")
         params.append(status)
     if action:
-        clauses.append("actions LIKE ?")
+        clauses.append("tr.actions LIKE ?")
         params.append(f"%{action}%")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with database.connect() as conn:
-        total = conn.execute(f"SELECT COUNT(*) AS c FROM traffic_records {where}", params).fetchone()["c"]
+        total = conn.execute(f"SELECT COUNT(*) AS c FROM traffic_records tr {where}", params).fetchone()["c"]
         rows = conn.execute(
             f"""
-            SELECT * FROM traffic_records
+            SELECT tr.*, p.name AS plan_name, r.status AS run_status
+            FROM traffic_records tr
+            LEFT JOIN traffic_plans p ON p.id = tr.plan_id
+            LEFT JOIN traffic_runs r ON r.id = tr.run_id
             {where}
-            ORDER BY created_at DESC, id DESC
+            ORDER BY tr.created_at DESC, tr.id DESC
             LIMIT ? OFFSET ?
             """,
             [*params, page_size, (page - 1) * page_size],
@@ -347,10 +460,10 @@ def update_settings(payload: TrafficSettingsUpdate) -> dict[str, Any]:
                 database.set_setting(conn, key, payload.values.get(key, default))
         conn.execute("DELETE FROM traffic_material_texts")
         conn.execute("DELETE FROM traffic_material_images")
-        for text in _clean_lines(payload.texts):
-            conn.execute("INSERT INTO traffic_material_texts(text, enabled) VALUES(?, 1)", (text,))
-        for image in _clean_lines(payload.images):
-            conn.execute("INSERT INTO traffic_material_images(path, enabled) VALUES(?, 1)", (image,))
+        for text, enabled in _clean_material_rows(payload.texts, "text"):
+            conn.execute("INSERT INTO traffic_material_texts(text, enabled) VALUES(?, ?)", (text, int(enabled)))
+        for image, enabled in _clean_material_rows(payload.images, "path"):
+            conn.execute("INSERT INTO traffic_material_images(path, enabled) VALUES(?, ?)", (image, int(enabled)))
     return get_settings()
 
 
@@ -2023,13 +2136,17 @@ def _format_plan(row: Any) -> dict[str, Any]:
     data["action_comment_text"] = bool(data.get("action_comment_text"))
     data["action_comment_image"] = bool(data.get("action_comment_image"))
     data["enabled"] = bool(data.get("enabled"))
+    data["archived"] = bool(data.get("archived"))
     data["actions"] = _plan_actions(data)
     data["action_label"] = "、".join(_action_label(action) for action in data["actions"]) or "仅浏览"
     return data
 
 
 def _format_run(row: Any) -> dict[str, Any]:
-    return database.row_to_dict(row) or {}
+    data = database.row_to_dict(row) or {}
+    if "archived" in data:
+        data["archived"] = bool(data.get("archived"))
+    return data
 
 
 def _format_record(row: Any) -> dict[str, Any]:
@@ -2264,8 +2381,22 @@ def _hash_text(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()
 
 
-def _clean_lines(values: list[str]) -> list[str]:
-    return [str(item).strip() for item in values if str(item).strip()]
+def _clean_material_rows(values: list[Any], value_key: str) -> list[tuple[str, bool]]:
+    rows: list[tuple[str, bool]] = []
+    for item in values:
+        if isinstance(item, dict):
+            value = str(item.get(value_key) or item.get("value") or "").strip()
+            enabled = _material_enabled(item.get("enabled", True))
+        else:
+            value = str(item).strip()
+            enabled = True
+        if value:
+            rows.append((value, enabled))
+    return rows
+
+
+def _material_enabled(value: Any) -> bool:
+    return str(value).lower() not in {"0", "false", "no", "off"}
 
 
 def _int_setting(settings: dict[str, Any], key: str, default: int, minimum: int, maximum: int) -> int:
