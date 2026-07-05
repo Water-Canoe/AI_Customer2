@@ -397,6 +397,7 @@ export default defineComponent({
           h('div', { class: 'form-grid traffic-settings-form' }, [
             settingInput('traffic_round_video_limit', '每轮视频上限'),
             settingInput('traffic_daily_action_limit', '每日动作上限'),
+            settingInput('traffic_action_probability', '操作执行概率%'),
             settingInput('traffic_min_watch_seconds', '最短停留秒数'),
             settingInput('traffic_max_watch_seconds', '最长停留秒数'),
             settingInput('traffic_author_cooldown_hours', '作者冷却小时'),

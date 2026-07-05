@@ -27,6 +27,7 @@ TRAFFIC_SETTING_KEYS = {
     "traffic_author_cooldown_hours": "24",
     "traffic_stop_after_failures": "3",
     "traffic_close_browser_on_failure": "true",
+    "traffic_action_probability": "60",
 }
 
 TRAFFIC_IMAGE_DIR = database.BACKEND_ROOT / "runtime" / "traffic_images"
@@ -523,6 +524,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     stop_after_failures = _int_setting(settings, "traffic_stop_after_failures", 3, 1, 10)
     author_cooldown_hours = _int_setting(settings, "traffic_author_cooldown_hours", 24, 0, 720)
     close_browser_on_failure = _bool_setting(settings, "traffic_close_browser_on_failure", True)
+    action_probability = _int_setting(settings, "traffic_action_probability", 60, 0, 100)
     action_budget = max(0, daily_action_limit - _daily_action_count())
     failure_count = 0
     no_progress_count = 0
@@ -585,8 +587,8 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                 watch_seconds = random.randint(min_watch, max_watch)
                 _append_log(run_id, "info", "browse", f"正在浏览视频：{video['video_desc'][:36] or video['video_id']}。", "按设置随机停留", f"本次停留约 {watch_seconds} 秒。", {"video_id": video["video_id"]})
                 page.wait_for_timeout(watch_seconds * 1000)
-                done_actions, comment_text, image_path, skipped_by_error = _execute_actions_with_retry(run_id, plan, page, video, action_budget)
-                action_budget = max(0, action_budget - len(done_actions))
+                done_actions, comment_text, image_path, skipped_by_error = _execute_actions_with_retry(run_id, plan, page, video, action_budget, action_probability)
+                action_budget = max(0, action_budget - _real_action_count(done_actions))
                 if skipped_by_error:
                     _record_video(run_id, plan, video, ["跳过"], comment_text, image_path, "skipped", "连续动作失败，已跳过当前视频")
                     if index < limit - 1 and not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
@@ -603,7 +605,8 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                     _append_log(run_id, "warning", "stop", f"当前视频没有完成任何动作，连续失败 {failure_count} 次。", "动作没有确认成功", "系统会继续尝试下一个视频，连续失败过多会自动停止。", {"video_id": video["video_id"]})
                 else:
                     failure_count = 0
-                _record_video(run_id, plan, video, done_actions or ["仅浏览"], comment_text, image_path, "browsed" if not plan["actions"] else "done")
+                record_actions = done_actions or ["仅浏览"]
+                _record_video(run_id, plan, video, record_actions, comment_text, image_path, "browsed" if not plan["actions"] or record_actions == ["仅浏览"] else "done")
                 if plan["actions"] and action_budget <= 0:
                     _append_log(run_id, "success", "stop", "已达到每日动作上限，任务已自动完成。", "今日真实互动动作数量已经达到设置值", "可以明天继续，或到引流设置调整每日动作上限。", {"daily_action_limit": daily_action_limit})
                     return {
@@ -1228,58 +1231,86 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any], action_budget: int | None = None) -> tuple[list[str], str, str, bool]:
+def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any], action_budget: int | None = None, action_probability: int = 100) -> tuple[list[str], str, str, bool]:
     if not plan["actions"]:
         return [], "", "", False
     done: list[str] = []
     comment_text = ""
     image_path = ""
     failed_twice = False
+    attempted = False
+    probability_skipped = False
     remaining = action_budget
     if remaining is not None and remaining <= 0:
         _append_log(run_id, "warning", "stop", "今日动作上限已用完，当前视频只浏览不互动。", "每日动作上限已达到", "系统会结束本轮任务，避免超过设置的互动频率。", {"video_id": video.get("video_id")})
         return done, comment_text, image_path, False
     if "like" in plan["actions"]:
-        ok, failed = _run_action_with_retry(run_id, page, video, "点赞视频", "like", lambda: _execute_click_action(run_id, page, video, "like", '[data-e2e="video-player-digg"]', "点赞视频"))
-        failed_twice = failed_twice or failed
-        if ok:
-            done.append("点赞视频")
-            remaining = None if remaining is None else remaining - 1
-        elif failed and not done:
-            return done, comment_text, image_path, True
+        if _skip_action_by_probability(run_id, video, "点赞视频", "like", action_probability):
+            probability_skipped = True
+        else:
+            attempted = True
+            ok, failed = _run_action_with_retry(run_id, page, video, "点赞视频", "like", lambda: _execute_click_action(run_id, page, video, "like", '[data-e2e="video-player-digg"]', "点赞视频"))
+            failed_twice = failed_twice or failed
+            if ok:
+                done.append("点赞视频")
+                remaining = None if remaining is None else remaining - 1
+            elif failed and not done:
+                return done, comment_text, image_path, True
     if remaining is not None and remaining <= 0:
         return done, comment_text, image_path, False
     if "collect" in plan["actions"]:
-        ok, failed = _run_action_with_retry(run_id, page, video, "收藏视频", "collect", lambda: _execute_click_action(run_id, page, video, "collect", '[data-e2e="video-player-collect"]', "收藏视频"))
-        failed_twice = failed_twice or failed
-        if ok:
-            done.append("收藏视频")
-            remaining = None if remaining is None else remaining - 1
-        elif failed and not done:
-            return done, comment_text, image_path, True
+        if _skip_action_by_probability(run_id, video, "收藏视频", "collect", action_probability):
+            probability_skipped = True
+        else:
+            attempted = True
+            ok, failed = _run_action_with_retry(run_id, page, video, "收藏视频", "collect", lambda: _execute_click_action(run_id, page, video, "collect", '[data-e2e="video-player-collect"]', "收藏视频"))
+            failed_twice = failed_twice or failed
+            if ok:
+                done.append("收藏视频")
+                remaining = None if remaining is None else remaining - 1
+            elif failed and not done:
+                return done, comment_text, image_path, True
     if remaining is not None and remaining <= 0:
         return done, comment_text, image_path, False
     if "follow" in plan["actions"]:
-        ok, failed = _run_action_with_retry(run_id, page, video, "关注作者", "follow", lambda: _execute_follow(run_id, page, video))
-        failed_twice = failed_twice or failed
-        if ok:
-            done.append("关注作者")
-            remaining = None if remaining is None else remaining - 1
-        elif failed and not done:
-            return done, comment_text, image_path, True
+        if _skip_action_by_probability(run_id, video, "关注作者", "follow", action_probability):
+            probability_skipped = True
+        else:
+            attempted = True
+            ok, failed = _run_action_with_retry(run_id, page, video, "关注作者", "follow", lambda: _execute_follow(run_id, page, video))
+            failed_twice = failed_twice or failed
+            if ok:
+                done.append("关注作者")
+                remaining = None if remaining is None else remaining - 1
+            elif failed and not done:
+                return done, comment_text, image_path, True
     if remaining is not None and remaining <= 0:
         return done, comment_text, image_path, False
     if "comment_text" in plan["actions"] or "comment_image" in plan["actions"]:
-        comment_text = _pick_text() if "comment_text" in plan["actions"] else ""
-        image_path = _pick_image() if "comment_image" in plan["actions"] else ""
-        ok, failed = _run_action_with_retry(run_id, page, video, "评论", "comment", lambda: _execute_comment(run_id, page, video, comment_text, image_path))
-        failed_twice = failed_twice or failed
-        if ok:
-            done.append("评论")
-            remaining = None if remaining is None else remaining - 1
-        elif failed and not done:
-            return done, comment_text, image_path, True
+        if _skip_action_by_probability(run_id, video, "评论", "comment", action_probability):
+            probability_skipped = True
+        else:
+            attempted = True
+            comment_text = _pick_text() if "comment_text" in plan["actions"] else ""
+            image_path = _pick_image() if "comment_image" in plan["actions"] else ""
+            ok, failed = _run_action_with_retry(run_id, page, video, "评论", "comment", lambda: _execute_comment(run_id, page, video, comment_text, image_path))
+            failed_twice = failed_twice or failed
+            if ok:
+                done.append("评论")
+                remaining = None if remaining is None else remaining - 1
+            elif failed and not done:
+                return done, comment_text, image_path, True
+    if not done and probability_skipped and not attempted:
+        return ["仅浏览"], comment_text, image_path, False
     return done, comment_text, image_path, bool(failed_twice and not done)
+
+
+def _skip_action_by_probability(run_id: str, video: dict[str, Any], label: str, phase: str, probability: int) -> bool:
+    chance = max(0, min(100, int(probability)))
+    if chance >= 100 or random.randint(1, 100) <= chance:
+        return False
+    _append_log(run_id, "info", phase, f"本次按操作执行概率跳过{label}。", f"当前操作执行概率为 {chance}%", "这是正常降频行为，用于减少每条视频都互动带来的风控风险。", {"video_id": video.get("video_id"), "probability": chance})
+    return True
 
 
 def _run_action_with_retry(run_id: str, page: Any, video: dict[str, Any], label: str, phase: str, action: Any) -> tuple[bool, bool]:
@@ -1314,8 +1345,12 @@ def _daily_action_count() -> int:
             actions = json.loads(row["actions"])
         except Exception:
             actions = []
-        total += len([item for item in actions if item not in ("仅浏览", "跳过")])
+        total += _real_action_count(actions)
     return total
+
+
+def _real_action_count(actions: list[str]) -> int:
+    return len([item for item in actions if item not in ("仅浏览", "跳过")])
 
 
 def _execute_click_action(run_id: str, page: Any, video: dict[str, Any], action: str, selector: str, label: str) -> bool:

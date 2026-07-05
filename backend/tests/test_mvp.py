@@ -711,6 +711,13 @@ def test_traffic_comment_actions_require_materials(tmp_path: Path) -> None:
         traffic_workbench.create_run(plan["id"])
 
 
+def test_traffic_action_probability_default_is_sixty(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    assert traffic_workbench.get_settings()["values"]["traffic_action_probability"] == "60"
+
+
 def test_traffic_comment_text_is_inserted_as_whole_text(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.services import traffic_workbench
@@ -791,6 +798,52 @@ def test_traffic_action_timeout_twice_skips_current_video(tmp_path: Path, monkey
     assert image_path == ""
     assert skipped is True
     assert "连续 2 次失败" in str(logs[-1][3])
+
+
+def test_traffic_action_probability_skips_each_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    called: list[str] = []
+    logs: list[tuple[object, ...]] = []
+    rolls = iter([60, 61])
+
+    monkeypatch.setattr(traffic_workbench.random, "randint", lambda *_: next(rolls))
+    monkeypatch.setattr(traffic_workbench, "_execute_click_action", lambda *args: called.append(str(args[3])) or True)
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
+
+    done, comment_text, image_path, skipped = traffic_workbench._execute_actions_with_retry(
+        "run-1",
+        {"actions": ["like", "collect"]},
+        object(),
+        {"video_id": "v1"},
+        action_probability=60,
+    )
+
+    assert done == ["点赞视频"]
+    assert comment_text == ""
+    assert image_path == ""
+    assert skipped is False
+    assert called == ["like"]
+    assert any("跳过收藏视频" in str(item[3]) for item in logs)
+
+
+def test_traffic_action_probability_all_skipped_is_browse_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    monkeypatch.setattr(traffic_workbench.random, "randint", lambda *_: 61)
+    monkeypatch.setattr(traffic_workbench, "_execute_click_action", lambda *args: pytest.fail("probability skipped actions should not execute"))
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: None)
+
+    done, _, _, skipped = traffic_workbench._execute_actions_with_retry(
+        "run-1",
+        {"actions": ["like", "collect"]},
+        object(),
+        {"video_id": "v1"},
+        action_probability=60,
+    )
+
+    assert done == ["仅浏览"]
+    assert skipped is False
 
 
 def test_traffic_failure_can_keep_browser_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
