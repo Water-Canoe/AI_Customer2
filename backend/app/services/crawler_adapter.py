@@ -30,7 +30,7 @@ MODE_LABELS = {
 PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
 
 RUNNING_PROCESSES: dict[str, subprocess.Popen[str]] = {}
-CDP_BROWSER_PROCESS: subprocess.Popen[str] | None = None
+CDP_BROWSER_CONTEXT: Any | None = None
 
 ACCOUNT_ANALYSIS_AWEME_LOG_MARKERS = (
     "store.douyin.update_douyin_aweme",
@@ -714,13 +714,16 @@ def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> st
     if _is_tcp_port_open("127.0.0.1", debug_port):
         return None
 
-    browser_path = _detect_browser_path(str(cdp_config["custom_browser_path"]))
-    user_data_dir = media_dir / "browser_data" / "ai_customer_cdp"
+    user_data_dir = media_dir / "browser_data" / "ai_customer_cloak_cdp"
     user_data_dir.mkdir(parents=True, exist_ok=True)
 
-    global CDP_BROWSER_PROCESS
+    try:
+        from cloakbrowser import launch_persistent_context
+    except ImportError as exc:
+        raise RuntimeError("缺少 CloakBrowser 依赖，请先安装 backend/requirements.txt 并执行 python -m cloakbrowser install") from exc
+
+    global CDP_BROWSER_CONTEXT
     args = [
-        browser_path,
         f"--remote-debugging-port={debug_port}",
         "--remote-debugging-address=127.0.0.1",
         "--no-first-run",
@@ -728,40 +731,36 @@ def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> st
         "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
         "--disable-renderer-backgrounding",
-        "--disable-features=TranslateUI",
-        "--disable-blink-features=AutomationControlled",
-        "--exclude-switches=enable-automation",
-        "--disable-infobars",
-        f"--user-data-dir={user_data_dir}",
     ]
-    if headless:
-        args.extend(["--headless=new", "--disable-gpu"])
-    else:
+    if not headless:
         args.append("--start-maximized")
 
-    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if platform.system() == "Windows" else 0
-    CDP_BROWSER_PROCESS = subprocess.Popen(
-        args,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        creationflags=creationflags,
+    # CloakBrowser 持有 Playwright context，MediaCrawler 通过 CDP 端口复用这个浏览器。
+    CDP_BROWSER_CONTEXT = launch_persistent_context(
+        str(user_data_dir),
+        headless=headless,
+        args=args,
+        viewport={"width": 1440, "height": 900},
+        locale="zh-CN",
     )
     if not _wait_for_tcp_port("127.0.0.1", debug_port, timeout_seconds=20):
-        raise RuntimeError(f"Chrome 已启动但 CDP 端口 {debug_port} 未就绪")
-    return f"检测到 MediaCrawler 需要连接已有 CDP 浏览器，但端口 {debug_port} 未开启；已自动启动 Chrome 调试实例"
+        try:
+            CDP_BROWSER_CONTEXT.close()
+        finally:
+            CDP_BROWSER_CONTEXT = None
+        raise RuntimeError(f"CloakBrowser 已启动但 CDP 端口 {debug_port} 未就绪")
+    return f"检测到 MediaCrawler 需要连接已有 CDP 浏览器，但端口 {debug_port} 未开启；已自动启动 CloakBrowser 调试实例"
 
 
 def _read_media_crawler_cdp_config(media_dir: Path) -> dict[str, object]:
     config_path = media_dir / "config" / "base_config.py"
     if not config_path.exists():
-        return {"enabled": False, "connect_existing": False, "debug_port": 9222, "custom_browser_path": ""}
+        return {"enabled": False, "connect_existing": False, "debug_port": 9222}
     text = config_path.read_text(encoding="utf-8", errors="ignore")
     return {
         "enabled": _read_bool_assignment(text, "ENABLE_CDP_MODE", False),
         "connect_existing": _read_bool_assignment(text, "CDP_CONNECT_EXISTING", False),
         "debug_port": _read_int_assignment(text, "CDP_DEBUG_PORT", 9222),
-        "custom_browser_path": _read_str_assignment(text, "CUSTOM_BROWSER_PATH", ""),
     }
 
 
@@ -773,42 +772,6 @@ def _read_bool_assignment(text: str, name: str, default: bool) -> bool:
 def _read_int_assignment(text: str, name: str, default: int) -> int:
     match = re.search(rf"^\s*{re.escape(name)}\s*=\s*(\d+)\b", text, re.MULTILINE)
     return int(match.group(1)) if match else default
-
-
-def _read_str_assignment(text: str, name: str, default: str) -> str:
-    match = re.search(rf"^\s*{re.escape(name)}\s*=\s*['\"]([^'\"]*)['\"]", text, re.MULTILINE)
-    return match.group(1) if match else default
-
-
-def _detect_browser_path(custom_browser_path: str = "") -> str:
-    if custom_browser_path and Path(custom_browser_path).is_file():
-        return custom_browser_path
-    candidates: list[str]
-    if platform.system() == "Windows":
-        candidates = [
-            os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe"),
-            os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
-        ]
-    elif platform.system() == "Darwin":
-        candidates = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        ]
-    else:
-        candidates = [
-            "/usr/bin/google-chrome",
-            "/usr/bin/google-chrome-stable",
-            "/usr/bin/chromium",
-            "/usr/bin/chromium-browser",
-            "/usr/bin/microsoft-edge",
-        ]
-    for candidate in candidates:
-        if Path(candidate).is_file():
-            return candidate
-    raise RuntimeError("找不到 Chrome 或 Edge，请安装浏览器或在 MediaCrawler config/base_config.py 设置 CUSTOM_BROWSER_PATH")
 
 
 def _is_tcp_port_open(host: str, port: int) -> bool:

@@ -2810,33 +2810,36 @@ def test_cdp_existing_mode_auto_launches_browser(tmp_path: Path, monkeypatch: py
                 "ENABLE_CDP_MODE = True",
                 "CDP_CONNECT_EXISTING = True",
                 "CDP_DEBUG_PORT = 9333",
-                'CUSTOM_BROWSER_PATH = ""',
             ]
         ),
         encoding="utf-8",
     )
 
-    popen_calls: list[list[str]] = []
+    launch_calls: list[dict[str, object]] = []
 
-    class FakeProcess:
-        pid = 12345
+    class FakeContext:
+        def close(self) -> None:
+            pass
 
-    def fake_popen(args: list[str], **_: object) -> FakeProcess:
-        popen_calls.append(args)
-        return FakeProcess()
+    def fake_launch_persistent_context(profile_dir: str, **kwargs: object) -> FakeContext:
+        launch_calls.append({"profile_dir": profile_dir, **kwargs})
+        return FakeContext()
+
+    fake_cloakbrowser = types.ModuleType("cloakbrowser")
+    fake_cloakbrowser.launch_persistent_context = fake_launch_persistent_context
 
     monkeypatch.setattr(crawler_adapter, "_is_tcp_port_open", lambda host, port: False)
     monkeypatch.setattr(crawler_adapter, "_wait_for_tcp_port", lambda host, port, timeout_seconds: True)
-    monkeypatch.setattr(crawler_adapter, "_detect_browser_path", lambda custom_browser_path="": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe")
-    monkeypatch.setattr(crawler_adapter.platform, "system", lambda: "Windows")
-    monkeypatch.setattr(crawler_adapter.subprocess, "Popen", fake_popen)
+    monkeypatch.setitem(sys.modules, "cloakbrowser", fake_cloakbrowser)
 
     message = crawler_adapter._ensure_cdp_browser_for_existing_mode(media_dir, headless=False)
 
     assert "9333" in str(message)
-    assert popen_calls
-    assert "--remote-debugging-port=9333" in popen_calls[0]
-    assert any(item.startswith("--user-data-dir=") for item in popen_calls[0])
+    assert "CloakBrowser" in str(message)
+    assert launch_calls
+    assert launch_calls[0]["headless"] is False
+    assert "--remote-debugging-port=9333" in launch_calls[0]["args"]
+    assert str(launch_calls[0]["profile_dir"]).endswith("ai_customer_cloak_cdp")
 
 
 def test_media_crawler_sqlite_schema_auto_initializes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

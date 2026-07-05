@@ -69,7 +69,7 @@ ICP 画像里的 `company_name` 是可选字段：填写后 AI 私信话术可�
 
 根目录内置的 MediaCrawler SQLite 如果是新建空文件，首次写入会因为缺少 `douyin_aweme`、`xhs_note` 等表而失败。后端适配器会在真实采集前检查当前平台内容表是否存在；缺表时会先在 MediaCrawler 根目录执行 `python main.py --init_db sqlite` 初始化表结构，再继续启动采集任务。该步骤只创建 MediaCrawler 原始库 schema，不会清空已有原始数据。
 
-根目录内置的 MediaCrawler 如果配置为 `ENABLE_CDP_MODE=True` 且 `CDP_CONNECT_EXISTING=True`，会要求 Chrome/Edge 先开放 CDP 调试端口，默认端口为 `9222`。后端适配器在启动 MediaCrawler 前会检查该端口；如果端口未开启，会自动启动一个独立的 Chrome 调试实例，用户数据目录为 `MediaCrawler/browser_data/ai_customer_cdp`，再让 MediaCrawler 继续按 CDP 模式连接。该逻辑只补齐“已有 CDP 浏览器”前置条件，不会切换到标准 Playwright，也不会修改 MediaCrawler 源码。
+根目录内置的 MediaCrawler 如果配置为 `ENABLE_CDP_MODE=True` 且 `CDP_CONNECT_EXISTING=True`，会要求浏览器先开放 CDP 调试端口，默认端口为 `9222`。后端适配器在启动 MediaCrawler 前会检查该端口；如果端口未开启，会自动启动一个独立的 CloakBrowser 调试实例，用户数据目录为 `MediaCrawler/browser_data/ai_customer_cloak_cdp`，再让 MediaCrawler 继续按 CDP 模式连接。该逻辑只补齐“已有 CDP 浏览器”前置条件，不会切换到标准 Playwright，也不会修改 MediaCrawler 源码。
 
 抖音 creator 找客户任务会通过项目 `sitecustomize` shim 增强稳定性：当单条视频详情、评论列表或创作者视频列表请求出现 `httpx.HTTPError`（例如代理连接失败、TLS 连接失败、网络抖动）时，项目会记录 `[AI_Customer.http_resilience]` 日志并跳过当前视频或停止当前账号后续翻页，避免一次网络异常让整个 MediaCrawler 子进程退出。该逻辑不伪造数据；如果网络持续不可用，任务仍可能导入 0 条有效数据，应优先检查代理、登录态和平台风控。
 
