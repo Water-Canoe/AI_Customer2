@@ -381,11 +381,11 @@ export default defineComponent({
     }
 
     function renderPlanPage() {
-      return h(SplitPane, { storageKey: 'traffic-plans', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
+      return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-plans', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
         default: () => h('section', { class: 'pane content-pane traffic-split-main' }, [
           sectionTitle({ title: '创建引流计划', subtitle: '不选动作时就是纯自动刷视频', icon: Promotion, tone: 'teal' }),
           renderPlatformTabs(),
-          h('div', { class: 'form-grid' }, [
+          h('div', { class: 'form-grid traffic-plan-form' }, [
             labelInput('计划名称', planDraft.value.name, value => planDraft.value.name = value, 'field-wide'),
             labelSelect('来源模式', planDraft.value.source_mode, sourceOptions, value => planDraft.value.source_mode = value),
             labelInput(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide'),
@@ -405,7 +405,7 @@ export default defineComponent({
             h('li', planActions(planDraft.value).length ? `将执行：${planActionLabel(planDraft.value)}` : '未选择动作：只自动刷视频并记录，不点赞、不收藏、不关注、不评论。'),
           ]),
           renderSourceShortcuts(),
-          h('div', { class: 'task-card-actions' }, [
+          h('div', { class: 'task-card-actions traffic-form-actions' }, [
             h('button', { class: 'primary-soft', disabled: loading.value, onClick: () => createPlan(false) }, '保存计划'),
             h('button', { class: 'primary-action', disabled: loading.value, onClick: () => createPlan(true) }, '保存并启动'),
           ]),
@@ -420,7 +420,7 @@ export default defineComponent({
 
     function renderMonitorPage() {
       const run = selectedRun.value
-      return h(SplitPane, { storageKey: 'traffic-monitor', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
+      return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-monitor', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
         default: () => h('section', { class: 'pane content-pane traffic-split-main traffic-monitor-pane' }, [
           sectionTitle({ title: '执行详情', subtitle: run?.plan_name || '选择右侧批次', icon: Monitor, tone: 'blue' }),
           run ? [
@@ -452,7 +452,7 @@ export default defineComponent({
     function renderRecordsPage() {
       const page = records.value.page || 1
       const totalPages = records.value.total_pages || 1
-      return h('section', { class: 'pane table-workspace' }, [
+      return h('section', { class: 'pane table-workspace traffic-records-workspace' }, [
         h('div', { class: 'table-library-bar traffic-record-bar' }, [
           sectionTitle({ title: '操作记录', subtitle: `共 ${records.value.total || 0} 条`, icon: DataLine, tone: 'green' }),
           h('div', { class: 'table-filters traffic-record-filters' }, [
@@ -503,10 +503,10 @@ export default defineComponent({
     }
 
     function renderSettingsPage() {
-      return h(SplitPane, { storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 320, minSideWidth: 280, maxSideWidth: 420 }, {
+      return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 320, minSideWidth: 280, maxSideWidth: 420 }, {
         default: () => h('section', { class: 'pane content-pane traffic-settings-pane traffic-split-main' }, [
           sectionTitle({ title: '引流设置', subtitle: '授权、文案、图片、限额统一在这里维护', icon: Setting, tone: 'teal' }),
-          h('div', { class: 'task-card-actions' }, [
+          h('div', { class: 'task-card-actions traffic-settings-actions' }, [
             h('button', { class: 'secondary-action', onClick: openLicense }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
             h('button', { class: 'primary-action', onClick: saveSettings }, '保存设置'),
           ]),
@@ -546,7 +546,7 @@ export default defineComponent({
     }
 
     function renderPlatformTabs() {
-      return h('div', { class: 'library-list' }, [
+      return h('div', { class: 'library-list traffic-platform-tabs' }, [
         h('button', { class: { selected: planDraft.value.platform === 'dy' }, onClick: () => choosePlatform('dy') }, '抖音'),
         h('button', { onClick: () => choosePlatform('ks') }, '快手'),
         h('button', { onClick: () => choosePlatform('xhs') }, '小红书'),
@@ -631,11 +631,13 @@ export default defineComponent({
     }
 
     function renderLogLine(log: Dict) {
-      return h('p', { class: `log-${log.level}` }, [
+      return h('article', { class: ['traffic-log-item', `log-${log.level}`] }, [
         h('time', log.created_at || ''),
-        ` ${log.message}`,
-        log.suggestion ? h('small', `  下一步：${log.suggestion}`) : null,
-        log.details && log.details !== '{}' ? h('details', [h('summary', '技术详情'), h('pre', log.details)]) : null,
+        h('div', { class: 'traffic-log-body' }, [
+          h('strong', log.message || '-'),
+          log.suggestion ? h('small', `下一步：${log.suggestion}`) : null,
+          log.details && log.details !== '{}' ? h('details', [h('summary', '技术详情'), h('pre', log.details)]) : null,
+        ]),
       ])
     }
 
