@@ -871,6 +871,15 @@ def test_traffic_failure_can_keep_browser_open(tmp_path: Path, monkeypatch: pyte
 def test_traffic_like_button_click_does_not_press_shortcut(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import traffic_workbench
 
+    class ResponseInfo:
+        value = type("Response", (), {"json": lambda self: {"status_code": 0}})()
+
+        def __enter__(self) -> "ResponseInfo":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
     class Keyboard:
         def __init__(self) -> None:
             self.pressed: list[str] = []
@@ -884,6 +893,9 @@ def test_traffic_like_button_click_does_not_press_shortcut(monkeypatch: pytest.M
 
         def wait_for_timeout(self, _: int) -> None:
             return None
+
+        def expect_response(self, *_: object, **__: object) -> ResponseInfo:
+            return ResponseInfo()
 
     calls: dict[str, object] = {}
 
@@ -905,11 +917,36 @@ def test_traffic_like_button_click_does_not_press_shortcut(monkeypatch: pytest.M
     assert page.keyboard.pressed == []
 
 
+def test_traffic_like_requires_server_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    class Keyboard:
+        def press(self, _: str) -> None:
+            return None
+
+    class FakePage:
+        keyboard = Keyboard()
+
+        def expect_response(self, *_: object, **__: object) -> object:
+            raise TimeoutError("no server confirmation")
+
+    inserted: list[tuple[object, ...]] = []
+    monkeypatch.setattr(traffic_workbench, "_dedup_exists", lambda *_: False)
+    monkeypatch.setattr(traffic_workbench, "_click_current_control", lambda *args, **kwargs: True)
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: None)
+    monkeypatch.setattr(traffic_workbench, "_insert_dedup", lambda *args: inserted.append(args))
+
+    ok = traffic_workbench._execute_click_action("run-1", FakePage(), {"video_id": "v1"}, "like", '[data-e2e="video-player-digg"]', "点赞视频")
+
+    assert ok is False
+    assert inserted == []
+
+
 def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
     from app.services import traffic_workbench
 
     class ResponseInfo:
-        value = type("Response", (), {"json": lambda self: {"status_code": 0}})()
+        value = type("Response", (), {"json": lambda self: {"status_code": 0, "comment": {"cid": "c1", "text": "不错！"}}})()
 
         def __enter__(self) -> "ResponseInfo":
             return self
@@ -932,15 +969,52 @@ def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
         def expect_response(self, *_: object, **__: object) -> ResponseInfo:
             return ResponseInfo()
 
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
         def evaluate(self, *_: object) -> bool:
             self.clicked_send = True
             return True
 
     page = FakePage()
 
-    assert traffic_workbench._publish_comment_and_confirm(page) is True
+    assert traffic_workbench._publish_comment_and_confirm(page, "不错！") is not None
     assert page.clicked_send is True
     assert page.keyboard.pressed == []
+
+
+def test_traffic_publish_comment_requires_visible_text() -> None:
+    from app.services import traffic_workbench
+
+    class ResponseInfo:
+        value = type("Response", (), {"json": lambda self: {"status_code": 0, "comment": {"cid": "c1", "text": "不错！"}}})()
+
+        def __enter__(self) -> "ResponseInfo":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+    class Keyboard:
+        def press(self, _: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = Keyboard()
+            self.calls = 0
+
+        def expect_response(self, *_: object, **__: object) -> ResponseInfo:
+            return ResponseInfo()
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+        def evaluate(self, *_: object) -> bool:
+            self.calls += 1
+            return self.calls == 1
+
+    assert traffic_workbench._publish_comment_and_confirm(FakePage(), "不错！") is None
 
 
 def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.MonkeyPatch) -> None:

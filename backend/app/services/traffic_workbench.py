@@ -1322,16 +1322,11 @@ def _execute_click_action(run_id: str, page: Any, video: dict[str, Any], action:
     if _dedup_exists(video, action, ""):
         _append_log(run_id, "warning", action, f"这个视频已经执行过{label}，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    confirmed = _click_current_control(page, video.get("video_id", ""), action, [selector], require_confirm=action != "like")
-    if not confirmed and action == "like":
-        before = _current_control_snapshot(page, video.get("video_id", ""), action)
-        page.keyboard.press("z")
-        page.wait_for_timeout(900)
-        confirmed = _control_changed(before, _current_control_snapshot(page, video.get("video_id", ""), action))
-    if not confirmed:
-        _append_log(run_id, "warning", action, f"没有确认{label}成功，已跳过当前动作。", "页面没有对应按钮或动作状态没有变化", "如果频繁出现，可能是抖音页面改版、当前视频不支持互动或账号受限。", {"selector": selector, "video_id": video["video_id"]})
+    payload = _click_and_confirm_action_response(page, video.get("video_id", ""), action, [selector], allow_like_shortcut=action == "like")
+    if payload is None:
+        _append_log(run_id, "warning", action, f"没有收到抖音服务端确认，已跳过{label}记录。", "前端按钮变化不能证明账号已真实落账", "系统不会把未确认动作写为成功；如果频繁出现，请降低频率或检查账号风控。", {"selector": selector, "video_id": video["video_id"]})
         return False
-    _append_log(run_id, "success", action, f"{label}已执行。", "动作已确认成功", "可以在操作记录中查看本视频结果。", {"video_id": video["video_id"]})
+    _append_log(run_id, "success", action, f"{label}已执行。", "已收到抖音服务端成功响应", "可以在操作记录中查看本视频结果。", {"video_id": video["video_id"], "response": _compact_payload(payload)})
     _insert_dedup(video, action, "", "done")
     return True
 
@@ -1340,11 +1335,11 @@ def _execute_follow(run_id: str, page: Any, video: dict[str, Any]) -> bool:
     if _dedup_exists(video, "follow", ""):
         _append_log(run_id, "warning", "follow", "这个作者已经关注过或处理过，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    confirmed = _click_current_control(page, video.get("video_id", ""), "follow", ['[data-e2e="feed-follow"]', 'button'])
-    if not confirmed:
-        _append_log(run_id, "warning", "follow", "没有确认关注成功，已跳过关注。", "当前视频可能是广告、直播、已关注作者或页面没有关注按钮", "如果计划包含关注，系统会继续处理其它动作。", {"video_id": video["video_id"]})
+    payload = _click_and_confirm_action_response(page, video.get("video_id", ""), "follow", ['[data-e2e="feed-follow"]', 'button'])
+    if payload is None:
+        _append_log(run_id, "warning", "follow", "没有收到抖音服务端关注确认，已跳过关注。", "当前视频可能是广告、直播、已关注作者、账号受限或页面没有关注按钮", "系统不会把未确认关注写为成功；如果计划包含其它动作，会继续处理其它动作。", {"video_id": video["video_id"]})
         return False
-    _append_log(run_id, "success", "follow", "已关注作者。", "关注动作已确认成功", "可以在操作记录中查看本次关注。", {"video_id": video["video_id"]})
+    _append_log(run_id, "success", "follow", "已关注作者。", "已收到抖音服务端成功响应", "可以在操作记录中查看本次关注。", {"video_id": video["video_id"], "response": _compact_payload(payload)})
     _insert_dedup(video, "follow", "", "done")
     return True
 
@@ -1380,14 +1375,58 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
             else:
                 _append_log(run_id, "warning", "comment", "评论图片文件不存在，已取消本次评论。", "图片路径无效", "请到引流设置检查图片路径。", {"image_path": image_path})
                 return False
-        if not _publish_comment_and_confirm(page):
-            _append_log(run_id, "warning", "comment", "评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应", "系统不会把未确认评论写为成功；如果频繁出现，请检查账号限制或安全验证。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
+        payload = _publish_comment_and_confirm(page, text)
+        if payload is None:
+            _append_log(run_id, "warning", "comment", "评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应，或评论发布后没有在评论区出现", "系统不会把未确认评论写为成功；如果频繁出现，请检查账号限制或安全验证。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
             return False
-        _append_log(run_id, "success", "comment", "评论已发送。", "评论发布接口返回成功", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
+        _append_log(run_id, "success", "comment", "评论已发送。", "评论发布接口返回成功，且已完成二次确认", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path, "response": _compact_payload(payload)})
         _insert_dedup(video, "comment", content_hash, "done")
         return True
     finally:
         _close_comment_panel(page)
+
+
+def _click_and_confirm_action_response(page: Any, video_id: str, action: str, selectors: list[str], allow_like_shortcut: bool = False) -> dict[str, Any] | None:
+    try:
+        with page.expect_response(lambda response: _is_action_response(response, action), timeout=10_000) as response_info:
+            clicked = _click_current_control(page, video_id, action, selectors, require_confirm=False)
+            if not clicked and allow_like_shortcut:
+                page.keyboard.press("z")
+                clicked = True
+            if not clicked:
+                return None
+        payload = _response_json(response_info.value)
+        return payload if _payload_status_ok(payload) else None
+    except Exception:
+        return None
+
+
+def _is_action_response(response: Any, action: str) -> bool:
+    url = str(getattr(response, "url", "")).lower()
+    if action == "like":
+        return "digg" in url and ("aweme" in url or "commit" in url)
+    if action == "collect":
+        return ("collect" in url or "favorite" in url) and ("aweme" in url or "commit" in url)
+    if action == "follow":
+        return ("follow" in url or "relation" in url) and ("user" in url or "commit" in url)
+    return False
+
+
+def _response_json(response: Any) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payload_status_ok(payload: dict[str, Any]) -> bool:
+    status = payload.get("status_code", payload.get("status"))
+    return status in (0, "0")
+
+
+def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: payload.get(key) for key in ("status_code", "status_msg", "message", "log_pb") if key in payload}
 
 
 def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
@@ -1570,7 +1609,7 @@ def _comment_image_ready(page: Any) -> bool:
         return True
 
 
-def _publish_comment_and_confirm(page: Any) -> bool:
+def _publish_comment_and_confirm(page: Any, text: str = "") -> dict[str, Any] | None:
     try:
         with page.expect_response(lambda response: "aweme/v1/web/comment/publish" in response.url, timeout=8000) as response_info:
             if not page.evaluate(
@@ -1599,8 +1638,50 @@ def _publish_comment_and_confirm(page: Any) -> bool:
                 page.keyboard.press("Control+Enter")
                 page.wait_for_timeout(200)
                 page.keyboard.press("Enter")
-        payload = response_info.value.json()
-        return isinstance(payload, dict) and payload.get("status_code") == 0
+        payload = _response_json(response_info.value)
+        if not _payload_status_ok(payload) or not _comment_publish_has_result(payload, text):
+            return None
+        page.wait_for_timeout(1000)
+        if text and not _comment_text_visible(page, text):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _comment_publish_has_result(payload: dict[str, Any], text: str) -> bool:
+    if text and _payload_contains_text(payload, text):
+        return True
+    return _payload_has_any_key(payload, {"cid", "comment_id", "comment_id_str", "reply_id"})
+
+
+def _payload_contains_text(value: Any, text: str) -> bool:
+    if isinstance(value, dict):
+        return any(_payload_contains_text(item, text) for item in value.values())
+    if isinstance(value, list):
+        return any(_payload_contains_text(item, text) for item in value)
+    return text in str(value or "")
+
+
+def _payload_has_any_key(value: Any, keys: set[str]) -> bool:
+    if isinstance(value, dict):
+        return any(key in value and value.get(key) for key in keys) or any(_payload_has_any_key(item, keys) for item in value.values())
+    if isinstance(value, list):
+        return any(_payload_has_any_key(item, keys) for item in value)
+    return False
+
+
+def _comment_text_visible(page: Any, text: str) -> bool:
+    try:
+        return bool(page.evaluate(
+            """
+            expected => {
+              const roots = [document.querySelector('#videoSideCard'), document.body].filter(Boolean);
+              return roots.some(root => (root.innerText || root.textContent || '').includes(expected));
+            }
+            """,
+            text,
+        ))
     except Exception:
         return False
 
