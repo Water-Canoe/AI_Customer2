@@ -379,13 +379,15 @@ def material_image_path(name: str) -> Path:
 
 def environment_check() -> dict[str, Any]:
     playwright_ok = importlib.util.find_spec("playwright") is not None
-    chromium = _check_chromium() if playwright_ok else _env_item(False, "需要先安装 Playwright Python 包")
+    cloakbrowser_ok = importlib.util.find_spec("cloakbrowser") is not None
+    cloakbrowser_binary = _check_cloakbrowser_binary() if cloakbrowser_ok else _env_item(False, "需要先安装 CloakBrowser Python 包")
     TRAFFIC_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
     image_dir_ok = TRAFFIC_IMAGE_DIR.exists() and TRAFFIC_IMAGE_DIR.is_dir()
     items = {
         "python": _env_item(True, str(sys.executable)),
         "playwright": _env_item(playwright_ok, "已安装" if playwright_ok else "缺少 Python Playwright 依赖"),
-        "chromium": chromium,
+        "cloakbrowser": _env_item(cloakbrowser_ok, "已安装" if cloakbrowser_ok else "缺少 Python CloakBrowser 依赖"),
+        "cloakbrowser_binary": cloakbrowser_binary,
         "image_dir": _env_item(image_dir_ok, str(TRAFFIC_IMAGE_DIR)),
     }
     ok = all(item["ok"] for item in items.values())
@@ -400,7 +402,7 @@ def environment_check() -> dict[str, Any]:
 def install_environment() -> dict[str, Any]:
     steps = [
         _run_install_step([sys.executable, "-m", "pip", "install", "-r", str(database.BACKEND_ROOT / "requirements.txt")]),
-        _run_install_step([sys.executable, "-m", "playwright", "install", "chromium"]),
+        _run_install_step([sys.executable, "-m", "cloakbrowser", "install"]),
     ]
     return {"ok": all(step["ok"] for step in steps), "steps": steps, "check": environment_check()}
 
@@ -409,6 +411,8 @@ def open_douyin_login_window() -> dict[str, Any]:
     global DOUYIN_LOGIN_PROCESS
     if importlib.util.find_spec("playwright") is None:
         raise ValueError("缺少 Python Playwright 依赖，请先在引流设置执行环境检查并自动安装")
+    if importlib.util.find_spec("cloakbrowser") is None:
+        raise ValueError("缺少 Python CloakBrowser 依赖，请先在引流设置执行环境检查并自动安装")
     if DOUYIN_LOGIN_PROCESS and DOUYIN_LOGIN_PROCESS.poll() is None:
         return {"ok": True, "message": "抖音登录窗口已经打开。扫码后请点开任意视频，关闭窗口，再启动批次。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
 
@@ -508,7 +512,6 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     # 真实浏览器自动化集中在这里，所有异常都转为用户可读停机原因。
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-        from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise TrafficStop(
             "缺少 Playwright 依赖，任务已停止。",
@@ -532,11 +535,10 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     no_progress_count = 0
     project_author_keys: set[str] = set()
 
-    playwright = sync_playwright().start()
     context = None
     close_context = True
     try:
-        context = _launch_context(playwright, TRAFFIC_DOUYIN_PROFILE_DIR)
+        context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR)
         page = context.pages[0] if context.pages else context.new_page()
         video_cache = _setup_video_data_cache(page)
         try:
@@ -650,13 +652,10 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
             raise
     finally:
         if close_context:
-            try:
-                if context is not None:
-                    context.close()
-            finally:
-                playwright.stop()
+            if context is not None:
+                context.close()
         elif context is not None:
-            TRAFFIC_REVIEW_SESSIONS.append({"playwright": playwright, "context": context})
+            TRAFFIC_REVIEW_SESSIONS.append({"context": context})
     return {}
 
 
@@ -670,43 +669,47 @@ def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
 
 
 def _hold_douyin_login_window() -> None:
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as playwright:
-        context = _launch_context(playwright, TRAFFIC_DOUYIN_PROFILE_DIR)
-        page = context.pages[0] if context.pages else context.new_page()
-        video_cache = _setup_video_data_cache(page)
-        page.goto("https://www.douyin.com/?recommend=1", wait_until="domcontentloaded", timeout=60_000)
-        while True:
-            video = _read_active_video(page, video_cache)
-            if video["video_id"]:
-                _save_last_douyin_video_url(video["video_url"] if _is_douyin_video_url(video["video_url"]) else f"https://www.douyin.com/video/{video['video_id']}")
-            else:
-                _save_last_douyin_video_url(page.url)
-            page.wait_for_timeout(1000)
+    context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR)
+    page = context.pages[0] if context.pages else context.new_page()
+    video_cache = _setup_video_data_cache(page)
+    page.goto("https://www.douyin.com/?recommend=1", wait_until="domcontentloaded", timeout=60_000)
+    while True:
+        video = _read_active_video(page, video_cache)
+        if video["video_id"]:
+            _save_last_douyin_video_url(video["video_url"] if _is_douyin_video_url(video["video_url"]) else f"https://www.douyin.com/video/{video['video_id']}")
+        else:
+            _save_last_douyin_video_url(page.url)
+        page.wait_for_timeout(1000)
 
 
-def _launch_context(playwright: Any, profile_dir: Path) -> Any:
+def _launch_context(profile_dir: Path) -> Any:
     profile_dir.mkdir(parents=True, exist_ok=True)
-    failures = []
-    for channel in ("chrome", "msedge", None):
-        try:
-            return playwright.chromium.launch_persistent_context(
-                str(profile_dir),
-                channel=channel,
-                headless=False,
-                viewport={"width": 1440, "height": 900},
-                locale="zh-CN",
-            )
-        except Exception as exc:
-            failures.append(f"{channel or 'bundled'}: {exc}")
-    raise TrafficStop(
-        "没有找到可用的 Chrome 或 Edge，任务已停止。",
-        "Playwright 无法启动浏览器。",
-        "请安装 Chrome/Edge，或执行 Playwright 浏览器安装后重试。",
-        "probe",
-        {"failures": failures},
-    )
+    try:
+        from cloakbrowser import launch_persistent_context
+    except ImportError as exc:
+        raise TrafficStop(
+            "缺少 CloakBrowser 依赖，任务已停止。",
+            "本地后端没有安装 CloakBrowser 浏览器依赖。",
+            "请到引流设置执行“检查并自动安装”，安装完成后再重试。",
+            "probe",
+            {"error": str(exc)},
+        ) from exc
+    try:
+        # CloakBrowser 内部会启动 Playwright，并在 context.close() 时清理驱动。
+        return launch_persistent_context(
+            str(profile_dir),
+            headless=False,
+            viewport={"width": 1440, "height": 900},
+            locale="zh-CN",
+        )
+    except Exception as exc:
+        raise TrafficStop(
+            "CloakBrowser 浏览器启动失败，任务已停止。",
+            "CloakBrowser 无法启动专用浏览器内核。",
+            "请到引流设置执行环境检查和自动安装；如果仍失败，请查看安装输出。",
+            "probe",
+            {"error": repr(exc), "profile_dir": str(profile_dir)},
+        ) from exc
 
 
 def _target_url(plan: dict[str, Any]) -> str:
@@ -2013,30 +2016,37 @@ def _env_item(ok: bool, message: str) -> dict[str, Any]:
     return {"ok": ok, "message": message}
 
 
-def _check_chromium() -> dict[str, Any]:
+def _check_cloakbrowser_binary() -> dict[str, Any]:
     try:
+        # Windows 下 chrome --version 偶发卡住，这里只检查 CloakBrowser 内核是否已安装。
         result = subprocess.run(
             [
                 sys.executable,
-                "-c",
-                "from playwright.sync_api import sync_playwright\n"
-                "with sync_playwright() as p:\n"
-                "    browser = p.chromium.launch(headless=True)\n"
-                "    browser.close()\n"
-                "print('Chromium 可启动')",
+                "-m",
+                "cloakbrowser",
+                "doctor",
+                "--quick",
+                "--json",
             ],
             cwd=str(database.BACKEND_ROOT),
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             timeout=60,
         )
     except subprocess.TimeoutExpired:
-        return _env_item(False, "Chromium 启动检查超时")
-    text = _tail(result.stdout)
+        return _env_item(False, "CloakBrowser 内核检查超时")
+    text = _tail((result.stdout or "") + "\n" + (result.stderr or ""))
     if result.returncode != 0:
-        return _env_item(False, text or "Chromium 浏览器内核未安装")
-    return _env_item(True, text or "Chromium 浏览器内核可用")
+        return _env_item(False, text or "CloakBrowser 内核检查失败")
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return _env_item(False, text or "CloakBrowser 内核检查结果无法解析")
+    binary = payload.get("binary") or {}
+    if not binary.get("installed"):
+        return _env_item(False, "CloakBrowser 浏览器内核未安装")
+    return _env_item(True, str(binary.get("path") or "CloakBrowser 浏览器内核可用"))
 
 
 def _run_install_step(command: list[str]) -> dict[str, Any]:

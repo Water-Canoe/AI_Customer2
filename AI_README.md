@@ -238,13 +238,13 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `backend/runtime/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。
 
-引流设置页提供“失败后关闭浏览器”开关，默认开启以保持原有行为；关闭后，批次异常停止或停机时会保留当前抖音浏览器窗口，便于复盘已经浏览和互动过的视频。复盘完成后需要手动关闭该浏览器，再启动新的引流批次。
+引流设置页提供“失败后关闭浏览器”开关，默认开启以保持原有行为；关闭后，批次异常停止或停机时会保留当前抖音 CloakBrowser 窗口，便于复盘已经浏览和互动过的视频。复盘完成后需要手动关闭该浏览器，再启动新的引流批次。
 
-引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、Chromium 浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `playwright install chromium`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
+引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、CloakBrowser Python 包、CloakBrowser 专用浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `python -m cloakbrowser install`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
 
-引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个独立 Playwright 登录窗口，并复用执行器同一个 `runtime/traffic_douyin_profile`；用户扫码后可以确认首页能正常展示内容，后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
+引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个独立 CloakBrowser 登录窗口，并复用执行器同一个 `runtime/traffic_douyin_profile`；用户扫码后可以确认首页能正常展示内容，后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
 
-执行器位于 `backend/app/services/traffic_workbench.py`，使用 Python Playwright 和独立浏览器 Profile `runtime/traffic_douyin_profile`。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
+执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并继续使用独立浏览器 Profile `runtime/traffic_douyin_profile` 保存抖音登录态。Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
 
 来源之间严格隔离：`随机推荐流` 只从抖音首页/精选页当前可见视频卡片进入，能从数字视频链接推导出 `jingxuan?modal_id=...` 时会优先进入随机视频流，不读取拓客项目库；`拓客竞品视频 / 已采集关键词` 才使用项目库视频队列，其中已采集关键词会按 `contents.source_keyword` 过滤候选视频；手动搜索关键词只在搜索结果页点击可见视频，不回退项目库。项目库队列每轮都会按作者冷却和本轮已选作者排除候选，避免沿同一作者视频合集连续互动。
 

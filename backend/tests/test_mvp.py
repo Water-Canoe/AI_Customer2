@@ -859,20 +859,6 @@ def test_traffic_failure_can_keep_browser_open(tmp_path: Path, monkeypatch: pyte
     from app import database
     from app.services import traffic_workbench
 
-    class FakePlaywright:
-        def __init__(self) -> None:
-            self.stopped = False
-
-        def stop(self) -> None:
-            self.stopped = True
-
-    class FakeSyncPlaywright:
-        def __init__(self, playwright: FakePlaywright) -> None:
-            self.playwright = playwright
-
-        def start(self) -> FakePlaywright:
-            return self.playwright
-
     class FakePage:
         url = "https://www.douyin.com/video/review"
 
@@ -891,11 +877,9 @@ def test_traffic_failure_can_keep_browser_open(tmp_path: Path, monkeypatch: pyte
         def close(self) -> None:
             self.closed = True
 
-    fake_playwright = FakePlaywright()
     fake_context = FakeContext()
     fake_sync_api = types.ModuleType("playwright.sync_api")
     fake_sync_api.TimeoutError = type("TimeoutError", (Exception,), {})
-    fake_sync_api.sync_playwright = lambda: FakeSyncPlaywright(fake_playwright)
     fake_playwright_package = types.ModuleType("playwright")
     fake_playwright_package.sync_api = fake_sync_api
     logs: list[tuple[object, ...]] = []
@@ -921,12 +905,34 @@ def test_traffic_failure_can_keep_browser_open(tmp_path: Path, monkeypatch: pyte
         traffic_workbench._run_with_playwright("run-1", {"source_mode": "random_feed", "source_value": "", "actions": []})
 
     assert fake_context.closed is False
-    assert fake_playwright.stopped is False
     assert traffic_workbench.TRAFFIC_REVIEW_SESSIONS[-1]["context"] is fake_context
     assert any("浏览器已保留" in str(item[3]) for item in logs)
     fake_context.close()
-    fake_playwright.stop()
     traffic_workbench.TRAFFIC_REVIEW_SESSIONS.clear()
+
+
+def test_traffic_launch_context_uses_cloakbrowser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    calls: dict[str, object] = {}
+    fake_context = object()
+    fake_cloakbrowser = types.ModuleType("cloakbrowser")
+
+    def fake_launch_persistent_context(user_data_dir: str, **kwargs: object) -> object:
+        calls["user_data_dir"] = user_data_dir
+        calls["kwargs"] = kwargs
+        return fake_context
+
+    fake_cloakbrowser.launch_persistent_context = fake_launch_persistent_context
+    monkeypatch.setitem(sys.modules, "cloakbrowser", fake_cloakbrowser)
+
+    profile = tmp_path / "traffic_profile"
+    context = traffic_workbench._launch_context(profile)
+
+    assert context is fake_context
+    assert calls["user_data_dir"] == str(profile)
+    assert calls["kwargs"] == {"headless": False, "viewport": {"width": 1440, "height": 900}, "locale": "zh-CN"}
 
 
 def test_traffic_like_button_click_does_not_press_shortcut(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1176,17 +1182,26 @@ def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, mo
     class Result:
         returncode = 0
         stdout = "ok"
+        stderr = ""
 
     def fake_run(command: list[str], **_: object) -> Result:
         calls.append(command)
-        return Result()
+        result = Result()
+        if command[:3] == [sys.executable, "-m", "cloakbrowser"] and "doctor" in command:
+            result.stdout = json.dumps(
+                {
+                    "binary": {"installed": True, "path": "C:/cloak/chrome.exe"},
+                    "launch": {"tested": True, "ok": True},
+                }
+            )
+        return result
 
     # 安装测试只校验命令编排，不真实联网下载依赖。
     monkeypatch.setattr(traffic_workbench.subprocess, "run", fake_run)
     monkeypatch.setattr(
         traffic_workbench.importlib.util,
         "find_spec",
-        lambda name: object() if name == "playwright" else None,
+        lambda name: object() if name in {"playwright", "cloakbrowser"} else None,
     )
 
     result = traffic_workbench.install_environment()
@@ -1195,8 +1210,8 @@ def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, mo
     assert result["check"]["ok"] is True
     assert calls[0][:4] == [sys.executable, "-m", "pip", "install"]
     assert "requirements.txt" in calls[0][-1]
-    assert calls[1] == [sys.executable, "-m", "playwright", "install", "chromium"]
-    assert calls[2][1] == "-c"
+    assert calls[1] == [sys.executable, "-m", "cloakbrowser", "install"]
+    assert calls[2] == [sys.executable, "-m", "cloakbrowser", "doctor", "--quick", "--json"]
 
 
 def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1221,7 +1236,7 @@ def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypat
     monkeypatch.setattr(
         traffic_workbench.importlib.util,
         "find_spec",
-        lambda name: object() if name == "playwright" else None,
+        lambda name: object() if name in {"playwright", "cloakbrowser"} else None,
     )
 
     result = traffic_workbench.open_douyin_login_window()

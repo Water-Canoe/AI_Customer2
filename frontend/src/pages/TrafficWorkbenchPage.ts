@@ -537,14 +537,15 @@ export default defineComponent({
       const items = [
         ['Python', trafficEnv.value?.items?.python],
         ['Playwright', trafficEnv.value?.items?.playwright],
-        ['Chromium', trafficEnv.value?.items?.chromium],
+        ['CloakBrowser', trafficEnv.value?.items?.cloakbrowser],
+        ['浏览器内核', trafficEnv.value?.items?.cloakbrowser_binary],
         ['图片目录', trafficEnv.value?.items?.image_dir],
       ]
       // 环境检查放在右栏，避免挤占文案和图片库的主编辑区。
       return h('div', { class: 'traffic-env-panel' }, [
         sectionTitle({
           title: '环境检查',
-          subtitle: trafficEnv.value.summary || '检查 Playwright 和执行目录',
+          subtitle: trafficEnv.value.summary || '检查 CloakBrowser 和执行目录',
           icon: Monitor,
           tone: trafficEnv.value.ok ? 'green' : 'amber',
           compact: true,
