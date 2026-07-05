@@ -977,6 +977,25 @@ input[type='checkbox'] {
   min-width: 860px;
 }
 
+.traffic-side-table th:last-child,
+.traffic-side-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  min-width: 132px;
+  background: #ffffff;
+  box-shadow: -8px 0 12px rgba(15, 23, 42, 0.05);
+}
+
+.traffic-side-table th:last-child {
+  z-index: 3;
+  background: #f8fafc;
+}
+
+.traffic-side-table .selected-table-row td:last-child {
+  background: #f8fffc;
+}
+
 .traffic-detail-data-table {
   min-width: 920px;
 }

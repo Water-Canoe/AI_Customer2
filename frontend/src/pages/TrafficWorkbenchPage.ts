@@ -1,4 +1,4 @@
-import { computed, defineComponent, h, onMounted, ref, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -72,6 +72,9 @@ export default defineComponent({
     const runArchiveFilter = ref('active')
     const recordFilters = ref({ query: '', status: '', action: '', page: 1, page_size: 20 })
     const loading = ref(false)
+    const trafficLogRef = ref<HTMLElement | null>(null)
+    const trafficLogAutoFollow = ref(true)
+    const LOG_BOTTOM_THRESHOLD = 28
 
     const view = computed(() => String(route.name || 'traffic-plans'))
     // 归档数据默认隐藏，只有用户切换到“已归档”时才展示。
@@ -80,6 +83,23 @@ export default defineComponent({
 
     onMounted(loadPage)
     watch(view, () => loadPage())
+    watch(
+      () => ({
+        runId: String(selectedRun.value?.id || ''),
+        logCount: (selectedRun.value?.logs || []).length,
+      }),
+      (current, previous) => {
+        if (!current.runId) return
+        const runChanged = !previous || current.runId !== previous.runId
+        if (runChanged) {
+          trafficLogAutoFollow.value = true
+          scrollTrafficLogToBottom(true)
+          return
+        }
+        if (!previous || current.logCount > previous.logCount) scrollTrafficLogToBottom(false)
+      },
+      { immediate: true },
+    )
 
     async function loadPage() {
       // 四个子页面按需拉取数据，避免进入引流工作台时全量请求。
@@ -413,7 +433,7 @@ export default defineComponent({
               h('li', run.stop_reason),
               run.stop_suggestion ? h('li', run.stop_suggestion) : null,
             ]) : null,
-            h('div', { class: 'traffic-log-list' }, (run.logs || []).length ? run.logs.map(renderLogLine) : [h('p', '暂无日志')]),
+            h('div', { class: 'traffic-log-list', ref: trafficLogRef, onScroll: updateTrafficLogFollowState }, (run.logs || []).length ? run.logs.map(renderLogLine) : [h('p', '暂无日志')]),
             sectionTitle({ title: '已处理视频', subtitle: `${(run.records || []).length} 条`, icon: VideoPlay, tone: 'green', compact: true }),
             h('div', { class: 'table-scroll traffic-detail-table' }, renderRecordsTable(run.records || [], '暂无视频记录')),
           ] : emptyState({ title: '请选择批次', description: '右侧选择一个批次查看日志', icon: Monitor }),
@@ -617,6 +637,26 @@ export default defineComponent({
         log.suggestion ? h('small', `  下一步：${log.suggestion}`) : null,
         log.details && log.details !== '{}' ? h('details', [h('summary', '技术详情'), h('pre', log.details)]) : null,
       ])
+    }
+
+    function isTrafficLogNearBottom(logPanel: HTMLElement) {
+      return logPanel.scrollHeight - logPanel.scrollTop - logPanel.clientHeight <= LOG_BOTTOM_THRESHOLD
+    }
+
+    function updateTrafficLogFollowState() {
+      const logPanel = trafficLogRef.value
+      if (!logPanel) return
+      trafficLogAutoFollow.value = isTrafficLogNearBottom(logPanel)
+    }
+
+    function scrollTrafficLogToBottom(force = false) {
+      nextTick(() => {
+        const logPanel = trafficLogRef.value
+        if (!logPanel) return
+        if (!force && !trafficLogAutoFollow.value) return
+        logPanel.scrollTop = logPanel.scrollHeight
+        trafficLogAutoFollow.value = true
+      })
     }
 
     function renderRecordsTable(rows: Dict[], emptyTitle: string) {
