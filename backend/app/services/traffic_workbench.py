@@ -1375,7 +1375,7 @@ def _execute_follow(run_id: str, page: Any, video: dict[str, Any]) -> bool:
     if _dedup_exists(video, "follow", ""):
         _append_log(run_id, "warning", "follow", "这个作者已经关注过或处理过，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    payload = _click_and_confirm_action_response(page, video, "follow", ['[data-e2e="feed-follow"]', 'button'])
+    payload = _click_and_confirm_action_response(page, video, "follow", _follow_selectors())
     if payload is None:
         _append_log(run_id, "warning", "follow", "没有收到抖音服务端关注确认，已跳过关注。", "当前视频可能是广告、直播、已关注作者、账号受限或页面没有关注按钮", "系统不会把未确认关注写为成功；如果计划包含其它动作，会继续处理其它动作。", {"video_id": video["video_id"]})
         return False
@@ -1456,7 +1456,7 @@ def _is_action_response(response: Any, action: str, video: dict[str, Any] | None
     url = str(getattr(response, "url", "")).lower()
     raw = f"{url}\n{_request_post_data(response)}".lower()
     target = str((video or {}).get("author_id" if action == "follow" else "video_id") or "")
-    if target and target not in raw:
+    if action != "follow" and target and target not in raw:
         return False
     if action == "like":
         return "digg" in url and ("aweme" in url or "commit" in url) and _is_positive_action_request(response)
@@ -1477,6 +1477,16 @@ def _is_positive_action_request(response: Any) -> bool:
                 return False
     positive_keys = {"type", "action_type", "digg_type", "collect_type", "follow_type", "action", "to_status"}
     return any(str(value).strip().lower() in {"1", "true", "follow", "collect", "digg"} for key in positive_keys for value in params.get(key, []))
+
+
+def _follow_selectors() -> list[str]:
+    return [
+        '[data-e2e="feed-follow"]',
+        '[data-e2e="feed-follow-icon"] span',
+        '[data-e2e="feed-follow-icon"] svg',
+        '[data-e2e="feed-follow-icon"]',
+        'button',
+    ]
 
 
 def _response_params(response: Any) -> dict[str, list[str]]:
@@ -1574,7 +1584,7 @@ def _click_current_control(page: Any, video_id: str, action: str, extra_selector
           const actionSelectors = {
             like: ['[data-e2e="feed-like-icon"]', '[data-e2e="video-player-digg"]'],
             collect: ['[data-e2e="video-player-collect"]'],
-            follow: ['[data-e2e="feed-follow"]', 'button'],
+            follow: ['[data-e2e="feed-follow"]', '[data-e2e="feed-follow-icon"] span', '[data-e2e="feed-follow-icon"] svg', '[data-e2e="feed-follow-icon"]', 'button'],
             comment: ['[data-e2e="feed-comment-icon"]'],
           };
           const selectors = [...(actionSelectors[action] || []), ...(extraSelectors || [])];
@@ -1596,9 +1606,13 @@ def _click_current_control(page: Any, video_id: str, action: str, extra_selector
           for (const root of roots) {
             for (const selector of selectors) {
               for (const el of Array.from(root.querySelectorAll(selector))) {
-                if (action === 'follow' && !/关注/.test(el.innerText || el.textContent || '')) continue;
+                if (action === 'follow') {
+                  const isIcon = Boolean(el.closest('[data-e2e="feed-follow-icon"]') || el.matches('[data-e2e="feed-follow-icon"]'));
+                  if (!isIcon && !/关注/.test(el.innerText || el.textContent || '')) continue;
+                }
                 const target = clickable(el);
                 if (target) {
+                  // ponytail: 抖音随机流关注是头像下方红色加号，通常没有“关注”文字。
                   target.click();
                   return true;
                 }
@@ -1626,7 +1640,7 @@ def _current_control_snapshot(page: Any, video_id: str, action: str) -> dict[str
               const selectors = {
                 like: ['[data-e2e="feed-like-icon"]', '[data-e2e="video-player-digg"]'],
                 collect: ['[data-e2e="video-player-collect"]'],
-                follow: ['[data-e2e="feed-follow"]', 'button'],
+                follow: ['[data-e2e="feed-follow"]', '[data-e2e="feed-follow-icon"] span', '[data-e2e="feed-follow-icon"] svg', '[data-e2e="feed-follow-icon"]', 'button'],
                 comment: ['[data-e2e="feed-comment-icon"]'],
               }[action] || [];
               const active = document.querySelector('[data-e2e="feed-active-video"]');
@@ -1636,7 +1650,10 @@ def _current_control_snapshot(page: Any, video_id: str, action: str) -> dict[str
               for (const root of roots) {
                 for (const selector of selectors) {
                   for (const el of Array.from(root.querySelectorAll(selector))) {
-                    if (action === 'follow' && !/关注/.test(el.innerText || el.textContent || '')) continue;
+                    if (action === 'follow') {
+                      const isIcon = Boolean(el.closest('[data-e2e="feed-follow-icon"]') || el.matches('[data-e2e="feed-follow-icon"]'));
+                      if (!isIcon && !/关注/.test(el.innerText || el.textContent || '')) continue;
+                    }
                     const target = el.closest('button') || el.closest('[role="button"]') || el.parentElement || el;
                     return {
                       text: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim(),

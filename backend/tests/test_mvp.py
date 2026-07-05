@@ -1037,6 +1037,33 @@ def test_traffic_action_response_requires_positive_targeted_request() -> None:
         "like",
         video,
     ) is False
+    assert traffic_workbench._is_action_response(
+        Response("https://www.douyin.com/aweme/v1/web/commit/follow/user/?user_id=another-author&type=1"),
+        "follow",
+        video,
+    ) is True
+
+
+def test_traffic_follow_uses_avatar_plus_icon_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    seen: dict[str, object] = {}
+
+    def fake_confirm(page: object, video: dict[str, object], action: str, selectors: list[str], **_: object) -> dict[str, object]:
+        seen["action"] = action
+        seen["selectors"] = selectors
+        return {"status_code": 0}
+
+    monkeypatch.setattr(traffic_workbench, "_dedup_exists", lambda *_: False)
+    monkeypatch.setattr(traffic_workbench, "_click_and_confirm_action_response", fake_confirm)
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: None)
+    monkeypatch.setattr(traffic_workbench, "_insert_dedup", lambda *args: None)
+
+    ok = traffic_workbench._execute_follow("run-1", object(), {"video_id": "v1", "author_id": "author-1"})
+
+    assert ok is True
+    assert seen["action"] == "follow"
+    assert '[data-e2e="feed-follow-icon"] svg' in seen["selectors"]
 
 
 def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
