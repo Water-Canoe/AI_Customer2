@@ -1132,6 +1132,64 @@ def test_traffic_active_video_prefers_feed_api_cache() -> None:
     assert traffic_workbench._is_regular_video({"aweme_type": 108}) is False
 
 
+def test_traffic_project_video_candidate_filters_collected_keyword(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import traffic_workbench
+
+    with database.connect() as conn:
+        conn.execute("DELETE FROM contents")
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, title, description, content_url, source_keyword)
+            VALUES
+              ('dy', 'wrong-video', '其它关键词', '', 'https://www.douyin.com/video/wrong-video', '其它'),
+              ('dy', 'right-video', '目标关键词', '', 'https://www.douyin.com/video/right-video', 'AI客服')
+            """
+        )
+
+    candidate = traffic_workbench._random_project_video_candidate(0, source_keyword="AI客服")
+
+    assert candidate is not None
+    assert candidate["url"] == "https://www.douyin.com/video/right-video"
+
+
+def test_traffic_follow_dedup_uses_author_scope(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    first_video = {"video_id": "video-1", "author_id": "author-1", "author_name": "作者"}
+    second_video = {"video_id": "video-2", "author_id": "author-1", "author_name": "作者"}
+
+    traffic_workbench._insert_dedup(first_video, "follow", "", "done")
+
+    assert traffic_workbench._dedup_exists(second_video, "follow", "") is True
+    assert traffic_workbench._dedup_exists({"video_id": "video-1", "author_id": "author-2"}, "like", "") is False
+
+
+def test_traffic_video_skip_reason_handles_ad_live_and_string_aweme_type() -> None:
+    from app.services import traffic_workbench
+
+    class FakePage:
+        def __init__(self, flags: dict[str, bool]) -> None:
+            self.flags = flags
+
+        def evaluate(self, *_: object) -> dict[str, bool]:
+            return self.flags
+
+    assert traffic_workbench._is_regular_video({"aweme_type": "0"}) is True
+    assert traffic_workbench._video_skip_reason(FakePage({"is_live": True, "is_ad": False}), {"video_id": "1", "aweme_type": 0}) == "直播视频"
+    assert traffic_workbench._video_skip_reason(FakePage({"is_live": False, "is_ad": True}), {"video_id": "1", "aweme_type": 0}) == "广告视频"
+    assert traffic_workbench._video_skip_reason(FakePage({"is_live": False, "is_ad": False}), {"video_id": "1", "aweme_type": 108}) == "不是常规视频"
+
+
+def test_traffic_random_numeric_video_uses_modal_feed_url() -> None:
+    from app.services import traffic_workbench
+
+    assert traffic_workbench._modal_feed_url("https://www.douyin.com/video/7571379476967782075") == "https://www.douyin.com/jingxuan?modal_id=7571379476967782075"
+    assert traffic_workbench._modal_feed_url("https://www.douyin.com/video/not-numeric") == ""
+
+
 def test_traffic_developing_platform_cannot_start(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficPlanCreate

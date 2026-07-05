@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import random
+import re
 import subprocess
 import sys
 import time
@@ -468,13 +469,13 @@ def run_traffic_run(run_id: str) -> None:
         return
     _mark_run_running(run_id)
     try:
-        _run_with_playwright(run_id, plan)
+        completion = _run_with_playwright(run_id, plan) or {}
         _finish_run(
             run_id,
             "completed",
-            "已达到本轮上限，任务已自动完成。",
-            "本轮执行已完成",
-            "可以在操作记录查看每个视频的处理结果。",
+            completion.get("message", "已达到本轮上限，任务已自动完成。"),
+            completion.get("reason", "本轮执行已完成"),
+            completion.get("suggestion", "可以在操作记录查看每个视频的处理结果。"),
         )
     except TrafficStop as exc:
         _finish_run(
@@ -498,7 +499,7 @@ def run_traffic_run(run_id: str) -> None:
         )
 
 
-def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
+def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     # 真实浏览器自动化集中在这里，所有异常都转为用户可读停机原因。
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -514,11 +515,14 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
 
     settings = get_settings()["values"]
     limit = _int_setting(settings, "traffic_round_video_limit", 5, 1, 200)
+    daily_action_limit = _int_setting(settings, "traffic_daily_action_limit", 50, 0, 1000)
     min_watch = _int_setting(settings, "traffic_min_watch_seconds", 3, 0, 120)
     max_watch = _int_setting(settings, "traffic_max_watch_seconds", 8, min_watch, 300)
     stop_after_failures = _int_setting(settings, "traffic_stop_after_failures", 3, 1, 10)
     author_cooldown_hours = _int_setting(settings, "traffic_author_cooldown_hours", 24, 0, 720)
+    action_budget = max(0, daily_action_limit - _daily_action_count())
     failure_count = 0
+    no_progress_count = 0
     project_author_keys: set[str] = set()
 
     with sync_playwright() as playwright:
@@ -532,39 +536,54 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                 _append_log(run_id, "warning", "probe", "抖音页面加载超时，继续检查当前页面。", "页面可能已经可用，但浏览器没有收到加载完成信号", "系统会继续识别当前页面；如果确实没有内容，会再给出明确原因。", {"url": target_url, "current_url": page.url})
             page.wait_for_timeout(4000)
             _ensure_page_ready(page)
-            navigation_source = _navigate_to_executable_video(page, run_id, plan["source_mode"], video_cache, author_cooldown_hours, project_author_keys)
-            use_project_queue = navigation_source == "project"
+            _navigate_to_executable_video(page, run_id, plan["source_mode"], video_cache, author_cooldown_hours, project_author_keys, plan.get("source_value", ""))
+            if plan["actions"] and action_budget <= 0:
+                _append_log(run_id, "success", "stop", "已达到每日动作上限，任务已自动完成。", "今日真实互动动作数量已经达到设置值", "可以明天继续，或到引流设置调整每日动作上限。", {"daily_action_limit": daily_action_limit})
+                return {
+                    "message": "已达到每日动作上限，任务已自动完成。",
+                    "reason": "今日真实互动动作数量已经达到设置值",
+                    "suggestion": "可以明天继续，或到引流设置调整每日动作上限。",
+                }
             for index in range(limit):
                 _raise_if_stop_requested(run_id)
                 video = _read_active_video(page, video_cache)
                 if not video["video_id"]:
-                    is_jingxuan = "douyin.com/jingxuan" in page.url
-                    raise TrafficStop(
-                        "连续没有找到可执行的视频，任务已停止。",
-                        "当前停留在抖音精选页，未进入具体视频。" if is_jingxuan else "当前页面没有活跃视频节点。",
-                        "请到引流设置打开抖音登录窗口，扫码后点开任意视频，关闭窗口，再重新启动批次。" if is_jingxuan else "请确认抖音已经进入推荐流或视频详情页，再重新启动任务。",
-                        "probe",
-                        {"url": page.url},
-                    )
-                if not _is_regular_video(video):
-                    _append_log(run_id, "warning", "browse", "当前不是常规视频，已跳过。", "可能是直播、图文或广告内容", "系统会尝试切换到下一个视频。", {"video_id": video["video_id"], "aweme_type": video.get("aweme_type")})
-                    _record_video(run_id, plan, video, ["跳过"], "", "", "skipped")
-                    if index < limit - 1 and not _next_video(page, run_id, video["video_id"], video_cache, use_project_queue, author_cooldown_hours, project_author_keys):
+                    no_progress_count += 1
+                    if no_progress_count >= stop_after_failures:
                         raise TrafficStop(
-                            "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
-                            "翻页后视频 ID 没有变化。",
-                            "请到引流设置重新打开抖音登录窗口，进入任意视频后再启动。",
-                            "advance",
-                            {"video_id": video["video_id"], "url": page.url},
+                            f"连续 {no_progress_count} 次没有找到可执行的视频，任务已停止。",
+                            "当前页面没有可识别的视频 ID。",
+                            "请确认抖音已经登录，且首页或搜索页能正常打开视频。",
+                            "probe",
+                            {"url": page.url, "mode": _detect_douyin_page_mode(page)},
                         )
+                    _append_log(run_id, "warning", "probe", "当前页面没有识别到视频，正在重新进入来源。", "页面可能还停留在首页、搜索结果或加载中的视频页", "系统会自动重新进入视频；连续失败才会停机。", {"url": page.url})
+                    _navigate_to_executable_video(page, run_id, plan["source_mode"], video_cache, author_cooldown_hours, project_author_keys, plan.get("source_value", ""))
+                    continue
+                no_progress_count = 0
+                skip_reason = _video_skip_reason(page, video)
+                if skip_reason:
+                    _append_log(run_id, "warning", "browse", f"当前视频已跳过：{skip_reason}。", skip_reason, "无需手动处理，系统会继续切换下一条视频。", {"video_id": video["video_id"], "aweme_type": video.get("aweme_type"), "url": page.url})
+                    _record_video(run_id, plan, video, ["跳过"], "", "", "skipped", skip_reason)
+                    if index < limit - 1 and not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
+                        no_progress_count += 1
+                        if no_progress_count >= stop_after_failures:
+                            raise TrafficStop(
+                                f"连续 {no_progress_count} 次没有切换到新视频，任务已停止。",
+                                "翻页后视频 ID 没有变化。",
+                                "请到引流设置重新打开抖音并确认推荐流可以正常切换。",
+                                "advance",
+                                {"video_id": video["video_id"], "url": page.url},
+                            )
                     continue
                 watch_seconds = random.randint(min_watch, max_watch)
                 _append_log(run_id, "info", "browse", f"正在浏览视频：{video['video_desc'][:36] or video['video_id']}。", "按设置随机停留", f"本次停留约 {watch_seconds} 秒。", {"video_id": video["video_id"]})
                 page.wait_for_timeout(watch_seconds * 1000)
-                done_actions, comment_text, image_path, skipped_by_error = _execute_actions_with_retry(run_id, plan, page, video)
+                done_actions, comment_text, image_path, skipped_by_error = _execute_actions_with_retry(run_id, plan, page, video, action_budget)
+                action_budget = max(0, action_budget - len(done_actions))
                 if skipped_by_error:
-                    _record_video(run_id, plan, video, ["跳过"], comment_text, image_path, "skipped")
-                    if index < limit - 1 and not _next_video(page, run_id, video["video_id"], video_cache, use_project_queue, author_cooldown_hours, project_author_keys):
+                    _record_video(run_id, plan, video, ["跳过"], comment_text, image_path, "skipped", "连续动作失败，已跳过当前视频")
+                    if index < limit - 1 and not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
                         raise TrafficStop(
                             "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
                             "跳过异常视频后仍无法切换到新视频。",
@@ -579,6 +598,13 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                 else:
                     failure_count = 0
                 _record_video(run_id, plan, video, done_actions or ["仅浏览"], comment_text, image_path, "browsed" if not plan["actions"] else "done")
+                if plan["actions"] and action_budget <= 0:
+                    _append_log(run_id, "success", "stop", "已达到每日动作上限，任务已自动完成。", "今日真实互动动作数量已经达到设置值", "可以明天继续，或到引流设置调整每日动作上限。", {"daily_action_limit": daily_action_limit})
+                    return {
+                        "message": "已达到每日动作上限，任务已自动完成。",
+                        "reason": "今日真实互动动作数量已经达到设置值",
+                        "suggestion": "可以明天继续，或到引流设置调整每日动作上限。",
+                    }
                 if failure_count >= stop_after_failures:
                     raise TrafficStop(
                         f"连续 {failure_count} 次动作没有确认成功，任务已停止。",
@@ -587,7 +613,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
                         "stop",
                         {"failure_count": failure_count},
                     )
-                if index < limit - 1 and not _next_video(page, run_id, video["video_id"], video_cache, use_project_queue, author_cooldown_hours, project_author_keys):
+                if index < limit - 1 and not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
                     raise TrafficStop(
                         "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
                         "翻页后视频 ID 没有变化。",
@@ -605,6 +631,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> None:
             ) from exc
         finally:
             context.close()
+    return {}
 
 
 def _hold_douyin_login_window() -> None:
@@ -672,22 +699,7 @@ def _is_recoverable_playwright_error(exc: Exception) -> bool:
 
 
 def _ensure_page_ready(page: Any) -> None:
-    state = page.evaluate(
-        """
-        () => {
-          const text = (document.body?.innerText || '').replace(/\\s+/g, ' ');
-          const active = document.querySelector('[data-e2e="feed-active-video"]');
-          const pathId = location.pathname.match(/\\/(?:video|note)\\/([^/?#]+)/)?.[1] || '';
-          return {
-            url: location.href,
-            title: document.title,
-            activeVideoId: active?.getAttribute('data-e2e-vid') || pathId,
-            loginPrompt: /扫码登录|立即登录|登录后|手机号登录/.test(text),
-            verifyPrompt: /安全验证|人机验证|验证码中间页|verify_check|secsdk-captcha|captcha/.test(location.href + text),
-          };
-        }
-        """
-    )
+    state = _douyin_page_state(page)
     if state.get("verifyPrompt"):
         raise TrafficStop(
             "抖音出现安全验证，任务已停止。请在浏览器中手动完成验证，不会自动绕过。",
@@ -706,7 +718,44 @@ def _ensure_page_ready(page: Any) -> None:
         )
 
 
-def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, video_cache: dict[str, Any] | None = None, cooldown_hours: int = 24, project_author_keys: set[str] | None = None) -> str:
+def _douyin_page_state(page: Any) -> dict[str, Any]:
+    return dict(page.evaluate(
+        """
+        () => {
+          const text = (document.body?.innerText || '').replace(/\\s+/g, ' ');
+          const active = document.querySelector('[data-e2e="feed-active-video"]');
+          const pathId = location.pathname.match(/\\/(?:video|note)\\/([^/?#]+)/)?.[1] || '';
+          return {
+            url: location.href,
+            title: document.title,
+            activeVideoId: active?.getAttribute('data-e2e-vid') || pathId,
+            loginPrompt: /扫码登录|立即登录|登录后|手机号登录/.test(text),
+            verifyPrompt: /安全验证|人机验证|验证码中间页|verify_check|secsdk-captcha|captcha/.test(location.href + text),
+          };
+        }
+        """
+    ))
+
+
+def _detect_douyin_page_mode(page: Any) -> str:
+    state = _douyin_page_state(page)
+    if state.get("verifyPrompt"):
+        return "captcha_required"
+    if state.get("loginPrompt"):
+        return "login_required"
+    url = str(state.get("url") or "")
+    if "modal_id=" in url and "douyin.com/jingxuan" in url:
+        return "jingxuan_modal_feed"
+    if "/video/" in url or "/note/" in url:
+        return "video_detail"
+    if "/search/" in url:
+        return "search_result"
+    if "douyin.com" in url:
+        return "home_grid"
+    return "unsupported"
+
+
+def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, video_cache: dict[str, Any] | None = None, cooldown_hours: int = 24, project_author_keys: set[str] | None = None, source_value: str = "") -> str:
     if _read_active_video(page, video_cache)["video_id"]:
         return "active"
     if source_mode == "random_feed":
@@ -719,8 +768,31 @@ def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, vide
             "probe",
             {"url": page.url},
         )
+    if source_mode == "search_keyword":
+        if _open_search_result_video(page, run_id, video_cache):
+            return "search"
+        raise TrafficStop(
+            "搜索页没有找到可点击的视频，任务已停止。",
+            "当前搜索结果页没有可见视频卡片。",
+            "请换一个关键词，或确认抖音搜索页能正常显示视频结果。",
+            "probe",
+            {"url": page.url, "source_value": source_value},
+        )
+    if source_mode in {"competitor_videos", "collected_keyword"}:
+        project = _random_project_video_candidate(cooldown_hours, project_author_keys, source_value if source_mode == "collected_keyword" else "")
+        if project:
+            _remember_project_author(project_author_keys, project)
+            _goto_video_candidate(page, run_id, project["url"], "已从项目库按来源队列跳转一个视频。")
+            return "project"
+        raise TrafficStop(
+            "项目库没有可执行的视频，任务已停止。",
+            "没有找到符合来源、作者冷却和防重复条件的视频。",
+            "请先通过拓客工作台采集视频，或调整关键词/作者冷却时间后重试。",
+            "probe",
+            {"source_mode": source_mode, "source_value": source_value},
+        )
     if "douyin.com/jingxuan" in page.url:
-        project = _random_project_video_candidate(cooldown_hours, project_author_keys)
+        project = _random_project_video_candidate(cooldown_hours, project_author_keys, source_value if source_mode == "collected_keyword" else "")
         if project:
             _remember_project_author(project_author_keys, project)
             _goto_video_candidate(page, run_id, project["url"], "已从项目库随机跳转一个视频。")
@@ -744,11 +816,14 @@ def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, vide
 
 
 def _open_random_visible_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None) -> bool:
+    if "/video/" in page.url or "/note/" in page.url:
+        _goto_with_timeout_tolerance(page, "https://www.douyin.com/?recommend=1", 60_000)
+        page.wait_for_timeout(1500)
     for _ in range(4):
         candidates = _visible_video_candidates(page)
         random.shuffle(candidates)
         for candidate in candidates[:6]:
-            if _click_video_candidate(page, run_id, candidate, "已从抖音首页随机点击一个视频。") and (
+            if _click_video_candidate(page, run_id, candidate, "已从抖音首页随机点击一个视频。", True) and (
                 _read_active_video(page, video_cache)["video_id"] or _is_douyin_video_url(page.url)
             ):
                 return True
@@ -757,12 +832,30 @@ def _open_random_visible_video(page: Any, run_id: str, video_cache: dict[str, An
     return False
 
 
-def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], message: str) -> bool:
+def _open_search_result_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None) -> bool:
+    for _ in range(3):
+        candidates = _visible_video_candidates(page) or _visible_video_links(page)
+        for candidate in candidates[:8]:
+            if _click_video_candidate(page, run_id, candidate, "已从搜索结果点击一个视频。") and _read_active_video(page, video_cache)["video_id"]:
+                return True
+        page.mouse.wheel(0, random.randint(600, 1200))
+        page.wait_for_timeout(1000)
+    return False
+
+
+def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], message: str, prefer_modal: bool = False) -> bool:
     # ponytail: 随机引流必须来自当前抖音页面，不能退回项目库视频。
     url = str(candidate.get("href") or page.url)
+    target_url = _modal_feed_url(url) if prefer_modal else ""
+    if target_url:
+        url = target_url
     _append_log(run_id, "info", "probe", message, "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": url})
     clicked = False
-    if isinstance(candidate.get("x"), (int, float)) and isinstance(candidate.get("y"), (int, float)):
+    if target_url:
+        if not _goto_with_timeout_tolerance(page, target_url, 60_000):
+            _append_log(run_id, "warning", "probe", "视频页面加载超时，继续检查当前页面。", "抖音可能已经打开视频，但没有返回加载完成信号", "系统会继续识别当前页面；如果不能执行，会自动换下一个视频。", {"target_url": target_url, "current_url": page.url})
+        clicked = True
+    elif isinstance(candidate.get("x"), (int, float)) and isinstance(candidate.get("y"), (int, float)):
         page.mouse.click(float(candidate["x"]), float(candidate["y"]))
         clicked = True
     if not clicked and candidate.get("href"):
@@ -786,9 +879,14 @@ def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], me
     return True
 
 
-def _next_video(page: Any, run_id: str, previous_video_id: str, video_cache: dict[str, Any] | None, use_project_queue: bool, cooldown_hours: int, project_author_keys: set[str] | None = None) -> bool:
-    if use_project_queue:
-        project = _random_project_video_candidate(cooldown_hours, project_author_keys)
+def _modal_feed_url(url: str) -> str:
+    match = re.search(r"/(?:video|note)/(\d+)", url)
+    return f"https://www.douyin.com/jingxuan?modal_id={match.group(1)}" if match else ""
+
+
+def _next_video(page: Any, run_id: str, plan: dict[str, Any], previous_video_id: str, video_cache: dict[str, Any] | None, cooldown_hours: int, project_author_keys: set[str] | None = None) -> bool:
+    if plan["source_mode"] in {"competitor_videos", "collected_keyword"}:
+        project = _random_project_video_candidate(cooldown_hours, project_author_keys, plan.get("source_value", "") if plan["source_mode"] == "collected_keyword" else "")
         if not project:
             return False
         _remember_project_author(project_author_keys, project)
@@ -812,17 +910,24 @@ def _random_project_video_url() -> str:
     return candidate["url"] if candidate else ""
 
 
-def _random_project_video_candidate(cooldown_hours: int, exclude_author_keys: set[str] | None = None) -> dict[str, str] | None:
+def _random_project_video_candidate(cooldown_hours: int, exclude_author_keys: set[str] | None = None, source_keyword: str = "") -> dict[str, str] | None:
     modifier = f"-{max(cooldown_hours, 0)} hours"
+    keyword = source_keyword.strip()
+    keyword_clause = "AND c.source_keyword = ?" if keyword else ""
+    params: list[Any] = []
+    if keyword:
+        params.append(keyword)
+    params.append(modifier)
     with database.connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT c.content_url, c.content_id,
                    COALESCE(u.platform_user_id, '') AS author_id,
                    COALESCE(u.nickname, '') AS author_name
             FROM contents c
             LEFT JOIN user_accounts u ON u.id = c.author_account_id
             WHERE c.platform = 'dy'
+              {keyword_clause}
               AND (
                 c.content_url LIKE '%douyin.com/video/%'
                 OR c.content_url LIKE '%douyin.com/note/%'
@@ -842,7 +947,7 @@ def _random_project_video_candidate(cooldown_hours: int, exclude_author_keys: se
             ORDER BY RANDOM()
             LIMIT 20
             """,
-            (modifier,),
+            params,
         ).fetchall()
     for row in rows:
         candidate = _project_video_candidate_from_row(row)
@@ -1038,11 +1143,52 @@ def _video_from_aweme(item: dict[str, Any], fallback_url: str) -> dict[str, Any]
         "like_count": _int_or_none(stats.get("digg_count")),
         "comment_count": _int_or_none(stats.get("comment_count")),
         "aweme_type": item.get("aweme_type"),
+        "is_ads": bool(item.get("is_ads") or item.get("is_ad") or item.get("ad_info")),
+        "is_live": bool(item.get("live_room") or item.get("is_live")),
     }
 
 
 def _is_regular_video(video: dict[str, Any]) -> bool:
-    return video.get("aweme_type") in (None, "", 0)
+    aweme_type = _int_or_none(video.get("aweme_type"))
+    return aweme_type in (None, 0)
+
+
+def _video_skip_reason(page: Any, video: dict[str, Any]) -> str:
+    if not _is_regular_video(video):
+        return "不是常规视频"
+    if video.get("is_live"):
+        return "直播视频"
+    if video.get("is_ads"):
+        return "广告视频"
+    flags = _current_video_flags(page, video.get("video_id", ""))
+    if flags.get("is_live"):
+        return "直播视频"
+    if flags.get("is_ad"):
+        return "广告视频"
+    return ""
+
+
+def _current_video_flags(page: Any, video_id: str) -> dict[str, bool]:
+    try:
+        return dict(page.evaluate(
+            """
+            videoId => {
+              const active = document.querySelector('[data-e2e="feed-active-video"]');
+              const detail = videoId ? document.querySelector(`[class*="video_${videoId}"]`) : null;
+              const root = active || detail || document.body || document;
+              const text = (root.innerText || document.body?.innerText || '').replace(/\\s+/g, ' ');
+              const href = location.href;
+              const hasAdCta = /广告|了解详情|立即购买|去购买|领取优惠|查看详情/.test(text);
+              return {
+                is_live: /直播中|进入直播间|正在直播|\\/live\\//.test(href + ' ' + text),
+                is_ad: hasAdCta && /广告|赞助|立即购买|去购买|了解详情/.test(text),
+              };
+            }
+            """,
+            str(video_id or ""),
+        ))
+    except Exception:
+        return {"is_live": False, "is_ad": False}
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -1052,34 +1198,47 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any]) -> tuple[list[str], str, str, bool]:
+def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any], action_budget: int | None = None) -> tuple[list[str], str, str, bool]:
     if not plan["actions"]:
         return [], "", "", False
     done: list[str] = []
     comment_text = ""
     image_path = ""
     failed_twice = False
+    remaining = action_budget
+    if remaining is not None and remaining <= 0:
+        _append_log(run_id, "warning", "stop", "今日动作上限已用完，当前视频只浏览不互动。", "每日动作上限已达到", "系统会结束本轮任务，避免超过设置的互动频率。", {"video_id": video.get("video_id")})
+        return done, comment_text, image_path, False
     if "like" in plan["actions"]:
         ok, failed = _run_action_with_retry(run_id, page, video, "点赞视频", "like", lambda: _execute_click_action(run_id, page, video, "like", '[data-e2e="video-player-digg"]', "点赞视频"))
         failed_twice = failed_twice or failed
         if ok:
             done.append("点赞视频")
+            remaining = None if remaining is None else remaining - 1
         elif failed and not done:
             return done, comment_text, image_path, True
+    if remaining is not None and remaining <= 0:
+        return done, comment_text, image_path, False
     if "collect" in plan["actions"]:
         ok, failed = _run_action_with_retry(run_id, page, video, "收藏视频", "collect", lambda: _execute_click_action(run_id, page, video, "collect", '[data-e2e="video-player-collect"]', "收藏视频"))
         failed_twice = failed_twice or failed
         if ok:
             done.append("收藏视频")
+            remaining = None if remaining is None else remaining - 1
         elif failed and not done:
             return done, comment_text, image_path, True
+    if remaining is not None and remaining <= 0:
+        return done, comment_text, image_path, False
     if "follow" in plan["actions"]:
         ok, failed = _run_action_with_retry(run_id, page, video, "关注作者", "follow", lambda: _execute_follow(run_id, page, video))
         failed_twice = failed_twice or failed
         if ok:
             done.append("关注作者")
+            remaining = None if remaining is None else remaining - 1
         elif failed and not done:
             return done, comment_text, image_path, True
+    if remaining is not None and remaining <= 0:
+        return done, comment_text, image_path, False
     if "comment_text" in plan["actions"] or "comment_image" in plan["actions"]:
         comment_text = _pick_text() if "comment_text" in plan["actions"] else ""
         image_path = _pick_image() if "comment_image" in plan["actions"] else ""
@@ -1087,6 +1246,7 @@ def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, vi
         failed_twice = failed_twice or failed
         if ok:
             done.append("评论")
+            remaining = None if remaining is None else remaining - 1
         elif failed and not done:
             return done, comment_text, image_path, True
     return done, comment_text, image_path, bool(failed_twice and not done)
@@ -1108,23 +1268,40 @@ def _run_action_with_retry(run_id: str, page: Any, video: dict[str, Any], label:
     return False, True
 
 
+def _daily_action_count() -> int:
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT actions FROM traffic_records
+            WHERE platform = 'dy'
+              AND status = 'done'
+              AND created_at >= date('now', 'localtime')
+            """
+        ).fetchall()
+    total = 0
+    for row in rows:
+        try:
+            actions = json.loads(row["actions"])
+        except Exception:
+            actions = []
+        total += len([item for item in actions if item not in ("仅浏览", "跳过")])
+    return total
+
+
 def _execute_click_action(run_id: str, page: Any, video: dict[str, Any], action: str, selector: str, label: str) -> bool:
     if _dedup_exists(video, action, ""):
         _append_log(run_id, "warning", action, f"这个视频已经执行过{label}，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    if action == "like":
+    confirmed = _click_current_control(page, video.get("video_id", ""), action, [selector])
+    if not confirmed and action == "like":
+        before = _current_control_snapshot(page, video.get("video_id", ""), action)
         page.keyboard.press("z")
-        page.wait_for_timeout(700)
-        _append_log(run_id, "success", action, f"{label}已执行。", "已使用抖音快捷键触发", "可以在操作记录中查看本视频结果。", {"video_id": video["video_id"]})
-        _insert_dedup(video, action, "", "done")
-        return True
-    locator = page.locator(selector).first
-    if not locator.is_visible(timeout=1500):
-        _append_log(run_id, "warning", action, f"没有找到{label}按钮，已跳过当前动作。", "页面没有对应按钮", "如果频繁出现，可能是抖音页面改版或当前视频不支持该动作。", {"selector": selector})
+        page.wait_for_timeout(900)
+        confirmed = _control_changed(before, _current_control_snapshot(page, video.get("video_id", ""), action))
+    if not confirmed:
+        _append_log(run_id, "warning", action, f"没有确认{label}成功，已跳过当前动作。", "页面没有对应按钮或动作状态没有变化", "如果频繁出现，可能是抖音页面改版、当前视频不支持互动或账号受限。", {"selector": selector, "video_id": video["video_id"]})
         return False
-    locator.click(timeout=5000)
-    page.wait_for_timeout(1200)
-    _append_log(run_id, "success", action, f"{label}已执行。", "动作已点击", "可以在操作记录中查看本视频结果。", {"video_id": video["video_id"]})
+    _append_log(run_id, "success", action, f"{label}已执行。", "动作已确认成功", "可以在操作记录中查看本视频结果。", {"video_id": video["video_id"]})
     _insert_dedup(video, action, "", "done")
     return True
 
@@ -1133,13 +1310,11 @@ def _execute_follow(run_id: str, page: Any, video: dict[str, Any]) -> bool:
     if _dedup_exists(video, "follow", ""):
         _append_log(run_id, "warning", "follow", "这个作者已经关注过或处理过，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    button = page.get_by_text("关注", exact=False).first
-    if not button.is_visible(timeout=1500):
-        _append_log(run_id, "warning", "follow", "没有找到关注按钮，已跳过关注。", "当前视频可能是广告、直播或已关注作者", "如果计划包含关注，系统会继续处理其它动作。", {"video_id": video["video_id"]})
+    confirmed = _click_current_control(page, video.get("video_id", ""), "follow", ['[data-e2e="feed-follow"]', 'button'])
+    if not confirmed:
+        _append_log(run_id, "warning", "follow", "没有确认关注成功，已跳过关注。", "当前视频可能是广告、直播、已关注作者或页面没有关注按钮", "如果计划包含关注，系统会继续处理其它动作。", {"video_id": video["video_id"]})
         return False
-    button.click(timeout=5000)
-    page.wait_for_timeout(1200)
-    _append_log(run_id, "success", "follow", "已尝试关注作者。", "关注动作已点击", "如果账号已关注或平台限制，记录里会保留本次尝试。", {"video_id": video["video_id"]})
+    _append_log(run_id, "success", "follow", "已关注作者。", "关注动作已确认成功", "可以在操作记录中查看本次关注。", {"video_id": video["video_id"]})
     _insert_dedup(video, "follow", "", "done")
     return True
 
@@ -1149,7 +1324,7 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
     if _dedup_exists(video, "comment", content_hash):
         _append_log(run_id, "warning", "comment", "这个视频已经发送过相同评论，已跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    page.keyboard.press("x")
+    _open_comment_panel(page, video.get("video_id", ""))
     page.wait_for_timeout(1000)
     composer = page.locator("textarea, [contenteditable='true'], .comment-input-inner-container").first
     if not composer.is_visible(timeout=3000):
@@ -1157,6 +1332,10 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
         return False
     if text:
         _fill_comment_text(page, composer, text)
+        actual_text = _current_comment_text(page, composer)
+        if actual_text != text:
+            _append_log(run_id, "warning", "comment", "评论文案没有完整写入，已取消发送。", "输入框内容和文案库内容不一致", "系统不会发送半截文案；请稍后重试或降低执行频率。", {"expected": text, "actual": actual_text})
+            return False
     if image_path:
         chooser_selector = ".commentInput-right-ct > div > span:nth-child(2)"
         if Path(image_path).exists():
@@ -1164,12 +1343,16 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
                 page.locator(chooser_selector).first.click(timeout=5000)
             chooser.value.set_files(image_path)
             page.wait_for_timeout(1500)
+            if not _comment_image_ready(page):
+                _append_log(run_id, "warning", "comment", "评论图片没有完成预览，已取消发送。", "图片上传后没有出现预览", "请到引流设置检查图片格式或换一张图片。", {"image_path": image_path})
+                return False
         else:
             _append_log(run_id, "warning", "comment", "评论图片文件不存在，已取消本次评论。", "图片路径无效", "请到引流设置检查图片路径。", {"image_path": image_path})
             return False
-    page.keyboard.press("Enter")
-    page.wait_for_timeout(1500)
-    _append_log(run_id, "success", "comment", "评论已发送。", "评论动作已提交", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
+    if not _publish_comment_and_confirm(page):
+        _append_log(run_id, "warning", "comment", "评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应", "系统不会把未确认评论写为成功；如果频繁出现，请检查账号限制或安全验证。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
+        return False
+    _append_log(run_id, "success", "comment", "评论已发送。", "评论发布接口返回成功", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
     _insert_dedup(video, "comment", content_hash, "done")
     return True
 
@@ -1183,16 +1366,178 @@ def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
     page.wait_for_timeout(300)
 
 
-def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any] | None = None) -> bool:
+def _click_current_control(page: Any, video_id: str, action: str, extra_selectors: list[str] | None = None) -> bool:
+    before = _current_control_snapshot(page, video_id, action)
+    clicked = page.evaluate(
+        """
+        ({ videoId, action, extraSelectors }) => {
+          const actionSelectors = {
+            like: ['[data-e2e="feed-like-icon"]', '[data-e2e="video-player-digg"]'],
+            collect: ['[data-e2e="video-player-collect"]'],
+            follow: ['[data-e2e="feed-follow"]', 'button'],
+            comment: ['[data-e2e="feed-comment-icon"]'],
+          };
+          const selectors = [...(actionSelectors[action] || []), ...(extraSelectors || [])];
+          const active = document.querySelector('[data-e2e="feed-active-video"]');
+          const detail = videoId ? document.querySelector(`[class*="video_${videoId}"]`) : null;
+          const scopedRoots = [active, detail].filter(Boolean);
+          const roots = scopedRoots.length ? scopedRoots : [document];
+          const visible = el => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 8 && rect.height > 8 && rect.bottom > 0 && rect.top < innerHeight
+              && rect.right > 0 && rect.left < innerWidth && style.display !== 'none'
+              && style.visibility !== 'hidden' && Number(style.opacity || 1) > 0;
+          };
+          const clickable = el => {
+            const chain = [el, el.closest('button'), el.closest('[role="button"]'), el.parentElement, el.parentElement?.parentElement].filter(Boolean);
+            return chain.find(visible);
+          };
+          for (const root of roots) {
+            for (const selector of selectors) {
+              for (const el of Array.from(root.querySelectorAll(selector))) {
+                if (action === 'follow' && !/关注/.test(el.innerText || el.textContent || '')) continue;
+                const target = clickable(el);
+                if (target) {
+                  target.click();
+                  return true;
+                }
+              }
+            }
+          }
+          return false;
+        }
+        """,
+        {"videoId": str(video_id or ""), "action": action, "extraSelectors": extra_selectors or []},
+    )
+    if not clicked:
+        return False
+    page.wait_for_timeout(1200)
+    if action == "comment":
+        return True
+    return _control_changed(before, _current_control_snapshot(page, video_id, action))
+
+
+def _current_control_snapshot(page: Any, video_id: str, action: str) -> dict[str, str]:
+    try:
+        return dict(page.evaluate(
+            """
+            ({ videoId, action }) => {
+              const selectors = {
+                like: ['[data-e2e="feed-like-icon"]', '[data-e2e="video-player-digg"]'],
+                collect: ['[data-e2e="video-player-collect"]'],
+                follow: ['[data-e2e="feed-follow"]', 'button'],
+                comment: ['[data-e2e="feed-comment-icon"]'],
+              }[action] || [];
+              const active = document.querySelector('[data-e2e="feed-active-video"]');
+              const detail = videoId ? document.querySelector(`[class*="video_${videoId}"]`) : null;
+              const scopedRoots = [active, detail].filter(Boolean);
+              const roots = scopedRoots.length ? scopedRoots : [document];
+              for (const root of roots) {
+                for (const selector of selectors) {
+                  for (const el of Array.from(root.querySelectorAll(selector))) {
+                    if (action === 'follow' && !/关注/.test(el.innerText || el.textContent || '')) continue;
+                    const target = el.closest('button') || el.closest('[role="button"]') || el.parentElement || el;
+                    return {
+                      text: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim(),
+                      cls: String(target.className || ''),
+                      aria: target.getAttribute('aria-pressed') || target.getAttribute('aria-label') || '',
+                    };
+                  }
+                }
+              }
+              return { text: '', cls: '', aria: '' };
+            }
+            """,
+            {"videoId": str(video_id or ""), "action": action},
+        ))
+    except Exception:
+        return {"text": "", "cls": "", "aria": ""}
+
+
+def _control_changed(before: dict[str, str], after: dict[str, str]) -> bool:
+    return bool(after.get("text") or after.get("cls") or after.get("aria")) and before != after
+
+
+def _open_comment_panel(page: Any, video_id: str) -> None:
+    if not _click_current_control(page, video_id, "comment", ['[data-e2e="feed-comment-icon"]']):
+        page.keyboard.press("x")
+
+
+def _close_comment_panel(page: Any) -> None:
     page.keyboard.press("x")
     page.wait_for_timeout(500)
-    for action in ("arrow_down", "wheel", "page_down"):
+
+
+def _current_comment_text(page: Any, composer: Any) -> str:
+    try:
+        value = composer.evaluate(
+            """
+            el => {
+              const active = document.activeElement;
+              const pick = node => (node && ('value' in node ? node.value : (node.innerText || node.textContent || ''))) || '';
+              return pick(active) || pick(el);
+            }
+            """
+        )
+    except Exception:
+        try:
+            value = page.evaluate("() => document.activeElement?.value || document.activeElement?.innerText || ''")
+        except Exception:
+            value = ""
+    return str(value or "").strip()
+
+
+def _comment_image_ready(page: Any) -> bool:
+    try:
+        return bool(page.evaluate(
+            """
+            () => Array.from(document.querySelectorAll('img, [style*="background-image"]'))
+              .some(el => {
+                const rect = el.getBoundingClientRect();
+                const text = (el.closest('[class*="comment"]')?.innerText || '').replace(/\\s+/g, ' ');
+                return rect.width > 16 && rect.height > 16 && rect.top < innerHeight && !/头像/.test(text);
+              })
+            """
+        ))
+    except Exception:
+        return True
+
+
+def _publish_comment_and_confirm(page: Any) -> bool:
+    try:
+        with page.expect_response(lambda response: "aweme/v1/web/comment/publish" in response.url, timeout=8000) as response_info:
+            page.keyboard.press("Enter")
+        payload = response_info.value.json()
+        return isinstance(payload, dict) and payload.get("status_code") == 0
+    except Exception:
+        return False
+
+
+def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any] | None = None) -> bool:
+    _close_comment_panel(page)
+    mode = _detect_douyin_page_mode(page)
+    actions = ("detail_next", "arrow_down", "wheel", "page_down", "visible_link") if mode == "video_detail" else ("arrow_down", "wheel", "page_down")
+    for action in actions:
         if action == "arrow_down":
             page.keyboard.press("ArrowDown")
         elif action == "wheel":
             page.mouse.wheel(0, 1600)
-        else:
+        elif action == "page_down":
             page.keyboard.press("PageDown")
+        elif action == "detail_next":
+            page.evaluate(
+                """
+                () => {
+                  const btn = document.querySelector('[data-e2e="video-switch-next-arrow"]');
+                  if (btn) btn.click();
+                }
+                """
+            )
+        else:
+            links = [item for item in _visible_video_links(page) if previous_video_id not in str(item.get("href", ""))]
+            if links:
+                page.goto(random.choice(links[:6])["href"], wait_until="domcontentloaded", timeout=60_000)
         page.wait_for_timeout(1400)
         next_id = _read_active_video(page, video_cache)["video_id"]
         if next_id and next_id != previous_video_id:
@@ -1208,6 +1553,7 @@ def _record_video(
     comment_text: str,
     image_path: str,
     status: str,
+    reason: str = "",
 ) -> None:
     # 每个视频都落操作记录，纯刷视频也会以“仅浏览”进入表格。
     with database.connect() as conn:
@@ -1215,9 +1561,9 @@ def _record_video(
             """
             INSERT INTO traffic_run_items(
                 run_id, video_id, video_url, author_id, author_name,
-                video_desc, like_count, comment_count, status, actions_done
+                video_desc, like_count, comment_count, status, actions_done, skip_reason
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -1230,6 +1576,7 @@ def _record_video(
                 video.get("comment_count"),
                 status,
                 json.dumps(actions, ensure_ascii=False),
+                reason,
             ),
         )
         conn.execute(
@@ -1237,9 +1584,9 @@ def _record_video(
             INSERT INTO traffic_records(
                 run_id, plan_id, platform, video_id, video_url, video_desc,
                 author_id, author_name, like_count, comment_count, actions,
-                comment_text, comment_image_path, status
+                comment_text, comment_image_path, status, reason
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -1256,6 +1603,7 @@ def _record_video(
                 comment_text,
                 image_path,
                 status,
+                reason,
             ),
         ).lastrowid
         conn.execute(
@@ -1497,6 +1845,7 @@ def _pick_image() -> str:
 
 
 def _dedup_exists(video: dict[str, Any], action: str, content_hash: str) -> bool:
+    video_id, author_id = _dedup_scope(video, action)
     with database.connect() as conn:
         row = conn.execute(
             """
@@ -1504,7 +1853,7 @@ def _dedup_exists(video: dict[str, Any], action: str, content_hash: str) -> bool
             WHERE platform = 'dy' AND video_id = ? AND author_id = ?
               AND action_type = ? AND content_hash = ?
             """,
-            (video.get("video_id", ""), video.get("author_id", ""), action, content_hash),
+            (video_id, author_id, action, content_hash),
         ).fetchone()
     return row is not None
 
@@ -1515,13 +1864,24 @@ def _insert_dedup(video: dict[str, Any], action: str, content_hash: str, status:
 
 
 def _insert_dedup_with_conn(conn: Any, video: dict[str, Any], action: str, content_hash: str, status: str, run_id: str | None, record_id: int | None) -> None:
+    video_id, author_id = _dedup_scope(video, action)
     conn.execute(
         """
         INSERT OR IGNORE INTO traffic_dedup_ledger(platform, video_id, author_id, action_type, content_hash, run_id, record_id, status)
         VALUES('dy', ?, ?, ?, ?, ?, ?, ?)
         """,
-        (video.get("video_id", ""), video.get("author_id", ""), action, content_hash, run_id, record_id, status),
+        (video_id, author_id, action, content_hash, run_id, record_id, status),
     )
+
+
+def _dedup_scope(video: dict[str, Any], action: str) -> tuple[str, str]:
+    video_id = str(video.get("video_id") or "")
+    author_id = str(video.get("author_id") or video.get("author_name") or "")
+    if action == "follow":
+        return "", author_id or video_id
+    if action in {"like", "collect", "comment"}:
+        return video_id, ""
+    return video_id, author_id
 
 
 def _hash_text(value: str) -> str:
