@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 from app import database
 from app.schemas import TrafficPlanCreate, TrafficSettingsUpdate
@@ -1322,7 +1322,7 @@ def _execute_click_action(run_id: str, page: Any, video: dict[str, Any], action:
     if _dedup_exists(video, action, ""):
         _append_log(run_id, "warning", action, f"这个视频已经执行过{label}，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    payload = _click_and_confirm_action_response(page, video.get("video_id", ""), action, [selector], allow_like_shortcut=action == "like")
+    payload = _click_and_confirm_action_response(page, video, action, [selector], allow_like_shortcut=action == "like")
     if payload is None:
         _append_log(run_id, "warning", action, f"没有收到抖音服务端确认，已跳过{label}记录。", "前端按钮变化不能证明账号已真实落账", "系统不会把未确认动作写为成功；如果频繁出现，请降低频率或检查账号风控。", {"selector": selector, "video_id": video["video_id"]})
         return False
@@ -1335,7 +1335,7 @@ def _execute_follow(run_id: str, page: Any, video: dict[str, Any]) -> bool:
     if _dedup_exists(video, "follow", ""):
         _append_log(run_id, "warning", "follow", "这个作者已经关注过或处理过，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    payload = _click_and_confirm_action_response(page, video.get("video_id", ""), "follow", ['[data-e2e="feed-follow"]', 'button'])
+    payload = _click_and_confirm_action_response(page, video, "follow", ['[data-e2e="feed-follow"]', 'button'])
     if payload is None:
         _append_log(run_id, "warning", "follow", "没有收到抖音服务端关注确认，已跳过关注。", "当前视频可能是广告、直播、已关注作者、账号受限或页面没有关注按钮", "系统不会把未确认关注写为成功；如果计划包含其它动作，会继续处理其它动作。", {"video_id": video["video_id"]})
         return False
@@ -1386,9 +1386,10 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
         _close_comment_panel(page)
 
 
-def _click_and_confirm_action_response(page: Any, video_id: str, action: str, selectors: list[str], allow_like_shortcut: bool = False) -> dict[str, Any] | None:
+def _click_and_confirm_action_response(page: Any, video: dict[str, Any], action: str, selectors: list[str], allow_like_shortcut: bool = False) -> dict[str, Any] | None:
+    video_id = str(video.get("video_id") or "")
     try:
-        with page.expect_response(lambda response: _is_action_response(response, action), timeout=10_000) as response_info:
+        with page.expect_response(lambda response: _is_action_response(response, action, video), timeout=10_000) as response_info:
             clicked = _click_current_control(page, video_id, action, selectors, require_confirm=False)
             if not clicked and allow_like_shortcut:
                 page.keyboard.press("z")
@@ -1396,20 +1397,63 @@ def _click_and_confirm_action_response(page: Any, video_id: str, action: str, se
             if not clicked:
                 return None
         payload = _response_json(response_info.value)
+        payload["_confirm_url"] = _response_path(response_info.value)
         return payload if _payload_status_ok(payload) else None
     except Exception:
         return None
 
 
-def _is_action_response(response: Any, action: str) -> bool:
+def _is_action_response(response: Any, action: str, video: dict[str, Any] | None = None) -> bool:
     url = str(getattr(response, "url", "")).lower()
+    raw = f"{url}\n{_request_post_data(response)}".lower()
+    target = str((video or {}).get("author_id" if action == "follow" else "video_id") or "")
+    if target and target not in raw:
+        return False
     if action == "like":
-        return "digg" in url and ("aweme" in url or "commit" in url)
+        return "digg" in url and ("aweme" in url or "commit" in url) and _is_positive_action_request(response)
     if action == "collect":
-        return ("collect" in url or "favorite" in url) and ("aweme" in url or "commit" in url)
+        return ("collect" in url or "favorite" in url) and ("aweme" in url or "commit" in url) and _is_positive_action_request(response)
     if action == "follow":
-        return ("follow" in url or "relation" in url) and ("user" in url or "commit" in url)
+        return ("follow" in url or "relation" in url) and ("user" in url or "commit" in url) and _is_positive_action_request(response)
     return False
+
+
+def _is_positive_action_request(response: Any) -> bool:
+    params = _response_params(response)
+    negative_keys = {"type", "action_type", "digg_type", "collect_type", "follow_type", "action", "is_cancel", "to_status"}
+    for key in negative_keys:
+        for value in params.get(key, []):
+            normalized = str(value).strip().lower()
+            if normalized in {"0", "false", "cancel", "unfollow", "uncollect", "undigg"}:
+                return False
+    positive_keys = {"type", "action_type", "digg_type", "collect_type", "follow_type", "action", "to_status"}
+    return any(str(value).strip().lower() in {"1", "true", "follow", "collect", "digg"} for key in positive_keys for value in params.get(key, []))
+
+
+def _response_params(response: Any) -> dict[str, list[str]]:
+    parsed = urlparse(str(getattr(response, "url", "")))
+    params = {key: list(value) for key, value in parse_qs(parsed.query).items()}
+    post_data = _request_post_data(response)
+    if post_data:
+        for key, value in parse_qs(post_data).items():
+            params.setdefault(key, []).extend(value)
+    return params
+
+
+def _request_post_data(response: Any) -> str:
+    try:
+        return str(getattr(response.request, "post_data", "") or "")
+    except Exception:
+        return ""
+
+
+def _response_path(response: Any) -> str:
+    try:
+        url = str(getattr(response, "url", ""))
+        parsed = urlparse(url)
+        return f"{parsed.path}?{parsed.query}"[:500]
+    except Exception:
+        return ""
 
 
 def _response_json(response: Any) -> dict[str, Any]:

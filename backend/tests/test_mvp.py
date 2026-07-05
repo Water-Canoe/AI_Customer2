@@ -942,6 +942,36 @@ def test_traffic_like_requires_server_confirmation(monkeypatch: pytest.MonkeyPat
     assert inserted == []
 
 
+def test_traffic_action_response_requires_positive_targeted_request() -> None:
+    from app.services import traffic_workbench
+
+    class Request:
+        post_data = ""
+
+    class Response:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.request = Request()
+
+    video = {"video_id": "7300000000000000001", "author_id": "author-1"}
+
+    assert traffic_workbench._is_action_response(
+        Response("https://www.douyin.com/aweme/v1/web/commit/item/digg/?aweme_id=7300000000000000001&type=1"),
+        "like",
+        video,
+    ) is True
+    assert traffic_workbench._is_action_response(
+        Response("https://www.douyin.com/aweme/v1/web/commit/item/digg/?aweme_id=7300000000000000001&type=0"),
+        "like",
+        video,
+    ) is False
+    assert traffic_workbench._is_action_response(
+        Response("https://www.douyin.com/aweme/v1/web/commit/item/digg/?aweme_id=999&type=1"),
+        "like",
+        video,
+    ) is False
+
+
 def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
     from app.services import traffic_workbench
 
