@@ -292,6 +292,20 @@ def get_run(run_id: str) -> dict[str, Any] | None:
                 (run_id,),
             ).fetchall()
         )
+        run["records"] = [
+            _format_record(row)
+            for row in conn.execute(
+                """
+                SELECT tr.*, p.name AS plan_name, r.status AS run_status
+                FROM traffic_records tr
+                LEFT JOIN traffic_plans p ON p.id = tr.plan_id
+                LEFT JOIN traffic_runs r ON r.id = tr.run_id
+                WHERE tr.run_id = ?
+                ORDER BY tr.created_at DESC, tr.id DESC
+                """,
+                (run_id,),
+            ).fetchall()
+        ]
     return run
 
 

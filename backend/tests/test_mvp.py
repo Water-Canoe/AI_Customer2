@@ -1360,8 +1360,11 @@ def test_traffic_records_filter_actions_and_image_preview(tmp_path: Path) -> Non
 
     like_rows = traffic_workbench.list_records(action="like")["rows"]
     comment_rows = traffic_workbench.list_records(action="comment_image")["rows"]
+    detail = traffic_workbench.get_run(run["id"])
     assert [row["video_id"] for row in like_rows] == ["like-video"]
     assert comment_rows[0]["comment_image_preview_url"].startswith("/api/traffic/material-images/")
+    assert detail is not None
+    assert detail["records"][0]["comment_image_preview_url"].startswith("/api/traffic/material-images/")
 
 
 def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

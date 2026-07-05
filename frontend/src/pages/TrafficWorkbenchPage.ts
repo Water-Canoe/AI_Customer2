@@ -413,9 +413,9 @@ export default defineComponent({
               h('li', run.stop_reason),
               run.stop_suggestion ? h('li', run.stop_suggestion) : null,
             ]) : null,
-            h('div', { class: 'log-console' }, (run.logs || []).length ? run.logs.map(renderLogLine) : [h('p', '暂无日志')]),
-            sectionTitle({ title: '已处理视频', subtitle: `${(run.items || []).length} 条`, icon: VideoPlay, tone: 'green', compact: true }),
-            h('div', { class: 'table-scroll traffic-detail-table' }, renderItemsTable(run.items || [])),
+            h('div', { class: 'traffic-log-list' }, (run.logs || []).length ? run.logs.map(renderLogLine) : [h('p', '暂无日志')]),
+            sectionTitle({ title: '已处理视频', subtitle: `${(run.records || []).length} 条`, icon: VideoPlay, tone: 'green', compact: true }),
+            h('div', { class: 'table-scroll traffic-detail-table' }, renderRecordsTable(run.records || [], '暂无视频记录')),
           ] : emptyState({ title: '请选择批次', description: '右侧选择一个批次查看日志', icon: Monitor }),
         ]),
         side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
@@ -457,7 +457,7 @@ export default defineComponent({
         ]),
         h('div', { class: 'table-content' }, [
           sectionTitle({ title: '记录表', subtitle: `${records.value.rows?.length || 0} / ${records.value.total || 0} 条`, icon: DataLine, tone: 'teal', compact: true }),
-          h('div', { class: 'table-scroll' }, renderRecordsTable()),
+          h('div', { class: 'table-scroll' }, renderRecordsTable(records.value.rows || [], '暂无操作记录')),
           h('div', { class: 'table-pagination' }, [
             h('div', { class: 'table-page-size' }, [
               h('span', '每页'),
@@ -619,26 +619,8 @@ export default defineComponent({
       ])
     }
 
-    function renderItemsTable(items: Dict[]) {
-      if (!items.length) return emptyState({ title: '暂无视频记录', description: '任务开始处理视频后会显示在这里', icon: VideoPlay })
-      return h('table', { class: 'data-table resizable-table traffic-detail-data-table' }, [
-        h('thead', [h('tr', ['时间', '视频', '作者', '点赞数', '评论数', '动作结果', '状态', '原因'].map(text => h('th', text)))]),
-        h('tbody', items.map(item => h('tr', [
-          h('td', tableText(item.created_at || '-')),
-          h('td', renderVideoCell(item)),
-          h('td', tableText(item.author_name || '-')),
-          h('td', item.like_count ?? '-'),
-          h('td', item.comment_count ?? '-'),
-          h('td', renderActionTags(item.actions_done)),
-          h('td', h('span', { class: ['status', recordStatusClass(item.status)] }, recordStatusText(item.status))),
-          h('td', tableText(item.skip_reason || '-')),
-        ]))),
-      ])
-    }
-
-    function renderRecordsTable() {
-      const rows = records.value.rows || []
-      if (!rows.length) return emptyState({ title: '暂无操作记录', description: '执行批次后会自动写入记录', icon: DataLine })
+    function renderRecordsTable(rows: Dict[], emptyTitle: string) {
+      if (!rows.length) return emptyState({ title: emptyTitle, description: '执行批次后会自动写入记录', icon: DataLine })
       return h('table', { class: 'data-table resizable-table traffic-record-table' }, [
         h('thead', [h('tr', ['时间', '视频简介', '作者', '点赞数', '评论数', '动作', '评论内容/图片', '状态', '原因', '计划/批次'].map(text => h('th', text)))]),
         h('tbody', rows.map((row: Dict) => h('tr', [

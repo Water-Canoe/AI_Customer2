@@ -992,18 +992,22 @@ input[type='checkbox'] {
 }
 
 .traffic-record-bar {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 14px;
 }
 
 .traffic-record-bar .section-title {
+  flex: 0 0 auto;
   margin-bottom: 0;
 }
 
 .traffic-record-filters {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(110px, 120px) minmax(110px, 120px) 72px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  max-width: none;
   min-width: 0;
 }
 
@@ -1012,6 +1016,18 @@ input[type='checkbox'] {
 .traffic-record-filters button {
   width: 100%;
   box-sizing: border-box;
+}
+
+.traffic-record-filters input {
+  flex: 1 1 180px;
+}
+
+.traffic-record-filters select {
+  flex: 0 0 118px;
+}
+
+.traffic-record-filters button {
+  flex: 0 0 72px;
 }
 
 .traffic-material-table {
@@ -1079,14 +1095,60 @@ input[type='checkbox'] {
   overflow: auto;
 }
 
-.traffic-monitor-pane .log-console {
-  height: clamp(180px, 28vh, 280px);
-  margin-bottom: 14px;
-}
-
 .traffic-monitor-pane .traffic-detail-table {
   max-height: none;
   overflow: auto;
+}
+
+.traffic-log-list {
+  display: grid;
+  gap: 8px;
+  max-height: clamp(180px, 28vh, 280px);
+  margin-bottom: 14px;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #e5ece8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.traffic-log-list p {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 10px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid #e5ece8;
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.traffic-log-list time {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.traffic-log-list small {
+  color: #64748b;
+}
+
+.traffic-log-list details {
+  grid-column: 2;
+  color: #475569;
+}
+
+.traffic-log-list pre {
+  max-height: 120px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #eef2f7;
+  color: #0f172a;
+  white-space: pre-wrap;
 }
 
 .traffic-action-tags {
@@ -3731,7 +3793,13 @@ input[type='checkbox'] {
 
   .traffic-record-bar,
   .traffic-record-filters {
-    grid-template-columns: 1fr;
+    flex-wrap: wrap;
+  }
+
+  .traffic-record-filters input,
+  .traffic-record-filters select,
+  .traffic-record-filters button {
+    flex: 1 1 140px;
   }
 
   .split-resizer {
