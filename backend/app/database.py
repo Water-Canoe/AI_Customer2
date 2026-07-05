@@ -10,14 +10,19 @@ from typing import Any, Iterator
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = BACKEND_ROOT.parent
-DEFAULT_DB_PATH = BACKEND_ROOT / "runtime" / "ai_customer.sqlite3"
+DEFAULT_DATA_ROOT = WORKSPACE_ROOT / "data"
 DEFAULT_MEDIA_CRAWLER_PATH = Path(os.getenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", str(WORKSPACE_ROOT / "MediaCrawler")))
 DEFAULT_MEDIA_CRAWLER_DB = DEFAULT_MEDIA_CRAWLER_PATH / "database" / "sqlite_tables.db"
 
 
+def get_data_root() -> Path:
+    """Return the persistent data folder that survives app updates."""
+    return Path(os.getenv("AI_CUSTOMER_DATA_DIR", str(DEFAULT_DATA_ROOT)))
+
+
 def get_db_path() -> Path:
     """Return the active project SQLite path."""
-    return Path(os.getenv("AI_CUSTOMER_DB", str(DEFAULT_DB_PATH)))
+    return Path(os.getenv("AI_CUSTOMER_DB", str(get_data_root() / "ai_customer.sqlite3")))
 
 
 @contextmanager

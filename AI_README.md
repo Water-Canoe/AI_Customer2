@@ -7,10 +7,10 @@
 数据分三层：
 
 1. MediaCrawler 底层原始库：默认 `D:\Dev\Projects\MediaCrawler\database\sqlite_tables.db`，只做采集保底和追溯。
-2. 项目业务库：默认 `backend/runtime/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件。
+2. 项目业务库：默认 `data/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件；可用 `AI_CUSTOMER_DATA_DIR` 指定整个数据目录，或用 `AI_CUSTOMER_DB` 指定单独数据库文件。
 3. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台下的计划工作台、执行监控、操作记录和引流设置共用 `traffic_*` 业务表和 `/api/traffic/*` 接口。
 
-版本控制只保留项目源码和文档；`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MediaCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
+版本控制只保留项目源码和文档；`data/`、`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MediaCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 
 ## 前端结构
 
@@ -238,15 +238,15 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 如果本地库曾运行过早期引流原型，`init_db()` 会为旧 `traffic_runs` 表补齐 `plan_id`、统计列和停机原因列，避免执行监控页因为旧表缺列返回 500。旧原型表还可能保留 `campaign_id NOT NULL` 和 `traffic_campaigns` 外键，新版创建批次会自动写入内部桥接 campaign，满足旧约束但不参与新版业务。引流分栏页面必须使用 `SplitPane` 的默认 slot 作为主区、`side` slot 作为右栏，否则主区会消失、右栏被压成竖排。
 
-引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `backend/runtime/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。操作记录页会把点赞、收藏、关注、评论渲染为不同颜色的标签；评论内容为图片时，如果图片来自素材库，会直接显示同一个预览地址的缩略图。操作记录表包含平台列，并提供抖音、小红书、快手平台筛选；当前只有抖音会产生真实执行记录，其余平台先保留筛选入口。
+引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `data/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。操作记录页会把点赞、收藏、关注、评论渲染为不同颜色的标签；评论内容为图片时，如果图片来自素材库，会直接显示同一个预览地址的缩略图。操作记录表包含平台列，并提供抖音、小红书、快手平台筛选；当前只有抖音会产生真实执行记录，其余平台先保留筛选入口。
 
 引流设置页提供“失败后关闭浏览器”开关，默认开启以保持原有行为；关闭后，批次异常停止或停机时会保留当前抖音 CloakBrowser 窗口，便于复盘已经浏览和互动过的视频。复盘完成后需要手动关闭该浏览器，再启动新的引流批次。引流设置页也提供“无头浏览器执行”开关，默认关闭；开启后仅引流批次使用无头 CloakBrowser，抖音登录窗口仍强制有头，方便扫码登录和处理安全验证。
 
 引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、CloakBrowser Python 包、CloakBrowser 专用浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `python -m cloakbrowser install`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
 
-引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个独立 CloakBrowser 登录窗口，并复用执行器同一个 `runtime/traffic_douyin_profile`；用户扫码后可以确认首页能正常展示内容，后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
+引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个独立 CloakBrowser 登录窗口，并复用执行器同一个 `data/traffic_douyin_profile`；用户扫码后可以确认首页能正常展示内容，后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
 
-执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并继续使用独立浏览器 Profile `runtime/traffic_douyin_profile` 保存抖音登录态。Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
+执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并继续使用独立浏览器 Profile `data/traffic_douyin_profile` 保存抖音登录态。Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
 
 来源之间严格隔离：`随机推荐流` 只从抖音首页/精选页当前可见视频卡片进入，能从数字视频链接推导出 `jingxuan?modal_id=...` 时会优先进入随机视频流，不读取拓客项目库；`拓客竞品视频 / 已采集关键词` 才使用项目库视频队列，其中已采集关键词会按 `contents.source_keyword` 过滤候选视频；手动搜索关键词只在搜索结果页点击可见视频，不回退项目库。项目库队列每轮都会按作者冷却和本轮已选作者排除候选，避免沿同一作者视频合集连续互动。
 
@@ -271,9 +271,9 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 
 Windows 测试包通过 `script/build_package.ps1` 生成。脚本会先执行 `frontend/npm run build` 生成静态文件，再使用后端虚拟环境里的 PyInstaller 把 `packaging/ai_customer_launcher.py` 打成 one-folder 包，并把 `frontend/dist` 作为 `frontend_dist` 一起放入包内。生成目录形如 `dist/AI_Customer_Test_yyyyMMdd_HHmmss/`，双击其中的 `AI_Customer_Test_yyyyMMdd_HHmmss.exe` 即可启动本地服务并自动打开浏览器。
 
-打包启动器会把业务库放在包目录的 `runtime/ai_customer.sqlite3`，首次启动自动初始化；前端由 FastAPI 直接托管，不需要朋友运行 Vite 或 Node。启动器会优先使用包目录旁的 `MediaCrawler/` 作为默认采集器路径，因此如果需要给朋友做完整采集测试，可以把 MediaCrawler 目录放到 exe 同级目录，或让朋友在“设置”页手动填写 MediaCrawler 路径和底层 SQLite 路径。当前测试包不把 MediaCrawler 打进 exe，因为该目录包含上游源码和虚拟环境，体积约 1GB 以上。
+打包启动器会把业务库放在稳定安装目录的 `data/ai_customer.sqlite3`，首次启动自动初始化；如果程序位于 `versions/1.0.1/`，数据仍放在外层 `data/`，所以后续更新只替换 `versions/` 不会覆盖数据库、引流图片和浏览器 Profile。前端由 FastAPI 直接托管，不需要朋友运行 Vite 或 Node。启动器会优先使用稳定安装目录旁的 `MediaCrawler/` 作为默认采集器路径，因此如果需要给朋友做完整采集测试，可以把 MediaCrawler 目录放到 `versions/` 同级的安装根目录，或让朋友在“设置”页手动填写 MediaCrawler 路径和底层 SQLite 路径。当前测试包不把 MediaCrawler 打进 exe，因为该目录包含上游源码和虚拟环境，体积约 1GB 以上。
 
-打包包内不会包含 AI_Customer 的 Python/Vue 源码，但本地软件不能做到绝对防逆向；授权与设备限制仍以 Sealos 服务端为准。分发前如果自己启动过包做 smoke test，需要删除包目录下明确的单个文件 `runtime/ai_customer.sqlite3`，避免把测试设备码一起发出去。
+打包包内不会包含 AI_Customer 的 Python/Vue 源码，但本地软件不能做到绝对防逆向；授权与设备限制仍以 Sealos 服务端为准。分发前如果自己启动过包做 smoke test，需要删除稳定安装目录下明确的单个文件 `data/ai_customer.sqlite3`，避免把测试设备码一起发出去。
 
 ## 已知限制
 

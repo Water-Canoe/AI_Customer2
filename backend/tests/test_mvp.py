@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 import sys
 import types
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,27 @@ def prepare_project(tmp_path: Path) -> tuple[Path, Path]:
         database.set_setting(conn, "media_crawler_db_path", str(raw_db))
         database.set_setting(conn, "media_crawler_path", str(tmp_path))
     return project_db, raw_db
+
+
+def test_packaged_launcher_keeps_data_outside_version_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher_path = BACKEND_ROOT.parent / "packaging" / "ai_customer_launcher.py"
+    spec = importlib.util.spec_from_file_location("ai_customer_launcher_test", launcher_path)
+    assert spec and spec.loader
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+
+    version_dir = tmp_path / "versions" / "1.0.1"
+    version_dir.mkdir(parents=True)
+    (tmp_path / "MediaCrawler").mkdir()
+    monkeypatch.delenv("AI_CUSTOMER_DATA_DIR", raising=False)
+    monkeypatch.delenv("AI_CUSTOMER_DB", raising=False)
+    monkeypatch.delenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", raising=False)
+
+    launcher.configure_environment(version_dir)
+
+    assert os.environ["AI_CUSTOMER_DATA_DIR"] == str(tmp_path / "data")
+    assert os.environ["AI_CUSTOMER_DB"] == str(tmp_path / "data" / "ai_customer.sqlite3")
+    assert os.environ["AI_CUSTOMER_MEDIA_CRAWLER_PATH"] == str(tmp_path / "MediaCrawler")
 
 
 def create_raw_db(raw_db: Path) -> None:

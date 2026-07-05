@@ -31,8 +31,8 @@ TRAFFIC_SETTING_KEYS = {
     "traffic_action_probability": "60",
 }
 
-TRAFFIC_IMAGE_DIR = database.BACKEND_ROOT / "runtime" / "traffic_images"
-TRAFFIC_DOUYIN_PROFILE_DIR = database.WORKSPACE_ROOT / "runtime" / "traffic_douyin_profile"
+TRAFFIC_IMAGE_DIR = database.get_data_root() / "traffic_images"
+TRAFFIC_DOUYIN_PROFILE_DIR = database.get_data_root() / "traffic_douyin_profile"
 TRAFFIC_LAST_VIDEO_URL_KEY = "traffic_last_douyin_video_url"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
@@ -562,7 +562,7 @@ def open_douyin_login_window() -> dict[str, Any]:
     if DOUYIN_LOGIN_PROCESS and DOUYIN_LOGIN_PROCESS.poll() is None:
         return {"ok": True, "message": "抖音登录窗口已经打开。扫码后请点开任意视频，关闭窗口，再启动批次。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
 
-    runtime_dir = database.BACKEND_ROOT / "runtime"
+    runtime_dir = database.get_data_root()
     runtime_dir.mkdir(parents=True, exist_ok=True)
     log_path = runtime_dir / "traffic_douyin_login.log"
     command = [sys.executable, "-c", "from app.services.traffic_workbench import _hold_douyin_login_window; _hold_douyin_login_window()"]
