@@ -38,6 +38,8 @@ TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 300
 DOUYIN_LOGIN_PROCESS: subprocess.Popen[Any] | None = None
 TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
+COMMENT_EDITOR_SELECTOR = "#videoSideCard textarea, #videoSideCard [contenteditable='true'], #videoSideBar textarea, #videoSideBar [contenteditable='true'], textarea, [contenteditable='true']"
+COMMENT_CONTAINER_SELECTOR = "#videoSideCard .comment-input-inner-container, #videoSideBar .comment-input-inner-container, .comment-input-inner-container"
 
 
 # 停机异常同时携带用户提示和技术详情，日志页面按这两个层级展示。
@@ -1387,14 +1389,23 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
     try:
         _open_comment_panel(page, video.get("video_id", ""))
         page.wait_for_timeout(1000)
-        composer = page.locator("textarea, [contenteditable='true'], .comment-input-inner-container").first
+        composer = _comment_composer(page)
         if not composer.is_visible(timeout=3000):
-            _append_log(run_id, "warning", "comment", "没有找到评论输入框，已跳过评论。", "评论区没有打开或当前视频不支持评论", "系统会继续浏览后续视频。", {"video_id": video["video_id"]})
-            return False
+            container = page.locator(COMMENT_CONTAINER_SELECTOR).first
+            if container.is_visible(timeout=1000):
+                container.click(timeout=1000)
+                page.wait_for_timeout(300)
+                composer = _comment_composer(page)
+            if not composer.is_visible(timeout=1000):
+                _append_log(run_id, "warning", "comment", "没有找到评论输入框，已跳过评论。", "评论区没有打开或当前视频不支持评论", "系统会继续浏览后续视频。", {"video_id": video["video_id"]})
+                return False
         if text:
             _fill_comment_text(page, composer, text)
             actual_text = _current_comment_text(page, composer)
-            if actual_text != text:
+            if not _comment_text_matches(actual_text, text):
+                _force_set_comment_text(page, text)
+                actual_text = _current_comment_text(page, composer)
+            if not _comment_text_matches(actual_text, text):
                 _append_log(run_id, "warning", "comment", "评论文案没有完整写入，已取消发送。", "输入框内容和文案库内容不一致", "系统不会发送半截文案；请稍后重试或降低执行频率。", {"expected": text, "actual": actual_text})
                 return False
         if image_path:
@@ -1508,12 +1519,47 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: payload.get(key) for key in ("status_code", "status_msg", "message", "log_pb") if key in payload}
 
 
+def _comment_composer(page: Any) -> Any:
+    return page.locator(COMMENT_EDITOR_SELECTOR).first
+
+
 def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
     composer.click(timeout=5000)
     # ponytail: 中文评论用整条插入，避免逐字键入时焦点丢失只留下末尾字符。
     page.keyboard.press("Control+A")
     page.keyboard.press("Backspace")
     page.keyboard.insert_text(text)
+    page.wait_for_timeout(500)
+
+
+def _force_set_comment_text(page: Any, text: str) -> None:
+    try:
+        page.evaluate(
+            """
+            text => {
+              const active = document.activeElement;
+              const editor = active?.matches?.('textarea, [contenteditable="true"]')
+                ? active
+                : active?.closest?.('[contenteditable="true"]')
+                  || document.querySelector('#videoSideCard textarea, #videoSideCard [contenteditable="true"], #videoSideBar textarea, #videoSideBar [contenteditable="true"], textarea, [contenteditable="true"]');
+              if (!editor) return false;
+              editor.focus();
+              if ('value' in editor) {
+                editor.value = text;
+                editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+                editor.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              }
+              document.execCommand('selectAll', false);
+              document.execCommand('insertText', false, text);
+              editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+              return true;
+            }
+            """,
+            text,
+        )
+    except Exception:
+        return None
     page.wait_for_timeout(300)
 
 
@@ -1658,9 +1704,21 @@ def _current_comment_text(page: Any, composer: Any) -> str:
         value = composer.evaluate(
             """
             el => {
-              const active = document.activeElement;
+              const visible = node => {
+                if (!node) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+              };
+              const editorOf = node => {
+                if (!node) return null;
+                if (node.matches?.('textarea, [contenteditable="true"]')) return node;
+                return node.closest?.('[contenteditable="true"]') || null;
+              };
               const pick = node => (node && ('value' in node ? node.value : (node.innerText || node.textContent || ''))) || '';
-              return pick(active) || pick(el);
+              const activeEditor = editorOf(document.activeElement);
+              const scoped = Array.from(document.querySelectorAll('#videoSideCard textarea, #videoSideCard [contenteditable="true"], #videoSideBar textarea, #videoSideBar [contenteditable="true"], textarea, [contenteditable="true"]')).find(visible);
+              return pick(activeEditor) || pick(editorOf(el)) || pick(scoped);
             }
             """
         )
@@ -1669,7 +1727,18 @@ def _current_comment_text(page: Any, composer: Any) -> str:
             value = page.evaluate("() => document.activeElement?.value || document.activeElement?.innerText || ''")
         except Exception:
             value = ""
-    return str(value or "").strip()
+    return _normalize_comment_text(value)
+
+
+def _comment_text_matches(actual: str, expected: str) -> bool:
+    return _normalize_comment_text(actual) == _normalize_comment_text(expected)
+
+
+def _normalize_comment_text(value: Any) -> str:
+    text = str(value or "")
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
+    text = text.replace("\xa0", " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _comment_image_ready(page: Any) -> bool:

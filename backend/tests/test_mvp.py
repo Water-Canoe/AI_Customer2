@@ -756,6 +756,14 @@ def test_traffic_comment_text_is_inserted_as_whole_text(tmp_path: Path) -> None:
     assert page.keyboard.inserted == "不错！"
 
 
+def test_traffic_comment_text_match_ignores_dom_noise() -> None:
+    from app.services import traffic_workbench
+
+    assert traffic_workbench._comment_text_matches("不\u200b错！", "不错！") is True
+    assert traffic_workbench._comment_text_matches("不错！\n", "不错！") is True
+    assert traffic_workbench._comment_text_matches("不！", "不错！") is False
+
+
 def test_traffic_goto_timeout_is_tolerated(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.services import traffic_workbench
