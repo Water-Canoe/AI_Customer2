@@ -254,6 +254,49 @@ CREATE TABLE IF NOT EXISTS deleted_identities (
 CREATE INDEX IF NOT EXISTS idx_deleted_identities_lookup
 ON deleted_identities(entity_type, platform, identifier_type, identifier_value);
 
+-- 拓客工作台高频读路径：任务、总览树、AI、私信队列和删除预览。
+CREATE INDEX IF NOT EXISTS idx_crawl_jobs_status_archived_created
+ON crawl_jobs(status, archived, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_task_logs_task_id_id
+ON task_logs(task_id, id);
+
+CREATE INDEX IF NOT EXISTS idx_contents_author_updated
+ON contents(author_account_id, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_comments_content_updated
+ON comments(content_id, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_account_sources_account_active
+ON account_sources(account_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_account_sources_task_active
+ON account_sources(task_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_lead_sources_lead_active
+ON lead_sources(lead_account_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_lead_sources_task_active
+ON lead_sources(task_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_lead_sources_content_active
+ON lead_sources(content_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_lead_sources_comment_active
+ON lead_sources(comment_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_lead_sources_source_active
+ON lead_sources(source_account_id, active);
+
+CREATE INDEX IF NOT EXISTS idx_lead_user_follow_hidden_updated
+ON lead_user_accounts(follow_status, hidden, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_lead_user_screening_hidden_updated
+ON lead_user_accounts(screening_status, hidden, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_lead_status_events_lead_status_created
+ON lead_status_events(lead_account_id, to_status, created_at);
+
 CREATE TABLE IF NOT EXISTS analysis_jobs (
     id TEXT PRIMARY KEY,
     target_type TEXT NOT NULL,
@@ -271,6 +314,12 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_analysis_jobs_target_status
+ON analysis_jobs(target_type, target_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status_updated
+ON analysis_jobs(status, updated_at);
 
 CREATE TABLE IF NOT EXISTS deletion_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
