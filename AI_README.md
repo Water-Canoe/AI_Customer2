@@ -267,6 +267,8 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 
 当前实现保留旧 demo 接口 `/ai-customer/get-permission`、`/ai-customer/add-permission`、`/ai-customer/get-permission-list` 便于过渡测试，但正式授权接入应优先使用授权码接口。AI_Customer 路由代码位于 Sealos 服务器 `~/project/routers/AI_Customer/`；`~/project/routers/AI_Medician/` 属于另一个业务，不应在 AI拓客授权迭代中修改。
 
+根目录 `tools/license-admin.html` 是一个纯静态授权管理页，可直接在浏览器打开。默认连接 `https://tfwqsfaegbdj.sealosbja.site/ai-customer`，用于按 `lead / traffic` 业务新增/保存授权码、查询授权设备、手动绑定设备、解绑设备，并支持配置管理 Token 和接口路径。当前 Sealos 文档只明确提供设备解绑接口，授权码删除/停用需要后端提供对应接口；管理页不会用本地兜底方式伪造删除结果。该页面只应由管理员自用，不应打进交付给客户的本地软件包。
+
 ## 本地打包
 
 Windows 测试包通过 `script/build_package.ps1` 生成。脚本会先执行 `frontend/npm run build` 生成静态文件，再使用后端虚拟环境里的 PyInstaller 把 `packaging/ai_customer_launcher.py` 打成 one-folder 包，并把 `frontend/dist` 作为 `frontend_dist` 一起放入包内。生成目录形如 `dist/AI_Customer_Test_yyyyMMdd_HHmmss/`，双击其中的 `AI_Customer_Test_yyyyMMdd_HHmmss.exe` 即可启动本地服务并自动打开浏览器。
