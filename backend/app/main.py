@@ -18,6 +18,7 @@ from app.schemas import (
     AiJobCreate,
     BulkActionPreview,
     ClearDataRequest,
+    CustomerAutoMessageRequest,
     CustomerFollowStatusUpdate,
     LicenseUpdate,
     SettingsUpdate,
@@ -614,12 +615,13 @@ def message_workbench_keywords() -> list[dict[str, object]]:
 @app.get("/api/message-workbench/customers")
 def message_workbench_customers(
     keyword: str = Query(default=""),
+    platform: str = Query(default=""),
     status: str = Query(default="待私信"),
     query: str = Query(default=""),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> dict[str, object]:
-    return message_workbench.list_customers(keyword=keyword, status=status, query=query, page=page, page_size=page_size)
+    return message_workbench.list_customers(keyword=keyword, platform=platform, status=status, query=query, page=page, page_size=page_size)
 
 
 @app.get("/api/message-workbench/customers/{lead_id}")
@@ -628,6 +630,18 @@ def message_workbench_customer_detail(lead_id: int) -> dict[str, object]:
         return message_workbench.customer_detail(lead_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/message-workbench/customers/{lead_id}/auto-message")
+async def message_workbench_customer_auto_message(
+    lead_id: int,
+    payload: CustomerAutoMessageRequest,
+) -> dict[str, object]:
+    require_license()
+    try:
+        return await message_workbench.auto_message_customer(lead_id, dry_run=payload.dry_run)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/platform-capabilities")

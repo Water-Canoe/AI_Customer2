@@ -32,7 +32,7 @@ TRAFFIC_SETTING_KEYS = {
 }
 
 TRAFFIC_IMAGE_DIR = database.get_data_root() / "traffic_images"
-TRAFFIC_DOUYIN_PROFILE_DIR = database.get_data_root() / "traffic_douyin_profile"
+TRAFFIC_DOUYIN_PROFILE_DIR = database.get_douyin_cloak_profile_dir()
 TRAFFIC_LAST_VIDEO_URL_KEY = "traffic_last_douyin_video_url"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
@@ -847,8 +847,9 @@ def _launch_context(profile_dir: Path, headless: bool = False) -> Any:
         return launch_persistent_context(
             str(profile_dir),
             headless=headless,
-            viewport={"width": 1440, "height": 900},
+            viewport=None if not headless else {"width": 1440, "height": 900},
             locale="zh-CN",
+            args=["--start-maximized"] if not headless else [],
         )
     except Exception as exc:
         raise TrafficStop(

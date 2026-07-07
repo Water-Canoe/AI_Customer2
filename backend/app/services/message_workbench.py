@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import json
+import sys
 from datetime import datetime
 from math import ceil
+from pathlib import Path
 from typing import Any
 
 from app import database
@@ -11,6 +15,7 @@ from app import database
 TARGET_FOLLOW_STATUSES = ("未私信", "已私信", "未回复", "已回复", "未成交", "已成交")
 STATUS_ALIASES = {"待私信": "未私信", "全部": ""}
 UNLABELED_KEYWORD = "未标记关键词"
+_AUTO_DM_LOCK = asyncio.Lock()
 
 
 def list_keywords() -> list[dict[str, Any]]:
@@ -24,9 +29,10 @@ def list_keywords() -> list[dict[str, Any]]:
     for customer in customers:
         _apply_customer_to_stat(stats[""], customer)
         for keyword in customer["keywords"]:
-            if keyword not in stats:
-                stats[keyword] = _empty_keyword_stat(keyword, keyword)
-            _apply_customer_to_stat(stats[keyword], customer)
+            key = f"{customer['platform']}::{keyword}"
+            if key not in stats:
+                stats[key] = _empty_keyword_stat(keyword, keyword, customer["platform"])
+            _apply_customer_to_stat(stats[key], customer)
 
     result = list(stats.values())
     return [result[0]] + sorted(
@@ -37,6 +43,7 @@ def list_keywords() -> list[dict[str, Any]]:
 
 def list_customers(
     keyword: str = "",
+    platform: str = "",
     status: str = "待私信",
     query: str = "",
     page: int = 1,
@@ -45,6 +52,7 @@ def list_customers(
     page = max(1, int(page or 1))
     page_size = max(1, min(100, int(page_size or 20)))
     normalized_keyword = _normalize_keyword_filter(keyword)
+    normalized_platform = str(platform or "").strip()
     normalized_status = _normalize_status_filter(status)
     normalized_query = str(query or "").strip().lower()
 
@@ -54,7 +62,7 @@ def list_customers(
 
     filtered = [
         customer for customer in customers
-        if _matches_customer(customer, normalized_keyword, normalized_status, normalized_query)
+        if _matches_customer(customer, normalized_keyword, normalized_platform, normalized_status, normalized_query)
     ]
     filtered.sort(key=lambda item: (not item["overdue"], item["latest_at"] or "", item["updated_at"] or ""), reverse=True)
 
@@ -94,6 +102,62 @@ def customer_detail(lead_id: int) -> dict[str, Any]:
         "sources": customers[0]["sources"],
         "events": events,
     }
+
+
+async def auto_message_customer(lead_id: int, dry_run: bool = False) -> dict[str, Any]:
+    detail = customer_detail(lead_id)
+    customer = detail["customer"]
+    if customer["platform"] != "dy":
+        raise ValueError("自动私信当前只支持抖音客户")
+    if not customer["profile_url"]:
+        raise ValueError("当前客户缺少主页链接，无法自动私信")
+    if not str(customer["script"] or "").strip():
+        raise ValueError("当前客户暂无AI话术，请先做意向分析")
+
+    sender = _load_douyin_dm_sender()
+    async with _AUTO_DM_LOCK:
+        result = await sender(
+            customer["profile_url"],
+            customer["script"],
+            profile_dir=database.get_douyin_cloak_profile_dir(),
+            dry_run=dry_run,
+        )
+
+    follow_update: dict[str, Any] | None = None
+    current_status = customer["follow_status"] or customer["screening_status"]
+    if not dry_run and current_status in {"待筛选", "未分析", "目标客户", "未私信"}:
+        from app.services import account_actions
+
+        follow_update = account_actions.update_customer_follow_status(
+            lead_id,
+            "已私信",
+            "私信工作台：自动发送AI话术",
+        )
+    return {"ok": True, "dm": result, "follow_update": follow_update}
+
+
+def _load_douyin_dm_sender() -> Any:
+    path = _douyin_dm_automation_path()
+    spec = importlib.util.spec_from_file_location("ai_customer_douyin_dm_automation", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"抖音自动私信脚本无法加载：{path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.send_douyin_dm
+
+
+def _douyin_dm_automation_path() -> Path:
+    bundle_root = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", "") else None
+    candidates = [
+        database.WORKSPACE_ROOT / "tools" / "douyin_dm_automation" / "automation.py",
+        Path(sys.executable).resolve().parent / "tools" / "douyin_dm_automation" / "automation.py",
+    ]
+    if bundle_root is not None:
+        candidates.append(bundle_root / "tools" / "douyin_dm_automation" / "automation.py")
+    for path in candidates:
+        if path.exists():
+            return path
+    raise ValueError("找不到 tools/douyin_dm_automation/automation.py，无法自动私信")
 
 
 def _target_source_rows(conn, lead_id: int | None = None) -> list[Any]:
@@ -282,10 +346,11 @@ def _source_item(row: Any) -> dict[str, Any]:
     }
 
 
-def _empty_keyword_stat(keyword: str, label: str) -> dict[str, Any]:
+def _empty_keyword_stat(keyword: str, label: str, platform: str = "") -> dict[str, Any]:
     return {
         "keyword": keyword,
         "label": label,
+        "platform": platform,
         "customer_count": 0,
         "unmessaged_count": 0,
         "messaged_count": 0,
@@ -307,7 +372,9 @@ def _apply_customer_to_stat(stat: dict[str, Any], customer: dict[str, Any]) -> N
         stat["overdue_count"] += 1
 
 
-def _matches_customer(customer: dict[str, Any], keyword: str, status: str, query: str) -> bool:
+def _matches_customer(customer: dict[str, Any], keyword: str, platform: str, status: str, query: str) -> bool:
+    if platform and customer["platform"] != platform:
+        return False
     if keyword and keyword not in customer["keywords"]:
         return False
     if status and customer["follow_status"] != status:

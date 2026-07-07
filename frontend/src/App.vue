@@ -237,6 +237,7 @@ const routeListeners = computed(() => {
       'filter-change': changeMessageWorkbenchFilter,
       'select-customer': selectMessageWorkbenchCustomer,
       'message-customer': messageWorkbenchCustomer,
+      'auto-message-customer': autoMessageWorkbenchCustomer,
       'update-follow-status': updateMessageWorkbenchFollowStatus,
       'close-detail': closeMessageWorkbenchDetail,
     }
@@ -915,6 +916,25 @@ async function messageWorkbenchCustomer(row: Dict) {
     await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '私信操作失败')
+  }
+}
+
+async function autoMessageWorkbenchCustomer(row: Dict) {
+  const leadId = row.lead_id || row.id
+  if (!leadId) {
+    ElMessage.error('当前客户缺少线索ID，无法自动私信')
+    return
+  }
+  if (row.platform !== 'dy') {
+    ElMessage.error('自动私信当前只支持抖音客户')
+    return
+  }
+  try {
+    await api.post(`/message-workbench/customers/${leadId}/auto-message`, { dry_run: false })
+    ElMessage.success('自动私信已完成，跟进状态已同步')
+    await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '自动私信失败')
   }
 }
 

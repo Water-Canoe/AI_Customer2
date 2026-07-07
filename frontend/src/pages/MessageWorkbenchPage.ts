@@ -17,15 +17,15 @@ export default defineComponent({
     filters: { type: Object, default: () => ({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 }) },
     loading: { type: Boolean, default: false },
   },
-  emits: ['filter-change', 'select-customer', 'message-customer', 'update-follow-status', 'close-detail'],
+  emits: ['filter-change', 'select-customer', 'message-customer', 'auto-message-customer', 'update-follow-status', 'close-detail'],
   setup(props, { emit }) {
     const queryDraft = ref(String((props.filters as Dict).query || ''))
-    const keywordPage = ref(1)
+    const keywordPages = ref<Record<string, number>>({})
     watch(() => (props.filters as Dict).query, value => {
       queryDraft.value = String(value || '')
     })
     watch(() => props.keywords, () => {
-      keywordPage.value = 1
+      keywordPages.value = {}
     })
 
     const rows = computed(() => (props.customers as Dict).rows || [])
@@ -33,12 +33,18 @@ export default defineComponent({
     const page = computed(() => Number((props.customers as Dict).page || 1))
     const pageSize = computed(() => Number((props.customers as Dict).page_size || 20))
     const totalPages = computed(() => Number((props.customers as Dict).total_pages || 1))
-    const keywordTotal = computed(() => (props.keywords as Dict[]).length)
-    const keywordTotalPages = computed(() => Math.max(1, Math.ceil(keywordTotal.value / keywordPageSize)))
-    const normalizedKeywordPage = computed(() => Math.min(keywordPage.value, keywordTotalPages.value))
-    const pagedKeywords = computed(() => {
-      const start = (normalizedKeywordPage.value - 1) * keywordPageSize
-      return (props.keywords as Dict[]).slice(start, start + keywordPageSize)
+    const allKeyword = computed(() => (props.keywords as Dict[]).find(item => !String(item.platform || '') && !String(item.keyword || '')))
+    const keywordGroups = computed(() => {
+      const groups: Record<string, Dict[]> = {}
+      for (const item of props.keywords as Dict[]) {
+        const platform = String(item.platform || '')
+        if (!platform) continue
+        if (!groups[platform]) groups[platform] = []
+        groups[platform].push(item)
+      }
+      return Object.entries(groups)
+        .sort(([left], [right]) => platformSort(left) - platformSort(right) || platformName(left).localeCompare(platformName(right)))
+        .map(([platform, items]) => ({ platform, items }))
     })
 
     function changeFilter(next: Dict) {
@@ -52,22 +58,15 @@ export default defineComponent({
     return () => h(SplitPane, { storageKey: 'message-workbench', side: 'left', defaultSideWidth: 300, minSideWidth: 260, maxSideWidth: 420 }, {
       side: () => h('aside', { class: 'pane message-keyword-pane' }, [
         sectionTitle({ title: '关键词队列', subtitle: '按需求产品筛选', icon: Collection, tone: 'amber' }),
-        h('div', { class: 'message-keyword-list' }, pagedKeywords.value.map(keyword => renderKeywordButton(keyword, props.filters as Dict, changeFilter))),
-        h('div', { class: 'keyword-pagination' }, [
-          h('span', `共 ${keywordTotal.value} 个关键词`),
-          h('div', [
-            h('button', {
-              type: 'button',
-              disabled: normalizedKeywordPage.value <= 1,
-              onClick: () => keywordPage.value = Math.max(1, normalizedKeywordPage.value - 1)
-            }, '上一页'),
-            h('strong', `${normalizedKeywordPage.value} / ${keywordTotalPages.value}`),
-            h('button', {
-              type: 'button',
-              disabled: normalizedKeywordPage.value >= keywordTotalPages.value,
-              onClick: () => keywordPage.value = Math.min(keywordTotalPages.value, normalizedKeywordPage.value + 1)
-            }, '下一页')
-          ])
+        h('div', { class: 'message-keyword-list' }, [
+          allKeyword.value ? renderKeywordButton(allKeyword.value, props.filters as Dict, changeFilter) : null,
+          ...keywordGroups.value.map(group => renderKeywordGroup(
+            group,
+            props.filters as Dict,
+            changeFilter,
+            keywordPages.value[group.platform] || 1,
+            (page) => keywordPages.value = { ...keywordPages.value, [group.platform]: page }
+          ))
         ])
       ]),
       default: () => h('section', { class: 'pane message-workbench' }, [
@@ -113,11 +112,11 @@ export default defineComponent({
 })
 
 function renderKeywordButton(keyword: Dict, filters: Dict, changeFilter: (next: Dict) => void) {
-  const selected = String(filters.keyword || '') === String(keyword.keyword || '')
+  const selected = String(filters.keyword || '') === String(keyword.keyword || '') && String(filters.platform || '') === String(keyword.platform || '')
   return h('button', {
     type: 'button',
     class: ['message-keyword-item', selected ? 'active' : ''],
-    onClick: () => changeFilter({ keyword: keyword.keyword || '', page: 1 })
+    onClick: () => changeFilter({ keyword: keyword.keyword || '', platform: keyword.platform || '', page: 1 })
   }, [
     h('div', { class: 'message-keyword-main' }, [
       iconBadge(Promotion, selected ? 'teal' : 'gray'),
@@ -132,6 +131,46 @@ function renderKeywordButton(keyword: Dict, filters: Dict, changeFilter: (next: 
       keyword.overdue_count ? h('span', { class: 'warn' }, `超时 ${keyword.overdue_count}`) : null
     ])
   ])
+}
+
+function renderKeywordGroup(
+  group: { platform: string, items: Dict[] },
+  filters: Dict,
+  changeFilter: (next: Dict) => void,
+  page: number,
+  setPage: (page: number) => void
+) {
+  const totalPages = Math.max(1, Math.ceil(group.items.length / keywordPageSize))
+  const normalizedPage = Math.min(Math.max(1, page), totalPages)
+  const start = (normalizedPage - 1) * keywordPageSize
+  const items = group.items.slice(start, start + keywordPageSize)
+  return h('details', { class: 'message-platform-group', open: true }, [
+    h('summary', [
+      h('strong', platformName(group.platform)),
+      h('span', `${group.items.length} 个关键词`)
+    ]),
+    h('div', { class: 'message-platform-keywords' }, items.map(keyword => renderKeywordButton(keyword, filters, changeFilter))),
+    h('div', { class: 'keyword-pagination compact' }, [
+      h('span', `${normalizedPage} / ${totalPages}`),
+      h('div', [
+        h('button', {
+          type: 'button',
+          disabled: normalizedPage <= 1,
+          onClick: () => setPage(normalizedPage - 1)
+        }, '上一页'),
+        h('strong', `${group.items.length}`),
+        h('button', {
+          type: 'button',
+          disabled: normalizedPage >= totalPages,
+          onClick: () => setPage(normalizedPage + 1)
+        }, '下一页')
+      ])
+    ])
+  ])
+}
+
+function platformSort(platform: string) {
+  return ({ dy: 1, xhs: 2, ks: 3 } as Record<string, number>)[platform] || 9
 }
 
 function renderCustomerTable(rows: Dict[], loading: boolean, emit: any) {
@@ -201,6 +240,13 @@ function renderCustomerRow(row: Dict, emit: any) {
             title: !row.script ? '暂无AI话术' : !row.profile_url ? '缺少客户主页' : '复制话术、打开主页并标记已私信',
             onClick: () => emit('message-customer', row)
           }, [h(CopyDocument), h('span', '私信')]),
+          h('button', {
+            type: 'button',
+            class: 'text-icon-button',
+            disabled: row.platform !== 'dy' || !row.script || !row.profile_url,
+            title: row.platform !== 'dy' ? '自动私信当前只支持抖音客户' : !row.script ? '暂无AI话术' : !row.profile_url ? '缺少客户主页' : '自动打开抖音主页并发送AI话术',
+            onClick: () => emit('auto-message-customer', row)
+          }, [h(Promotion), h('span', '自动私信')]),
           h('button', { type: 'button', class: 'ghost-button compact', onClick: () => emit('select-customer', row.lead_id) }, '详情')
         ]),
         h('select', {

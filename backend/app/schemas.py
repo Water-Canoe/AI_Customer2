@@ -105,3 +105,7 @@ class BulkActionPreview(BaseModel):
 class CustomerFollowStatusUpdate(BaseModel):
     follow_status: Literal["待筛选", "未私信", "已私信", "未回复", "已回复", "未成交", "已成交", "非客户", "无需跟进"]
     note: str = ""
+
+
+class CustomerAutoMessageRequest(BaseModel):
+    dry_run: bool = False

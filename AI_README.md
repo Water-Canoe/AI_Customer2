@@ -14,7 +14,7 @@
 
 ## 抖音私信自动化测试工具
 
-`tools/douyin_dm_automation/` 是一个独立的单用户抖音私信自动化验证目录，不接入主拓客工作台的数据流。它复用 `backend/.venv` 中的 `playwright`、`cloakbrowser`、`fastapi` 和 `uvicorn`，通过 CloakBrowser 的 Playwright 兼容持久化浏览器打开最大化窗口并访问抖音用户主页，等待人工登录，点击“私信/发私信”，向 Draft.js 聊天输入框写入话术，并可选择实际点击“发送”。前端页面由 `server.py` 提供，访问 `http://127.0.0.1:8025/` 即可填写用户主页 URL 和话术。
+`tools/douyin_dm_automation/` 是一个单用户抖音私信自动化验证目录，同时被“私信工作台”的自动私信按钮复用。它复用 `backend/.venv` 中的 `playwright`、`cloakbrowser`、`fastapi` 和 `uvicorn`，通过 CloakBrowser 的 Playwright 兼容持久化浏览器打开最大化窗口并访问抖音用户主页，等待人工登录，点击“私信/发私信”，向 Draft.js 聊天输入框写入话术，并可选择实际点击“发送”。前端页面由 `server.py` 提供，访问 `http://127.0.0.1:8025/` 即可填写用户主页 URL 和话术。
 
 运行命令：
 
@@ -26,7 +26,7 @@ cd D:\Dev\Projects\Web_Project\AI_Customer
 backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:app --host 127.0.0.1 --port 8025
 ```
 
-该工具只用于验证单个目标主页的自动化可行性，不提供批量私信、账号池、代理池或自动重试队列。运行态登录目录位于 `tools/douyin_dm_automation/runtime/`，属于本地运行产物。
+该工具只用于验证单个目标主页的自动化可行性，不提供批量私信、账号池、代理池或自动重试队列。运行态登录目录统一为 `data/douyin_cloak_profile/`，拓客采集 CDP、引流执行和自动私信共用这个 CloakBrowser Profile。
 
 私信按钮点击逻辑先等待可见“私信/发私信”入口，再从同名按钮中选择最后一个可见按钮并使用 Playwright `force=True` 点击，避开抖音渲染的隐藏按钮副本和 actionability 等待；点击后 25 秒内没有出现聊天输入框就报错。修改该目录代码后必须重启 `uvicorn`，否则 `8025` 页面仍会调用旧模块。
 
@@ -48,13 +48,13 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 4. 采集完成后自动读取底层 SQLite，并写入项目业务库和 `raw_source_refs`。
 5. 在“任务与日志”中查看本次任务产出摘要，确认内容、评论、候选竞品、线索、目标客户和需分析账号数量。
 6. 在“AI分析”中筛选竞品账号或目标客户，目标客户按白板状态流转：`待筛选 -> 未私信 -> 已私信 -> 未回复 -> 已回复 -> 未成交 -> 已成交`。
-7. 在“私信工作台”按关键词筛选目标客户，批量推进私信、回访、回复和成交状态。
+7. 在“私信工作台”按平台折叠的关键词队列筛选目标客户，批量推进私信、回访、回复和成交状态；抖音客户可点击“自动私信”直接调用 CloakBrowser 打开主页、发送 AI 话术并标记为已私信。
 8. 在“数据表”和“总览树”中查看业务数据和父子关系。
 9. 对失败任务、0 入库任务、批量删除和批量 AI 分析，先看诊断或预览，再决定是否重试或执行。
 
 竞品账号采集采用两阶段漏斗：关键词 `search` 阶段只负责高召回发现作者，所有从关键词内容中发现的作者都会进入“竞品账号候选库”，并记录关键词、来源内容和任务证据；这一阶段不再依赖主页简介命中关键词，因为 `search` 模式常常拿不到稳定简介。真正的竞品判断由后续 `creator` 阶段完成：拿候选账号主页/ID 批量补采主页简介、粉丝数和少量近期内容，再把 ICP、昵称、简介、近期内容和来源关键词一起交给 AI 判断 `竞品 / 非竞品` 并写回分析原因。竞品判断采用适中口径：主页定位或部分近期视频提供、销售、展示或获客与 ICP 高度相近的产品/服务时，可判为 `竞品`；但不能把关键词命中等同于竞品关系，除非视频简介或主页简介明确说明账号从事了这个行业。AI 分析原因必须说明主页简介是否相关、相关视频数量/总视频数量，以及与 ICP 的重合点。当前后端只通过 OpenAI 兼容聊天接口传入证据；如果接入的模型本身不具备联网搜索能力，AI 不得编造外部搜索结果。
 
-找客户流程以已判定的竞品账号为入口：总览树竞品账号行的“找客户”和关键词行的“一键找客户”都会创建 `competitor_crawl` 任务，调用 MediaCrawler creator 模式采集竞品账号近期内容，并打开评论采集，把评论者归一化为线索客户。抖音 creator 模式上游可能先拿到创作者完整历史视频再逐条抓评论；项目适配器会通过运行时 shim 把“内容数量”作为每账号视频上限注入 MediaCrawler，避免“找客户”扫完整账号历史。设置页打开“自动分析线索用户”后，任务成功导入线索会自动结合 ICP 画像、评论内容和来源内容发起客户 AI 判断，并按设置页“AI分析并行数”并发执行，写回客户是否有需求、付费意向、分析原因和建议话术；设置页打开“自动删除非客户账号”后，AI 明确判定为非客户的线索会走客户线索专用删除，只为当前评论证据写入墓碑并清理客户侧证据，不会把该评论作者写入作者排除表。总览树客户行在客户名下方展示评论摘要，后续列展示来源视频详情、AI分析原因、AI生成话术、AI分析状态、跟进状态、证据数量和最近时间，便于从竞品账号直接进入客户跟进。客户行“意向分析”会对单个客户结合 ICP、来源视频和评论证据发起 `lead` AI 分析：判定为目标客户时 `screening_status=目标客户` 且 `follow_status=未私信`；判定为非客户时 `screening_status=非客户` 且 `follow_status=非客户`。客户行“私信”按钮只对已判定为客户的线索启用，会复制 AI 生成话术、打开客户主页，并把 `follow_status` 写为 `已私信`，同时记录人工跟进事件。
+找客户流程以已判定的竞品账号为入口：总览树竞品账号行的“找客户”和关键词行的“一键找客户”都会创建 `competitor_crawl` 任务，调用 MediaCrawler creator 模式采集竞品账号近期内容，并打开评论采集，把评论者归一化为线索客户。抖音 creator 模式上游可能先拿到创作者完整历史视频再逐条抓评论；项目适配器会通过运行时 shim 把“内容数量”作为每账号视频上限注入 MediaCrawler，避免“找客户”扫完整账号历史。设置页打开“自动分析线索用户”后，任务成功导入线索会自动结合 ICP 画像、评论内容和来源内容发起客户 AI 判断，并按设置页“AI分析并行数”并发执行，写回客户是否有需求、付费意向、分析原因和建议话术；设置页打开“自动删除非客户账号”后，AI 明确判定为非客户的线索会走客户线索专用删除，只为当前评论证据写入墓碑并清理客户侧证据，不会把该评论作者写入作者排除表。总览树客户行在客户名下方展示评论摘要，后续列展示来源视频详情、AI分析原因、AI生成话术、AI分析状态、跟进状态、证据数量和最近时间，便于从竞品账号直接进入客户跟进。客户行“意向分析”会对单个客户结合 ICP、来源视频和评论证据发起 `lead` AI 分析：判定为目标客户时 `screening_status=目标客户` 且 `follow_status=未私信`；判定为非客户时 `screening_status=非客户` 且 `follow_status=非客户`。客户行“私信”按钮只对已判定为客户的线索启用，会复制 AI 生成话术、打开客户主页，并把 `follow_status` 写为 `已私信`，同时记录人工跟进事件；私信工作台的“自动私信”只支持抖音客户，会复用同一 CloakBrowser Profile 打开主页、发送 AI 话术并同步状态。
 
 【找客户】已改为优先复用已入库内容：当竞品账号名下已经有未被墓碑删除的内容时，后端会先把这些内容 ID/链接合并成 MediaCrawler `detail` 任务，只补采这些内容下的评论；如果账号已有内容少于设置页“默认内容数”，会用 `creator` 任务补足缺口；如果已有内容已经达到默认内容数，再次点击【找客户】会继续尝试向后扩展新的默认内容数，而不是因为“已有 50 条”直接停止。为避免连续点击反复扫同一批内容，设置页提供“评论复采间隔小时”，默认 24 小时；内容一旦被采过评论或被本次评论任务检查过，就会记录 `last_comment_crawled_at`，在间隔期内不会再次创建 detail 评论采集任务，填 0 表示每次都允许复采。项目库会把已采内容 ID 写入任务隐藏字段 `skip_content_ids`，并通过运行时 shim 传给 MediaCrawler 子进程；creator 翻页时会跳过这些已采内容，只把未采内容送入详情和评论链路。项目库仍按 `UNIQUE(platform, content_id)`、`UNIQUE(platform, comment_id)` 和 `lead_sources` 证据唯一约束防重复；已存在的内容/评论会更新而不是复制，任务导入计数只统计新增内容、新增评论和新增线索来源，不把重复 upsert 当作新增，已写入内容/评论墓碑的数据会继续跳过。抖音和快手可用纯内容 ID 进入 detail；小红书优先使用内容链接，因为 detail 模式通常需要带 `xsec_token` 的完整链接。
 客户 AI 判断采用“竞品评论区语境”而不是单纯关键词匹配。后端会把来源视频详情、评论内容、来源竞品账号昵称/简介/竞品判断原因和自动提取的意图信号一起放进 `lead` AI payload。若评论发生在已判定竞品账号或竞品内容下，且评论中出现询价、报价、多少钱、详情、参数、配置、型号、尺寸、供应商、厂家、联系方式、怎么买、能不能做、能不能装、定制、适配、改装、批发等表达，应默认视为目标客户线索；不能因为评论没有直接写出 ICP 关键词、客户主页简介为空、昵称像普通用户或缺少公司信息就判为非客户。只有评论明显与来源视频和 ICP 无关、纯玩笑围观、纯技术学习不涉及采购方案、同行广告、招聘、辱骂、抽奖互动时，才应判为非客户。
@@ -89,7 +89,7 @@ ICP 画像里的 `company_name` 是可选字段：填写后 AI 私信话术可�
 
 根目录内置的 MediaCrawler SQLite 如果是新建空文件，首次写入会因为缺少 `douyin_aweme`、`xhs_note` 等表而失败。后端适配器会在真实采集前检查当前平台内容表是否存在；缺表时会先在 MediaCrawler 根目录执行 `python main.py --init_db sqlite` 初始化表结构，再继续启动采集任务。该步骤只创建 MediaCrawler 原始库 schema，不会清空已有原始数据。
 
-根目录内置的 MediaCrawler 如果配置为 `ENABLE_CDP_MODE=True` 且 `CDP_CONNECT_EXISTING=True`，会要求浏览器先开放 CDP 调试端口，默认端口为 `9222`。后端适配器在启动 MediaCrawler 前会检查该端口；如果端口未开启，会自动启动一个独立的 CloakBrowser 调试实例，用户数据目录为 `MediaCrawler/browser_data/ai_customer_cloak_cdp`，再让 MediaCrawler 继续按 CDP 模式连接。该逻辑只补齐“已有 CDP 浏览器”前置条件，不会切换到标准 Playwright，也不会修改 MediaCrawler 源码。
+根目录内置的 MediaCrawler 如果配置为 `ENABLE_CDP_MODE=True` 且 `CDP_CONNECT_EXISTING=True`，会要求浏览器先开放 CDP 调试端口，默认端口为 `9222`。后端适配器在启动 MediaCrawler 前会检查该端口；如果端口未开启，会自动启动 CloakBrowser 调试实例，用户数据目录统一为 `data/douyin_cloak_profile/`，再让 MediaCrawler 继续按 CDP 模式连接。该逻辑只补齐“已有 CDP 浏览器”前置条件，不会切换到标准 Playwright，也不会修改 MediaCrawler 源码。
 
 抖音 creator 找客户任务会通过项目 `sitecustomize` shim 增强稳定性：当单条视频详情、评论列表或创作者视频列表请求出现 `httpx.HTTPError`（例如代理连接失败、TLS 连接失败、网络抖动）时，项目会记录 `[AI_Customer.http_resilience]` 日志并跳过当前视频或停止当前账号后续翻页，避免一次网络异常让整个 MediaCrawler 子进程退出。该逻辑不伪造数据；如果网络持续不可用，任务仍可能导入 0 条有效数据，应优先检查代理、登录态和平台风控。
 
@@ -264,9 +264,9 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、CloakBrowser Python 包、CloakBrowser 专用浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `python -m cloakbrowser install`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
 
-引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个独立 CloakBrowser 登录窗口，并复用执行器同一个 `data/traffic_douyin_profile`；用户扫码后可以确认首页能正常展示内容，后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
+引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个可见的 CloakBrowser 登录窗口，并复用全系统同一个 `data/douyin_cloak_profile/`；用户扫码后可以确认首页能正常展示内容，后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
 
-执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并继续使用独立浏览器 Profile `data/traffic_douyin_profile` 保存抖音登录态。Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
+执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并使用共享浏览器 Profile `data/douyin_cloak_profile/` 保存抖音登录态。可见窗口默认最大化；Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
 
 来源之间严格隔离：`随机推荐流` 只从抖音首页/精选页当前可见视频卡片进入，能从数字视频链接推导出 `jingxuan?modal_id=...` 时会优先进入随机视频流，不读取拓客项目库；`拓客竞品视频 / 已采集关键词` 才使用项目库视频队列，其中已采集关键词会按 `contents.source_keyword` 过滤候选视频；手动搜索关键词只在搜索结果页点击可见视频，不回退项目库。项目库队列每轮都会按作者冷却和本轮已选作者排除候选，避免沿同一作者视频合集连续互动。
 

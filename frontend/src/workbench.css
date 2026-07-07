@@ -3353,6 +3353,27 @@ input[type='checkbox'] {
   padding-right: 2px;
 }
 
+.message-platform-group {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #dbe8e4;
+  border-radius: 10px;
+  background: #fbfdfc;
+  padding: 10px;
+}
+
+.message-platform-group summary {
+  display: flex;
+  justify-content: space-between;
+  cursor: pointer;
+  color: #26364b;
+}
+
+.message-platform-keywords {
+  display: grid;
+  gap: 8px;
+}
+
 .message-keyword-item {
   display: flex;
   align-items: center;
@@ -3573,7 +3594,7 @@ input[type='checkbox'] {
 
 .message-table th:nth-child(6),
 .message-table td:nth-child(6) {
-  width: 164px;
+  width: 230px;
 }
 
 .message-sticky-action {
@@ -3739,7 +3760,7 @@ input[type='checkbox'] {
 
 .message-action-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 

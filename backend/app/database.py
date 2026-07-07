@@ -25,6 +25,11 @@ def get_db_path() -> Path:
     return Path(os.getenv("AI_CUSTOMER_DB", str(get_data_root() / "ai_customer.sqlite3")))
 
 
+def get_douyin_cloak_profile_dir() -> Path:
+    """Return the shared Douyin CloakBrowser profile directory."""
+    return get_data_root() / "douyin_cloak_profile"
+
+
 @contextmanager
 def connect(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
     """Open a SQLite connection with dict-like rows and FK checks."""

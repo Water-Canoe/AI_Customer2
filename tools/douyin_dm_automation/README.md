@@ -7,7 +7,7 @@
 - `automation.py`：可直接运行的自动化脚本。
 - `server.py`：FastAPI 服务，给 `index.html` 提供调用接口。
 - `index.html`：最小前端页面。
-- `runtime/`：运行后自动生成的 CloakBrowser 登录态目录，不提交。
+- `../../data/douyin_cloak_profile/`：和拓客、引流工作台共用的 CloakBrowser 登录态目录，不提交。
 
 ## 命令
 

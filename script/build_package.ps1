@@ -42,6 +42,7 @@ if (-not $hasPyInstaller) {
     --onedir `
     --paths $BackendDir `
     --add-data "$FrontendDir\dist;frontend_dist" `
+    --add-data "$ProjectRoot\tools\douyin_dm_automation\automation.py;tools\douyin_dm_automation" `
     $Launcher
 
 # Copy the package usage note next to the generated exe.

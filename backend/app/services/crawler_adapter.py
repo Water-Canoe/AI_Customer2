@@ -604,6 +604,8 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
             env=run_env,
         )
     except Exception as exc:
+        if cdp_message:
+            _close_cdp_browser_context()
         _fail_task(task_id, f"启动 MediaCrawler 失败：{exc}")
         return
 
@@ -632,6 +634,8 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
 
     return_code = process.wait()
     RUNNING_PROCESSES.pop(task_id, None)
+    if cdp_message:
+        _close_cdp_browser_context()
     if return_code != 0 and not controlled_stop:
         _fail_task(task_id, f"MediaCrawler 退出码异常：{return_code}")
         return
@@ -714,7 +718,7 @@ def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> st
     if _is_tcp_port_open("127.0.0.1", debug_port):
         return None
 
-    user_data_dir = media_dir / "browser_data" / "ai_customer_cloak_cdp"
+    user_data_dir = database.get_douyin_cloak_profile_dir()
     user_data_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -740,7 +744,7 @@ def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> st
         str(user_data_dir),
         headless=headless,
         args=args,
-        viewport={"width": 1440, "height": 900},
+        viewport=None if not headless else {"width": 1440, "height": 900},
         locale="zh-CN",
     )
     if not _wait_for_tcp_port("127.0.0.1", debug_port, timeout_seconds=20):
@@ -750,6 +754,16 @@ def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> st
             CDP_BROWSER_CONTEXT = None
         raise RuntimeError(f"CloakBrowser 已启动但 CDP 端口 {debug_port} 未就绪")
     return f"检测到 MediaCrawler 需要连接已有 CDP 浏览器，但端口 {debug_port} 未开启；已自动启动 CloakBrowser 调试实例"
+
+
+def _close_cdp_browser_context() -> None:
+    global CDP_BROWSER_CONTEXT
+    if CDP_BROWSER_CONTEXT is None:
+        return
+    try:
+        CDP_BROWSER_CONTEXT.close()
+    finally:
+        CDP_BROWSER_CONTEXT = None
 
 
 def _read_media_crawler_cdp_config(media_dir: Path) -> dict[str, object]:

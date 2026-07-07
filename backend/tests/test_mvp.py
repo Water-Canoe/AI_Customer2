@@ -7,6 +7,7 @@ import subprocess
 import sys
 import types
 import importlib.util
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -1040,7 +1041,7 @@ def test_traffic_launch_context_uses_cloakbrowser(tmp_path: Path, monkeypatch: p
 
     assert context is fake_context
     assert calls["user_data_dir"] == str(profile)
-    assert calls["kwargs"] == {"headless": False, "viewport": {"width": 1440, "height": 900}, "locale": "zh-CN"}
+    assert calls["kwargs"] == {"headless": False, "viewport": None, "locale": "zh-CN", "args": ["--start-maximized"]}
 
     traffic_workbench._launch_context(profile, True)
     assert calls["kwargs"]["headless"] is True
@@ -1476,7 +1477,7 @@ def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypat
     result = traffic_workbench.open_douyin_login_window()
 
     assert result["ok"] is True
-    assert "traffic_douyin_profile" in result["profile_dir"]
+    assert "douyin_cloak_profile" in result["profile_dir"]
     assert calls["cwd"] == str(BACKEND_ROOT)
     assert calls["command"] == [
         sys.executable,
@@ -2864,7 +2865,8 @@ def test_cdp_existing_mode_auto_launches_browser(tmp_path: Path, monkeypatch: py
     assert launch_calls
     assert launch_calls[0]["headless"] is False
     assert "--remote-debugging-port=9333" in launch_calls[0]["args"]
-    assert str(launch_calls[0]["profile_dir"]).endswith("ai_customer_cloak_cdp")
+    assert str(launch_calls[0]["profile_dir"]).endswith("douyin_cloak_profile")
+    assert launch_calls[0]["viewport"] is None
 
 
 def test_media_crawler_sqlite_schema_auto_initializes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3679,6 +3681,7 @@ def test_message_workbench_keyword_queue_and_global_follow_status(tmp_path: Path
     parade = next(item for item in keywords if item["keyword"] == "巡游花车")
     assert all(item["keyword"] != "未标记关键词" for item in keywords[1:])
     assert all_keyword["customer_count"] == 2
+    assert electric["platform"] == "dy"
     assert electric["customer_count"] == 2
     assert electric["unmessaged_count"] == 1
     assert electric["overdue_count"] == 1
@@ -3690,6 +3693,12 @@ def test_message_workbench_keyword_queue_and_global_follow_status(tmp_path: Path
     ).json()
     assert waiting_list["total"] == 1
     assert waiting_list["rows"][0]["lead_id"] == unmessaged_lead_id
+
+    xhs_waiting_list = client.get(
+        "/api/message-workbench/customers",
+        params={"platform": "xhs", "keyword": "电动车", "status": "待私信", "page": 1, "page_size": 10},
+    ).json()
+    assert xhs_waiting_list["total"] == 0
 
     overdue_list = client.get(
         "/api/message-workbench/customers",
@@ -3717,6 +3726,52 @@ def test_message_workbench_keyword_queue_and_global_follow_status(tmp_path: Path
         assert replied["total"] == 1
         assert replied["rows"][0]["lead_id"] == lead_id
         assert replied["rows"][0]["reply_at"]
+
+
+def test_message_workbench_auto_message_uses_shared_profile_and_marks_sent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import message_workbench
+
+    with database.connect() as conn:
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
+            VALUES('dy', 'lead-dm', '可私信客户', 'https://www.douyin.com/user/test-lead')
+            """
+        ).lastrowid
+        lead_id = conn.execute(
+            """
+            INSERT INTO lead_user_accounts(account_id, screening_status, follow_status, script)
+            VALUES(?, '目标客户', '未私信', '你好，方便沟通需求吗？')
+            """,
+            (account_id,),
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO lead_sources(lead_account_id, keyword, source_type)
+            VALUES(?, '电动车', 'competitor_crawl')
+            """,
+            (lead_id,),
+        )
+
+    calls: list[dict[str, object]] = []
+
+    async def fake_sender(user_url: str, message: str, **kwargs: object) -> dict[str, object]:
+        calls.append({"user_url": user_url, "message": message, **kwargs})
+        return {"ok": True, "sent": True}
+
+    monkeypatch.setattr(message_workbench, "_load_douyin_dm_sender", lambda: fake_sender)
+
+    result = asyncio.run(message_workbench.auto_message_customer(int(lead_id)))
+
+    assert result["ok"] is True
+    assert calls[0]["user_url"] == "https://www.douyin.com/user/test-lead"
+    assert calls[0]["message"] == "你好，方便沟通需求吗？"
+    assert calls[0]["profile_dir"] == database.get_douyin_cloak_profile_dir()
+    with database.connect() as conn:
+        row = conn.execute("SELECT follow_status FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone()
+        assert row["follow_status"] == "已私信"
 
 
 def test_ai_result_does_not_override_manual_follow_status(tmp_path: Path) -> None:

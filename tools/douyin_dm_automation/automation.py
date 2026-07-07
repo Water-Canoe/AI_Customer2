@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 DOUYIN_HOSTS = {"www.douyin.com", "douyin.com"}
-DEFAULT_PROFILE_DIR = Path(__file__).resolve().parent / "runtime" / "cloak_profile"
+DEFAULT_PROFILE_DIR = Path(__file__).resolve().parents[2] / "data" / "douyin_cloak_profile"
 DEFAULT_WAIT_SECONDS = 300
 DM_PANEL_WAIT_SECONDS = 25
 
