@@ -1206,12 +1206,45 @@ input[type='checkbox'] {
 }
 
 .traffic-monitor-pane {
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .traffic-monitor-pane .traffic-detail-table {
+  flex: 1 1 240px;
+  min-height: 180px;
   max-height: none;
   overflow: auto;
+}
+
+.traffic-monitor-pane .ai-summary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.traffic-monitor-pane .metric-tile {
+  min-height: 58px;
+  padding: 8px 12px 8px 14px;
+}
+
+.traffic-monitor-pane .metric-tile::before {
+  top: 8px;
+  bottom: 8px;
+}
+
+.traffic-monitor-pane .metric-tile-head {
+  gap: 6px;
+}
+
+.traffic-monitor-pane .metric-tile-head .ui-icon-badge {
+  width: 24px;
+  height: 24px;
+}
+
+.traffic-monitor-pane .metric-tile strong {
+  margin-top: 4px;
+  font-size: 22px;
 }
 
 .traffic-log-list {
