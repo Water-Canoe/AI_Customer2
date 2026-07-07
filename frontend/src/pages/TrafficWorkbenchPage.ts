@@ -561,7 +561,7 @@ export default defineComponent({
             h('small', `设备码：${licenseInfo.value.device_code || '-'}`),
           ]),
           sectionTitle({ title: '抖音登录态', subtitle: '扫码后用于引流执行', icon: VideoPlay, tone: 'blue', compact: true }),
-          h('p', { class: 'traffic-env-suggestion' }, '扫码后点开任意视频，关闭登录窗口，再重新启动引流批次。'),
+          h('p', { class: 'traffic-env-suggestion' }, '扫码后请保持登录窗口打开，确认登录稳定后再手动关闭。'),
           h('div', { class: 'task-card-actions traffic-login-actions' }, [
             h('button', { class: 'primary-action', disabled: douyinLoginOpening.value, onClick: openDouyinLogin }, douyinLoginOpening.value ? '打开中...' : '打开抖音登录窗口'),
           ]),

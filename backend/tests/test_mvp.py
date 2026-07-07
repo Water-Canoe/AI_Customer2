@@ -1543,6 +1543,36 @@ def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypat
     ]
 
 
+def test_traffic_login_window_waits_for_manual_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    calls: dict[str, object] = {"waits": 0}
+
+    class FakePage:
+        def goto(self, url: str, **_: object) -> None:
+            calls["url"] = url
+
+        def wait_for_timeout(self, _: int) -> None:
+            calls["waits"] = int(calls["waits"]) + 1
+            raise RuntimeError("manual close")
+
+    class FakeContext:
+        pages = [FakePage()]
+
+    def fail_read_active_video(*_: object) -> None:
+        raise AssertionError("login window should not detect login state")
+
+    monkeypatch.setattr(traffic_workbench, "_launch_context", lambda *_: FakeContext())
+    monkeypatch.setattr(traffic_workbench, "_read_active_video", fail_read_active_video)
+
+    with pytest.raises(RuntimeError, match="manual close"):
+        traffic_workbench._hold_douyin_login_window()
+
+    assert calls["url"] == "https://www.douyin.com/?recommend=1"
+    assert calls["waits"] == 1
+
+
 def test_traffic_douyin_login_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app

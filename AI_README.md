@@ -268,7 +268,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、CloakBrowser Python 包、CloakBrowser 专用浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `python -m cloakbrowser install`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
 
-引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个可见的 CloakBrowser 登录窗口，并复用全系统同一个 `data/douyin_cloak_profile/`；用户扫码后可以确认首页能正常展示内容，后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
+引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个可见的 CloakBrowser 登录窗口，并复用全系统同一个 `data/douyin_cloak_profile/`；登录窗口只负责保活，不再检测登录状态或自动关闭，用户扫码后确认登录稳定再手动关闭窗口。后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
 
 执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并使用共享浏览器 Profile `data/douyin_cloak_profile/` 保存抖音登录态。可见窗口默认最大化；Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
 

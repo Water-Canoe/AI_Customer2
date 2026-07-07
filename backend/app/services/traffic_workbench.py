@@ -562,7 +562,7 @@ def open_douyin_login_window() -> dict[str, Any]:
     if importlib.util.find_spec("cloakbrowser") is None:
         raise ValueError("缺少 Python CloakBrowser 依赖，请先在引流设置执行环境检查并自动安装")
     if DOUYIN_LOGIN_PROCESS and DOUYIN_LOGIN_PROCESS.poll() is None:
-        return {"ok": True, "message": "抖音登录窗口已经打开。扫码后请点开任意视频，关闭窗口，再启动批次。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
+        return {"ok": True, "message": "抖音登录窗口已经打开。扫码后请保持窗口打开，确认登录稳定后再手动关闭。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
 
     runtime_dir = database.get_data_root()
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -580,7 +580,7 @@ def open_douyin_login_window() -> dict[str, Any]:
     time.sleep(1)
     if DOUYIN_LOGIN_PROCESS.poll() is not None:
         raise ValueError(f"抖音登录窗口启动失败，请先检查环境。日志：{log_path}")
-    return {"ok": True, "message": "抖音登录窗口已打开。扫码后请点开任意视频，关闭窗口，再启动批次。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
+    return {"ok": True, "message": "抖音登录窗口已打开。扫码后请保持窗口打开，确认登录稳定后再手动关闭。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
 
 
 def source_keywords() -> list[dict[str, Any]]:
@@ -843,14 +843,9 @@ def _hold_douyin_login_window() -> None:
     # 登录和安全验证必须可见，执行批次才允许无头。
     context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR, False)
     page = context.pages[0] if context.pages else context.new_page()
-    video_cache = _setup_video_data_cache(page)
     page.goto("https://www.douyin.com/?recommend=1", wait_until="domcontentloaded", timeout=60_000)
     while True:
-        video = _read_active_video(page, video_cache)
-        if video["video_id"]:
-            _save_last_douyin_video_url(video["video_url"] if _is_douyin_video_url(video["video_url"]) else f"https://www.douyin.com/video/{video['video_id']}")
-        else:
-            _save_last_douyin_video_url(page.url)
+        # 登录窗口只负责保活，不检测登录状态，避免扫码后自动化读页触发窗口关闭。
         page.wait_for_timeout(1000)
 
 
