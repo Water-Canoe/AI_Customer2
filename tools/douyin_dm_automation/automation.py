@@ -232,7 +232,7 @@ async def send_douyin_dm(
         headless=False,
         locale="zh-CN",
         timezone="Asia/Shanghai",
-        viewport={"width": 1365, "height": 900},
+        viewport=None,
         humanize=True,
         human_preset="careful",
         args=["--disable-blink-features=AutomationControlled", "--start-maximized"],

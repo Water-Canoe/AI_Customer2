@@ -14,7 +14,7 @@
 
 ## 抖音私信自动化测试工具
 
-`tools/douyin_dm_automation/` 是一个独立的单用户抖音私信自动化验证目录，不接入主拓客工作台的数据流。它复用 `backend/.venv` 中的 `playwright`、`cloakbrowser`、`fastapi` 和 `uvicorn`，通过 CloakBrowser 的 Playwright 兼容持久化浏览器打开抖音用户主页，等待人工登录，点击“私信/发私信”，向 Draft.js 聊天输入框写入话术，并可选择实际点击“发送”。前端页面由 `server.py` 提供，访问 `http://127.0.0.1:8025/` 即可填写用户主页 URL 和话术。
+`tools/douyin_dm_automation/` 是一个独立的单用户抖音私信自动化验证目录，不接入主拓客工作台的数据流。它复用 `backend/.venv` 中的 `playwright`、`cloakbrowser`、`fastapi` 和 `uvicorn`，通过 CloakBrowser 的 Playwright 兼容持久化浏览器打开最大化窗口并访问抖音用户主页，等待人工登录，点击“私信/发私信”，向 Draft.js 聊天输入框写入话术，并可选择实际点击“发送”。前端页面由 `server.py` 提供，访问 `http://127.0.0.1:8025/` 即可填写用户主页 URL 和话术。
 
 运行命令：
 
