@@ -1212,15 +1212,30 @@ input[type='checkbox'] {
 }
 
 .traffic-monitor-pane .traffic-detail-table {
-  flex: 1 1 240px;
-  min-height: 180px;
+  flex: 1 1 340px;
+  min-height: 260px;
   max-height: none;
   overflow: auto;
 }
 
-.traffic-monitor-pane .ai-summary-grid {
+.traffic-monitor-pane > .section-title-with-icon {
+  align-items: stretch;
+}
+
+.traffic-monitor-pane > .section-title-with-icon .section-title-main {
+  flex: 0 0 auto;
+}
+
+.traffic-monitor-pane > .section-title-with-icon .section-title-aside {
+  flex: 1 1 auto;
+  min-width: 420px;
+}
+
+.traffic-monitor-metrics {
+  display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  width: 100%;
 }
 
 .traffic-monitor-pane .metric-tile {
@@ -1250,13 +1265,23 @@ input[type='checkbox'] {
 .traffic-log-list {
   display: grid;
   gap: 8px;
-  max-height: clamp(180px, 28vh, 280px);
+  max-height: clamp(150px, 22vh, 220px);
   margin-bottom: 14px;
   padding: 10px;
   overflow: auto;
   border: 1px solid #e5ece8;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.traffic-side-table-block {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.traffic-side-pagination {
+  margin-top: 8px;
 }
 
 .traffic-log-item {

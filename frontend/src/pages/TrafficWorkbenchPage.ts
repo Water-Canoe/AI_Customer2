@@ -42,6 +42,7 @@ const sourceOptions = [
   ['collected_keyword', '已采集关键词'],
   ['search_keyword', '手动搜索关键词'],
 ]
+const SIDE_PAGE_SIZE = 10
 
 export default defineComponent({
   name: 'TrafficWorkbenchPage',
@@ -74,6 +75,8 @@ export default defineComponent({
     const douyinLoginOpening = ref(false)
     const planArchiveFilter = ref('active')
     const runArchiveFilter = ref('active')
+    const planPage = ref(1)
+    const runPage = ref(1)
     const recordFilters = ref({ query: '', platform: '', status: '', action: '', page: 1, page_size: 20 })
     const loading = ref(false)
     const trafficLogRef = ref<HTMLElement | null>(null)
@@ -84,6 +87,8 @@ export default defineComponent({
     // 归档数据默认隐藏，只有用户切换到“已归档”时才展示。
     const visiblePlans = computed(() => plans.value.filter(plan => planArchiveFilter.value === 'archived' ? plan.archived : !plan.archived))
     const visibleRuns = computed(() => runs.value.filter(run => runArchiveFilter.value === 'archived' ? run.archived : !run.archived))
+    const pagedPlans = computed(() => pageSlice(visiblePlans.value, planPage.value))
+    const pagedRuns = computed(() => pageSlice(visibleRuns.value, runPage.value))
 
     onMounted(loadPage)
     watch(view, () => loadPage())
@@ -131,6 +136,11 @@ export default defineComponent({
     async function selectRun(id: string) {
       const { data } = await api.get(`/traffic/runs/${id}`)
       selectedRun.value = data
+    }
+
+    function pageSlice(rows: Dict[], page: number) {
+      const safePage = Math.min(Math.max(page, 1), Math.max(1, Math.ceil(rows.length / SIDE_PAGE_SIZE)))
+      return rows.slice((safePage - 1) * SIDE_PAGE_SIZE, safePage * SIDE_PAGE_SIZE)
     }
 
     async function loadRecords() {
@@ -418,7 +428,7 @@ export default defineComponent({
         ]),
         side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
           sectionTitle({ title: '计划列表', subtitle: `${visiblePlans.value.length} 个计划`, icon: Tickets, tone: 'blue' }),
-          renderArchiveTabs(planArchiveFilter.value, async value => { planArchiveFilter.value = value; await loadPlans() }),
+          renderArchiveTabs(planArchiveFilter.value, async value => { planArchiveFilter.value = value; planPage.value = 1; await loadPlans() }),
           renderPlanTable(),
         ]),
       })
@@ -428,13 +438,14 @@ export default defineComponent({
       const run = selectedRun.value
       return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-monitor', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
         default: () => h('section', { class: 'pane content-pane traffic-split-main traffic-monitor-pane' }, [
-          sectionTitle({ title: '执行详情', subtitle: run?.plan_name || '选择右侧批次', icon: Monitor, tone: 'blue' }),
+          sectionTitle({
+            title: '执行详情',
+            subtitle: run?.plan_name || '选择右侧批次',
+            icon: Monitor,
+            tone: 'blue',
+            aside: run ? renderRunMetrics(run) : null,
+          }),
           run ? [
-            h('div', { class: 'ai-summary-grid' }, [
-              metricTile({ label: '浏览视频', value: String(run.browsed_count || 0), tone: 'blue', icon: VideoPlay }),
-              metricTile({ label: '成功动作', value: String(run.action_success_count || 0), tone: 'green', icon: Operation }),
-              metricTile({ label: '失败/跳过', value: String((run.failed_count || 0) + (run.skipped_count || 0)), tone: 'red', icon: DataLine }),
-            ]),
             run.stop_reason ? h('div', { class: 'bulk-preview-warning' }, [
               h('li', run.stop_reason),
               run.stop_suggestion ? h('li', run.stop_suggestion) : null,
@@ -447,7 +458,7 @@ export default defineComponent({
         side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
           sectionTitle({ title: '批次列表', subtitle: '运行状态与历史', icon: Tickets, tone: 'blue' }),
           h('div', { class: 'traffic-list-toolbar' }, [
-            renderArchiveTabs(runArchiveFilter.value, async value => { runArchiveFilter.value = value; await loadRuns() }),
+            renderArchiveTabs(runArchiveFilter.value, async value => { runArchiveFilter.value = value; runPage.value = 1; await loadRuns() }),
             h('button', { class: 'secondary-action', onClick: loadRuns }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
           ]),
           renderRunTable(),
@@ -507,6 +518,14 @@ export default defineComponent({
             ]),
           ]),
         ]),
+      ])
+    }
+
+    function renderRunMetrics(run: Dict) {
+      return h('div', { class: 'traffic-monitor-metrics' }, [
+        metricTile({ label: '浏览视频', value: String(run.browsed_count || 0), tone: 'blue', icon: VideoPlay }),
+        metricTile({ label: '成功动作', value: String(run.action_success_count || 0), tone: 'green', icon: Operation }),
+        metricTile({ label: '失败/跳过', value: String((run.failed_count || 0) + (run.skipped_count || 0)), tone: 'red', icon: DataLine }),
       ])
     }
 
@@ -590,51 +609,71 @@ export default defineComponent({
     }
 
     function renderPlanTable() {
-      return h('div', { class: 'table-scroll traffic-side-scroll' }, [
-        h('table', { class: 'data-table resizable-table traffic-side-table' }, [
-          h('thead', [h('tr', ['计划名称', '平台', '来源模式', '每轮上限', '来源内容', '动作组合', '状态', '创建时间', '操作'].map(text => h('th', text)))]),
-          h('tbody', visiblePlans.value.length ? visiblePlans.value.map(plan => h('tr', [
-            h('td', [h('strong', { class: 'table-primary-text', title: plan.name }, plan.name || '-')]),
-            h('td', platformLabel(plan.platform)),
-            h('td', sourceLabel(plan.source_mode)),
-            h('td', String(plan.round_video_limit || 5)),
-            h('td', tableText(plan.source_value || '随机推荐流')),
-            h('td', tableText(plan.action_label || planActionLabel(plan))),
-            h('td', h('span', { class: ['status', plan.archived ? 'cancelled' : 'pending'] }, plan.archived ? '已归档' : '可启动')),
-            h('td', tableText(plan.created_at || '-')),
-            h('td', { class: 'traffic-row-actions' }, plan.archived ? [
-              h('button', { class: 'text-icon-button', onClick: () => restorePlan(plan.id) }, '恢复'),
-              h('button', { class: 'text-icon-button danger', onClick: () => deletePlan(plan.id) }, '删除'),
-            ] : [
-              h('button', { class: 'text-icon-button reserved', onClick: () => startRun(plan.id) }, '启动'),
-              h('button', { class: 'text-icon-button', onClick: () => archivePlan(plan.id) }, '归档'),
-            ]),
-          ])) : [emptyTableRow(9, planArchiveFilter.value === 'archived' ? '暂无已归档计划' : '暂无计划，先在左侧创建')]),
+      return h('div', { class: 'traffic-side-table-block' }, [
+        h('div', { class: 'table-scroll traffic-side-scroll' }, [
+          h('table', { class: 'data-table resizable-table traffic-side-table' }, [
+            h('thead', [h('tr', ['计划名称', '平台', '来源模式', '每轮上限', '来源内容', '动作组合', '状态', '创建时间', '操作'].map(text => h('th', text)))]),
+            h('tbody', pagedPlans.value.length ? pagedPlans.value.map(plan => h('tr', [
+              h('td', [h('strong', { class: 'table-primary-text', title: plan.name }, plan.name || '-')]),
+              h('td', platformLabel(plan.platform)),
+              h('td', sourceLabel(plan.source_mode)),
+              h('td', String(plan.round_video_limit || 5)),
+              h('td', tableText(plan.source_value || '随机推荐流')),
+              h('td', tableText(plan.action_label || planActionLabel(plan))),
+              h('td', h('span', { class: ['status', plan.archived ? 'cancelled' : 'pending'] }, plan.archived ? '已归档' : '可启动')),
+              h('td', tableText(plan.created_at || '-')),
+              h('td', { class: 'traffic-row-actions' }, plan.archived ? [
+                h('button', { class: 'text-icon-button', onClick: () => restorePlan(plan.id) }, '恢复'),
+                h('button', { class: 'text-icon-button danger', onClick: () => deletePlan(plan.id) }, '删除'),
+              ] : [
+                h('button', { class: 'text-icon-button reserved', onClick: () => startRun(plan.id) }, '启动'),
+                h('button', { class: 'text-icon-button', onClick: () => archivePlan(plan.id) }, '归档'),
+              ]),
+            ])) : [emptyTableRow(9, planArchiveFilter.value === 'archived' ? '暂无已归档计划' : '暂无计划，先在左侧创建')]),
+          ]),
         ]),
+        renderSidePagination(visiblePlans.value.length, planPage, '计划'),
       ])
     }
 
     function renderRunTable() {
-      return h('div', { class: 'table-scroll traffic-side-scroll' }, [
-        h('table', { class: 'data-table resizable-table traffic-side-table' }, [
-          h('thead', [h('tr', ['批次', '计划', '状态', '浏览', '成功', '跳过/失败', '停机原因', '开始时间', '操作'].map(text => h('th', text)))]),
-          h('tbody', visibleRuns.value.length ? visibleRuns.value.map(run => h('tr', { class: selectedRun.value?.id === run.id ? 'selected-table-row' : '', onClick: () => selectRun(run.id) }, [
-            h('td', [h('strong', { class: 'table-primary-text', title: run.id }, shortId(run.id))]),
-            h('td', tableText(run.plan_name || '-')),
-            h('td', h('span', { class: ['status', statusClass(run.status)] }, statusText(run.status))),
-            h('td', String(run.browsed_count || 0)),
-            h('td', String(run.action_success_count || 0)),
-            h('td', `${run.skipped_count || 0}/${run.failed_count || 0}`),
-            h('td', tableText(run.stop_reason || '-')),
-            h('td', tableText(run.started_at || run.created_at || '-')),
-            h('td', { class: 'traffic-row-actions' }, run.archived ? [
-              h('button', { class: 'text-icon-button', onClick: stopClick(() => restoreRun(run.id)) }, '恢复'),
-              h('button', { class: 'text-icon-button danger', onClick: stopClick(() => deleteRun(run.id)) }, '删除'),
-            ] : [
-              isActiveStatus(run.status) ? h('button', { class: 'text-icon-button', onClick: stopClick(() => stopRun(run.id)) }, '停止') : h('button', { class: 'text-icon-button reserved', onClick: stopClick(() => startRun(run.plan_id)) }, '重试'),
-              !isActiveStatus(run.status) ? h('button', { class: 'text-icon-button', onClick: stopClick(() => archiveRun(run.id)) }, '归档') : null,
-            ]),
-          ])) : [emptyTableRow(9, runArchiveFilter.value === 'archived' ? '暂无已归档批次' : '暂无批次，启动计划后会出现')]),
+      return h('div', { class: 'traffic-side-table-block' }, [
+        h('div', { class: 'table-scroll traffic-side-scroll' }, [
+          h('table', { class: 'data-table resizable-table traffic-side-table' }, [
+            h('thead', [h('tr', ['批次', '计划', '状态', '浏览', '成功', '跳过/失败', '停机原因', '开始时间', '操作'].map(text => h('th', text)))]),
+            h('tbody', pagedRuns.value.length ? pagedRuns.value.map(run => h('tr', { class: selectedRun.value?.id === run.id ? 'selected-table-row' : '', onClick: () => selectRun(run.id) }, [
+              h('td', [h('strong', { class: 'table-primary-text', title: run.id }, shortId(run.id))]),
+              h('td', tableText(run.plan_name || '-')),
+              h('td', h('span', { class: ['status', statusClass(run.status)] }, statusText(run.status))),
+              h('td', String(run.browsed_count || 0)),
+              h('td', String(run.action_success_count || 0)),
+              h('td', `${run.skipped_count || 0}/${run.failed_count || 0}`),
+              h('td', tableText(run.stop_reason || '-')),
+              h('td', tableText(run.started_at || run.created_at || '-')),
+              h('td', { class: 'traffic-row-actions' }, run.archived ? [
+                h('button', { class: 'text-icon-button', onClick: stopClick(() => restoreRun(run.id)) }, '恢复'),
+                h('button', { class: 'text-icon-button danger', onClick: stopClick(() => deleteRun(run.id)) }, '删除'),
+              ] : [
+                isActiveStatus(run.status) ? h('button', { class: 'text-icon-button', onClick: stopClick(() => stopRun(run.id)) }, '停止') : h('button', { class: 'text-icon-button reserved', onClick: stopClick(() => startRun(run.plan_id)) }, '重试'),
+                !isActiveStatus(run.status) ? h('button', { class: 'text-icon-button', onClick: stopClick(() => archiveRun(run.id)) }, '归档') : null,
+              ]),
+            ])) : [emptyTableRow(9, runArchiveFilter.value === 'archived' ? '暂无已归档批次' : '暂无批次，启动计划后会出现')]),
+          ]),
+        ]),
+        renderSidePagination(visibleRuns.value.length, runPage, '批次'),
+      ])
+    }
+
+    function renderSidePagination(total: number, pageRef: { value: number }, label: string) {
+      if (!total) return null
+      const totalPages = Math.max(1, Math.ceil(total / SIDE_PAGE_SIZE))
+      const page = Math.min(Math.max(pageRef.value, 1), totalPages)
+      return h('div', { class: 'table-pagination traffic-side-pagination' }, [
+        h('span', `${label} ${Math.min((page - 1) * SIDE_PAGE_SIZE + 1, total)}-${Math.min(page * SIDE_PAGE_SIZE, total)} / ${total}`),
+        h('div', { class: 'table-page-controls' }, [
+          h('button', { disabled: page <= 1, onClick: () => pageRef.value = page - 1 }, '上一页'),
+          h('span', `${page} / ${totalPages}`),
+          h('button', { disabled: page >= totalPages, onClick: () => pageRef.value = page + 1 }, '下一页'),
         ]),
       ])
     }
