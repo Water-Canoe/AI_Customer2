@@ -25,6 +25,8 @@ PROFILE_DM_SELECTORS = [
 ]
 
 CHAT_INPUT_SELECTORS = [
+    ".messageEditorinputArea",
+    ".messageEditorimChatEditorContainer [contenteditable='true']",
     ".DraftEditor-root [contenteditable='true']",
     ".DraftEditor-editor [contenteditable='true']",
     "[data-contents='true']",
@@ -129,6 +131,9 @@ async def click_private_message_button(page: Any, seconds: int) -> None:
 
 
 async def open_dm_panel(page: Any, seconds: int) -> None:
+    if await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=1000):
+        return
+
     await click_private_message_button(page, seconds)
 
     deadline = time.monotonic() + min(seconds, DM_PANEL_WAIT_SECONDS)
@@ -212,6 +217,25 @@ async def editor_contains_message(page: Any, message: str) -> bool:
     )
 
 
+async def outgoing_message_visible(page: Any, message: str) -> bool:
+    return await page.evaluate(
+        """text => {
+            const selectors = [
+                '.messageMessageBoxisFromMe',
+                '.MessageBoxContentisFromMe',
+                '.MessageItemTextisFromMe',
+                '.messageMessageListwrapper'
+            ];
+            return selectors.some(selector =>
+                Array.from(document.querySelectorAll(selector)).some(el =>
+                    (el.innerText || el.textContent || '').includes(text)
+                )
+            );
+        }""",
+        message,
+    )
+
+
 async def click_send(page: Any) -> None:
     await page.wait_for_timeout(2500)
     for selector in SEND_ICON_SELECTORS:
@@ -243,10 +267,12 @@ async def click_send(page: Any) -> None:
 async def wait_until_message_sent(page: Any, message: str) -> None:
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        if not await editor_contains_message(page, message):
+        if await outgoing_message_visible(page, message):
             return
         await page.wait_for_timeout(500)
-    raise RuntimeError("已点击发送按钮，但话术仍在输入框中，可能未发送。")
+    if await editor_contains_message(page, message):
+        raise RuntimeError("已点击发送按钮，但话术仍在输入框中，未确认发送成功。")
+    raise RuntimeError("输入框已变化，但聊天记录中没有出现本人发送的消息气泡，未确认发送成功。")
 
 
 async def send_douyin_dm(
