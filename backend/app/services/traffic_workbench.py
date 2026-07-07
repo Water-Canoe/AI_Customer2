@@ -36,6 +36,7 @@ TRAFFIC_LAST_VIDEO_URL_KEY = "traffic_last_douyin_video_url"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 300
+WARMUP_VIDEO_SKIP_COUNT = 3
 ACTION_FILTER_TERMS = {
     "like": ["like", "点赞视频"],
     "collect": ["collect", "收藏视频"],
@@ -679,7 +680,6 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     headless = _bool_setting(settings, "traffic_headless", False)
     action_probability = _int_setting(settings, "traffic_action_probability", 60, 0, 100)
     action_budget = max(0, daily_action_limit - _daily_action_count())
-    failure_count = 0
     no_progress_count = 0
     project_author_keys: set[str] = set()
 
@@ -704,7 +704,10 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                     "reason": "今日真实互动动作数量已经达到设置值",
                     "suggestion": "可以明天继续，或到引流设置调整每日动作上限。",
                 }
-            for index in range(limit):
+            handled_count = 0
+            seen_count = 0
+            max_seen_count = limit * 10 + WARMUP_VIDEO_SKIP_COUNT
+            while handled_count < limit:
                 _raise_if_stop_requested(run_id)
                 video = _read_active_video(page, video_cache)
                 if not video["video_id"]:
@@ -721,11 +724,24 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                     _navigate_to_executable_video(page, run_id, plan["source_mode"], video_cache, author_cooldown_hours, project_author_keys, plan.get("source_value", ""))
                     continue
                 no_progress_count = 0
+                seen_count += 1
+                if seen_count <= WARMUP_VIDEO_SKIP_COUNT:
+                    if not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys, silent=True):
+                        no_progress_count += 1
+                        if no_progress_count >= stop_after_failures:
+                            raise TrafficStop(
+                                f"连续 {no_progress_count} 次没有切换到新视频，任务已停止。",
+                                "预热跳过视频时无法切换到下一条。",
+                                "请到引流设置重新打开抖音并确认推荐流可以正常切换。",
+                                "advance",
+                                {"video_id": video["video_id"], "url": page.url},
+                            )
+                    continue
                 skip_reason = _video_skip_reason(page, video)
                 if skip_reason:
                     _append_log(run_id, "warning", "browse", f"当前视频已跳过：{skip_reason}。", skip_reason, "无需手动处理，系统会继续切换下一条视频。", {"video_id": video["video_id"], "aweme_type": video.get("aweme_type"), "url": page.url})
                     _record_video(run_id, plan, video, ["跳过"], "", "", "skipped", skip_reason)
-                    if index < limit - 1 and not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
+                    if not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
                         no_progress_count += 1
                         if no_progress_count >= stop_after_failures:
                             raise TrafficStop(
@@ -737,13 +753,14 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                             )
                     continue
                 watch_seconds = random.randint(min_watch, max_watch)
-                _append_log(run_id, "info", "browse", f"正在浏览视频：{video['video_desc'][:36] or video['video_id']}。", "按设置随机停留", f"本次停留约 {watch_seconds} 秒。", {"video_id": video["video_id"]})
+                if not plan["actions"]:
+                    _append_log(run_id, "info", "browse", f"正在浏览视频：{video['video_desc'][:36] or video['video_id']}。", "按设置随机停留", f"本次停留约 {watch_seconds} 秒。", {"video_id": video["video_id"]})
                 page.wait_for_timeout(watch_seconds * 1000)
                 done_actions, comment_text, image_path, skipped_by_error = _execute_actions_with_retry(run_id, plan, page, video, action_budget, action_probability)
                 action_budget = max(0, action_budget - _real_action_count(done_actions))
                 if skipped_by_error:
                     _record_video(run_id, plan, video, ["跳过"], comment_text, image_path, "skipped", "连续动作失败，已跳过当前视频")
-                    if index < limit - 1 and not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
+                    if not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
                         raise TrafficStop(
                             "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
                             "跳过异常视频后仍无法切换到新视频。",
@@ -753,12 +770,26 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                         )
                     continue
                 if plan["actions"] and not done_actions:
-                    failure_count += 1
-                    _append_log(run_id, "warning", "stop", f"当前视频没有完成任何动作，连续失败 {failure_count} 次。", "动作没有确认成功", "系统会继续尝试下一个视频，连续失败过多会自动停止。", {"video_id": video["video_id"]})
-                else:
-                    failure_count = 0
+                    if seen_count >= max_seen_count:
+                        raise TrafficStop(
+                            "连续跳过的视频过多，任务已停止。",
+                            "本轮没有凑够可执行互动的视频。",
+                            "请降低防重复限制、提高操作执行概率，或稍后再试。",
+                            "advance",
+                            {"seen_count": seen_count, "target_count": limit},
+                        )
+                    if not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys, silent=True):
+                        raise TrafficStop(
+                            "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
+                            "无操作视频后无法切换到新视频。",
+                            "请到引流设置重新打开抖音并确认推荐流可以正常切换。",
+                            "advance",
+                            {"video_id": video["video_id"], "url": page.url},
+                        )
+                    continue
                 record_actions = done_actions or ["仅浏览"]
                 _record_video(run_id, plan, video, record_actions, comment_text, image_path, "browsed" if not plan["actions"] or record_actions == ["仅浏览"] else "done")
+                handled_count += 1
                 if plan["actions"] and action_budget <= 0:
                     _append_log(run_id, "success", "stop", "已达到每日动作上限，任务已自动完成。", "今日真实互动动作数量已经达到设置值", "可以明天继续，或到引流设置调整每日动作上限。", {"daily_action_limit": daily_action_limit})
                     return {
@@ -766,15 +797,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                         "reason": "今日真实互动动作数量已经达到设置值",
                         "suggestion": "可以明天继续，或到引流设置调整每日动作上限。",
                     }
-                if failure_count >= stop_after_failures:
-                    raise TrafficStop(
-                        f"连续 {failure_count} 次动作没有确认成功，任务已停止。",
-                        "连续动作失败次数达到停机阈值。",
-                        "请检查抖音页面是否改版、账号是否受限，或先降低动作频率。",
-                        "stop",
-                        {"failure_count": failure_count},
-                    )
-                if index < limit - 1 and not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
+                if handled_count < limit and not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys):
                     raise TrafficStop(
                         "连续 3 次没有切换到新视频，任务已停止。可能是页面没有进入推荐流。",
                         "翻页后视频 ID 没有变化。",
@@ -1072,23 +1095,25 @@ def _modal_feed_url(url: str) -> str:
     return f"https://www.douyin.com/jingxuan?modal_id={match.group(1)}" if match else ""
 
 
-def _next_video(page: Any, run_id: str, plan: dict[str, Any], previous_video_id: str, video_cache: dict[str, Any] | None, cooldown_hours: int, project_author_keys: set[str] | None = None) -> bool:
+def _next_video(page: Any, run_id: str, plan: dict[str, Any], previous_video_id: str, video_cache: dict[str, Any] | None, cooldown_hours: int, project_author_keys: set[str] | None = None, silent: bool = False) -> bool:
     if plan["source_mode"] in {"competitor_videos", "collected_keyword"}:
         project = _random_project_video_candidate(cooldown_hours, project_author_keys, plan.get("source_value", "") if plan["source_mode"] == "collected_keyword" else "")
         if not project:
             return False
         _remember_project_author(project_author_keys, project)
-        _goto_video_candidate(page, run_id, project["url"], "已按作者冷却随机切换到项目库另一个视频。")
+        _goto_video_candidate(page, run_id, project["url"], "已按作者冷却随机切换到项目库另一个视频。", silent)
         next_id = _read_active_video(page, video_cache)["video_id"]
         return bool(next_id and next_id != previous_video_id)
     return _advance_video(page, previous_video_id, video_cache)
 
 
-def _goto_video_candidate(page: Any, run_id: str, url: str, message: str) -> None:
+def _goto_video_candidate(page: Any, run_id: str, url: str, message: str, silent: bool = False) -> None:
     # ponytail: 先复用已有视频入口；后续需要纯随机推荐再接入接口队列。
-    _append_log(run_id, "info", "probe", message, "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": url})
+    if not silent:
+        _append_log(run_id, "info", "probe", message, "当前页面不是可执行视频流", "系统会进入具体视频后继续执行。", {"from_url": page.url, "target_url": url})
     if not _goto_with_timeout_tolerance(page, url, 60_000):
-        _append_log(run_id, "warning", "probe", "视频页面加载超时，继续检查当前页面。", "抖音可能已经打开视频，但没有返回加载完成信号", "系统会继续识别当前页面；如果不能执行，会自动换下一个视频。", {"target_url": url, "current_url": page.url})
+        if not silent:
+            _append_log(run_id, "warning", "probe", "视频页面加载超时，继续检查当前页面。", "抖音可能已经打开视频，但没有返回加载完成信号", "系统会继续识别当前页面；如果不能执行，会自动换下一个视频。", {"target_url": url, "current_url": page.url})
     page.wait_for_timeout(3000)
     _ensure_page_ready(page)
 
@@ -1456,7 +1481,7 @@ def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, vi
             elif failed and not done:
                 return done, comment_text, image_path, True
     if not done and probability_skipped and not attempted:
-        return ["仅浏览"], comment_text, image_path, False
+        return [], comment_text, image_path, False
     return done, comment_text, image_path, bool(failed_twice and not done)
 
 
@@ -1464,7 +1489,6 @@ def _skip_action_by_probability(run_id: str, video: dict[str, Any], label: str, 
     chance = max(0, min(100, int(probability)))
     if chance >= 100 or random.randint(1, 100) <= chance:
         return False
-    _append_log(run_id, "info", phase, f"本次按操作执行概率跳过{label}。", f"当前操作执行概率为 {chance}%", "这是正常降频行为，用于减少每条视频都互动带来的风控风险。", {"video_id": video.get("video_id"), "probability": chance})
     return True
 
 
@@ -2074,7 +2098,7 @@ def _record_video(
     status: str,
     reason: str = "",
 ) -> None:
-    # 每个视频都落操作记录，纯刷视频也会以“仅浏览”进入表格。
+    # 只有计入批次的视频才落表；预热和无操作视频不走这里。
     with database.connect() as conn:
         conn.execute(
             """

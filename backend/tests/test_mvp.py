@@ -744,6 +744,7 @@ def test_traffic_run_uses_plan_round_video_limit(tmp_path: Path, monkeypatch: py
     fake_playwright_package.sync_api = fake_sync_api
     reads = {"count": 0}
     records: list[tuple[object, ...]] = []
+    action_calls = {"count": 0}
 
     def fake_video(*_: object) -> dict[str, object]:
         reads["count"] += 1
@@ -759,17 +760,24 @@ def test_traffic_run_uses_plan_round_video_limit(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(traffic_workbench, "_raise_if_stop_requested", lambda *_: None)
     monkeypatch.setattr(traffic_workbench, "_read_active_video", fake_video)
     monkeypatch.setattr(traffic_workbench, "_video_skip_reason", lambda *_: "")
-    monkeypatch.setattr(traffic_workbench, "_execute_actions_with_retry", lambda *_: ([], "", "", False))
+
+    def fake_actions(*_: object) -> tuple[list[str], str, str, bool]:
+        action_calls["count"] += 1
+        return (["点赞视频"], "", "", False) if action_calls["count"] >= 3 else ([], "", "", False)
+
+    monkeypatch.setattr(traffic_workbench, "_execute_actions_with_retry", fake_actions)
     monkeypatch.setattr(traffic_workbench, "_record_video", lambda *args: records.append(args))
-    monkeypatch.setattr(traffic_workbench, "_next_video", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_next_video", lambda *_, **__: True)
     monkeypatch.setattr(traffic_workbench, "_append_log", lambda *_: None)
 
     traffic_workbench._run_with_playwright(
         "run-1",
-        {"name": "计划上限", "source_mode": "random_feed", "source_value": "", "actions": [], "round_video_limit": 2},
+        {"name": "计划上限", "source_mode": "random_feed", "source_value": "", "actions": ["like"], "round_video_limit": 2},
     )
 
     assert len(records) == 2
+    assert reads["count"] == traffic_workbench.WARMUP_VIDEO_SKIP_COUNT + 4
+    assert [args[3] for args in records] == [["点赞视频"], ["点赞视频"]]
 
 
 def test_traffic_plan_and_run_archive_filters(tmp_path: Path) -> None:
@@ -972,12 +980,11 @@ def test_traffic_action_probability_skips_each_action(monkeypatch: pytest.Monkey
     from app.services import traffic_workbench
 
     called: list[str] = []
-    logs: list[tuple[object, ...]] = []
     rolls = iter([60, 61])
 
     monkeypatch.setattr(traffic_workbench.random, "randint", lambda *_: next(rolls))
     monkeypatch.setattr(traffic_workbench, "_execute_click_action", lambda *args: called.append(str(args[3])) or True)
-    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: None)
 
     done, comment_text, image_path, skipped = traffic_workbench._execute_actions_with_retry(
         "run-1",
@@ -992,10 +999,9 @@ def test_traffic_action_probability_skips_each_action(monkeypatch: pytest.Monkey
     assert image_path == ""
     assert skipped is False
     assert called == ["like"]
-    assert any("跳过收藏视频" in str(item[3]) for item in logs)
 
 
-def test_traffic_action_probability_all_skipped_is_browse_only(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_traffic_action_probability_all_skipped_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import traffic_workbench
 
     monkeypatch.setattr(traffic_workbench.random, "randint", lambda *_: 61)
@@ -1010,7 +1016,7 @@ def test_traffic_action_probability_all_skipped_is_browse_only(monkeypatch: pyte
         action_probability=60,
     )
 
-    assert done == ["仅浏览"]
+    assert done == []
     assert skipped is False
 
 
