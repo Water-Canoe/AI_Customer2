@@ -28,7 +28,7 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 
 该工具只用于验证单个目标主页的自动化可行性，不提供批量私信、账号池、代理池或自动重试队列。运行态登录目录位于 `tools/douyin_dm_automation/runtime/`，属于本地运行产物。
 
-私信按钮点击逻辑优先使用 Playwright 定位到的可见按钮；如果抖音页面遮挡导致普通点击失败，会退回到对可见“发私信 / 私信 / 消息”元素的 DOM 点击。修改该目录代码后必须重启 `uvicorn`，否则 `8025` 页面仍会调用旧模块。
+私信按钮点击逻辑先等待可见“私信/发私信”入口，再从同名按钮中选择最后一个可见按钮并使用 Playwright `force=True` 点击，避开抖音渲染的隐藏按钮副本和 actionability 等待；点击后 25 秒内没有出现聊天输入框就报错。修改该目录代码后必须重启 `uvicorn`，否则 `8025` 页面仍会调用旧模块。
 
 ## 前端结构
 

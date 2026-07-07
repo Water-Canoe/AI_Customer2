@@ -11,20 +11,17 @@ from urllib.parse import urlparse
 DOUYIN_HOSTS = {"www.douyin.com", "douyin.com"}
 DEFAULT_PROFILE_DIR = Path(__file__).resolve().parent / "runtime" / "cloak_profile"
 DEFAULT_WAIT_SECONDS = 300
+DM_PANEL_WAIT_SECONDS = 25
 
 PROFILE_DM_SELECTORS = [
     "button:has-text('发私信')",
     "button:has-text('私信')",
-    "button:has-text('消息')",
     "div[role='button']:has-text('发私信')",
     "div[role='button']:has-text('私信')",
-    "div[role='button']:has-text('消息')",
     "span:has-text('发私信')",
     "span:has-text('私信')",
-    "span:has-text('消息')",
     "a:has-text('发私信')",
     "a:has-text('私信')",
-    "a:has-text('消息')",
 ]
 
 CHAT_INPUT_SELECTORS = [
@@ -40,9 +37,6 @@ SEND_SELECTORS = [
     "div[role='button']:has-text('发送')",
     "span:has-text('发送')",
 ]
-
-CLICKABLE_TEXT_SELECTORS = "button, div[role='button'], a, span"
-
 
 def validate_douyin_user_url(value: str) -> str:
     url = value.strip()
@@ -110,35 +104,26 @@ async def dismiss_easy_popups(page: Any) -> None:
 
 
 async def click_private_message_button(page: Any, seconds: int) -> None:
-    button = await wait_for_private_message_button(page, seconds)
-    try:
-        await button.scroll_into_view_if_needed(timeout=3000)
-        await button.click(timeout=5000)
-    except Exception:
-        # ponytail: Douyin sometimes overlays the profile button; DOM click is the fallback for this one known button.
-        clicked = await page.evaluate(
-            """selector => {
-                for (const el of document.querySelectorAll(selector)) {
-                    const text = (el.innerText || el.textContent || '').trim();
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width > 0 && rect.height > 0 && /^(发私信|私信|消息)$/.test(text)) {
-                        const target = el.closest('button, div[role="button"], a') || el;
-                        target.click();
-                        return true;
-                    }
-                }
-                return false;
-            }""",
-            CLICKABLE_TEXT_SELECTORS,
-        )
-        if not clicked:
-            raise RuntimeError("找到了私信按钮，但点击失败。")
+    await wait_for_private_message_button(page, seconds)
+
+    for selector in ["button:has-text('发私信')", "button:has-text('私信')"]:
+        locator = page.locator(selector)
+        for index in range(await locator.count() - 1, -1, -1):
+            button = locator.nth(index)
+            try:
+                if await button.is_visible(timeout=500):
+                    # ponytail: force avoids Douyin's duplicate hidden button and actionability stalls.
+                    await button.click(timeout=5000, force=True)
+                    return
+            except Exception:
+                continue
+    raise RuntimeError("找到了私信按钮，但点击失败。")
 
 
 async def open_dm_panel(page: Any, seconds: int) -> None:
     await click_private_message_button(page, seconds)
 
-    deadline = time.monotonic() + seconds
+    deadline = time.monotonic() + min(seconds, DM_PANEL_WAIT_SECONDS)
     while time.monotonic() < deadline:
         editor = await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=1200)
         if editor:

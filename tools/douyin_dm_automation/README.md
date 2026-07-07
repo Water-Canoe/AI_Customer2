@@ -25,7 +25,7 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 backend\.venv\Scripts\python.exe tools\douyin_dm_automation\automation.py --user-url "https://www.douyin.com/user/MS4wLjABAAAAY0Ci-RnZrri7dWXZI5BxIBoS-Q42xcYsAsRHMfjaSFtGxRPr0hiisLjww-_DRqJI" --message "你好，我这边想测试一下抖音网页版私信自动化。" --dry-run
 ```
 
-打开 `http://127.0.0.1:8025/` 后填写用户主页 URL 和话术。首次运行会弹出浏览器；如果抖音提示未登录，就在该浏览器里完成登录，脚本最长等待 300 秒。
+打开 `http://127.0.0.1:8025/` 后填写用户主页 URL 和话术。首次运行会弹出浏览器；如果抖音提示未登录，就在该浏览器里完成登录，脚本最长等待 300 秒。抖音页面会渲染一个隐藏的“私信”按钮副本，脚本会点击最后一个可见按钮；点击后 25 秒内没有出现聊天输入框就报错，不再长时间卡住。
 
 如果修改了脚本代码，需要重启 `uvicorn` 服务；旧服务进程不会自动加载新版点击逻辑。
 
