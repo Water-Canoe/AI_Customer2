@@ -4997,6 +4997,127 @@ def test_agent_cancel_stops_queued_run(tmp_path: Path, monkeypatch: pytest.Monke
     assert cancelled.json()["stop_requested"] == 1
 
 
+def test_agent_command_answers_unmessaged_stats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import ai_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+        conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status)
+            VALUES('dy', 'competitor-1', '竞品A', '竞品')
+            """
+        )
+        lead_account_cursor = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname)
+            VALUES('dy', 'lead-1', '客户A')
+            """
+        )
+        lead_account_id = lead_account_cursor.lastrowid
+        lead_cursor = conn.execute(
+            """
+            INSERT INTO lead_user_accounts(account_id, screening_status, follow_status)
+            VALUES(?, '目标客户', '未私信')
+            """,
+            (lead_account_id,),
+        )
+        lead_id = lead_cursor.lastrowid
+        conn.execute(
+            """
+            INSERT INTO lead_sources(lead_account_id, keyword, source_type)
+            VALUES(?, 'AI客服', 'comment')
+            """,
+            (lead_id,),
+        )
+
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps({"action": "answer_stats", "metric": "unmessaged"}),
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/agent/commands/preview", json={"command": "我现在还有多少用户未私信", "workspace": "lead"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["executed"] is True
+    assert payload["result"]["values"]["unmessaged"] == 1
+    assert "未私信" in payload["answer"]
+
+
+def test_agent_command_rejects_unsafe_sql(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import ai_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps({"action": "query_database", "sql": "DELETE FROM user_accounts"}),
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/agent/commands/preview", json={"command": "清空账号表", "workspace": "lead"})
+
+    assert response.status_code == 400
+    assert "SELECT" in response.json()["detail"]
+
+
+def test_agent_command_execute_creates_customers_without_dm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import agent_service, ai_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+
+    monkeypatch.setattr(agent_service, "_start_background_run", lambda _run_id: None)
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps(
+            {
+                "action": "lead_auto",
+                "lead_operation": "customers",
+                "auto_dm": False,
+                "keywords": ["AI客服"],
+                "dm_count": 5,
+                "title": "寻找客户但不私信",
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/agent/commands/execute",
+        json={"command": "为我找些对AI客服有需求的客户，先不私信", "workspace": "lead"},
+    )
+
+    assert response.status_code == 200
+    run = response.json()["run"]
+    assert run["run_type"] == "lead_auto"
+    assert run["keywords"] == ["AI客服"]
+    assert run["params"]["lead_operation"] == "customers"
+    assert run["params"]["auto_dm"] is False
+
+
 def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app

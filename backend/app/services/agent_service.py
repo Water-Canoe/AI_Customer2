@@ -159,9 +159,12 @@ def _run_lead_auto(run_id: str) -> dict[str, Any]:
     assert run is not None
     params = run["params"]
     keywords = run["keywords"]
+    operation = str(params.get("lead_operation") or "full")
+    auto_dm = bool(params.get("auto_dm", True))
     settings = _settings()
-    _validate_lead_environment(settings)
     license_service.ensure_authorized()
+    if operation != "message":
+        _validate_lead_environment(settings)
     _append_event(run_id, "info", "check", "拓客授权、AI 配置和采集环境已通过检查", {})
 
     summary: dict[str, Any] = {
@@ -179,6 +182,10 @@ def _run_lead_auto(run_id: str) -> dict[str, Any]:
         "dm_skipped": 0,
         "dm_errors": [],
     }
+
+    if operation == "message":
+        _run_message_batches(run_id, keywords, params, summary)
+        return summary
 
     for keyword in keywords:
         _raise_if_stopped(run_id)
@@ -216,6 +223,10 @@ def _run_lead_auto(run_id: str) -> dict[str, Any]:
         else:
             _append_event(run_id, "warn", "competitor_screening", f"没有可筛选的竞品候选：{keyword}", analysis)
 
+        if operation == "competitors":
+            _update_result(run_id, summary)
+            continue
+
         customer_task = account_actions.create_keyword_find_customer_task("dy", keyword)
         find_task_ids = [str(task_id) for task_id in customer_task.get("task_ids", [])]
         summary["competitor_accounts"] += int(customer_task.get("account_count") or 0)
@@ -234,7 +245,10 @@ def _run_lead_auto(run_id: str) -> dict[str, Any]:
             _append_event(run_id, "warn", "customer_discovery", f"没有可执行的找客户任务：{keyword}", customer_task)
         _update_result(run_id, summary)
 
-    _run_message_batches(run_id, keywords, params, summary)
+    if operation == "full" and auto_dm:
+        _run_message_batches(run_id, keywords, params, summary)
+    elif operation in ("customers", "full"):
+        _append_event(run_id, "info", "message", "本次计划不自动私信", {"auto_dm": auto_dm, "operation": operation})
     return summary
 
 
@@ -331,10 +345,24 @@ def _resolve_keywords(payload: AgentRunCreate, settings: dict[str, Any]) -> list
     explicit = _clean_keywords(payload.keywords)
     if explicit:
         return explicit
+    if payload.run_type == "lead_auto" and payload.lead_operation == "message":
+        keywords = _message_keywords()
+        if keywords:
+            return keywords
+        raise ValueError("当前没有可自动私信的未私信客户关键词队列")
     product_keywords = _clean_keywords(settings.get("product_keywords", []))
     if not product_keywords:
         raise ValueError("请先在设置页填写产品关键词，或在执行前手动输入关键词")
     return _select_keywords_with_ai(payload.goal, product_keywords, settings)
+
+
+def _message_keywords() -> list[str]:
+    result: list[str] = []
+    for item in message_workbench.list_keywords():
+        keyword = str(item.get("keyword") or "").strip()
+        if keyword and int(item.get("unmessaged_count") or 0) > 0:
+            result.append(keyword)
+    return result
 
 
 def _select_keywords_with_ai(goal: str, product_keywords: list[str], settings: dict[str, Any]) -> list[str]:

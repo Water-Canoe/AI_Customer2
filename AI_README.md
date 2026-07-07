@@ -12,21 +12,25 @@
 
 ## AI 自动化入口
 
-当前新增两个非技术用户主入口：拓客工作台的 `AI自动拓客` 和引流工作台的 `AI自动引流`。两个页面共用 `frontend/src/pages/AutoAgentPage.ts`，左侧只保留“我要做什么”和必要参数，右侧展示 `AI任务批次`、运行日志和结果汇总；运行中每 3 秒轮询 `/api/agent/runs` 与 `/api/agent/runs/{id}/events`，首版不引入 WebSocket。
+当前两个非技术用户主入口是拓客工作台的 `AI自动拓客` 和引流工作台的 `AI自动引流`。两个页面共用 `frontend/src/pages/AutoAgentPage.ts`，左侧只保留一个自然语言指令输入框和示例指令，右侧展示 `AI任务批次`、运行日志和结果汇总；运行中每 3 秒轮询 `/api/agent/runs` 与 `/api/agent/runs/{id}/events`，首版不引入 WebSocket。用户可以输入“检查下我现在有多少竞品账户/目标客户”“我现在还有多少用户未私信”“为我找些做xxx的竞品”“为我找些对xxx有需求的客户，先不私信”“将还未私信的客户私信”等指令，不再手动填写关键词、私信数量或引流动作参数。
 
-后端新增 `agent_runs` 和 `agent_run_events` 两张编排表，由 `backend/app/services/agent_service.py` 以确定性状态机执行，不引入 LangGraph/CrewAI/AutoGen。`run_type=lead_auto` 表示自动拓客，`run_type=traffic_auto` 表示自动引流；Agent 只调用现有白名单服务函数，不直接执行任意 SQL，也不驱动前端页面。公开接口包括：
+后端新增 `backend/app/services/agent_commands.py` 作为自然语言指令规划器，使用已配置的 OpenAI 兼容模型把用户输入解析为白名单计划。查询类计划会直接返回本地统计或只读 SQL 查询结果；执行类计划会先返回可确认的计划，再通过 `agent_runs` 创建真实批次。`agent_runs` 和 `agent_run_events` 由 `backend/app/services/agent_service.py` 以确定性状态机执行，不引入 LangGraph/CrewAI/AutoGen。`run_type=lead_auto` 表示自动拓客，`run_type=traffic_auto` 表示自动引流；Agent 只调用现有白名单服务函数，不驱动前端页面，不执行写入类 SQL。公开接口包括：
 
+- `POST /api/agent/commands/preview`：解析自然语言指令；统计/查询类直接返回答案，执行类返回待确认计划。
+- `POST /api/agent/commands/execute`：按已确认计划创建自动化批次；不会执行自由文本或任意代码。
 - `POST /api/agent/runs`：创建并后台启动自动化批次。
 - `GET /api/agent/runs?run_type=lead_auto|traffic_auto`：查看批次列表。
 - `GET /api/agent/runs/{id}`：查看批次详情、结果和关联任务/批次。
 - `GET /api/agent/runs/{id}/events`：查看运行日志。
 - `POST /api/agent/runs/{id}/cancel`：请求停止批次。
 
-设置页新增 `产品关键词` 标签输入，保存为 `settings.product_keywords` JSON 数组。AI 自动页会优先带入这些关键词；如果用户清空关键词，后端会用已配置的 OpenAI 兼容模型从产品关键词和目标描述中选择本次关键词。没有 AI 配置、没有产品关键词且未手动输入关键词时，创建自动化批次会明确失败。
+自然语言查询的数据库能力只开放安全只读范围：SQL 必须以 `SELECT` 或 `WITH` 开头，不能包含 `insert/update/delete/drop/alter/create/replace/attach/detach/pragma/vacuum` 等关键字，也不能包含多条语句；可读表限制为账号、内容、线索、任务、AI job、私信批次、自动化批次和引流业务表，不暴露 `settings` 等配置表，避免模型读取 API Key、授权码或本机路径。常见统计问题优先走固定统计口径，不依赖模型生成 SQL。
 
-`AI自动拓客` 首版只跑抖音完整闭环：校验拓客授权、AI 配置、MediaCrawler 路径和底层 SQLite 后，按关键词创建 `competitor_discovery` 采集任务，复用“一键竞品分析”补主页并触发竞品 AI 判断，再复用“一键找客户”创建找客户任务，采集评论后触发客户意向 AI 分析。最后按关键词从私信工作台读取“未私信”的目标客户，创建自动私信批次并按用户设置的数量和间隔执行。设置页若开启“自动私信只填内容不发送”，仍会沿用私信工作台现有安全开关，只填话术并等待人工发送。
+设置页新增 `产品关键词` 标签输入，保存为 `settings.product_keywords` JSON 数组。自然语言执行类指令会优先让 AI 从用户目标和产品关键词中选择本次关键词；若用户指令本身已经包含明确关键词，则计划会直接带入。没有 AI 配置、没有产品关键词且计划也没有明确关键词时，创建自动化批次会明确失败。
 
-`AI自动引流` 首版只真实执行抖音：校验引流授权和 CloakBrowser/Playwright 环境后，根据目标、来源模式、来源值、动作组合和每轮视频数创建 `traffic_plan`，随后立即创建并执行 `traffic_run`。结果会关联到既有执行监控和操作记录页面。
+`AI自动拓客` 首版只跑抖音，支持四种确定性动作：`lead_operation=competitors` 只找竞品；`lead_operation=customers` 找竞品和客户但不私信；`lead_operation=message` 只从私信工作台读取当前未私信关键词队列并创建自动私信批次；`lead_operation=full` 跑完整闭环。完整闭环会校验拓客授权、AI 配置、MediaCrawler 路径和底层 SQLite，按关键词创建 `competitor_discovery` 采集任务，复用“一键竞品分析”补主页并触发竞品 AI 判断，再复用“一键找客户”创建找客户任务，采集评论后触发客户意向 AI 分析。需要私信时，后端按 AI 计划里的 `dm_count / interval_min_seconds / interval_max_seconds` 创建自动私信批次；设置页若开启“自动私信只填内容不发送”，仍会沿用私信工作台现有安全开关，只填话术并等待人工发送。
+
+`AI自动引流` 首版只真实执行抖音：自然语言计划会生成来源模式、来源值、动作组合和每轮视频数；用户确认后，后端校验引流授权和 CloakBrowser/Playwright 环境，创建 `traffic_plan`，随后立即创建并执行 `traffic_run`。结果会关联到既有执行监控和操作记录页面。
 
 版本控制只保留项目源码和文档；`data/`、`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MediaCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 

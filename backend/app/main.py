@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 
 from app import database
 from app.schemas import (
+    AgentCommandRequest,
     AgentRunCreate,
     AiBatchCreate,
     AiBulkDelete,
@@ -29,7 +30,7 @@ from app.schemas import (
     TrafficPlanCreate,
     TrafficSettingsUpdate,
 )
-from app.services import account_actions, agent_service, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
+from app.services import account_actions, agent_commands, agent_service, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
 from app import views
 
 
@@ -224,6 +225,22 @@ def restore_traffic_run(run_id: str) -> dict[str, object]:
 def create_agent_run(payload: AgentRunCreate) -> dict[str, object]:
     try:
         return agent_service.create_run(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/agent/commands/preview")
+def preview_agent_command(payload: AgentCommandRequest) -> dict[str, object]:
+    try:
+        return agent_commands.preview_command(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/agent/commands/execute")
+def execute_agent_command(payload: AgentCommandRequest) -> dict[str, object]:
+    try:
+        return agent_commands.execute_command(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

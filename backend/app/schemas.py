@@ -74,6 +74,8 @@ class AgentRunCreate(BaseModel):
     goal: str = ""
     platform: Platform = "dy"
     keywords: list[str] = Field(default_factory=list)
+    lead_operation: Literal["full", "competitors", "customers", "message"] = "full"
+    auto_dm: bool = True
     content_count: int = Field(default=20, ge=1, le=500)
     comment_count: int = Field(default=20, ge=0, le=1000)
     dm_count: int = Field(default=10, ge=1, le=200)
@@ -87,6 +89,12 @@ class AgentRunCreate(BaseModel):
     action_comment_text: bool = False
     action_comment_image: bool = False
     round_video_limit: int = Field(default=5, ge=1, le=200)
+
+
+class AgentCommandRequest(BaseModel):
+    command: str = Field(default="", min_length=1)
+    workspace: Literal["auto", "lead", "traffic"] = "auto"
+    plan: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClearDataRequest(BaseModel):
