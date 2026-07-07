@@ -1466,8 +1466,7 @@ def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, vi
             probability_skipped = True
         else:
             attempted = True
-            comment_text = _pick_text() if "comment_text" in plan["actions"] else ""
-            image_path = _pick_image() if "comment_image" in plan["actions"] else ""
+            comment_text, image_path = _pick_comment_materials(plan["actions"])
             ok, failed = _run_action_with_retry(run_id, page, video, "评论", "comment", lambda: _execute_comment(run_id, page, video, comment_text, image_path))
             failed_twice = failed_twice or failed
             if ok:
@@ -1478,6 +1477,16 @@ def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, vi
     if not done and probability_skipped and not attempted:
         return [], comment_text, image_path, False
     return done, comment_text, image_path, bool(failed_twice and not done)
+
+
+def _pick_comment_materials(actions: list[str]) -> tuple[str, str]:
+    has_text = "comment_text" in actions
+    has_image = "comment_image" in actions
+    if has_text and has_image:
+        # 同时启用时随机评论形态，避免每次都文案和图片一起发。
+        mode = random.choice(("text", "image", "both"))
+        return (_pick_text() if mode in {"text", "both"} else "", _pick_image() if mode in {"image", "both"} else "")
+    return (_pick_text() if has_text else "", _pick_image() if has_image else "")
 
 
 def _skip_action_by_probability(run_id: str, video: dict[str, Any], label: str, phase: str, probability: int) -> bool:

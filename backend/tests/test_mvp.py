@@ -1020,6 +1020,21 @@ def test_traffic_action_probability_all_skipped_is_noop(monkeypatch: pytest.Monk
     assert skipped is False
 
 
+def test_traffic_comment_materials_randomize_text_image_and_both(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    modes = iter(["text", "image", "both"])
+    monkeypatch.setattr(traffic_workbench.random, "choice", lambda _: next(modes))
+    monkeypatch.setattr(traffic_workbench, "_pick_text", lambda: "不错！")
+    monkeypatch.setattr(traffic_workbench, "_pick_image", lambda: "C:/tmp/comment.png")
+
+    actions = ["comment_text", "comment_image"]
+
+    assert traffic_workbench._pick_comment_materials(actions) == ("不错！", "")
+    assert traffic_workbench._pick_comment_materials(actions) == ("", "C:/tmp/comment.png")
+    assert traffic_workbench._pick_comment_materials(actions) == ("不错！", "C:/tmp/comment.png")
+
+
 def test_traffic_failure_can_keep_browser_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database
