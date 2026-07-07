@@ -8,6 +8,8 @@ import { iconBadge, sectionTitle } from '../components/ui/Workbench'
 
 const statusTabs = ['待私信', '已私信', '未回复', '已回复', '未成交', '已成交', '全部']
 const keywordPageSize = 8
+const autoBatchConfigKey = 'message-workbench-auto-batch-config'
+const autoBatchDefaults = { count: 10, min: 5, max: 20 }
 
 export default defineComponent({
   props: {
@@ -20,16 +22,20 @@ export default defineComponent({
   },
   emits: ['filter-change', 'select-customer', 'message-customer', 'auto-message-customer', 'start-auto-message-batch', 'cancel-auto-message-batch', 'update-follow-status', 'close-detail'],
   setup(props, { emit }) {
+    const savedBatchConfig = loadAutoBatchConfig()
     const queryDraft = ref(String((props.filters as Dict).query || ''))
     const keywordPages = ref<Record<string, number>>({})
-    const batchCount = ref(10)
-    const intervalMin = ref(30)
-    const intervalMax = ref(60)
+    const batchCount = ref(savedBatchConfig.count)
+    const intervalMin = ref(savedBatchConfig.min)
+    const intervalMax = ref(savedBatchConfig.max)
     watch(() => (props.filters as Dict).query, value => {
       queryDraft.value = String(value || '')
     })
     watch(() => props.keywords, () => {
       keywordPages.value = {}
+    })
+    watch([batchCount, intervalMin, intervalMax], () => {
+      saveAutoBatchConfig({ count: batchCount.value, min: intervalMin.value, max: intervalMax.value })
     })
 
     const rows = computed(() => (props.customers as Dict).rows || [])
@@ -75,9 +81,9 @@ export default defineComponent({
       ]),
       default: () => h('section', { class: 'pane message-workbench' }, [
         renderAutoBatchControls(props.filters as Dict, props.batches as Dict, batchCount.value, intervalMin.value, intervalMax.value, {
-          setCount: (value: number) => batchCount.value = value,
-          setMin: (value: number) => intervalMin.value = value,
-          setMax: (value: number) => intervalMax.value = value,
+          setCount: (value: number) => batchCount.value = boundedNumber(value, autoBatchDefaults.count, 1, 200),
+          setMin: (value: number) => intervalMin.value = boundedNumber(value, autoBatchDefaults.min, 0, 3600),
+          setMax: (value: number) => intervalMax.value = boundedNumber(value, autoBatchDefaults.max, 0, 3600),
           start: () => emit('start-auto-message-batch', {
             platform: (props.filters as Dict).platform || '',
             keyword: (props.filters as Dict).keyword || '',
@@ -351,12 +357,39 @@ function renderCustomerRow(row: Dict, emit: any) {
             value: row.follow_status || '未私信',
             onChange: (event: Event) => emit('update-follow-status', row, (event.target as HTMLSelectElement).value)
           }, followOptions(row.follow_status).map(status => h('option', { value: status }, status))),
-          h('button', { type: 'button', class: 'ghost-button compact', onClick: () => emit('select-customer', row.lead_id) }, '详情')
+          h('button', { type: 'button', class: 'text-icon-button compact', onClick: () => emit('select-customer', row.lead_id) }, '详情')
         ]),
         row.overdue ? h('span', { class: 'overdue-badge' }, `超时 ${row.overdue_days || 0} 天`) : null
       ])
     ])
   ])
+}
+
+function loadAutoBatchConfig() {
+  try {
+    const raw = window.localStorage.getItem(autoBatchConfigKey)
+    const data = raw ? JSON.parse(raw) : {}
+    return {
+      count: boundedNumber(data.count, autoBatchDefaults.count, 1, 200),
+      min: boundedNumber(data.min, autoBatchDefaults.min, 0, 3600),
+      max: boundedNumber(data.max, autoBatchDefaults.max, 0, 3600)
+    }
+  } catch {
+    return autoBatchDefaults
+  }
+}
+
+function saveAutoBatchConfig(config: { count: number, min: number, max: number }) {
+  try {
+    window.localStorage.setItem(autoBatchConfigKey, JSON.stringify(config))
+  } catch {
+    // ponytail: localStorage may be blocked; defaults still keep the page usable.
+  }
+}
+
+function boundedNumber(value: unknown, fallback: number, min: number, max: number) {
+  const number = Number(value)
+  return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.trunc(number))) : fallback
 }
 
 function renderDetailDrawer(detail: Dict, emit: any) {

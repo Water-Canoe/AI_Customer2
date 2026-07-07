@@ -3803,6 +3803,8 @@ input[type='checkbox'] {
   display: grid;
   align-content: start;
   gap: 8px;
+  width: 100%;
+  min-width: 220px;
 }
 
 .message-action-row {
@@ -3811,15 +3813,21 @@ input[type='checkbox'] {
   gap: 8px;
 }
 
+.message-action-row > * {
+  min-width: 0;
+}
+
 .message-action-row .text-icon-button,
-.message-action-row .compact {
+.message-action-row .compact,
+.message-action-row .follow-select {
   width: 100%;
   min-height: 34px;
   padding: 0 10px;
 }
 
-.message-action-row .follow-select {
-  min-height: 34px;
+.message-action-row .text-icon-button,
+.message-action-row .compact {
+  justify-content: center;
 }
 
 .message-empty {
