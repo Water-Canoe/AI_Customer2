@@ -5,6 +5,7 @@ import importlib.util
 import json
 import random
 import sys
+import threading
 from datetime import datetime
 from math import ceil
 from pathlib import Path
@@ -17,7 +18,7 @@ from app import database
 TARGET_FOLLOW_STATUSES = ("未私信", "已私信", "未回复", "已回复", "未成交", "已成交")
 STATUS_ALIASES = {"待私信": "未私信", "全部": ""}
 UNLABELED_KEYWORD = "未标记关键词"
-_AUTO_DM_LOCK = asyncio.Lock()
+_AUTO_DM_LOCKS: dict[int, asyncio.Lock] = {}
 ACTIVE_BATCH_STATUSES = {"pending", "running"}
 
 
@@ -135,8 +136,18 @@ def create_auto_message_batch(
             )
 
     if run_now:
-        asyncio.get_running_loop().create_task(run_auto_message_batch(batch_id))
+        _start_auto_message_batch(batch_id)
     return get_auto_message_batch(batch_id)
+
+
+def _start_auto_message_batch(batch_id: str) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Agent 编排运行在普通后台线程里，这里补一个事件循环来复用同一批次执行器。
+        threading.Thread(target=lambda: asyncio.run(run_auto_message_batch(batch_id)), daemon=True).start()
+        return
+    loop.create_task(run_auto_message_batch(batch_id))
 
 
 def list_auto_message_batches(batch_id: str = "") -> dict[str, Any]:
@@ -237,7 +248,7 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
     effective_timeout = _bounded_int(timeout_seconds, configured_timeout, 0, 3600) if timeout_seconds else configured_timeout
 
     sender = _load_douyin_dm_sender()
-    async with _AUTO_DM_LOCK:
+    async with _auto_dm_lock():
         result = await sender(
             customer["profile_url"],
             customer["script"],
@@ -260,7 +271,7 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
 
 
 async def run_auto_message_batch(batch_id: str) -> None:
-    async with _AUTO_DM_LOCK:
+    async with _auto_dm_lock():
         with database.connect() as conn:
             batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
             if not batch or batch["status"] not in ACTIVE_BATCH_STATUSES:
@@ -322,6 +333,15 @@ async def run_auto_message_batch(batch_id: str) -> None:
         finally:
             if context is not None:
                 await context.close()
+
+
+def _auto_dm_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    key = id(loop)
+    if key not in _AUTO_DM_LOCKS:
+        # Agent 后台线程会创建独立事件循环，锁按 loop 隔离避免跨 loop 复用失败。
+        _AUTO_DM_LOCKS[key] = asyncio.Lock()
+    return _AUTO_DM_LOCKS[key]
 
 
 async def _run_batch_item(context: Any, item: dict[str, Any], batch: dict[str, Any], module: Any) -> None:

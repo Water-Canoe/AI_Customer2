@@ -76,6 +76,11 @@ function buildOwnAccountsPayload(value: Dict) {
   return result
 }
 
+function normalizeProductKeywords(value: any) {
+  const tags = Array.isArray(value) ? value : splitTagText(String(value || ''))
+  return Array.from(new Set(tags.map((item: unknown) => String(item).trim()).filter(Boolean)))
+}
+
 export default defineComponent({
   props: {
     settings: { type: Object, required: true },
@@ -164,6 +169,7 @@ export default defineComponent({
       Object.assign(local, JSON.parse(JSON.stringify(props.settings || {})))
       local.icp_profile = normalizeIcpProfile(local.icp_profile)
       local.own_accounts = normalizeOwnAccounts(local.own_accounts)
+      local.product_keywords = normalizeProductKeywords(local.product_keywords)
       emit('settings-dirty-change', false)
       syncingFromProps.value = false
     }
@@ -211,8 +217,12 @@ export default defineComponent({
       if (!local.own_accounts || typeof local.own_accounts !== 'object') {
         local.own_accounts = normalizeOwnAccounts(local.own_accounts)
       }
+      if (!Array.isArray(local.product_keywords)) {
+        local.product_keywords = normalizeProductKeywords(local.product_keywords)
+      }
       const icpProfile = local.icp_profile as Dict
       const ownAccounts = local.own_accounts as Dict
+      const productKeywords = local.product_keywords as string[]
       return [
       h(SplitPane, { storageKey: 'settings', side: 'right', defaultSideWidth: 360 }, {
         default: () => [
@@ -247,6 +257,7 @@ export default defineComponent({
             inputField(local, 'douyin_detail_sleep_seconds', '抖音详情等待秒数', 'number', '建议 0.5-2，越小越快但越容易限流', markSettingsDirty),
             inputField(local, 'max_concurrency', '默认并发', 'number', '', markSettingsDirty)
           ]),
+          ...renderProductKeywords(productKeywords, markSettingsDirty, value => { local.product_keywords = value }),
           h('div', { class: 'toggles' }, [
             toggleField(local, 'headless', '默认无头模式', markSettingsDirty),
             toggleField(local, 'auto_analyze_competitors', '自动分析竞品账号', markSettingsDirty),
@@ -262,7 +273,7 @@ export default defineComponent({
           h('div', { class: 'action-row' }, [
             h('button', {
               class: 'primary-action',
-              onClick: () => submitSettingsAfterDraft(() => ({ ...local, icp_profile: buildIcpPayload(icpProfile), own_accounts: buildOwnAccountsPayload(ownAccounts) }))
+              onClick: () => submitSettingsAfterDraft(() => ({ ...local, product_keywords: normalizeProductKeywords(local.product_keywords), icp_profile: buildIcpPayload(icpProfile), own_accounts: buildOwnAccountsPayload(ownAccounts) }))
             }, [h(Check, { class: 'inline-icon' }), '保存设置']),
             h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备'])
           ])
@@ -330,6 +341,25 @@ function renderIcpField(profile: Dict, field: Dict, markDirty: () => void) {
     h('span', field.label),
     control
   ])
+}
+
+function renderProductKeywords(tags: string[], markDirty: () => void, update: (value: string[]) => void) {
+  return [
+    sectionTitle({ title: '产品关键词', subtitle: 'AI 自动拓客和自动引流会优先从这里挑关键词', icon: Key, tone: 'green', compact: true }),
+    h('label', { class: 'own-account-field product-keyword-field' }, [
+      h('span', '产品、服务、行业关键词'),
+      h(TagInput, {
+        modelValue: tags,
+        placeholder: '输入关键词后按回车，例如 AI客服、智能获客、抖音私信',
+        onFocus: markDirty,
+        'onUpdate:modelValue': (value: string[]) => {
+          update(normalizeProductKeywords(value))
+          markDirty()
+        }
+      }),
+      h('small', '建议填写 3-10 个，AI 自动页会按目标描述选择本次执行关键词。')
+    ])
+  ]
 }
 
 function inputField(local: Dict, key: string, label: string, type = 'text', placeholder = '', markDirty?: () => void) {

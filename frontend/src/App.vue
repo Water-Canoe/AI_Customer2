@@ -11,6 +11,7 @@
       <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench']" class="nav" @select="goToView">
         <el-sub-menu index="lead-workbench">
           <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
+          <el-menu-item index="auto-leads"><el-icon><MagicStick /></el-icon><span>AI自动拓客</span></el-menu-item>
           <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
           <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
           <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
@@ -21,6 +22,7 @@
         </el-sub-menu>
         <el-sub-menu index="traffic-workbench">
           <template #title><el-icon><Promotion /></el-icon><span>引流工作台</span></template>
+          <el-menu-item index="traffic-auto"><el-icon><MagicStick /></el-icon><span>AI自动引流</span></el-menu-item>
           <el-menu-item index="traffic-plans"><el-icon><Promotion /></el-icon><span>计划工作台</span></el-menu-item>
           <el-menu-item index="traffic-monitor"><el-icon><Tickets /></el-icon><span>执行监控</span></el-menu-item>
           <el-menu-item index="traffic-records"><el-icon><Grid /></el-icon><span>操作记录</span></el-menu-item>
@@ -138,7 +140,11 @@ const topbarEnvLabel = computed(() => {
   if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
   return topbarEnvOk.value ? '环境就绪' : '需要检查环境'
 })
-const topbarPrimaryAction = computed(() => isTrafficView.value ? '新建计划' : '新建任务')
+const topbarPrimaryAction = computed(() => {
+  if (activeView.value === 'auto-leads') return '新建自动拓客'
+  if (activeView.value === 'traffic-auto') return '新建自动引流'
+  return isTrafficView.value ? '新建计划' : '新建任务'
+})
 const hasActiveAsyncWork = computed(() => {
   return tasks.value.some(task => isActiveStatus(task.status))
     || aiJobs.value.some(job => isActiveStatus(job.status))
@@ -206,6 +212,7 @@ const routeProps = computed(() => {
       keywordFilter: tableKeyword.value,
     }
   }
+  if (activeView.value === 'auto-leads' || activeView.value === 'traffic-auto') return {}
   if (activeView.value.startsWith('traffic-')) return { refreshSeq: trafficRefreshSeq.value }
   return {
     settings: settings.value,
@@ -285,6 +292,7 @@ const routeListeners = computed(() => {
       'find-customers': findCustomers,
     }
   }
+  if (activeView.value === 'auto-leads' || activeView.value === 'traffic-auto') return {}
   if (activeView.value.startsWith('traffic-')) return {}
   return {
     save: saveSettings,
@@ -312,6 +320,14 @@ async function refreshAll() {
 }
 
 function createFromTopbar() {
+  if (activeView.value === 'auto-leads') {
+    router.push('/auto-leads')
+    return
+  }
+  if (activeView.value === 'traffic-auto') {
+    router.push('/traffic-auto')
+    return
+  }
   router.push(isTrafficView.value ? '/traffic-plans' : '/tasks')
 }
 

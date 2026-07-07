@@ -4829,6 +4829,10 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["ai_model"] == "deepseek-chat"
     assert response.json()["own_accounts"] == {"dy": [], "xhs": [], "ks": []}
+    product_keywords = ["AI客服", "智能获客"]
+    response = client.put("/api/settings", json={"values": {"product_keywords": product_keywords}})
+    assert response.status_code == 200
+    assert response.json()["product_keywords"] == product_keywords
     own_accounts = {
         "dy": ["https://www.douyin.com/user/a", "https://www.douyin.com/user/b"],
         "xhs": ["xhs-account"],
@@ -4849,6 +4853,148 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     )
     assert created.status_code == 200
     assert created.json()["creator_id"] == "xhs-account"
+
+
+def test_agent_run_requires_clear_configuration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import agent_service
+
+    monkeypatch.setattr(agent_service, "_start_background_run", lambda _run_id: None)
+    client = TestClient(app)
+
+    missing_ai = client.post("/api/agent/runs", json={"run_type": "lead_auto", "goal": "寻找客户"})
+    assert missing_ai.status_code == 400
+    assert "AI" in missing_ai.json()["detail"]
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+
+    missing_keywords = client.post("/api/agent/runs", json={"run_type": "lead_auto", "goal": "寻找客户"})
+    assert missing_keywords.status_code == 400
+    assert "产品关键词" in missing_keywords.json()["detail"]
+
+
+def test_agent_lead_auto_events_and_relations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import agent_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+
+    monkeypatch.setattr(agent_service, "_start_background_run", lambda _run_id: None)
+
+    def fake_lead_auto(run_id: str) -> dict[str, object]:
+        # 单测只验证 agent 批次状态机和关联字段，采集/AI/私信链路在各自服务里单独覆盖。
+        agent_service._append_event(run_id, "info", "check", "检查通过", {})
+        agent_service._append_event(run_id, "info", "competitor_discovery", "找竞品", {})
+        agent_service._append_event(run_id, "info", "competitor_screening", "筛竞品", {})
+        agent_service._append_event(run_id, "info", "customer_discovery", "找客户", {})
+        agent_service._append_event(run_id, "info", "message", "自动私信", {})
+        agent_service._link_values(run_id, "related_task_ids", ["task-1", "task-2"])
+        agent_service._link_values(run_id, "related_ai_job_ids", ["ai-job-1"])
+        agent_service._link_values(run_id, "related_message_batch_ids", ["msg-batch-1"])
+        return {"keywords": ["AI客服"], "dm_success": 1, "dm_failed": 0, "dm_skipped": 0}
+
+    monkeypatch.setattr(agent_service, "_run_lead_auto", fake_lead_auto)
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/agent/runs",
+        json={"run_type": "lead_auto", "goal": "寻找客户", "keywords": ["AI客服"], "dm_count": 1},
+    )
+    assert created.status_code == 200
+    run_id = created.json()["id"]
+
+    agent_service.run_agent_run(run_id)
+    detail = client.get(f"/api/agent/runs/{run_id}").json()
+    assert detail["status"] == "succeeded"
+    assert detail["related_task_ids"] == ["task-1", "task-2"]
+    assert detail["related_ai_job_ids"] == ["ai-job-1"]
+    assert detail["related_message_batch_ids"] == ["msg-batch-1"]
+
+    phases = [event["phase"] for event in client.get(f"/api/agent/runs/{run_id}/events").json()]
+    assert phases == ["created", "check", "competitor_discovery", "competitor_screening", "customer_discovery", "message", "succeeded"]
+
+
+def test_agent_traffic_auto_creates_plan_and_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import agent_service, traffic_workbench
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+
+    monkeypatch.setattr(agent_service, "_start_background_run", lambda _run_id: None)
+    monkeypatch.setattr(traffic_workbench, "environment_check", lambda: {"ok": True, "summary": "ok"})
+
+    def fake_run_traffic(run_id: str) -> None:
+        with database.connect() as conn:
+            conn.execute(
+                """
+                UPDATE traffic_runs
+                SET status = 'completed', browsed_count = 3, action_success_count = 2,
+                    finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+                """,
+                (run_id,),
+            )
+
+    monkeypatch.setattr(traffic_workbench, "run_traffic_run", fake_run_traffic)
+
+    client = TestClient(app)
+    created = client.post(
+        "/api/agent/runs",
+        json={
+            "run_type": "traffic_auto",
+            "goal": "引流到私域",
+            "keywords": ["AI客服"],
+            "source_mode": "search_keyword",
+            "source_value": "AI客服",
+            "round_video_limit": 3,
+        },
+    )
+    assert created.status_code == 200
+    run_id = created.json()["id"]
+
+    agent_service.run_agent_run(run_id)
+    detail = client.get(f"/api/agent/runs/{run_id}").json()
+    assert detail["status"] == "succeeded"
+    assert detail["related_traffic_plan_id"]
+    assert detail["related_traffic_run_id"]
+    assert detail["result"]["traffic_run"]["browsed_count"] == 3
+    assert detail["result"]["traffic_run"]["action_success_count"] == 2
+
+
+def test_agent_cancel_stops_queued_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import agent_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+
+    monkeypatch.setattr(agent_service, "_start_background_run", lambda _run_id: None)
+    client = TestClient(app)
+    created = client.post("/api/agent/runs", json={"run_type": "lead_auto", "keywords": ["AI客服"]}).json()
+    cancelled = client.post(f"/api/agent/runs/{created['id']}/cancel")
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["stop_requested"] == 1
 
 
 def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
