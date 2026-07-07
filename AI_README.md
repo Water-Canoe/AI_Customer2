@@ -12,6 +12,22 @@
 
 版本控制只保留项目源码和文档；`data/`、`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MediaCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 
+## 抖音私信自动化测试工具
+
+`tools/douyin_dm_automation/` 是一个独立的单用户抖音私信自动化验证目录，不接入主拓客工作台的数据流。它复用 `backend/.venv` 中的 `playwright`、`cloakbrowser`、`fastapi` 和 `uvicorn`，通过 CloakBrowser 的 Playwright 兼容持久化浏览器打开抖音用户主页，等待人工登录，点击“私信/发私信”，向 Draft.js 聊天输入框写入话术，并可选择实际点击“发送”。前端页面由 `server.py` 提供，访问 `http://127.0.0.1:8025/` 即可填写用户主页 URL 和话术。
+
+运行命令：
+
+```powershell
+# 进入项目根目录，保证后续相对路径正确
+cd D:\Dev\Projects\Web_Project\AI_Customer
+
+# 启动抖音私信自动化测试页面
+backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:app --host 127.0.0.1 --port 8025
+```
+
+该工具只用于验证单个目标主页的自动化可行性，不提供批量私信、账号池、代理池或自动重试队列。运行态登录目录位于 `tools/douyin_dm_automation/runtime/`，属于本地运行产物。
+
 ## 前端结构
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts` 和 `TrafficWorkbenchPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。

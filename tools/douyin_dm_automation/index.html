@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>抖音私信自动化测试</title>
+    <style>
+      :root {
+        color: #172026;
+        background: #f5f7f8;
+        font-family: "Microsoft YaHei", Arial, sans-serif;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      main {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 32px 20px;
+      }
+
+      h1 {
+        margin: 0 0 20px;
+        font-size: 24px;
+        font-weight: 650;
+      }
+
+      form {
+        display: grid;
+        gap: 16px;
+        padding: 20px;
+        border: 1px solid #d9e1e5;
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      label {
+        display: grid;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      input,
+      textarea {
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid #c9d4da;
+        border-radius: 6px;
+        padding: 10px 12px;
+        font: inherit;
+      }
+
+      textarea {
+        min-height: 140px;
+        resize: vertical;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .row label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 500;
+      }
+
+      .row input {
+        width: auto;
+      }
+
+      button {
+        width: fit-content;
+        border: 0;
+        border-radius: 6px;
+        padding: 10px 18px;
+        color: #fff;
+        background: #0f8f7e;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: wait;
+        background: #8aa5a0;
+      }
+
+      pre {
+        white-space: pre-wrap;
+        margin: 16px 0 0;
+        padding: 14px;
+        border: 1px solid #d9e1e5;
+        border-radius: 8px;
+        background: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>抖音私信自动化测试</h1>
+      <form id="form">
+        <label>
+          用户主页 URL
+          <input
+            id="userUrl"
+            name="userUrl"
+            value="https://www.douyin.com/user/MS4wLjABAAAAY0Ci-RnZrri7dWXZI5BxIBoS-Q42xcYsAsRHMfjaSFtGxRPr0hiisLjww-_DRqJI"
+            required
+          />
+        </label>
+        <label>
+          私信话术
+          <textarea id="message" name="message" required>你好，我这边想测试一下抖音网页版私信自动化。</textarea>
+        </label>
+        <div class="row">
+          <label>
+            <input id="dryRun" type="checkbox" />
+            只输入话术，不点击发送
+          </label>
+        </div>
+        <button id="submit" type="submit">打开主页并处理私信</button>
+      </form>
+      <pre id="result">等待操作</pre>
+    </main>
+
+    <script>
+      const form = document.querySelector("#form");
+      const result = document.querySelector("#result");
+      const submit = document.querySelector("#submit");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        result.textContent = "浏览器处理中；如果弹出登录页，请在浏览器里完成登录。";
+        try {
+          const response = await fetch("/api/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_url: document.querySelector("#userUrl").value,
+              message: document.querySelector("#message").value,
+              dry_run: document.querySelector("#dryRun").checked,
+            }),
+          });
+          const data = await response.json();
+          result.textContent = JSON.stringify(data, null, 2);
+        } catch (error) {
+          result.textContent = String(error);
+        } finally {
+          submit.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
