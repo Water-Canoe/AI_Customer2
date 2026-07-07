@@ -30,7 +30,7 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 
 私信按钮点击逻辑先等待可见“私信/发私信”入口，再从同名按钮中选择最后一个可见按钮并使用 Playwright `force=True` 点击，避开抖音渲染的隐藏按钮副本和 actionability 等待；点击后 25 秒内没有出现聊天输入框就报错。修改该目录代码后必须重启 `uvicorn`，否则 `8025` 页面仍会调用旧模块。
 
-抖音当前发送按钮是输入区右侧的图标按钮，不包含“发送”文本；脚本会优先点击 `.messageMsgInputinputAction svg` 中最后一个可见图标，再退回 Enter。
+抖音当前发送按钮是输入区右侧的红色圆形上箭头，不包含“发送”文本；脚本会点击 `.messageMsgInputinputAction svg` 中最后一个可见图标的中心点，再校验输入框是否清空，最后才退回 Enter。
 
 ## 前端结构
 

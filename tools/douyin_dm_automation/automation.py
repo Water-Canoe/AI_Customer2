@@ -115,10 +115,9 @@ async def click_private_message_button(page: Any, seconds: int) -> None:
         for index in range(await locator.count() - 1, -1, -1):
             button = locator.nth(index)
             try:
-                if await button.is_visible(timeout=500):
-                    # ponytail: force avoids Douyin's duplicate hidden button and actionability stalls.
-                    await button.click(timeout=5000, force=True)
-                    return
+                # ponytail: force avoids Douyin's duplicate hidden button and actionability stalls.
+                await button.click(timeout=5000, force=True)
+                return
             except Exception:
                 continue
     try:
@@ -196,23 +195,58 @@ async def type_message(page: Any, message: str) -> None:
         raise RuntimeError("输入私信话术失败。")
 
 
+async def editor_contains_message(page: Any, message: str) -> bool:
+    return await page.evaluate(
+        """text => {
+            const editors = [
+                document.querySelector('.messageEditorinputArea'),
+                document.querySelector('.DraftEditor-root [contenteditable="true"]'),
+                document.querySelector('.DraftEditor-editor [contenteditable="true"]'),
+                document.querySelector('[data-contents="true"]'),
+                document.querySelector('[contenteditable="true"]'),
+                document.querySelector('textarea')
+            ].filter(Boolean);
+            return editors.some(el => (el.innerText || el.value || '').includes(text));
+        }""",
+        message,
+    )
+
+
 async def click_send(page: Any) -> None:
+    await page.wait_for_timeout(2500)
+    for selector in SEND_ICON_SELECTORS:
+        point = await page.evaluate(
+            """selector => {
+                const icons = Array.from(document.querySelectorAll(selector))
+                    .map(el => {
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0
+                            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+                            : null;
+                    })
+                    .filter(Boolean);
+                return icons.length ? icons[icons.length - 1] : null;
+            }""",
+            selector,
+        )
+        if point:
+            # ponytail: Douyin's send control is an icon-only SVG; real mouse click triggers it.
+            await page.mouse.click(point["x"], point["y"])
+            return
     button = await first_visible(page, SEND_SELECTORS, timeout_ms=2500)
     if button:
         await button.click(force=True)
         return
-    for selector in SEND_ICON_SELECTORS:
-        locator = page.locator(selector)
-        for index in range(await locator.count() - 1, -1, -1):
-            icon = locator.nth(index)
-            try:
-                if await icon.is_visible(timeout=500):
-                    # ponytail: Douyin's send control is an icon-only button.
-                    await icon.click(timeout=5000, force=True)
-                    return
-            except Exception:
-                continue
     await page.keyboard.press("Enter")
+
+
+async def wait_until_message_sent(page: Any, message: str) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if not await editor_contains_message(page, message):
+            return
+        await page.wait_for_timeout(500)
+    raise RuntimeError("已点击发送按钮，但话术仍在输入框中，可能未发送。")
 
 
 async def send_douyin_dm(
@@ -250,7 +284,7 @@ async def send_douyin_dm(
         await type_message(page, message)
         if not dry_run:
             await click_send(page)
-            await page.wait_for_timeout(1200)
+            await wait_until_message_sent(page, message)
         return {
             "ok": True,
             "sent": not dry_run,
