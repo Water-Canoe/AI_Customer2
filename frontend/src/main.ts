@@ -8,8 +8,7 @@ import {
   ElMain,
   ElMenu,
   ElMenuItem,
-  ElSubMenu,
-  ElTag
+  ElSubMenu
 } from 'element-plus'
 import 'element-plus/dist/index.css'
 import './styles.css'
@@ -19,7 +18,7 @@ import { router } from './router'
 
 const app = createApp(App)
 
-;[ElAside, ElButton, ElContainer, ElHeader, ElIcon, ElMain, ElMenu, ElMenuItem, ElSubMenu, ElTag].forEach((component) => {
+;[ElAside, ElButton, ElContainer, ElHeader, ElIcon, ElMain, ElMenu, ElMenuItem, ElSubMenu].forEach((component) => {
   app.component(component.name || '', component)
 })
 

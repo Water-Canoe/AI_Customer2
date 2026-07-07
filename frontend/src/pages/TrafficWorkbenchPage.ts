@@ -44,7 +44,10 @@ const sourceOptions = [
 
 export default defineComponent({
   name: 'TrafficWorkbenchPage',
-  setup() {
+  props: {
+    refreshSeq: { type: Number, default: 0 },
+  },
+  setup(props) {
     const route = useRoute()
     const plans = ref<Dict[]>([])
     const runs = ref<Dict[]>([])
@@ -83,6 +86,7 @@ export default defineComponent({
 
     onMounted(loadPage)
     watch(view, () => loadPage())
+    watch(() => props.refreshSeq, () => loadPage())
     watch(
       () => ({
         runId: String(selectedRun.value?.id || ''),

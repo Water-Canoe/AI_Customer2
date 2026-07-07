@@ -47,12 +47,10 @@
             <strong>{{ item.value }}</strong>
           </div>
         </div>
-        <div v-if="!isTrafficView" class="topbar-actions">
-          <el-tag :type="envReady ? 'success' : 'warning'" effect="light">
-            {{ envReady ? '环境就绪' : '需要检查环境' }}
-          </el-tag>
+        <div class="topbar-actions">
+          <span class="topbar-env-tag" :class="topbarEnvOk ? 'is-ok' : 'is-warn'">{{ topbarEnvLabel }}</span>
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
-          <el-button type="primary" :icon="Plus" @click="router.push('/tasks')">新建任务</el-button>
+          <el-button type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
         </div>
       </el-header>
 
@@ -115,6 +113,9 @@ const messageDetail = ref<Dict>({})
 const messageLoading = ref(false)
 const messageFilters = ref<Dict>({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 })
 const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
+const trafficRuns = ref<Dict[]>([])
+const trafficEnv = ref<Dict>({})
+const trafficRefreshSeq = ref(0)
 const tombstoneSummary = ref<Dict>({})
 const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
@@ -132,13 +133,29 @@ const topbarKicker = computed(() => isTrafficView.value ? '引流工作台' : '�
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.media_crawler_path?.ok && env.value?.media_crawler_db?.ok))
+const topbarEnvOk = computed(() => isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)
+const topbarEnvLabel = computed(() => {
+  if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
+  return topbarEnvOk.value ? '环境就绪' : '需要检查环境'
+})
+const topbarPrimaryAction = computed(() => isTrafficView.value ? '新建计划' : '新建任务')
 const hasActiveAsyncWork = computed(() => {
   return tasks.value.some(task => isActiveStatus(task.status))
     || aiJobs.value.some(job => isActiveStatus(job.status))
     || isActiveStatus(messageBatches.value?.active?.status)
+    || trafficRuns.value.some(run => isActiveStatus(run.status))
 })
 const dashboardInsights = computed(() => {
-  if (isTrafficView.value) return []
+  if (isTrafficView.value) {
+    const activeRunCount = trafficRuns.value.filter(run => isActiveStatus(run.status)).length
+    const successCount = trafficRuns.value.reduce((total, run) => total + Number(run.action_success_count || 0), 0)
+    const failedCount = trafficRuns.value.reduce((total, run) => total + Number(run.failed_count || 0) + Number(run.skipped_count || 0), 0)
+    return [
+      { label: '运行批次', value: compactCount(activeRunCount), tone: 'blue' },
+      { label: '成功动作', value: compactCount(successCount), tone: 'green' },
+      { label: '失败/跳过', value: compactCount(failedCount), tone: 'red' },
+    ]
+  }
   const summary = aiWorkbench.value?.summary || {}
   const pendingAi = Number(summary.competitor_pending || 0) + Number(summary.lead_pending || 0)
   const failedAi = Number(summary.failed || 0)
@@ -189,7 +206,7 @@ const routeProps = computed(() => {
       keywordFilter: tableKeyword.value,
     }
   }
-  if (activeView.value.startsWith('traffic-')) return {}
+  if (activeView.value.startsWith('traffic-')) return { refreshSeq: trafficRefreshSeq.value }
   return {
     settings: settings.value,
     settingsSaveRevision: settingsSaveRevision.value,
@@ -283,9 +300,19 @@ function goToView(view: string) {
 }
 
 async function refreshAll() {
+  if (isTrafficView.value) {
+    await loadTrafficShell()
+    trafficRefreshSeq.value += 1
+    lastAutoSyncAt.value = Date.now()
+    return
+  }
   // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
   await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadMessageWorkbench(true), loadTombstoneSummary(), loadTombstones(), loadTable(activeLibrary.value)])
   lastAutoSyncAt.value = Date.now()
+}
+
+function createFromTopbar() {
+  router.push(isTrafficView.value ? '/traffic-plans' : '/tasks')
 }
 
 async function loadTasks() {
@@ -377,6 +404,16 @@ async function loadMessageWorkbench(silent = false) {
   }
 }
 
+async function loadTrafficShell() {
+  // 引流页顶部栏只取轻量运行态，列表详情仍由当前子页面自己加载。
+  const [runsResult, envResult] = await Promise.allSettled([
+    api.get('/traffic/runs'),
+    api.get('/traffic/environment-check'),
+  ])
+  if (runsResult.status === 'fulfilled') trafficRuns.value = runsResult.value.data
+  if (envResult.status === 'fulfilled') trafficEnv.value = envResult.value.data
+}
+
 async function loadTable(library: string, silent = false) {
   if (!silent) tableLoading.value = true
   try {
@@ -446,6 +483,7 @@ async function syncCurrentView(reason: 'auto' | 'route' | 'visible') {
     // 任务和 AI job 是全局运行态来源，当前页面之外的异步变化也要持续感知。
     loaders.set('tasks', loadTasks)
     loaders.set('ai', loadAiJobs)
+    if (isTrafficView.value) loaders.set('traffic-shell', loadTrafficShell)
 
     if (activeView.value === 'logs') loaders.set('selected-task', refreshSelectedTask)
     if (activeView.value === 'overview') loaders.set('overview', loadOverview)
