@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import base64
 from typing import Any
 
 from app import database, views
@@ -124,6 +125,8 @@ SYSTEM_ACTIONS = {
     "traffic_records_clear": True,
     "traffic_settings_read": False,
     "traffic_settings_update": True,
+    "traffic_material_image_save": True,
+    "traffic_material_image_info": False,
     "traffic_environment_check": False,
     "traffic_runs_list": False,
     "traffic_records_list": False,
@@ -728,6 +731,21 @@ def _traffic_settings_update(params: dict[str, Any]) -> dict[str, Any]:
     return traffic_workbench.update_settings(TrafficSettingsUpdate(**params))
 
 
+def _traffic_material_image_save(params: dict[str, Any]) -> dict[str, Any]:
+    raw = _required_str(params, "content_base64")
+    try:
+        content = base64.b64decode(raw, validate=True)
+    except Exception as exc:
+        raise ValueError("content_base64不是有效的Base64内容") from exc
+    return traffic_workbench.save_material_image(_required_str(params, "filename"), content)
+
+
+def _traffic_material_image_info(params: dict[str, Any]) -> dict[str, Any]:
+    name = _required_str(params, "name")
+    path = traffic_workbench.material_image_path(name)
+    return {"name": name, "path": str(path), "preview_url": f"/api/traffic/material-images/{name}"}
+
+
 def _tombstones_list(params: dict[str, Any]) -> dict[str, Any]:
     return ops_visibility.list_tombstones(
         entity_type=str(params.get("entity_type") or ""),
@@ -817,6 +835,8 @@ _SYSTEM_ACTION_HANDLERS = {
     "traffic_records_clear": lambda _params: traffic_workbench.clear_records(),
     "traffic_settings_read": lambda _params: traffic_workbench.get_settings(),
     "traffic_settings_update": _traffic_settings_update,
+    "traffic_material_image_save": _traffic_material_image_save,
+    "traffic_material_image_info": _traffic_material_image_info,
     "traffic_environment_check": lambda _params: traffic_workbench.environment_check(),
     "traffic_runs_list": lambda params: traffic_workbench.list_runs(bool(params.get("include_archived", False))),
     "traffic_records_list": _traffic_records_list,
@@ -925,6 +945,8 @@ def _system_action_catalog() -> dict[str, dict[str, Any]]:
         "traffic_records_list": "查看引流操作记录",
         "traffic_source_keywords": "查看可用于引流的关键词",
         "traffic_source_competitor_videos": "查看可用于引流的竞品视频",
+        "traffic_material_image_save": "用Base64内容保存引流图片素材",
+        "traffic_material_image_info": "查看引流图片素材预览信息",
         "task_create": "创建并启动采集任务",
         "task_cancel": "取消采集任务",
         "task_archive": "归档采集任务",

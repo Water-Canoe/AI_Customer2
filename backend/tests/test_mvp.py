@@ -5273,6 +5273,30 @@ def test_agent_system_action_preview_does_not_mutate_until_execute(tmp_path: Pat
         assert database.get_setting(conn, "ai_model") == "agent-test-model"
 
 
+def test_agent_system_action_saves_traffic_material_image(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/agent/commands/execute",
+        json={
+            "command": "保存引流图片素材",
+            "workspace": "traffic",
+            "plan": {
+                "action": "system_action",
+                "operation": "traffic_material_image_save",
+                "params": {"filename": "agent-test.png", "content_base64": "iVBORw0KGgo="},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()["result"]["data"]
+    assert data["path"].endswith(".png")
+    assert data["preview_url"].startswith("/api/traffic/material-images/")
+
+
 def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app
