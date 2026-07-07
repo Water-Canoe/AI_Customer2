@@ -5,7 +5,7 @@ import type { Dict } from '../shared/types'
 import { accountRoleLabel, competitorStatusClass, competitorStatusLabel, platformName, taskModeName } from '../shared/format'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
-const OVERVIEW_CHILD_PAGE_SIZE = 20
+const OVERVIEW_CHILD_PAGE_SIZE = 10
 
 type OverviewHandlers = {
   analyzeAccount: (node: Dict) => void
