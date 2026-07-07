@@ -235,6 +235,52 @@ CREATE TABLE IF NOT EXISTS lead_status_events (
     FOREIGN KEY(lead_account_id) REFERENCES lead_user_accounts(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS message_batches (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL DEFAULT 'dy',
+    keyword TEXT NOT NULL DEFAULT '',
+    requested_count INTEGER NOT NULL DEFAULT 0,
+    interval_min_seconds INTEGER NOT NULL DEFAULT 0,
+    interval_max_seconds INTEGER NOT NULL DEFAULT 0,
+    fill_only INTEGER NOT NULL DEFAULT 0,
+    timeout_seconds INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    total_count INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    current_lead_id INTEGER,
+    stop_requested INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS message_batch_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id TEXT NOT NULL,
+    lead_account_id INTEGER NOT NULL,
+    nickname TEXT NOT NULL DEFAULT '',
+    profile_url TEXT NOT NULL DEFAULT '',
+    script TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(batch_id) REFERENCES message_batches(id) ON DELETE CASCADE,
+    FOREIGN KEY(lead_account_id) REFERENCES lead_user_accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_batches_status_created
+ON message_batches(status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_message_batch_items_batch_status
+ON message_batch_items(batch_id, status, id);
+
 CREATE TABLE IF NOT EXISTS raw_source_refs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_type TEXT NOT NULL,

@@ -275,25 +275,13 @@ async def wait_until_message_sent(page: Any, message: str) -> None:
     raise RuntimeError("输入框已变化，但聊天记录中没有出现本人发送的消息气泡，未确认发送成功。")
 
 
-async def send_douyin_dm(
-    user_url: str,
-    message: str,
-    *,
-    profile_dir: Path = DEFAULT_PROFILE_DIR,
-    login_wait_seconds: int = DEFAULT_WAIT_SECONDS,
-    dry_run: bool = False,
-    manual_send_timeout_seconds: int = 0,
-) -> dict[str, Any]:
-    user_url = validate_douyin_user_url(user_url)
-    message = normalize_message(message)
+async def open_douyin_context(*, profile_dir: Path = DEFAULT_PROFILE_DIR) -> Any:
     profile_dir.mkdir(parents=True, exist_ok=True)
-
     try:
         from cloakbrowser import launch_persistent_context_async
     except ImportError as exc:
         raise RuntimeError("当前 Python 环境缺少 cloakbrowser，请先安装 backend/requirements.txt。") from exc
-
-    context = await launch_persistent_context_async(
+    return await launch_persistent_context_async(
         str(profile_dir),
         headless=False,
         locale="zh-CN",
@@ -304,23 +292,55 @@ async def send_douyin_dm(
         args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
     )
 
+
+async def send_douyin_dm_on_page(
+    page: Any,
+    user_url: str,
+    message: str,
+    *,
+    login_wait_seconds: int = DEFAULT_WAIT_SECONDS,
+    dry_run: bool = False,
+    manual_send_timeout_seconds: int = 0,
+) -> dict[str, Any]:
+    user_url = validate_douyin_user_url(user_url)
+    message = normalize_message(message)
+    await page.goto(user_url, wait_until="domcontentloaded", timeout=60000)
+    await open_dm_panel(page, login_wait_seconds)
+    await type_message(page, message)
+    if not dry_run:
+        await click_send(page)
+        await wait_until_message_sent(page, message)
+    elif manual_send_timeout_seconds > 0:
+        await page.wait_for_timeout(manual_send_timeout_seconds * 1000)
+    return {
+        "ok": True,
+        "sent": not dry_run,
+        "url": user_url,
+        "message": message,
+        "note": "已发送" if not dry_run else f"已输入话术，未点击发送；窗口等待 {manual_send_timeout_seconds} 秒后关闭",
+    }
+
+
+async def send_douyin_dm(
+    user_url: str,
+    message: str,
+    *,
+    profile_dir: Path = DEFAULT_PROFILE_DIR,
+    login_wait_seconds: int = DEFAULT_WAIT_SECONDS,
+    dry_run: bool = False,
+    manual_send_timeout_seconds: int = 0,
+) -> dict[str, Any]:
+    context = await open_douyin_context(profile_dir=profile_dir)
     page = context.pages[0] if context.pages else await context.new_page()
     try:
-        await page.goto(user_url, wait_until="domcontentloaded", timeout=60000)
-        await open_dm_panel(page, login_wait_seconds)
-        await type_message(page, message)
-        if not dry_run:
-            await click_send(page)
-            await wait_until_message_sent(page, message)
-        elif manual_send_timeout_seconds > 0:
-            await page.wait_for_timeout(manual_send_timeout_seconds * 1000)
-        return {
-            "ok": True,
-            "sent": not dry_run,
-            "url": user_url,
-            "message": message,
-            "note": "已发送" if not dry_run else f"已输入话术，未点击发送；窗口等待 {manual_send_timeout_seconds} 秒后关闭",
-        }
+        return await send_douyin_dm_on_page(
+            page,
+            user_url,
+            message,
+            login_wait_seconds=login_wait_seconds,
+            dry_run=dry_run,
+            manual_send_timeout_seconds=manual_send_timeout_seconds,
+        )
     finally:
         await context.close()
 

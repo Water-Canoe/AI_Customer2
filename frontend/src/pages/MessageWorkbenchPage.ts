@@ -15,12 +15,16 @@ export default defineComponent({
     customers: { type: Object, default: () => ({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 }) },
     detail: { type: Object, default: () => ({}) },
     filters: { type: Object, default: () => ({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 }) },
+    batches: { type: Object, default: () => ({ batches: [], active: null, items: [] }) },
     loading: { type: Boolean, default: false },
   },
-  emits: ['filter-change', 'select-customer', 'message-customer', 'auto-message-customer', 'update-follow-status', 'close-detail'],
+  emits: ['filter-change', 'select-customer', 'message-customer', 'auto-message-customer', 'start-auto-message-batch', 'cancel-auto-message-batch', 'update-follow-status', 'close-detail'],
   setup(props, { emit }) {
     const queryDraft = ref(String((props.filters as Dict).query || ''))
     const keywordPages = ref<Record<string, number>>({})
+    const batchCount = ref(10)
+    const intervalMin = ref(30)
+    const intervalMax = ref(60)
     watch(() => (props.filters as Dict).query, value => {
       queryDraft.value = String(value || '')
     })
@@ -70,6 +74,19 @@ export default defineComponent({
         ])
       ]),
       default: () => h('section', { class: 'pane message-workbench' }, [
+        renderAutoBatchControls(props.filters as Dict, props.batches as Dict, batchCount.value, intervalMin.value, intervalMax.value, {
+          setCount: (value: number) => batchCount.value = value,
+          setMin: (value: number) => intervalMin.value = value,
+          setMax: (value: number) => intervalMax.value = value,
+          start: () => emit('start-auto-message-batch', {
+            platform: (props.filters as Dict).platform || '',
+            keyword: (props.filters as Dict).keyword || '',
+            count: batchCount.value,
+            interval_min_seconds: intervalMin.value,
+            interval_max_seconds: intervalMax.value
+          }),
+          cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch)
+        }),
         h('div', { class: 'message-status-tabs' }, [
           ...statusTabs.map(status => h('button', {
           type: 'button',
@@ -105,6 +122,7 @@ export default defineComponent({
             }, '下一页')
           ])
         ]),
+        renderBatchLog(props.batches as Dict),
         renderDetailDrawer(props.detail as Dict, emit)
       ])
     })
@@ -171,6 +189,85 @@ function renderKeywordGroup(
 
 function platformSort(platform: string) {
   return ({ dy: 1, xhs: 2, ks: 3 } as Record<string, number>)[platform] || 9
+}
+
+function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, minSeconds: number, maxSeconds: number, actions: Dict) {
+  const keyword = String(filters.keyword || '')
+  const platform = String(filters.platform || '')
+  const active = batches.active
+  const disabled = Boolean(active) || platform !== 'dy' || !keyword
+  return h('section', { class: 'auto-message-batch-panel' }, [
+    h('div', { class: 'auto-message-batch-title' }, [
+      h('strong', 'AI一键私信'),
+      h('span', keyword ? `${platformName(platform)} / ${keyword}` : '先在左侧选择一个抖音关键词')
+    ]),
+    h('div', { class: 'auto-message-batch-form' }, [
+      h('label', ['私信数量', h('input', {
+        type: 'number',
+        min: '1',
+        max: '200',
+        value: count,
+        onInput: (event: Event) => actions.setCount(Number((event.target as HTMLInputElement).value || 1))
+      })]),
+      h('label', ['间隔最小秒', h('input', {
+        type: 'number',
+        min: '0',
+        max: '3600',
+        value: minSeconds,
+        onInput: (event: Event) => actions.setMin(Number((event.target as HTMLInputElement).value || 0))
+      })]),
+      h('label', ['间隔最大秒', h('input', {
+        type: 'number',
+        min: '0',
+        max: '3600',
+        value: maxSeconds,
+        onInput: (event: Event) => actions.setMax(Number((event.target as HTMLInputElement).value || 0))
+      })]),
+      h('button', {
+        type: 'button',
+        class: 'primary-action compact-action',
+        disabled,
+        title: active ? '已有自动私信批次正在执行' : platform !== 'dy' ? 'AI一键私信当前只支持抖音' : !keyword ? '请先选择具体关键词' : '启动批量自动私信',
+        onClick: actions.start
+      }, [h(Promotion), h('span', active ? '运行中' : 'AI一键私信')]),
+      active ? h('button', { type: 'button', class: 'secondary-action compact-action', onClick: () => actions.cancel(active) }, '取消批次') : null
+    ])
+  ])
+}
+
+function renderBatchLog(batches: Dict) {
+  const batchList = batches.batches || []
+  const current = batches.active || batchList[0]
+  const items = batches.items || []
+  return h('section', { class: 'message-batch-log' }, [
+    h('div', { class: 'batch-log-head' }, [
+      h('strong', '自动私信批次记录'),
+      current ? h('span', `批次 ${current.id} · ${batchStatusLabel(current.status)}`) : h('span', '暂无批次')
+    ]),
+    current ? h('div', { class: 'batch-log-summary' }, [
+      h('span', `关键词 ${current.keyword || '-'}`),
+      h('span', `目标 ${current.total_count || 0}`),
+      h('span', `成功 ${current.success_count || 0}`),
+      h('span', `失败 ${current.failed_count || 0}`),
+      h('span', `跳过 ${current.skipped_count || 0}`)
+    ]) : null,
+    items.length ? h('div', { class: 'batch-item-list' }, items.map((item: Dict) => h('article', [
+      h('strong', item.nickname || `客户 ${item.lead_account_id}`),
+      h('span', { class: `batch-status is-${item.status || 'pending'}` }, batchStatusLabel(item.status)),
+      h('small', item.error || item.finished_at || item.started_at || item.created_at || '')
+    ]))) : h('div', { class: 'message-empty compact-empty' }, '暂无自动私信日志')
+  ])
+}
+
+function batchStatusLabel(status: string) {
+  return ({
+    pending: '排队中',
+    running: '执行中',
+    succeeded: '成功',
+    failed: '失败',
+    skipped: '跳过',
+    cancelled: '已取消'
+  } as Record<string, string>)[String(status || '')] || String(status || '-')
 }
 
 function renderCustomerTable(rows: Dict[], loading: boolean, emit: any) {

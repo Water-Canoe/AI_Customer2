@@ -114,6 +114,7 @@ const messageCustomers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20,
 const messageDetail = ref<Dict>({})
 const messageLoading = ref(false)
 const messageFilters = ref<Dict>({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 })
+const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
 const tombstoneSummary = ref<Dict>({})
 const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
@@ -132,7 +133,9 @@ const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.media_crawler_path?.ok && env.value?.media_crawler_db?.ok))
 const hasActiveAsyncWork = computed(() => {
-  return tasks.value.some(task => isActiveStatus(task.status)) || aiJobs.value.some(job => isActiveStatus(job.status))
+  return tasks.value.some(task => isActiveStatus(task.status))
+    || aiJobs.value.some(job => isActiveStatus(job.status))
+    || isActiveStatus(messageBatches.value?.active?.status)
 })
 const dashboardInsights = computed(() => {
   if (isTrafficView.value) return []
@@ -166,6 +169,7 @@ const routeProps = computed(() => {
       detail: messageDetail.value,
       filters: messageFilters.value,
       loading: messageLoading.value,
+      batches: messageBatches.value,
     }
   }
   if (activeView.value === 'logs') {
@@ -238,6 +242,8 @@ const routeListeners = computed(() => {
       'select-customer': selectMessageWorkbenchCustomer,
       'message-customer': messageWorkbenchCustomer,
       'auto-message-customer': autoMessageWorkbenchCustomer,
+      'start-auto-message-batch': startMessageAutoBatch,
+      'cancel-auto-message-batch': cancelMessageAutoBatch,
       'update-follow-status': updateMessageWorkbenchFollowStatus,
       'close-detail': closeMessageWorkbenchDetail,
     }
@@ -348,12 +354,14 @@ async function loadTombstones(filters: Dict = {}) {
 async function loadMessageWorkbench(silent = false) {
   if (!silent) messageLoading.value = true
   try {
-    const [keywords, customers] = await Promise.all([
+    const [keywords, customers, batches] = await Promise.all([
       api.get('/message-workbench/keywords'),
-      api.get('/message-workbench/customers', { params: messageFilters.value })
+      api.get('/message-workbench/customers', { params: messageFilters.value }),
+      api.get('/message-workbench/auto-message-batches')
     ])
     messageKeywords.value = keywords.data
     messageCustomers.value = customers.data
+    messageBatches.value = batches.data
     const detailLeadId = messageDetail.value?.customer?.lead_id
     if (detailLeadId) {
       try {
@@ -938,6 +946,31 @@ async function autoMessageWorkbenchCustomer(row: Dict) {
     await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '自动私信失败')
+  }
+}
+
+async function startMessageAutoBatch(payload: Dict) {
+  try {
+    const { data } = await api.post('/message-workbench/auto-message-batches', payload)
+    ElMessage.success(`自动私信批次 ${data.id} 已启动`)
+    await loadMessageWorkbench(true)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '启动自动私信批次失败')
+  }
+}
+
+async function cancelMessageAutoBatch(batch: Dict) {
+  const batchId = batch?.id
+  if (!batchId) {
+    ElMessage.error('当前批次缺少ID，无法取消')
+    return
+  }
+  try {
+    await api.post(`/message-workbench/auto-message-batches/${batchId}/cancel`)
+    ElMessage.success('已请求取消自动私信批次')
+    await loadMessageWorkbench(true)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '取消自动私信批次失败')
   }
 }
 

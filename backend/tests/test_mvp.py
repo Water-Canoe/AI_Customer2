@@ -3818,6 +3818,76 @@ def test_message_workbench_auto_message_fill_only_keeps_status(tmp_path: Path, m
         assert row["follow_status"] == "未私信"
 
 
+def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import message_workbench
+
+    lead_ids: list[int] = []
+    with database.connect() as conn:
+        for index in range(2):
+            account_id = conn.execute(
+                """
+                INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
+                VALUES('dy', ?, ?, ?)
+                """,
+                (f"batch-lead-{index}", f"批量客户{index}", f"https://www.douyin.com/user/batch-{index}"),
+            ).lastrowid
+            lead_id = conn.execute(
+                """
+                INSERT INTO lead_user_accounts(account_id, screening_status, follow_status, script)
+                VALUES(?, '目标客户', '未私信', ?)
+                """,
+                (account_id, f"你好，这是第{index}条话术。"),
+            ).lastrowid
+            lead_ids.append(int(lead_id))
+            conn.execute(
+                "INSERT INTO lead_sources(lead_account_id, keyword, source_type) VALUES(?, '电动车', 'competitor_crawl')",
+                (lead_id,),
+            )
+
+    calls: list[dict[str, object]] = []
+
+    class FakePage:
+        async def close(self) -> None:
+            pass
+
+    class FakeContext:
+        pages: list[object] = []
+
+        async def new_page(self) -> FakePage:
+            return FakePage()
+
+        async def close(self) -> None:
+            calls.append({"event": "close_context"})
+
+    class FakeModule:
+        async def open_douyin_context(self, **kwargs: object) -> FakeContext:
+            calls.append({"event": "open_context", **kwargs})
+            return FakeContext()
+
+        async def send_douyin_dm_on_page(self, page: object, user_url: str, message: str, **kwargs: object) -> dict[str, object]:
+            calls.append({"event": "send", "user_url": user_url, "message": message, **kwargs})
+            return {"ok": True, "sent": True}
+
+    monkeypatch.setattr(message_workbench, "_load_douyin_dm_module", lambda: FakeModule())
+
+    batch = message_workbench.create_auto_message_batch("dy", "电动车", 2, 0, 0, run_now=False)
+    asyncio.run(message_workbench.run_auto_message_batch(str(batch["id"])))
+    result = message_workbench.get_auto_message_batch(str(batch["id"]))
+
+    assert [call["event"] for call in calls].count("open_context") == 1
+    assert [call["event"] for call in calls].count("send") == 2
+    assert result["success_count"] == 2
+    assert all(item["status"] == "succeeded" for item in result["items"])
+    with database.connect() as conn:
+        rows = conn.execute(
+            f"SELECT follow_status FROM lead_user_accounts WHERE id IN ({','.join(['?'] * len(lead_ids))})",
+            lead_ids,
+        ).fetchall()
+        assert {row["follow_status"] for row in rows} == {"已私信"}
+
+
 def test_ai_result_does_not_override_manual_follow_status(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database

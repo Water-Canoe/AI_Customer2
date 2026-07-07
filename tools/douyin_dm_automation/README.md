@@ -4,7 +4,7 @@
 
 ## 文件
 
-- `automation.py`：可直接运行的自动化脚本。
+- `automation.py`：可直接运行的自动化脚本，也提供 `open_douyin_context()` 和 `send_douyin_dm_on_page()` 给私信工作台批量复用同一个浏览器上下文。
 - `server.py`：FastAPI 服务，给 `index.html` 提供调用接口。
 - `index.html`：最小前端页面。
 - `../../data/douyin_cloak_profile/`：和拓客、引流工作台共用的 CloakBrowser 登录态目录，不提交。
@@ -31,4 +31,4 @@ backend\.venv\Scripts\python.exe tools\douyin_dm_automation\automation.py --user
 
 ## 限制
 
-当前版本只做单用户测试，不做批量发送、账号池、代理池或自动重试队列。抖音的发送按钮是输入区右侧红色圆形上箭头，脚本会点击最后一个可见发送 SVG 的中心点，并校验聊天记录里是否出现本人发送的消息气泡。抖音页面结构如果变化，优先调整 `PROFILE_DM_SELECTORS`、`CHAT_INPUT_SELECTORS`、`SEND_SELECTORS` 和 `SEND_ICON_SELECTORS`。
+当前目录只做单用户测试和底层浏览器动作，不内置账号池、代理池或自动重试队列；批量发送由主项目“私信工作台”创建批次并调用本脚本的复用接口。抖音的发送按钮是输入区右侧红色圆形上箭头，脚本会点击最后一个可见发送 SVG 的中心点，并校验聊天记录里是否出现本人发送的消息气泡。抖音页面结构如果变化，优先调整 `PROFILE_DM_SELECTORS`、`CHAT_INPUT_SELECTORS`、`SEND_SELECTORS` 和 `SEND_ICON_SELECTORS`。

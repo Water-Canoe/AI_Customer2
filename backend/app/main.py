@@ -21,6 +21,7 @@ from app.schemas import (
     CustomerAutoMessageRequest,
     CustomerFollowStatusUpdate,
     LicenseUpdate,
+    MessageAutoBatchCreate,
     SettingsUpdate,
     TableUpdate,
     TaskCreate,
@@ -646,6 +647,35 @@ async def message_workbench_customer_auto_message(
         )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/message-workbench/auto-message-batches")
+def message_workbench_auto_message_batches(batch_id: str = Query(default="")) -> dict[str, object]:
+    return message_workbench.list_auto_message_batches(batch_id=batch_id)
+
+
+@app.post("/api/message-workbench/auto-message-batches")
+async def create_message_workbench_auto_message_batch(payload: MessageAutoBatchCreate) -> dict[str, object]:
+    require_license()
+    try:
+        return message_workbench.create_auto_message_batch(
+            platform=payload.platform,
+            keyword=payload.keyword,
+            count=payload.count,
+            interval_min_seconds=payload.interval_min_seconds,
+            interval_max_seconds=payload.interval_max_seconds,
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/message-workbench/auto-message-batches/{batch_id}/cancel")
+def cancel_message_workbench_auto_message_batch(batch_id: str) -> dict[str, object]:
+    require_license()
+    try:
+        return message_workbench.cancel_auto_message_batch(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/platform-capabilities")

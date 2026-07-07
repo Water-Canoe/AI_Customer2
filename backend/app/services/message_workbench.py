@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import random
 import sys
 from datetime import datetime
 from math import ceil
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from app import database
 
@@ -16,6 +18,7 @@ TARGET_FOLLOW_STATUSES = ("未私信", "已私信", "未回复", "已回复", "�
 STATUS_ALIASES = {"待私信": "未私信", "全部": ""}
 UNLABELED_KEYWORD = "未标记关键词"
 _AUTO_DM_LOCK = asyncio.Lock()
+ACTIVE_BATCH_STATUSES = {"pending", "running"}
 
 
 def list_keywords() -> list[dict[str, Any]]:
@@ -77,6 +80,118 @@ def list_customers(
         "page_size": page_size,
         "total_pages": max(1, ceil(total / page_size)) if total else 1,
     }
+
+
+def create_auto_message_batch(
+    platform: str,
+    keyword: str,
+    count: int,
+    interval_min_seconds: int,
+    interval_max_seconds: int,
+    run_now: bool = True,
+) -> dict[str, Any]:
+    platform = str(platform or "").strip()
+    keyword = _normalize_keyword_filter(keyword)
+    if platform != "dy":
+        raise ValueError("AI一键私信当前只支持抖音")
+    if not keyword:
+        raise ValueError("请先选择一个具体关键词，不能对“全部”一键私信")
+    count = _bounded_int(count, 10, 1, 200)
+    interval_min_seconds = _bounded_int(interval_min_seconds, 30, 0, 3600)
+    interval_max_seconds = _bounded_int(interval_max_seconds, 60, 0, 3600)
+    if interval_max_seconds < interval_min_seconds:
+        raise ValueError("最大时间间隔不能小于最小时间间隔")
+
+    with database.connect() as conn:
+        active = conn.execute(
+            "SELECT id FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if active:
+            raise ValueError(f"已有自动私信批次 {active['id']} 正在执行，请先等待结束或取消")
+        fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
+        timeout_seconds = _bounded_int(database.get_setting(conn, "auto_dm_timeout_seconds", "300"), 300, 0, 3600)
+        customers = _batch_candidates(conn, platform, keyword, count)
+        if not customers:
+            raise ValueError("当前关键词下没有可自动私信的未私信目标客户")
+
+        batch_id = uuid4().hex[:8]
+        conn.execute(
+            """
+            INSERT INTO message_batches(
+                id, platform, keyword, requested_count, interval_min_seconds,
+                interval_max_seconds, fill_only, timeout_seconds, status, total_count
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (batch_id, platform, keyword, count, interval_min_seconds, interval_max_seconds, int(fill_only), timeout_seconds, len(customers)),
+        )
+        for customer in customers:
+            conn.execute(
+                """
+                INSERT INTO message_batch_items(batch_id, lead_account_id, nickname, profile_url, script)
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (batch_id, customer["lead_id"], customer["nickname"], customer["profile_url"], customer["script"]),
+            )
+
+    if run_now:
+        asyncio.get_running_loop().create_task(run_auto_message_batch(batch_id))
+    return get_auto_message_batch(batch_id)
+
+
+def list_auto_message_batches(batch_id: str = "") -> dict[str, Any]:
+    with database.connect() as conn:
+        batches = database.rows_to_dicts(
+            conn.execute(
+                """
+                SELECT *
+                FROM message_batches
+                ORDER BY created_at DESC
+                LIMIT 20
+                """
+            ).fetchall()
+        )
+        active = next((batch for batch in batches if batch["status"] in ACTIVE_BATCH_STATUSES), None)
+        selected_id = str(batch_id or (active or (batches[0] if batches else {})).get("id") or "")
+        items = _batch_items(conn, selected_id) if selected_id else []
+    return {"batches": batches, "active": active, "selected_batch_id": selected_id, "items": items}
+
+
+def get_auto_message_batch(batch_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        batch = database.row_to_dict(conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone())
+        if not batch:
+            raise ValueError("自动私信批次不存在")
+        batch["items"] = _batch_items(conn, batch_id)
+    return batch
+
+
+def cancel_auto_message_batch(batch_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
+        if not batch:
+            raise ValueError("自动私信批次不存在")
+        if batch["status"] == "pending":
+            conn.execute(
+                """
+                UPDATE message_batches
+                SET status = 'cancelled', stop_requested = 1, finished_at = datetime('now', 'localtime'),
+                    updated_at = datetime('now', 'localtime'), error = '用户取消'
+                WHERE id = ?
+                """,
+                (batch_id,),
+            )
+            conn.execute(
+                "UPDATE message_batch_items SET status = 'skipped', error = '用户取消', updated_at = datetime('now', 'localtime') WHERE batch_id = ? AND status = 'pending'",
+                (batch_id,),
+            )
+        elif batch["status"] == "running":
+            conn.execute(
+                "UPDATE message_batches SET stop_requested = 1, error = '用户请求取消', updated_at = datetime('now', 'localtime') WHERE id = ?",
+                (batch_id,),
+            )
+        _refresh_batch_counts(conn, batch_id)
+    return get_auto_message_batch(batch_id)
 
 
 def customer_detail(lead_id: int) -> dict[str, Any]:
@@ -144,6 +259,119 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
     return {"ok": True, "dm": result, "follow_update": follow_update}
 
 
+async def run_auto_message_batch(batch_id: str) -> None:
+    async with _AUTO_DM_LOCK:
+        with database.connect() as conn:
+            batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
+            if not batch or batch["status"] not in ACTIVE_BATCH_STATUSES:
+                return
+            conn.execute(
+                """
+                UPDATE message_batches
+                SET status = 'running', started_at = COALESCE(started_at, datetime('now', 'localtime')),
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+                """,
+                (batch_id,),
+            )
+
+        # 批量私信只打开一次 CloakBrowser 上下文，避免每个客户重复启动浏览器。
+        module = _load_douyin_dm_module()
+        context = None
+        try:
+            context = await module.open_douyin_context(profile_dir=database.get_douyin_cloak_profile_dir())
+            while True:
+                with database.connect() as conn:
+                    batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
+                    if not batch or int(batch["stop_requested"] or 0):
+                        _cancel_pending_items(conn, batch_id)
+                        _finish_batch(conn, batch_id, "cancelled", "用户取消")
+                        return
+                    item = conn.execute(
+                        """
+                        SELECT *
+                        FROM message_batch_items
+                        WHERE batch_id = ? AND status = 'pending'
+                        ORDER BY id ASC
+                        LIMIT 1
+                        """,
+                        (batch_id,),
+                    ).fetchone()
+                    if not item:
+                        _finish_batch(conn, batch_id, "succeeded", "")
+                        return
+                    conn.execute(
+                        """
+                        UPDATE message_batch_items
+                        SET status = 'running', started_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
+                        WHERE id = ?
+                        """,
+                        (item["id"],),
+                    )
+                    conn.execute(
+                        "UPDATE message_batches SET current_lead_id = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+                        (item["lead_account_id"], batch_id),
+                    )
+
+                await _run_batch_item(context, database.row_to_dict(item) or {}, database.row_to_dict(batch) or {}, module)
+                await _sleep_between_batch_items(batch_id, int(batch["interval_min_seconds"] or 0), int(batch["interval_max_seconds"] or 0))
+        except Exception as exc:
+            with database.connect() as conn:
+                _fail_pending_items(conn, batch_id, str(exc))
+                _finish_batch(conn, batch_id, "failed", str(exc))
+        finally:
+            if context is not None:
+                await context.close()
+
+
+async def _run_batch_item(context: Any, item: dict[str, Any], batch: dict[str, Any], module: Any) -> None:
+    page = await context.new_page()
+    try:
+        if not str(item.get("profile_url") or "").strip():
+            _mark_batch_item(item["id"], "skipped", "缺少客户主页链接")
+            return
+        if not str(item.get("script") or "").strip():
+            _mark_batch_item(item["id"], "skipped", "缺少AI话术")
+            return
+        fill_only = bool(batch.get("fill_only"))
+        await module.send_douyin_dm_on_page(
+            page,
+            item["profile_url"],
+            item["script"],
+            login_wait_seconds=300,
+            dry_run=fill_only,
+            manual_send_timeout_seconds=int(batch.get("timeout_seconds") or 0) if fill_only else 0,
+        )
+        if fill_only:
+            _mark_batch_item(item["id"], "skipped", "只填内容不发送，未自动标记已私信")
+            return
+
+        from app.services import account_actions
+
+        account_actions.update_customer_follow_status(
+            int(item["lead_account_id"]),
+            "已私信",
+            f"AI一键私信批次 {batch['id']} 自动发送",
+        )
+        _mark_batch_item(item["id"], "succeeded", "")
+    except Exception as exc:
+        _mark_batch_item(item["id"], "failed", str(exc))
+    finally:
+        await page.close()
+
+
+async def _sleep_between_batch_items(batch_id: str, minimum: int, maximum: int) -> None:
+    with database.connect() as conn:
+        pending = conn.execute(
+            "SELECT 1 FROM message_batch_items WHERE batch_id = ? AND status = 'pending' LIMIT 1",
+            (batch_id,),
+        ).fetchone()
+        batch = conn.execute("SELECT stop_requested FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
+    if not pending or (batch and int(batch["stop_requested"] or 0)):
+        return
+    await asyncio.sleep(random.randint(minimum, maximum) if maximum > minimum else minimum)
+
+
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     try:
         number = int(value)
@@ -153,13 +381,17 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 
 def _load_douyin_dm_sender() -> Any:
+    return _load_douyin_dm_module().send_douyin_dm
+
+
+def _load_douyin_dm_module() -> Any:
     path = _douyin_dm_automation_path()
     spec = importlib.util.spec_from_file_location("ai_customer_douyin_dm_automation", path)
     if spec is None or spec.loader is None:
         raise ValueError(f"抖音自动私信脚本无法加载：{path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.send_douyin_dm
+    return module
 
 
 def _douyin_dm_automation_path() -> Path:
@@ -174,6 +406,112 @@ def _douyin_dm_automation_path() -> Path:
         if path.exists():
             return path
     raise ValueError("找不到 tools/douyin_dm_automation/automation.py，无法自动私信")
+
+
+def _batch_candidates(conn, platform: str, keyword: str, count: int) -> list[dict[str, Any]]:
+    # 一键私信只处理当前关键词下仍处于“未私信”的目标客户。
+    customers = _aggregate_customers(_target_source_rows(conn), _reminder_days(conn))
+    rows = [
+        customer for customer in customers
+        if _matches_customer(customer, keyword, platform, "未私信", "")
+    ]
+    rows.sort(key=lambda item: (item["comment_at"] or item["latest_at"] or item["updated_at"] or ""), reverse=True)
+    return rows[:count]
+
+
+def _batch_items(conn, batch_id: str) -> list[dict[str, Any]]:
+    if not batch_id:
+        return []
+    return database.rows_to_dicts(
+        conn.execute(
+            """
+            SELECT *
+            FROM message_batch_items
+            WHERE batch_id = ?
+            ORDER BY id ASC
+            """,
+            (batch_id,),
+        ).fetchall()
+    )
+
+
+def _mark_batch_item(item_id: int, status: str, error: str) -> None:
+    with database.connect() as conn:
+        row = conn.execute("SELECT batch_id FROM message_batch_items WHERE id = ?", (item_id,)).fetchone()
+        if not row:
+            return
+        conn.execute(
+            """
+            UPDATE message_batch_items
+            SET status = ?, error = ?, finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+            """,
+            (status, error, item_id),
+        )
+        _refresh_batch_counts(conn, row["batch_id"])
+
+
+def _refresh_batch_counts(conn, batch_id: str) -> None:
+    counts = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS success_count,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+            SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped_count
+        FROM message_batch_items
+        WHERE batch_id = ?
+        """,
+        (batch_id,),
+    ).fetchone()
+    conn.execute(
+        """
+        UPDATE message_batches
+        SET success_count = ?, failed_count = ?, skipped_count = ?, updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+        """,
+        (counts["success_count"] or 0, counts["failed_count"] or 0, counts["skipped_count"] or 0, batch_id),
+    )
+
+
+def _cancel_pending_items(conn, batch_id: str) -> None:
+    conn.execute(
+        """
+        UPDATE message_batch_items
+        SET status = 'skipped', error = '用户取消', finished_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
+        WHERE batch_id = ? AND status = 'pending'
+        """,
+        (batch_id,),
+    )
+    _refresh_batch_counts(conn, batch_id)
+
+
+def _fail_pending_items(conn, batch_id: str, error: str) -> None:
+    # 浏览器启动等批次级失败会影响所有未开始客户，统一标为失败便于排查。
+    conn.execute(
+        """
+        UPDATE message_batch_items
+        SET status = 'failed', error = ?, finished_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
+        WHERE batch_id = ? AND status IN ('pending', 'running')
+        """,
+        (error, batch_id),
+    )
+    _refresh_batch_counts(conn, batch_id)
+
+
+def _finish_batch(conn, batch_id: str, status: str, error: str) -> None:
+    _refresh_batch_counts(conn, batch_id)
+    conn.execute(
+        """
+        UPDATE message_batches
+        SET status = ?, error = ?, current_lead_id = NULL,
+            finished_at = COALESCE(finished_at, datetime('now', 'localtime')),
+            updated_at = datetime('now', 'localtime')
+        WHERE id = ?
+        """,
+        (status, error, batch_id),
+    )
 
 
 def _target_source_rows(conn, lead_id: int | None = None) -> list[Any]:
