@@ -5236,6 +5236,43 @@ def test_agent_command_executes_system_task_create(tmp_path: Path, monkeypatch: 
     assert payload["result"]["data"]["keywords"] == "AI客服"
 
 
+def test_agent_system_action_handlers_cover_catalog(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.services import agent_commands
+
+    assert set(agent_commands.SYSTEM_ACTIONS) == set(agent_commands._SYSTEM_ACTION_HANDLERS)
+
+
+def test_agent_system_action_preview_does_not_mutate_until_execute(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+
+    client = TestClient(app)
+    plan = {
+        "action": "system_action",
+        "operation": "settings_update",
+        "params": {"values": {"ai_model": "agent-test-model"}},
+    }
+
+    preview = client.post(
+        "/api/agent/commands/preview",
+        json={"command": "把模型改成agent-test-model", "workspace": "lead", "plan": plan},
+    )
+    assert preview.status_code == 200
+    assert preview.json()["requires_confirmation"] is True
+    with database.connect() as conn:
+        assert database.get_setting(conn, "ai_model") != "agent-test-model"
+
+    executed = client.post(
+        "/api/agent/commands/execute",
+        json={"command": "把模型改成agent-test-model", "workspace": "lead", "plan": plan},
+    )
+    assert executed.status_code == 200
+    with database.connect() as conn:
+        assert database.get_setting(conn, "ai_model") == "agent-test-model"
+
+
 def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app

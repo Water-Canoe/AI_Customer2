@@ -5,16 +5,22 @@ import re
 import threading
 from typing import Any
 
-from app import database
+from app import database, views
 from app.schemas import (
     AgentCommandRequest,
     AgentRunCreate,
+    AiBulkDelete,
     AiBatchCreate,
     AiJobCreate,
     BulkActionPreview,
+    ClearDataRequest,
+    CustomerAutoMessageRequest,
     MessageAutoBatchCreate,
+    SettingsUpdate,
+    TableUpdate,
     TaskCreate,
     TrafficPlanCreate,
+    TrafficSettingsUpdate,
 )
 from app.services import (
     account_actions,
@@ -22,9 +28,12 @@ from app.services import (
     ai_service,
     bulk_actions,
     crawler_adapter,
+    deletion,
     diagnostics,
     license_service,
+    maintenance,
     message_workbench,
+    ops_visibility,
     traffic_workbench,
 )
 
@@ -57,14 +66,64 @@ READABLE_TABLES = {
     "traffic_dedup_ledger",
 }
 SYSTEM_ACTIONS = {
+    "health": False,
+    "license_read": False,
+    "license_update": True,
+    "license_check": True,
+    "traffic_license_read": False,
+    "traffic_license_update": True,
+    "traffic_license_check": True,
     "settings_read": False,
+    "settings_update": True,
+    "settings_env_check": False,
+    "settings_clear_data": True,
     "task_preview": False,
     "task_detail": False,
     "task_diagnostics": False,
+    "task_dedup_summary": False,
     "tasks_list": False,
+    "task_delete": True,
+    "table_list": False,
+    "table_update": True,
+    "table_delete": True,
+    "overview_tree": False,
+    "overview_node": False,
+    "overview_platform_delete": True,
+    "overview_keyword_delete": True,
+    "overview_keyword_analyze": True,
+    "overview_keyword_find_customers": True,
+    "overview_account_delete": True,
+    "overview_customer_delete": True,
+    "workbench_actions": False,
+    "tombstone_summary": False,
+    "tombstones_list": False,
     "message_keywords": False,
     "message_customers": False,
+    "message_customer_detail": False,
+    "message_customer_auto": True,
+    "message_batches": False,
     "ai_workbench": False,
+    "ai_jobs_list": False,
+    "ai_delete_non_competitors": True,
+    "ai_delete_non_customers": True,
+    "platform_capabilities": False,
+    "agent_runs_list": False,
+    "agent_run_detail": False,
+    "agent_run_events": False,
+    "agent_run_cancel": True,
+    "traffic_plans_list": False,
+    "traffic_plan_update": True,
+    "traffic_plan_delete": True,
+    "traffic_plan_archive": True,
+    "traffic_plan_restore": True,
+    "traffic_run_detail": False,
+    "traffic_run_logs": False,
+    "traffic_run_archive": True,
+    "traffic_run_restore": True,
+    "traffic_run_delete": True,
+    "traffic_records_clear": True,
+    "traffic_settings_read": False,
+    "traffic_settings_update": True,
     "traffic_environment_check": False,
     "traffic_runs_list": False,
     "traffic_records_list": False,
@@ -365,6 +424,33 @@ def _settings_redacted(_: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _settings_update(params: dict[str, Any]) -> dict[str, Any]:
+    return views.update_settings(SettingsUpdate(**params).values)
+
+
+def _settings_clear_data(params: dict[str, Any]) -> dict[str, Any]:
+    payload = ClearDataRequest(**params)
+    return maintenance.clear_all_data(payload.confirm)
+
+
+def _license_update(params: dict[str, Any]) -> dict[str, Any]:
+    return license_service.update_license_code(_required_str(params, "license_code"))
+
+
+def _license_check(params: dict[str, Any]) -> dict[str, Any]:
+    value = str(params.get("license_code") or "").strip() or None
+    return license_service.check_license(value)
+
+
+def _traffic_license_update(params: dict[str, Any]) -> dict[str, Any]:
+    return license_service.update_license_code_for("traffic", _required_str(params, "license_code"))
+
+
+def _traffic_license_check(params: dict[str, Any]) -> dict[str, Any]:
+    value = str(params.get("license_code") or "").strip() or None
+    return license_service.check_license_for("traffic", value)
+
+
 def _task_preview(params: dict[str, Any]) -> dict[str, Any]:
     return crawler_adapter.preview_task(TaskCreate(**params))
 
@@ -384,6 +470,10 @@ def _task_detail(params: dict[str, Any]) -> dict[str, Any]:
 
 def _task_diagnostics(params: dict[str, Any]) -> dict[str, Any]:
     return diagnostics.task_diagnostics(_required_str(params, "task_id"))
+
+
+def _task_dedup_summary(params: dict[str, Any]) -> dict[str, Any]:
+    return ops_visibility.task_dedup_summary(_required_str(params, "task_id"))
 
 
 def _task_create(params: dict[str, Any]) -> dict[str, Any]:
@@ -410,6 +500,61 @@ def _task_cancel(params: dict[str, Any]) -> dict[str, Any]:
 
 def _task_archive(params: dict[str, Any]) -> dict[str, Any]:
     return crawler_adapter.archive_task(_required_str(params, "task_id"))
+
+
+def _task_delete(params: dict[str, Any]) -> dict[str, Any]:
+    return deletion.delete_task(_required_str(params, "task_id"))
+
+
+def _table_list(params: dict[str, Any]) -> dict[str, Any]:
+    return views.list_library(
+        _required_str(params, "library"),
+        status=str(params.get("status") or ""),
+        keyword=str(params.get("keyword") or ""),
+    )
+
+
+def _table_update(params: dict[str, Any]) -> dict[str, Any]:
+    payload = TableUpdate(values=dict(params.get("values") or {}))
+    return views.update_library_row(_required_str(params, "library"), _required_int(params, "row_id"), payload.values)
+
+
+def _table_delete(params: dict[str, Any]) -> dict[str, Any]:
+    hard = params.get("hard")
+    hard_value = None if hard is None else bool(hard)
+    return deletion.delete_library_row(_required_str(params, "library"), _required_int(params, "row_id"), hard_value)
+
+
+def _overview_keyword_analyze(params: dict[str, Any]) -> dict[str, Any]:
+    license_service.ensure_authorized()
+    result = account_actions.create_keyword_account_analysis_tasks(
+        str(params.get("platform") or "dy"),
+        _required_str(params, "keyword"),
+    )
+    if params.get("run_now", True) and result.get("task_ids"):
+        account_ids = [int(item["account_id"]) for item in result.get("accounts", []) if item.get("account_id")]
+        _background(account_actions.run_keyword_account_analysis, account_ids, str(result["task_ids"][0]))
+    return result
+
+
+def _overview_keyword_find_customers(params: dict[str, Any]) -> dict[str, Any]:
+    license_service.ensure_authorized()
+    result = account_actions.create_keyword_find_customer_task(
+        str(params.get("platform") or "dy"),
+        _required_str(params, "keyword"),
+    )
+    if params.get("run_now", True) and result.get("task_ids"):
+        _background(crawler_adapter.run_tasks_serially, result["task_ids"])
+    return result
+
+
+def _overview_customer_delete(params: dict[str, Any]) -> dict[str, Any]:
+    source_account_id = params.get("source_account_id")
+    return deletion.delete_lead_customer(
+        _required_int(params, "lead_id"),
+        source_account_id=int(source_account_id) if source_account_id is not None else None,
+        source="agent_system_action",
+    )
 
 
 def _profile_enrichment_batch(params: dict[str, Any]) -> dict[str, Any]:
@@ -501,6 +646,24 @@ def _message_customers(params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _message_customer_detail(params: dict[str, Any]) -> dict[str, Any]:
+    return message_workbench.customer_detail(_required_int(params, "lead_id"))
+
+
+def _message_customer_auto(params: dict[str, Any]) -> dict[str, Any]:
+    import asyncio
+
+    license_service.ensure_authorized()
+    payload = CustomerAutoMessageRequest(**params)
+    return asyncio.run(
+        message_workbench.auto_message_customer(
+            _required_int(params, "lead_id"),
+            dry_run=payload.dry_run,
+            timeout_seconds=payload.timeout_seconds,
+        )
+    )
+
+
 def _message_batch_create(params: dict[str, Any]) -> dict[str, Any]:
     license_service.ensure_authorized()
     payload = MessageAutoBatchCreate(**params)
@@ -522,6 +685,11 @@ def _traffic_plan_create(params: dict[str, Any]) -> dict[str, Any]:
     return traffic_workbench.create_plan(TrafficPlanCreate(**params))
 
 
+def _traffic_plan_update(params: dict[str, Any]) -> dict[str, Any]:
+    values = dict(params.get("plan") or params.get("values") or {})
+    return traffic_workbench.update_plan(_required_str(params, "plan_id"), TrafficPlanCreate(**values))
+
+
 def _traffic_run_create(params: dict[str, Any]) -> dict[str, Any]:
     license_service.ensure_authorized_for("traffic")
     run = traffic_workbench.create_run(_required_str(params, "plan_id"))
@@ -532,6 +700,13 @@ def _traffic_run_create(params: dict[str, Any]) -> dict[str, Any]:
 
 def _traffic_run_stop(params: dict[str, Any]) -> dict[str, Any]:
     return traffic_workbench.stop_run(_required_str(params, "run_id"))
+
+
+def _traffic_run_detail(params: dict[str, Any]) -> dict[str, Any]:
+    run = traffic_workbench.get_run(_required_str(params, "run_id"))
+    if not run:
+        raise ValueError("引流批次不存在")
+    return run
 
 
 def _traffic_records_list(params: dict[str, Any]) -> dict[str, Any]:
@@ -547,6 +722,21 @@ def _traffic_records_list(params: dict[str, Any]) -> dict[str, Any]:
 
 def _traffic_source_competitor_videos(params: dict[str, Any]) -> list[dict[str, Any]]:
     return traffic_workbench.source_competitor_videos(_bounded_int(params.get("limit"), 100, 1, 500))
+
+
+def _traffic_settings_update(params: dict[str, Any]) -> dict[str, Any]:
+    return traffic_workbench.update_settings(TrafficSettingsUpdate(**params))
+
+
+def _tombstones_list(params: dict[str, Any]) -> dict[str, Any]:
+    return ops_visibility.list_tombstones(
+        entity_type=str(params.get("entity_type") or ""),
+        platform=str(params.get("platform") or ""),
+        source=str(params.get("source") or ""),
+        query=str(params.get("query") or ""),
+        page=_bounded_int(params.get("page"), 1, 1, 10_000),
+        page_size=_bounded_int(params.get("page_size"), 20, 1, 100),
+    )
 
 
 def _background(fn: Any, *args: Any) -> None:
@@ -569,14 +759,64 @@ def _required_int(params: dict[str, Any], key: str) -> int:
 
 
 _SYSTEM_ACTION_HANDLERS = {
+    "health": lambda _params: {"status": "ok"},
+    "license_read": lambda _params: license_service.license_overview(),
+    "license_update": _license_update,
+    "license_check": _license_check,
+    "traffic_license_read": lambda _params: license_service.license_overview_for("traffic"),
+    "traffic_license_update": _traffic_license_update,
+    "traffic_license_check": _traffic_license_check,
     "settings_read": _settings_redacted,
+    "settings_update": _settings_update,
+    "settings_env_check": lambda _params: views.environment_check(),
+    "settings_clear_data": _settings_clear_data,
     "task_preview": _task_preview,
     "task_detail": _task_detail,
     "task_diagnostics": _task_diagnostics,
+    "task_dedup_summary": _task_dedup_summary,
     "tasks_list": _tasks_list,
+    "task_delete": _task_delete,
+    "table_list": _table_list,
+    "table_update": _table_update,
+    "table_delete": _table_delete,
+    "overview_tree": lambda _params: views.overview_tree(),
+    "overview_node": lambda params: views.overview_node(_required_str(params, "node_id")),
+    "overview_platform_delete": lambda params: deletion.delete_overview_platform(_required_str(params, "platform")),
+    "overview_keyword_delete": lambda params: deletion.delete_overview_keyword(str(params.get("platform") or "dy"), _required_str(params, "keyword")),
+    "overview_keyword_analyze": _overview_keyword_analyze,
+    "overview_keyword_find_customers": _overview_keyword_find_customers,
+    "overview_account_delete": lambda params: deletion.delete_overview_account(_required_int(params, "account_id")),
+    "overview_customer_delete": _overview_customer_delete,
+    "workbench_actions": lambda _params: views.workbench_actions(),
+    "tombstone_summary": lambda _params: ops_visibility.tombstone_summary(),
+    "tombstones_list": _tombstones_list,
     "message_keywords": lambda _params: message_workbench.list_keywords(),
     "message_customers": _message_customers,
+    "message_customer_detail": _message_customer_detail,
+    "message_customer_auto": _message_customer_auto,
+    "message_batches": lambda params: message_workbench.list_auto_message_batches(str(params.get("batch_id") or "")),
     "ai_workbench": lambda _params: ai_service.ai_workbench(),
+    "ai_jobs_list": lambda _params: ai_service.list_ai_jobs(),
+    "ai_delete_non_competitors": lambda params: ai_service.delete_workbench_non_competitors(AiBulkDelete(**params).target_ids),
+    "ai_delete_non_customers": lambda params: ai_service.delete_workbench_non_customers(AiBulkDelete(**params).target_ids),
+    "platform_capabilities": lambda _params: views.platform_capabilities(),
+    "agent_runs_list": lambda params: agent_service.list_runs(str(params.get("run_type") or "")),
+    "agent_run_detail": lambda params: agent_service.get_run(_required_str(params, "run_id")) or {},
+    "agent_run_events": lambda params: agent_service.list_events(_required_str(params, "run_id")),
+    "agent_run_cancel": lambda params: agent_service.cancel_run(_required_str(params, "run_id")),
+    "traffic_plans_list": lambda params: traffic_workbench.list_plans(bool(params.get("include_archived", False))),
+    "traffic_plan_update": _traffic_plan_update,
+    "traffic_plan_delete": lambda params: traffic_workbench.delete_plan(_required_str(params, "plan_id")),
+    "traffic_plan_archive": lambda params: traffic_workbench.archive_plan(_required_str(params, "plan_id")),
+    "traffic_plan_restore": lambda params: traffic_workbench.restore_plan(_required_str(params, "plan_id")),
+    "traffic_run_detail": _traffic_run_detail,
+    "traffic_run_logs": lambda params: traffic_workbench.list_logs(_required_str(params, "run_id")),
+    "traffic_run_archive": lambda params: traffic_workbench.archive_run(_required_str(params, "run_id")),
+    "traffic_run_restore": lambda params: traffic_workbench.restore_run(_required_str(params, "run_id")),
+    "traffic_run_delete": lambda params: traffic_workbench.delete_run(_required_str(params, "run_id")),
+    "traffic_records_clear": lambda _params: traffic_workbench.clear_records(),
+    "traffic_settings_read": lambda _params: traffic_workbench.get_settings(),
+    "traffic_settings_update": _traffic_settings_update,
     "traffic_environment_check": lambda _params: traffic_workbench.environment_check(),
     "traffic_runs_list": lambda params: traffic_workbench.list_runs(bool(params.get("include_archived", False))),
     "traffic_records_list": _traffic_records_list,
