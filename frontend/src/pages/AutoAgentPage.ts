@@ -240,6 +240,8 @@ function renderPlanMeta(plan: Dict) {
   if (plan.source_value) items.push(['来源值', String(plan.source_value)])
   if (Array.isArray(plan.actions) && plan.actions.length) items.push(['动作组合', plan.actions.map(actionName).join('、')])
   if (plan.round_video_limit) items.push(['每轮视频', String(plan.round_video_limit)])
+  if (plan.operation) items.push(['系统操作', String(plan.operation)])
+  if (plan.params && Object.keys(plan.params).length) items.push(['参数', JSON.stringify(plan.params)])
   return h('div', { class: 'auto-agent-plan-meta' }, items.map(([label, value]) => h('span', [
     h('b', `${label}：`),
     value,
@@ -248,6 +250,12 @@ function renderPlanMeta(plan: Dict) {
 
 function renderQueryResult(result: Dict) {
   const rows = Array.isArray(result.rows) ? result.rows : []
+  if (result.operation && result.data) {
+    return h('details', { class: 'auto-agent-advanced', open: true }, [
+      h('summary', '操作结果'),
+      h('pre', JSON.stringify(result.data, null, 2)),
+    ])
+  }
   if (!rows.length && !result.values) return null
   if (result.values) {
     return h('div', { class: 'auto-agent-metrics' }, [
@@ -341,6 +349,7 @@ function actionLabel(action: string) {
     query_database: '数据库查询',
     lead_auto: '自动拓客',
     traffic_auto: '自动引流',
+    system_action: '系统操作',
     unknown: '未识别',
   }[action] || action
 }

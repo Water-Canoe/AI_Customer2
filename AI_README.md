@@ -14,7 +14,7 @@
 
 当前两个非技术用户主入口是拓客工作台的 `AI自动拓客` 和引流工作台的 `AI自动引流`。两个页面共用 `frontend/src/pages/AutoAgentPage.ts`，左侧只保留一个自然语言指令输入框和示例指令，右侧展示 `AI任务批次`、运行日志和结果汇总；运行中每 3 秒轮询 `/api/agent/runs` 与 `/api/agent/runs/{id}/events`，首版不引入 WebSocket。用户可以输入“检查下我现在有多少竞品账户/目标客户”“我现在还有多少用户未私信”“为我找些做xxx的竞品”“为我找些对xxx有需求的客户，先不私信”“将还未私信的客户私信”等指令，不再手动填写关键词、私信数量或引流动作参数。
 
-后端新增 `backend/app/services/agent_commands.py` 作为自然语言指令规划器，使用已配置的 OpenAI 兼容模型把用户输入解析为白名单计划。查询类计划会直接返回本地统计或只读 SQL 查询结果；执行类计划会先返回可确认的计划，再通过 `agent_runs` 创建真实批次。`agent_runs` 和 `agent_run_events` 由 `backend/app/services/agent_service.py` 以确定性状态机执行，不引入 LangGraph/CrewAI/AutoGen。`run_type=lead_auto` 表示自动拓客，`run_type=traffic_auto` 表示自动引流；Agent 只调用现有白名单服务函数，不驱动前端页面，不执行写入类 SQL。公开接口包括：
+后端新增 `backend/app/services/agent_commands.py` 作为自然语言指令规划器，使用已配置的 OpenAI 兼容模型把用户输入解析为白名单计划。查询类计划会直接返回本地统计、只读 SQL 查询结果或只读系统操作结果；执行类计划会先返回可确认的计划，再调用白名单系统操作或通过 `agent_runs` 创建真实批次。`agent_runs` 和 `agent_run_events` 由 `backend/app/services/agent_service.py` 以确定性状态机执行，不引入 LangGraph/CrewAI/AutoGen。`run_type=lead_auto` 表示自动拓客，`run_type=traffic_auto` 表示自动引流；Agent 只调用现有白名单服务函数，不驱动前端页面，不执行写入类 SQL，也不执行任意 Python/PowerShell。公开接口包括：
 
 - `POST /api/agent/commands/preview`：解析自然语言指令；统计/查询类直接返回答案，执行类返回待确认计划。
 - `POST /api/agent/commands/execute`：按已确认计划创建自动化批次；不会执行自由文本或任意代码。
@@ -24,7 +24,9 @@
 - `GET /api/agent/runs/{id}/events`：查看运行日志。
 - `POST /api/agent/runs/{id}/cancel`：请求停止批次。
 
-自然语言查询的数据库能力只开放安全只读范围：SQL 必须以 `SELECT` 或 `WITH` 开头，不能包含 `insert/update/delete/drop/alter/create/replace/attach/detach/pragma/vacuum` 等关键字，也不能包含多条语句；可读表限制为账号、内容、线索、任务、AI job、私信批次、自动化批次和引流业务表，不暴露 `settings` 等配置表，避免模型读取 API Key、授权码或本机路径。常见统计问题优先走固定统计口径，不依赖模型生成 SQL。
+自然语言查询的数据库能力只开放安全只读范围：SQL 必须以 `SELECT` 或 `WITH` 开头，不能包含 `insert/update/delete/drop/alter/create/replace/attach/detach/pragma/vacuum` 等关键字，也不能包含多条语句；可读表覆盖任务、日志、账号、内容、评论、线索、状态事件、私信批次、自动化批次、删除审计和引流业务表，不暴露原始 `settings` 表。需要查看设置时，Agent 只能走 `system_action=settings_read`，返回值会把 `api_key / license / device_code / token / secret / password` 这类敏感字段打码。常见统计问题优先走固定统计口径，不依赖模型生成 SQL。
+
+`system_action` 是“系统任何操作”的当前实现边界：模型只能从白名单中选择操作名和参数，后端继续复用已有服务函数、授权校验和 Pydantic 参数校验。当前白名单覆盖：设置查看、任务预览/创建/取消/归档/详情/诊断、主页资料补全、账号竞品分析、账号找客户、客户意向分析、客户跟进状态修改、账号客户批量分析、删除非客户/非竞品、AI job 创建/批量创建/重试、批量操作预览、私信关键词/客户查询、私信批次创建/取消、AI分析工作台查看、引流环境检查/安装、抖音登录窗口、引流计划创建、引流批次启动/停止、引流记录和来源查询。会改变数据或打开浏览器的操作一律先预览计划，再由用户点击“确认执行”。
 
 设置页新增 `产品关键词` 标签输入，保存为 `settings.product_keywords` JSON 数组。自然语言执行类指令会优先让 AI 从用户目标和产品关键词中选择本次关键词；若用户指令本身已经包含明确关键词，则计划会直接带入。没有 AI 配置、没有产品关键词且计划也没有明确关键词时，创建自动化批次会明确失败。
 

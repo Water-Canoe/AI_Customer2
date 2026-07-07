@@ -5052,6 +5052,55 @@ def test_agent_command_answers_unmessaged_stats(tmp_path: Path, monkeypatch: pyt
     assert "未私信" in payload["answer"]
 
 
+def test_agent_command_falls_back_when_ai_returns_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import ai_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps({"action": "unknown", "summary": "无法理解"}),
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/agent/commands/preview", json={"command": "我现在还有多少用户未私信", "workspace": "lead"})
+
+    assert response.status_code == 200
+    assert response.json()["plan"]["action"] == "answer_stats"
+    assert response.json()["plan"]["metric"] == "unmessaged"
+
+
+def test_agent_command_overrides_wrong_metric_for_unmessaged_question(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import ai_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps({"action": "answer_stats", "metric": "dm_summary"}),
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/agent/commands/preview", json={"command": "我现在还有多少用户未私信", "workspace": "lead"})
+
+    assert response.status_code == 200
+    assert response.json()["plan"]["metric"] == "unmessaged"
+
+
 def test_agent_command_rejects_unsafe_sql(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app
@@ -5074,6 +5123,41 @@ def test_agent_command_rejects_unsafe_sql(tmp_path: Path, monkeypatch: pytest.Mo
 
     assert response.status_code == 400
     assert "SELECT" in response.json()["detail"]
+
+
+def test_agent_command_rejects_settings_sql_but_redacts_settings_action(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_api_key", "secret-key")
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+
+    client = TestClient(app)
+    blocked = client.post(
+        "/api/agent/commands/preview",
+        json={
+            "command": "查看设置表",
+            "workspace": "lead",
+            "plan": {"action": "query_database", "sql": "SELECT * FROM settings"},
+        },
+    )
+    assert blocked.status_code == 400
+    assert "settings" in blocked.json()["detail"]
+
+    redacted = client.post(
+        "/api/agent/commands/preview",
+        json={
+            "command": "查看当前设置",
+            "workspace": "lead",
+            "plan": {"action": "system_action", "operation": "settings_read", "params": {}},
+        },
+    )
+    assert redacted.status_code == 200
+    values = redacted.json()["result"]["data"]
+    assert values["ai_api_key"]["value"] == "***"
+    assert values["ai_base_url"]["value"] == "https://example.test"
 
 
 def test_agent_command_execute_creates_customers_without_dm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5116,6 +5200,40 @@ def test_agent_command_execute_creates_customers_without_dm(tmp_path: Path, monk
     assert run["keywords"] == ["AI客服"]
     assert run["params"]["lead_operation"] == "customers"
     assert run["params"]["auto_dm"] is False
+
+
+def test_agent_command_executes_system_task_create(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.services import agent_commands
+
+    monkeypatch.setattr(agent_commands, "_background", lambda *_args, **_kwargs: None)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/agent/commands/execute",
+        json={
+            "command": "创建一个竞品采集任务",
+            "workspace": "lead",
+            "plan": {
+                "action": "system_action",
+                "operation": "task_create",
+                "params": {
+                    "mode": "competitor_discovery",
+                    "platform": "dy",
+                    "keywords": "AI客服",
+                    "execute_crawler": False,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["executed"] is True
+    assert payload["result"]["operation"] == "task_create"
+    assert payload["result"]["data"]["mode"] == "competitor_discovery"
+    assert payload["result"]["data"]["keywords"] == "AI客服"
 
 
 def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
