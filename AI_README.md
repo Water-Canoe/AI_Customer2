@@ -30,6 +30,8 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 
 私信按钮点击逻辑先等待可见“私信/发私信”入口，再从同名按钮中选择最后一个可见按钮并使用 Playwright `force=True` 点击，避开抖音渲染的隐藏按钮副本和 actionability 等待；点击后 25 秒内没有出现聊天输入框就报错。修改该目录代码后必须重启 `uvicorn`，否则 `8025` 页面仍会调用旧模块。
 
+抖音当前发送按钮是输入区右侧的图标按钮，不包含“发送”文本；脚本会优先点击 `.messageMsgInputinputAction svg` 中最后一个可见图标，再退回 Enter。
+
 ## 前端结构
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts` 和 `TrafficWorkbenchPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。

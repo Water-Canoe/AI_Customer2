@@ -31,4 +31,4 @@ backend\.venv\Scripts\python.exe tools\douyin_dm_automation\automation.py --user
 
 ## 限制
 
-当前版本只做单用户测试，不做批量发送、账号池、代理池或自动重试队列。抖音页面结构如果变化，优先调整 `PROFILE_DM_SELECTORS`、`CHAT_INPUT_SELECTORS` 和 `SEND_SELECTORS`。
+当前版本只做单用户测试，不做批量发送、账号池、代理池或自动重试队列。抖音页面结构如果变化，优先调整 `PROFILE_DM_SELECTORS`、`CHAT_INPUT_SELECTORS`、`SEND_SELECTORS` 和 `SEND_ICON_SELECTORS`。

@@ -38,6 +38,10 @@ SEND_SELECTORS = [
     "span:has-text('发送')",
 ]
 
+SEND_ICON_SELECTORS = [
+    ".messageMsgInputinputAction svg",
+]
+
 def validate_douyin_user_url(value: str) -> str:
     url = value.strip()
     parsed = urlparse(url)
@@ -104,7 +108,7 @@ async def dismiss_easy_popups(page: Any) -> None:
 
 
 async def click_private_message_button(page: Any, seconds: int) -> None:
-    await wait_for_private_message_button(page, seconds)
+    visible_entry = await wait_for_private_message_button(page, seconds)
 
     for selector in ["button:has-text('发私信')", "button:has-text('私信')"]:
         locator = page.locator(selector)
@@ -117,6 +121,11 @@ async def click_private_message_button(page: Any, seconds: int) -> None:
                     return
             except Exception:
                 continue
+    try:
+        await visible_entry.click(timeout=5000, force=True)
+        return
+    except Exception:
+        pass
     raise RuntimeError("找到了私信按钮，但点击失败。")
 
 
@@ -190,8 +199,19 @@ async def type_message(page: Any, message: str) -> None:
 async def click_send(page: Any) -> None:
     button = await first_visible(page, SEND_SELECTORS, timeout_ms=2500)
     if button:
-        await button.click()
+        await button.click(force=True)
         return
+    for selector in SEND_ICON_SELECTORS:
+        locator = page.locator(selector)
+        for index in range(await locator.count() - 1, -1, -1):
+            icon = locator.nth(index)
+            try:
+                if await icon.is_visible(timeout=500):
+                    # ponytail: Douyin's send control is an icon-only button.
+                    await icon.click(timeout=5000, force=True)
+                    return
+            except Exception:
+                continue
     await page.keyboard.press("Enter")
 
 
