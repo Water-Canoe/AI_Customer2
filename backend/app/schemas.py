@@ -59,6 +59,7 @@ class TrafficPlanCreate(BaseModel):
     action_follow: bool = False
     action_comment_text: bool = False
     action_comment_image: bool = False
+    round_video_limit: int = Field(default=5, ge=1, le=200)
     enabled: bool = True
 
 

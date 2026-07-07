@@ -696,8 +696,9 @@ def test_traffic_browse_only_plan_can_start_and_logs_user_reason(tmp_path: Path,
     from app.schemas import TrafficPlanCreate
     from app.services import traffic_workbench
 
-    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="纯刷视频", platform="dy"))
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="纯刷视频", platform="dy", round_video_limit=12))
     assert plan["action_label"] == "仅浏览"
+    assert plan["round_video_limit"] == 12
     run = traffic_workbench.create_run(plan["id"])
 
     def fail_with_readable_reason(run_id: str, plan_payload: dict[str, object]) -> None:
@@ -719,6 +720,56 @@ def test_traffic_browse_only_plan_can_start_and_logs_user_reason(tmp_path: Path,
     assert "引流设置" in detail["stop_suggestion"]
     assert detail["logs"][-1]["message"].startswith("连续 3 次")
     assert detail["logs"][-1]["suggestion"]
+
+
+def test_traffic_run_uses_plan_round_video_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    class FakePage:
+        url = "https://www.douyin.com/video/1"
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    class FakeContext:
+        pages = [FakePage()]
+
+        def close(self) -> None:
+            return None
+
+    fake_sync_api = types.ModuleType("playwright.sync_api")
+    fake_sync_api.TimeoutError = type("TimeoutError", (Exception,), {})
+    fake_playwright_package = types.ModuleType("playwright")
+    fake_playwright_package.sync_api = fake_sync_api
+    reads = {"count": 0}
+    records: list[tuple[object, ...]] = []
+
+    def fake_video(*_: object) -> dict[str, object]:
+        reads["count"] += 1
+        return {"video_id": f"v{reads['count']}", "video_url": "", "video_desc": "测试视频"}
+
+    monkeypatch.setitem(sys.modules, "playwright", fake_playwright_package)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_sync_api)
+    monkeypatch.setattr(traffic_workbench, "_launch_context", lambda *_: FakeContext())
+    monkeypatch.setattr(traffic_workbench, "_setup_video_data_cache", lambda *_: {})
+    monkeypatch.setattr(traffic_workbench, "_goto_with_timeout_tolerance", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_ensure_page_ready", lambda *_: None)
+    monkeypatch.setattr(traffic_workbench, "_navigate_to_executable_video", lambda *_: None)
+    monkeypatch.setattr(traffic_workbench, "_raise_if_stop_requested", lambda *_: None)
+    monkeypatch.setattr(traffic_workbench, "_read_active_video", fake_video)
+    monkeypatch.setattr(traffic_workbench, "_video_skip_reason", lambda *_: "")
+    monkeypatch.setattr(traffic_workbench, "_execute_actions_with_retry", lambda *_: ([], "", "", False))
+    monkeypatch.setattr(traffic_workbench, "_record_video", lambda *args: records.append(args))
+    monkeypatch.setattr(traffic_workbench, "_next_video", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *_: None)
+
+    traffic_workbench._run_with_playwright(
+        "run-1",
+        {"name": "计划上限", "source_mode": "random_feed", "source_value": "", "actions": [], "round_video_limit": 2},
+    )
+
+    assert len(records) == 2
 
 
 def test_traffic_plan_and_run_archive_filters(tmp_path: Path) -> None:

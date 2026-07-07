@@ -397,6 +397,7 @@ CREATE TABLE IF NOT EXISTS traffic_plans (
     action_follow INTEGER NOT NULL DEFAULT 0,
     action_comment_text INTEGER NOT NULL DEFAULT 0,
     action_comment_image INTEGER NOT NULL DEFAULT 0,
+    round_video_limit INTEGER NOT NULL DEFAULT 5,
     enabled INTEGER NOT NULL DEFAULT 1,
     archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
@@ -551,7 +552,6 @@ DEFAULT_SETTINGS = {
     "traffic_license_last_reason": "",
     "traffic_license_last_message": "未填写授权码",
     "traffic_license_last_checked_at": "",
-    "traffic_round_video_limit": "5",
     "traffic_daily_action_limit": "50",
     "traffic_min_watch_seconds": "3",
     "traffic_max_watch_seconds": "8",
@@ -603,6 +603,7 @@ def init_db() -> None:
         _ensure_column(conn, "traffic_runs", "stop_suggestion", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "traffic_runs", "stop_requested", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "traffic_plans", "archived", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "traffic_plans", "round_video_limit", "INTEGER NOT NULL DEFAULT 5")
         _ensure_column(conn, "traffic_runs", "archived", "INTEGER NOT NULL DEFAULT 0")
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(

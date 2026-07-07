@@ -20,7 +20,6 @@ from app.schemas import TrafficPlanCreate, TrafficSettingsUpdate
 
 # 引流设置默认值只覆盖缺失项，避免覆盖用户在设置页保存的配置。
 TRAFFIC_SETTING_KEYS = {
-    "traffic_round_video_limit": "5",
     "traffic_daily_action_limit": "50",
     "traffic_min_watch_seconds": "3",
     "traffic_max_watch_seconds": "8",
@@ -91,9 +90,9 @@ def create_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
             INSERT INTO traffic_plans(
                 id, name, platform, source_mode, source_value,
                 action_like, action_collect, action_follow,
-                action_comment_text, action_comment_image, enabled
+                action_comment_text, action_comment_image, round_video_limit, enabled
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 plan_id,
@@ -106,6 +105,7 @@ def create_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
                 int(plan["action_follow"]),
                 int(plan["action_comment_text"]),
                 int(plan["action_comment_image"]),
+                int(plan["round_video_limit"]),
                 int(plan["enabled"]),
             ),
         )
@@ -125,7 +125,7 @@ def update_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, Any]:
             UPDATE traffic_plans
             SET name = ?, platform = ?, source_mode = ?, source_value = ?,
                 action_like = ?, action_collect = ?, action_follow = ?,
-                action_comment_text = ?, action_comment_image = ?, enabled = ?,
+                action_comment_text = ?, action_comment_image = ?, round_video_limit = ?, enabled = ?,
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
             """,
@@ -139,6 +139,7 @@ def update_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, Any]:
                 int(plan["action_follow"]),
                 int(plan["action_comment_text"]),
                 int(plan["action_comment_image"]),
+                int(plan["round_video_limit"]),
                 int(plan["enabled"]),
                 plan_id,
             ),
@@ -668,7 +669,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
         ) from exc
 
     settings = get_settings()["values"]
-    limit = _int_setting(settings, "traffic_round_video_limit", 5, 1, 200)
+    limit = int(plan.get("round_video_limit") or 5)
     daily_action_limit = _int_setting(settings, "traffic_daily_action_limit", 50, 0, 1000)
     min_watch = _int_setting(settings, "traffic_min_watch_seconds", 3, 0, 120)
     max_watch = _int_setting(settings, "traffic_max_watch_seconds", 8, min_watch, 300)
@@ -2162,6 +2163,7 @@ def _normalize_plan(payload: TrafficPlanCreate, plan_id: str = "") -> dict[str, 
         "action_follow": payload.action_follow,
         "action_comment_text": payload.action_comment_text,
         "action_comment_image": payload.action_comment_image,
+        "round_video_limit": payload.round_video_limit,
         "enabled": payload.enabled,
     }
 
@@ -2178,6 +2180,7 @@ def _format_plan(row: Any) -> dict[str, Any]:
     data["action_follow"] = bool(data.get("action_follow"))
     data["action_comment_text"] = bool(data.get("action_comment_text"))
     data["action_comment_image"] = bool(data.get("action_comment_image"))
+    data["round_video_limit"] = int(data.get("round_video_limit") or 5)
     data["enabled"] = bool(data.get("enabled"))
     data["archived"] = bool(data.get("archived"))
     data["actions"] = _plan_actions(data)

@@ -31,6 +31,7 @@ const defaultPlan = () => ({
   action_follow: false,
   action_comment_text: false,
   action_comment_image: false,
+  round_video_limit: 5,
   enabled: true,
 })
 
@@ -392,6 +393,7 @@ export default defineComponent({
           h('div', { class: 'form-grid traffic-plan-form' }, [
             labelInput('计划名称', planDraft.value.name, value => planDraft.value.name = value, 'field-wide', `留空自动生成：${sourceLabel(planDraft.value.source_mode)}-计划ID`),
             labelSelect('来源模式', planDraft.value.source_mode, sourceOptions, value => planDraft.value.source_mode = value),
+            labelInput('每轮视频上限', String(planDraft.value.round_video_limit || 5), value => planDraft.value.round_video_limit = value.trim() || 5, '', '', 'number'),
             labelInput(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide'),
             h('label', { class: 'form-field field-full' }, [
               h('span', '动作组合'),
@@ -517,7 +519,6 @@ export default defineComponent({
             h('button', { class: 'primary-action', onClick: saveSettings }, '保存设置'),
           ]),
           h('div', { class: 'form-grid traffic-settings-form' }, [
-            settingInput('traffic_round_video_limit', '每轮视频上限'),
             settingInput('traffic_daily_action_limit', '每日动作上限'),
             settingInput('traffic_action_probability', '操作执行概率%'),
             settingInput('traffic_min_watch_seconds', '最短停留秒数'),
@@ -591,11 +592,12 @@ export default defineComponent({
     function renderPlanTable() {
       return h('div', { class: 'table-scroll traffic-side-scroll' }, [
         h('table', { class: 'data-table resizable-table traffic-side-table' }, [
-          h('thead', [h('tr', ['计划名称', '平台', '来源模式', '来源内容', '动作组合', '状态', '创建时间', '操作'].map(text => h('th', text)))]),
+          h('thead', [h('tr', ['计划名称', '平台', '来源模式', '每轮上限', '来源内容', '动作组合', '状态', '创建时间', '操作'].map(text => h('th', text)))]),
           h('tbody', visiblePlans.value.length ? visiblePlans.value.map(plan => h('tr', [
             h('td', [h('strong', { class: 'table-primary-text', title: plan.name }, plan.name || '-')]),
             h('td', platformLabel(plan.platform)),
             h('td', sourceLabel(plan.source_mode)),
+            h('td', String(plan.round_video_limit || 5)),
             h('td', tableText(plan.source_value || '随机推荐流')),
             h('td', tableText(plan.action_label || planActionLabel(plan))),
             h('td', h('span', { class: ['status', plan.archived ? 'cancelled' : 'pending'] }, plan.archived ? '已归档' : '可启动')),
@@ -607,7 +609,7 @@ export default defineComponent({
               h('button', { class: 'text-icon-button reserved', onClick: () => startRun(plan.id) }, '启动'),
               h('button', { class: 'text-icon-button', onClick: () => archivePlan(plan.id) }, '归档'),
             ]),
-          ])) : [emptyTableRow(8, planArchiveFilter.value === 'archived' ? '暂无已归档计划' : '暂无计划，先在左侧创建')]),
+          ])) : [emptyTableRow(9, planArchiveFilter.value === 'archived' ? '暂无已归档计划' : '暂无计划，先在左侧创建')]),
         ]),
       ])
     }
@@ -765,10 +767,10 @@ export default defineComponent({
       }), text])
     }
 
-    function labelInput(text: string, value: string, update: (value: string) => void, extraClass = '', placeholder = '') {
+    function labelInput(text: string, value: string, update: (value: string) => void, extraClass = '', placeholder = '', inputType = 'text') {
       return h('label', { class: ['form-field', extraClass] }, [
         h('span', text),
-        h('input', { value, placeholder, onInput: (event: Event) => update((event.target as HTMLInputElement).value) }),
+        h('input', { type: inputType, value, placeholder, onInput: (event: Event) => update((event.target as HTMLInputElement).value) }),
       ])
     }
 
