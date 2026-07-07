@@ -27,6 +27,8 @@ backend\.venv\Scripts\python.exe tools\douyin_dm_automation\automation.py --user
 
 打开 `http://127.0.0.1:8025/` 后填写用户主页 URL 和话术。首次运行会弹出浏览器；如果抖音提示未登录，就在该浏览器里完成登录，脚本最长等待 300 秒。
 
+如果修改了脚本代码，需要重启 `uvicorn` 服务；旧服务进程不会自动加载新版点击逻辑。
+
 ## 限制
 
 当前版本只做单用户测试，不做批量发送、账号池、代理池或自动重试队列。抖音页面结构如果变化，优先调整 `PROFILE_DM_SELECTORS`、`CHAT_INPUT_SELECTORS` 和 `SEND_SELECTORS`。
