@@ -121,9 +121,19 @@ function paginateChildren(node: Dict, children: Dict[], getPage: (node: Dict) =>
     page,
     total,
     totalPages,
+    label: overviewChildPageLabel(children),
     start: total ? start + 1 : 0,
     end
   }
+}
+
+function overviewChildPageLabel(children: Dict[]) {
+  // 关键词下翻“账号”，账号下翻“客户”，避免用户误以为只对目标客户分页。
+  const kind = String(children[0]?.kind || '')
+  if (kind === 'account') return '账号'
+  if (kind === 'customer') return '客户'
+  if (kind === 'keyword') return '关键词'
+  return '条目'
 }
 
 function renderOverviewPagination(
@@ -133,7 +143,7 @@ function renderOverviewPagination(
   setPage: (node: Dict, page: number) => void
 ) {
   return h('div', { class: 'overview-pagination-row', style: { paddingLeft: `${level * 34}px` } }, [
-    h('span', `显示 ${pagination.start}-${pagination.end} / ${pagination.total}`),
+    h('span', `${pagination.label || '条目'} ${pagination.start}-${pagination.end} / ${pagination.total}`),
     h('div', { class: 'overview-pagination-actions' }, [
       h('button', {
         disabled: pagination.page <= 1,
