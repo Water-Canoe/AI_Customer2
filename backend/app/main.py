@@ -639,7 +639,11 @@ async def message_workbench_customer_auto_message(
 ) -> dict[str, object]:
     require_license()
     try:
-        return await message_workbench.auto_message_customer(lead_id, dry_run=payload.dry_run)
+        return await message_workbench.auto_message_customer(
+            lead_id,
+            dry_run=payload.dry_run,
+            timeout_seconds=payload.timeout_seconds,
+        )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

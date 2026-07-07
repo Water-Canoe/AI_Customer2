@@ -125,6 +125,10 @@
             <input id="dryRun" type="checkbox" />
             只输入话术，不点击发送
           </label>
+          <label>
+            等待秒数
+            <input id="manualTimeout" type="number" min="0" max="3600" value="300" />
+          </label>
         </div>
         <button id="submit" type="submit">打开主页并处理私信</button>
       </form>
@@ -148,6 +152,7 @@
               user_url: document.querySelector("#userUrl").value,
               message: document.querySelector("#message").value,
               dry_run: document.querySelector("#dryRun").checked,
+              manual_send_timeout_seconds: Number(document.querySelector("#manualTimeout").value || 0),
             }),
           });
           const data = await response.json();

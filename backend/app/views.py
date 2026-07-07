@@ -59,6 +59,7 @@ def get_settings() -> dict[str, Any]:
         "auto_delete_non_competitors",
         "auto_analyze_leads",
         "auto_delete_non_customers",
+        "auto_dm_fill_only",
         "headless",
     ):
         result[key] = result.get(key, "false") == "true"
@@ -71,7 +72,7 @@ def get_settings() -> dict[str, Any]:
         result["own_accounts"] = own_accounts if isinstance(own_accounts, dict) else {}
     except json.JSONDecodeError:
         result["own_accounts"] = {}
-    for key in ("content_cutoff_days", "comment_cutoff_days", "comment_recrawl_cooldown_hours", "ai_analysis_concurrency", "unreplied_reminder_days"):
+    for key in ("content_cutoff_days", "comment_cutoff_days", "comment_recrawl_cooldown_hours", "ai_analysis_concurrency", "unreplied_reminder_days", "auto_dm_timeout_seconds"):
         try:
             result[key] = int(result.get(key, 0) or 0)
         except (TypeError, ValueError):

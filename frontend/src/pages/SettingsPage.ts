@@ -243,6 +243,7 @@ export default defineComponent({
             inputField(local, 'account_analysis_content_count', '账号分析内容数', 'number', '', markSettingsDirty),
             inputField(local, 'ai_analysis_concurrency', 'AI分析并行数', 'number', '建议 1-5，过高容易触发模型限流', markSettingsDirty),
             inputField(local, 'unreplied_reminder_days', '未回复提醒天数', 'number', '默认 3 天，填 0 表示不提醒', markSettingsDirty),
+            inputField(local, 'auto_dm_timeout_seconds', '自动私信等待秒数', 'number', '只填内容不发送时，窗口保留等待人工发送的秒数', markSettingsDirty),
             inputField(local, 'douyin_detail_sleep_seconds', '抖音详情等待秒数', 'number', '建议 0.5-2，越小越快但越容易限流', markSettingsDirty),
             inputField(local, 'max_concurrency', '默认并发', 'number', '', markSettingsDirty)
           ]),
@@ -251,7 +252,8 @@ export default defineComponent({
             toggleField(local, 'auto_analyze_competitors', '自动分析竞品账号', markSettingsDirty),
             toggleField(local, 'auto_delete_non_competitors', '自动删除非竞品账号', markSettingsDirty),
             toggleField(local, 'auto_analyze_leads', '自动分析线索用户', markSettingsDirty),
-            toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty)
+            toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty),
+            toggleField(local, 'auto_dm_fill_only', '自动私信只填内容不发送', markSettingsDirty)
           ]),
           sectionTitle({ title: '自家账号', subtitle: '同平台可多个，跨平台分任务运行', icon: User, tone: 'blue', compact: true }),
           h('div', { class: 'own-account-grid' }, ownAccountPlatforms.map(platform => renderOwnAccountField(ownAccounts, platform, markSettingsDirty))),
@@ -344,7 +346,7 @@ function inputField(local: Dict, key: string, label: string, type = 'text', plac
   }
   if (type === 'number') {
     inputProps.step = key === 'douyin_detail_sleep_seconds' ? '0.1' : '1'
-    inputProps.min = key === 'douyin_detail_sleep_seconds' ? '0' : undefined
+    inputProps.min = ['douyin_detail_sleep_seconds', 'auto_dm_timeout_seconds'].includes(key) ? '0' : undefined
   }
   return h('label', [label, h('input', inputProps)])
 }

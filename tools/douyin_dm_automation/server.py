@@ -24,6 +24,7 @@ class SendRequest(BaseModel):
     message: str = Field(..., description="私信话术")
     dry_run: bool = Field(False, description="只输入不发送")
     login_wait_seconds: int = Field(DEFAULT_WAIT_SECONDS, ge=30, le=900)
+    manual_send_timeout_seconds: int = Field(300, ge=0, le=3600)
 
 
 @app.get("/")
@@ -41,6 +42,7 @@ async def send_message(payload: SendRequest) -> dict:
                 payload.message,
                 login_wait_seconds=payload.login_wait_seconds,
                 dry_run=payload.dry_run,
+                manual_send_timeout_seconds=payload.manual_send_timeout_seconds if payload.dry_run else 0,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

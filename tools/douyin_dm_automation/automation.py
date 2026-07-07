@@ -282,6 +282,7 @@ async def send_douyin_dm(
     profile_dir: Path = DEFAULT_PROFILE_DIR,
     login_wait_seconds: int = DEFAULT_WAIT_SECONDS,
     dry_run: bool = False,
+    manual_send_timeout_seconds: int = 0,
 ) -> dict[str, Any]:
     user_url = validate_douyin_user_url(user_url)
     message = normalize_message(message)
@@ -311,12 +312,14 @@ async def send_douyin_dm(
         if not dry_run:
             await click_send(page)
             await wait_until_message_sent(page, message)
+        elif manual_send_timeout_seconds > 0:
+            await page.wait_for_timeout(manual_send_timeout_seconds * 1000)
         return {
             "ok": True,
             "sent": not dry_run,
             "url": user_url,
             "message": message,
-            "note": "已发送" if not dry_run else "已输入话术，未点击发送",
+            "note": "已发送" if not dry_run else f"已输入话术，未点击发送；窗口等待 {manual_send_timeout_seconds} 秒后关闭",
         }
     finally:
         await context.close()
@@ -341,6 +344,7 @@ async def main() -> None:
     parser.add_argument("--profile-dir", type=Path, default=DEFAULT_PROFILE_DIR, help="CloakBrowser 持久化登录目录")
     parser.add_argument("--login-wait-seconds", type=int, default=DEFAULT_WAIT_SECONDS, help="等待手动登录和页面加载的秒数")
     parser.add_argument("--dry-run", action="store_true", help="只打开并输入话术，不点击发送")
+    parser.add_argument("--manual-send-timeout-seconds", type=int, default=0, help="dry-run 后保留窗口等待人工发送的秒数")
     parser.add_argument("--self-check", action="store_true", help="运行不依赖浏览器的脚本自检")
     args = parser.parse_args()
 
@@ -356,6 +360,7 @@ async def main() -> None:
         profile_dir=args.profile_dir,
         login_wait_seconds=args.login_wait_seconds,
         dry_run=args.dry_run,
+        manual_send_timeout_seconds=args.manual_send_timeout_seconds,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

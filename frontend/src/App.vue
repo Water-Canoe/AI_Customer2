@@ -930,8 +930,11 @@ async function autoMessageWorkbenchCustomer(row: Dict) {
     return
   }
   try {
-    await api.post(`/message-workbench/customers/${leadId}/auto-message`, { dry_run: false })
-    ElMessage.success('自动私信已完成，跟进状态已同步')
+    const { data } = await api.post(`/message-workbench/customers/${leadId}/auto-message`, {
+      dry_run: Boolean(settings.value.auto_dm_fill_only),
+      timeout_seconds: Number(settings.value.auto_dm_timeout_seconds || 0)
+    })
+    ElMessage.success(data?.dm?.note || '自动私信已完成，跟进状态已同步')
     await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '自动私信失败')

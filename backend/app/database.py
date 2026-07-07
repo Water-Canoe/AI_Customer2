@@ -482,6 +482,8 @@ DEFAULT_SETTINGS = {
     "account_analysis_content_count": "5",
     "ai_analysis_concurrency": "3",
     "unreplied_reminder_days": "3",
+    "auto_dm_fill_only": "false",
+    "auto_dm_timeout_seconds": "300",
     "douyin_detail_sleep_seconds": "2",
     "max_concurrency": "1",
     "headless": "false",

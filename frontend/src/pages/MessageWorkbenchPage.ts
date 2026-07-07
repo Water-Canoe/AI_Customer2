@@ -236,24 +236,26 @@ function renderCustomerRow(row: Dict, emit: any) {
           h('button', {
             type: 'button',
             class: 'text-icon-button',
-            disabled: !row.script || !row.profile_url,
-            title: !row.script ? '暂无AI话术' : !row.profile_url ? '缺少客户主页' : '复制话术、打开主页并标记已私信',
-            onClick: () => emit('message-customer', row)
-          }, [h(CopyDocument), h('span', '私信')]),
+            disabled: row.platform !== 'dy' || !row.script || !row.profile_url,
+            title: row.platform !== 'dy' ? '自动私信当前只支持抖音客户' : !row.script ? '暂无AI话术' : !row.profile_url ? '缺少客户主页' : '自动打开抖音主页并处理AI话术',
+            onClick: () => emit('auto-message-customer', row)
+          }, [h(Promotion), h('span', '自动私信')]),
           h('button', {
             type: 'button',
             class: 'text-icon-button',
-            disabled: row.platform !== 'dy' || !row.script || !row.profile_url,
-            title: row.platform !== 'dy' ? '自动私信当前只支持抖音客户' : !row.script ? '暂无AI话术' : !row.profile_url ? '缺少客户主页' : '自动打开抖音主页并发送AI话术',
-            onClick: () => emit('auto-message-customer', row)
-          }, [h(Promotion), h('span', '自动私信')]),
+            disabled: !row.script || !row.profile_url,
+            title: !row.script ? '暂无AI话术' : !row.profile_url ? '缺少客户主页' : '复制话术、打开主页并标记已私信',
+            onClick: () => emit('message-customer', row)
+          }, [h(CopyDocument), h('span', '私信')])
+        ]),
+        h('div', { class: 'message-action-row' }, [
+          h('select', {
+            class: ['follow-select', followStatusClass(row.follow_status)],
+            value: row.follow_status || '未私信',
+            onChange: (event: Event) => emit('update-follow-status', row, (event.target as HTMLSelectElement).value)
+          }, followOptions(row.follow_status).map(status => h('option', { value: status }, status))),
           h('button', { type: 'button', class: 'ghost-button compact', onClick: () => emit('select-customer', row.lead_id) }, '详情')
         ]),
-        h('select', {
-          class: ['follow-select', followStatusClass(row.follow_status)],
-          value: row.follow_status || '未私信',
-          onChange: (event: Event) => emit('update-follow-status', row, (event.target as HTMLSelectElement).value)
-        }, followOptions(row.follow_status).map(status => h('option', { value: status }, status))),
         row.overdue ? h('span', { class: 'overdue-badge' }, `超时 ${row.overdue_days || 0} 天`) : null
       ])
     ])
