@@ -13,8 +13,6 @@ from fastapi.responses import FileResponse
 
 from app import database
 from app.schemas import (
-    AgentCommandRequest,
-    AgentRunCreate,
     AiBatchCreate,
     AiBulkDelete,
     AiJobCreate,
@@ -30,7 +28,7 @@ from app.schemas import (
     TrafficPlanCreate,
     TrafficSettingsUpdate,
 )
-from app.services import account_actions, agent_commands, agent_service, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
+from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
 from app import views
 
 
@@ -219,59 +217,6 @@ def restore_traffic_run(run_id: str) -> dict[str, object]:
         return traffic_workbench.restore_run(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/agent/runs")
-def create_agent_run(payload: AgentRunCreate) -> dict[str, object]:
-    try:
-        return agent_service.create_run(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/agent/commands/preview")
-def preview_agent_command(payload: AgentCommandRequest) -> dict[str, object]:
-    try:
-        return agent_commands.preview_command(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/agent/commands/execute")
-def execute_agent_command(payload: AgentCommandRequest) -> dict[str, object]:
-    try:
-        return agent_commands.execute_command(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/api/agent/runs")
-def list_agent_runs(run_type: str = "") -> list[dict[str, object]]:
-    return agent_service.list_runs(run_type)
-
-
-@app.get("/api/agent/runs/{run_id}")
-def get_agent_run(run_id: str) -> dict[str, object]:
-    run = agent_service.get_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="AI 自动化批次不存在")
-    return run
-
-
-@app.get("/api/agent/runs/{run_id}/events")
-def list_agent_run_events(run_id: str) -> list[dict[str, object]]:
-    try:
-        return agent_service.list_events(run_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@app.post("/api/agent/runs/{run_id}/cancel")
-def cancel_agent_run(run_id: str) -> dict[str, object]:
-    try:
-        return agent_service.cancel_run(run_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.delete("/api/traffic/runs/{run_id}")

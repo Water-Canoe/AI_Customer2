@@ -8,35 +8,13 @@
 
 1. MyCrawler 底层原始库：默认 `D:\Dev\Projects\MyCrawler\database\sqlite_tables.db`，只做采集保底和追溯。
 2. 项目业务库：默认 `data/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件；可用 `AI_CUSTOMER_DATA_DIR` 指定整个数据目录，或用 `AI_CUSTOMER_DB` 指定单独数据库文件。
-3. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台下的计划工作台、执行监控、操作记录和引流设置共用 `traffic_*` 业务表和 `/api/traffic/*` 接口。`AI自动拓客` 和 `AI自动引流` 页面代码与路由暂时保留，但侧边栏入口已隐藏。
+3. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台下的计划工作台、执行监控、操作记录和引流设置共用 `traffic_*` 业务表和 `/api/traffic/*` 接口。
 
-## AI 自动化入口
+## 浏览器资源队列
 
-`AI自动拓客` 和 `AI自动引流` 目前从侧边栏隐藏，`/auto-leads` 与 `/traffic-auto` 路由、`frontend/src/pages/AutoAgentPage.ts` 和后端 `/api/agent/*` 能力仍保留，方便后续重新开放。两个页面左侧是自然语言指令输入框和可自定义快捷指令，右侧展示 `AI任务批次`、运行日志和结果汇总；运行中每 3 秒轮询 `/api/agent/runs` 与 `/api/agent/runs/{id}/events`，首版不引入 WebSocket。快捷指令分别保存为 `settings.lead_agent_commands` 和 `settings.traffic_agent_commands`，用户可在对应工作台把当前输入保存为快捷指令、删除旧指令或恢复默认；`settings.lead_agent_auto_execute` 和 `settings.traffic_agent_auto_execute` 控制“AI自动执行”，开启后点击运行会在 AI 解析出可执行计划后直接执行，不再要求二次确认。
+浏览器自动化由 `backend/app/services/browser_queue.py` 统一排队。MyCrawler 采集、引流执行、单个自动私信和批量自动私信都会在打开共享 `data/douyin_cloak_profile/` 前获取同一个浏览器资源锁；如果前方已有任务占用浏览器，后续任务会等待并在对应任务日志或引流日志中记录“等待浏览器资源”，用户不需要重复点击执行。AI 文本分析等不占用浏览器的步骤仍按原机制执行。
 
-后端新增 `backend/app/services/agent_commands.py` 作为自然语言指令规划器，使用已配置的 OpenAI 兼容模型把用户输入解析为白名单计划。查询类计划会直接返回本地统计、只读 SQL 查询结果或只读系统操作结果；执行类计划会先返回可确认的计划，再调用白名单系统操作或通过 `agent_runs` 创建真实批次。`agent_runs` 和 `agent_run_events` 由 `backend/app/services/agent_service.py` 以确定性状态机执行，不引入 LangGraph/CrewAI/AutoGen。`run_type=lead_auto` 表示自动拓客，`run_type=traffic_auto` 表示自动引流；Agent 只调用现有白名单服务函数，不驱动前端页面，不执行写入类 SQL，也不执行任意 Python/PowerShell。公开接口包括：
-
-- `POST /api/agent/commands/preview`：解析自然语言指令；统计/查询类直接返回答案，执行类返回待确认计划。
-- `POST /api/agent/commands/execute`：按已确认计划创建自动化批次；不会执行自由文本或任意代码。
-- `POST /api/agent/runs`：创建并后台启动自动化批次。
-- `GET /api/agent/runs?run_type=lead_auto|traffic_auto`：查看批次列表。
-- `GET /api/agent/runs/{id}`：查看批次详情、结果和关联任务/批次。
-- `GET /api/agent/runs/{id}/events`：查看运行日志。
-- `POST /api/agent/runs/{id}/cancel`：请求停止批次。
-
-自然语言查询的数据库能力只开放安全只读范围：SQL 必须以 `SELECT` 或 `WITH` 开头，不能包含 `insert/update/delete/drop/alter/create/replace/attach/detach/pragma/vacuum` 等关键字，也不能包含多条语句；可读表覆盖任务、日志、账号、内容、评论、线索、状态事件、私信批次、自动化批次、删除审计和引流业务表，不暴露原始 `settings` 表。需要查看设置时，Agent 只能走 `system_action=settings_read`，返回值会把 `api_key / license / device_code / token / secret / password` 这类敏感字段打码。常见统计问题优先走固定统计口径，不依赖模型生成 SQL。
-
-`system_action` 是“系统任何操作”的当前实现边界：模型只能从白名单中选择操作名和参数，后端继续复用已有服务函数、授权校验和 Pydantic 参数校验。当前白名单基本对齐本地 `/api/*` 业务能力，覆盖：授权读取/保存/校验、设置读取/保存/环境检查/清空数据、任务预览/创建/取消/归档/删除/详情/诊断/去重摘要、数据表读取/更新/删除、总览树读取/节点读取/平台删除/关键词删除/账号删除/客户删除/关键词竞品分析/关键词找客户、工作台动作、墓碑统计和列表、平台能力、私信关键词/客户/详情/自动私信/批次查询/批次创建/批次取消、AI job 列表/创建/批量创建/重试、AI工作台和非竞品/非客户清理、Agent批次列表/详情/事件/取消、引流授权、引流计划列表/创建/更新/删除/归档/恢复、引流批次列表/详情/启动/停止/删除/归档/恢复/日志、引流记录查询/清空、引流设置读取/保存、引流图片素材 Base64 上传/预览信息、引流环境检查/安装、抖音登录窗口、引流来源查询。会改变数据、清空数据、删除数据、打开浏览器或安装环境的操作一律先预览计划，再由用户点击“确认执行”。
-
-Agent 已内置顶部状态词“失败待查”的固定语义：它等于未归档失败采集任务数加失败 AI 分析任务数。用户询问“失败待查是什么意思”会走固定统计回答；用户说“重试失败待查/为我重试”会生成 `system_action=failed_retry`，确认后重试失败 AI job，并按原参数重新创建失败采集任务。
-Agent 也内置“非竞品账号 / 非客户”的数据清理语义：用户说“删除/清理所有非竞品和非客户”时不会创建拓客批次，而是生成确认型 `system_action=ai_delete_non_targets`，只删除已被系统明确判定为 `非竞品` 或 `非客户 / 无需跟进` 的记录。
-Agent 会区分“按关键词找客户”和“从已有竞品账号找客户”：用户说“从竞品账号中找客户 / 用已有竞品账号找客户”时生成确认型 `system_action=account_find_customers_from_competitors`，复用“一键找客户”的批量任务构建逻辑，把当前已判定为 `竞品` 的账号合并创建找客户采集任务，不再逐个竞品账号单独创建任务；该动作不重新按关键词找竞品，也不会自动私信。
-设置页新增 `产品关键词` 标签输入，保存为 `settings.product_keywords` JSON 数组。自然语言执行类指令会优先让 AI 从用户目标和产品关键词中选择本次关键词；若用户指令本身已经包含明确关键词，则计划会直接带入。没有 AI 配置、没有产品关键词且计划也没有明确关键词时，创建自动化批次会明确失败。
-
-`AI自动拓客` 首版只跑抖音，支持四种确定性动作：`lead_operation=competitors` 只找竞品；`lead_operation=customers` 找竞品和客户但不私信；`lead_operation=message` 只从私信工作台读取当前未私信关键词队列并创建自动私信批次；`lead_operation=full` 跑完整闭环。完整闭环会校验拓客授权、AI 配置、MyCrawler 路径和底层 SQLite，按关键词创建 `competitor_discovery` 采集任务，复用“一键竞品分析”补主页并触发竞品 AI 判断，再复用“一键找客户”创建找客户任务，采集评论后触发客户意向 AI 分析。需要私信时，后端按 AI 计划里的 `dm_count / interval_min_seconds / interval_max_seconds` 创建自动私信批次；设置页若开启“自动私信只填内容不发送”，仍会沿用私信工作台现有安全开关，只填话术并等待人工发送。
-
-`AI自动引流` 首版只真实执行抖音：自然语言计划会生成来源模式、来源值、动作组合和每轮视频数；用户确认后，后端校验引流授权和 CloakBrowser/Playwright 环境，创建 `traffic_plan`，随后立即创建并执行 `traffic_run`。结果会关联到既有执行监控和操作记录页面。
-浏览器自动化现在由 `backend/app/services/browser_queue.py` 统一排队。MyCrawler 采集、引流执行、单个自动私信和批量自动私信都会在打开共享 `data/douyin_cloak_profile/` 前获取同一个浏览器资源锁；如果前方已有任务占用浏览器，后续任务会等待并在对应任务日志或引流日志中记录“等待浏览器资源”，用户不需要重复点击执行。AI/数据库查询、AI 文本分析等不占用浏览器的步骤仍可按原机制执行。
+`AI自动拓客`、`AI自动引流`、`/api/agent/*`、`agent_runs`、`agent_run_events` 和自然语言指令编排代码已移除。后续如果尝试新的浏览器操作脚本思路，应重新设计独立边界，不复用这套已删除的确定性编排入口。
 
 版本控制只保留项目源码和文档；`data/`、`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MyCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 本地采集依赖目录、界面文案、日志文案和默认路径统一显示为 `MyCrawler`；内部 `media_crawler_*` 设置键继续作为历史数据库/API 键保留，不做额外迁移。

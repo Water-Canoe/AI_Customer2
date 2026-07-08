@@ -145,7 +145,7 @@ def _start_auto_message_batch(batch_id: str) -> None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        # Agent 编排运行在普通后台线程里，这里补一个事件循环来复用同一批次执行器。
+        # 普通后台线程没有事件循环，这里补一个事件循环复用同一批次执行器。
         threading.Thread(target=lambda: asyncio.run(run_auto_message_batch(batch_id)), daemon=True).start()
         return
     loop.create_task(run_auto_message_batch(batch_id))
@@ -349,7 +349,7 @@ def _auto_dm_lock() -> asyncio.Lock:
     loop = asyncio.get_running_loop()
     key = id(loop)
     if key not in _AUTO_DM_LOCKS:
-        # Agent 后台线程会创建独立事件循环，锁按 loop 隔离避免跨 loop 复用失败。
+        # 后台线程可能创建独立事件循环，锁按 loop 隔离避免跨 loop 复用失败。
         _AUTO_DM_LOCKS[key] = asyncio.Lock()
     return _AUTO_DM_LOCKS[key]
 

@@ -281,45 +281,6 @@ ON message_batches(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_message_batch_items_batch_status
 ON message_batch_items(batch_id, status, id);
 
-CREATE TABLE IF NOT EXISTS agent_runs (
-    id TEXT PRIMARY KEY,
-    run_type TEXT NOT NULL,
-    platform TEXT NOT NULL DEFAULT 'dy',
-    goal TEXT NOT NULL DEFAULT '',
-    keywords TEXT NOT NULL DEFAULT '[]',
-    params TEXT NOT NULL DEFAULT '{}',
-    result TEXT NOT NULL DEFAULT '{}',
-    error TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'queued',
-    stop_requested INTEGER NOT NULL DEFAULT 0,
-    related_task_ids TEXT NOT NULL DEFAULT '[]',
-    related_ai_job_ids TEXT NOT NULL DEFAULT '[]',
-    related_message_batch_ids TEXT NOT NULL DEFAULT '[]',
-    related_traffic_plan_id TEXT NOT NULL DEFAULT '',
-    related_traffic_run_id TEXT NOT NULL DEFAULT '',
-    started_at TEXT,
-    finished_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS agent_run_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id TEXT NOT NULL,
-    level TEXT NOT NULL DEFAULT 'info',
-    phase TEXT NOT NULL DEFAULT '',
-    message TEXT NOT NULL,
-    details TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    FOREIGN KEY(run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_runs_type_status_created
-ON agent_runs(run_type, status, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_id
-ON agent_run_events(run_id, id);
-
 CREATE TABLE IF NOT EXISTS raw_source_refs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_type TEXT NOT NULL,
@@ -560,27 +521,6 @@ DEFAULT_SETTINGS = {
     "ai_base_url": "",
     "ai_api_key": "",
     "ai_model": "deepseek-chat",
-    "product_keywords": json.dumps([], ensure_ascii=False),
-    "lead_agent_commands": json.dumps(
-        [
-            "检查下我现在有多少竞品账户和目标客户",
-            "我现在还有多少用户未私信",
-            "为我找些做跨境电商AI客服的竞品",
-            "为我找些对AI客服有需求的客户，先不私信",
-            "将还未私信的客户私信",
-        ],
-        ensure_ascii=False,
-    ),
-    "traffic_agent_commands": json.dumps(
-        [
-            "检查最近的引流执行情况",
-            "帮我围绕AI客服做一轮抖音点赞引流",
-            "找跨境电商相关视频，点赞并关注，每轮处理10个",
-        ],
-        ensure_ascii=False,
-    ),
-    "lead_agent_auto_execute": "false",
-    "traffic_agent_auto_execute": "false",
     "default_content_count": "20",
     "default_comment_count": "20",
     "content_cutoff_days": "0",

@@ -585,30 +585,6 @@ def create_keyword_find_customer_task(platform: str, keyword: str, limit: int = 
     )
 
 
-def create_competitors_find_customer_task(platform: str = "dy", limit: int = 100) -> dict[str, Any]:
-    safe_limit = max(1, min(int(limit), 100))
-    # 复用“一键找客户”的批量构建器，避免 Agent 按账号拆出多批任务。
-    with database.connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, platform, platform_user_id, sec_uid, nickname, profile_url,
-                   competitor_status, content_total_count
-            FROM user_accounts
-            WHERE platform = ?
-              AND competitor_status = '竞品'
-            ORDER BY updated_at DESC, id DESC
-            LIMIT ?
-            """,
-            (platform, safe_limit),
-        ).fetchall()
-    return _build_find_customer_task(
-        platform,
-        rows,
-        "已有竞品账号",
-        f"已有竞品账号批量找客户：{platform}，竞品账号 {len(rows)} 个",
-    )
-
-
 def run_account_analysis_batch(account_ids: list[int], task_id: str) -> None:
     crawler_adapter.run_task(task_id)
     task = crawler_adapter.get_task(task_id)

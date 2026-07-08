@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import AutoAgentPage from './pages/AutoAgentPage'
 import AiPage from './pages/AiPage'
 import LogsPage from './pages/LogsPage'
 import MessageWorkbenchPage from './pages/MessageWorkbenchPage'
@@ -14,13 +13,6 @@ export const routes = [
   {
     path: '/',
     redirect: '/tasks',
-  },
-  // AI自动化页面暂时不在侧边栏展示，保留路由便于后续恢复入口。
-  {
-    path: '/auto-leads',
-    name: 'auto-leads',
-    component: AutoAgentPage,
-    meta: { title: 'AI自动拓客', subtitle: '输入目标后自动完成找竞品、筛客户和私信。', hint: '非技术用户的拓客入口' },
   },
   {
     path: '/tasks',
@@ -63,12 +55,6 @@ export const routes = [
     name: 'settings',
     component: SettingsPage,
     meta: { title: '设置', subtitle: '配置 AI 模型、MyCrawler 路径、自动化和 ICP 画像。', hint: '开始前先把基础环境配好' },
-  },
-  {
-    path: '/traffic-auto',
-    name: 'traffic-auto',
-    component: AutoAgentPage,
-    meta: { title: 'AI自动引流', subtitle: '输入目标后自动创建计划并启动抖音引流批次。', hint: '非技术用户的引流入口' },
   },
   {
     path: '/traffic-plans',
