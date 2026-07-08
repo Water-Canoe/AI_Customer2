@@ -3258,6 +3258,54 @@ def test_kuaishou_profile_enrichment_loads_runtime_shim() -> None:
     assert "mediacrawler_shims" in env["PYTHONPATH"]
 
 
+def test_kuaishou_runtime_shim_persists_creator_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "sqlite_tables.db"
+    config_pkg = types.ModuleType("config")
+    db_config_module = types.ModuleType("config.db_config")
+    db_config_module.sqlite_db_config = {"db_path": str(db_path)}
+    store_pkg = types.ModuleType("store")
+    store_pkg.__path__ = []  # type: ignore[attr-defined]
+    kuaishou_module = types.ModuleType("store.kuaishou")
+    calls: list[str] = []
+
+    async def original_save_creator(user_id: str, creator: dict[str, object]) -> None:
+        calls.append(user_id)
+
+    kuaishou_module.save_creator = original_save_creator  # type: ignore[attr-defined]
+    store_pkg.kuaishou = kuaishou_module  # type: ignore[attr-defined]
+    tools_pkg = types.ModuleType("tools")
+    utils_module = types.ModuleType("tools.utils")
+    utils_module.logger = types.SimpleNamespace(info=lambda message: None)
+    monkeypatch.setenv("AI_CUSTOMER_CREATOR_PLATFORM", "ks")
+    monkeypatch.setitem(sys.modules, "config", config_pkg)
+    monkeypatch.setitem(sys.modules, "config.db_config", db_config_module)
+    monkeypatch.setitem(sys.modules, "store", store_pkg)
+    monkeypatch.setitem(sys.modules, "store.kuaishou", kuaishou_module)
+    monkeypatch.setitem(sys.modules, "tools", tools_pkg)
+    monkeypatch.setitem(sys.modules, "tools.utils", utils_module)
+
+    spec = importlib.util.spec_from_file_location(
+        "sitecustomize_ks_test",
+        BACKEND_ROOT / "app" / "mediacrawler_shims" / "sitecustomize.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    asyncio.run(kuaishou_module.save_creator(  # type: ignore[attr-defined]
+        "ks-user",
+        {
+            "profile": {"user_name": "快手账号", "user_text": "主营AI客服", "headurl": "avatar", "gender": "F"},
+            "ownerCount": {"follow": 3, "fan": 88, "photo_public": 7},
+        },
+    ))
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT user_id, nickname, desc, fans, interaction FROM kuaishou_creator").fetchone()
+    assert calls == ["ks-user"]
+    assert row == ("ks-user", "快手账号", "主营AI客服", "88", "7")
+
+
 def test_recover_interrupted_running_tasks_marks_failed(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database

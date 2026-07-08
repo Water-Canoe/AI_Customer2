@@ -401,40 +401,43 @@ def _patch_ks_creator_sqlite_store() -> None:
         return
     try:
         from config.db_config import sqlite_db_config
-        from store.kuaishou import _store_impl as kuaishou_store_impl
+        from store import kuaishou as kuaishou_store
         from tools import utils
     except ModuleNotFoundError:
         sys.path.insert(0, os.getcwd())
         from config.db_config import sqlite_db_config
-        from store.kuaishou import _store_impl as kuaishou_store_impl
+        from store import kuaishou as kuaishou_store
         from tools import utils
 
-    store_class = kuaishou_store_impl.KuaishouSqliteStoreImplement
-    if getattr(store_class.store_creator, "_ai_customer_ks_creator_sqlite", False):
+    target = kuaishou_store.save_creator
+    if getattr(target, "_ai_customer_ks_creator_sqlite", False):
         return
 
-    async def store_creator(self, creator: dict[str, Any]) -> None:
-        user_id = str((creator or {}).get("user_id") or "").strip()
+    async def save_creator(user_id: str, creator: dict[str, Any]) -> None:
+        await target(user_id, creator)
+        user_id = str(user_id or "").strip()
         if not user_id:
             return
         raw_db_path = str(sqlite_db_config.get("db_path") or "") if isinstance(sqlite_db_config, dict) else ""
         db_path = Path(raw_db_path) if raw_db_path else Path(os.getcwd()) / "database" / "sqlite_tables.db"
+        owner_count = (creator or {}).get("ownerCount", {}) if isinstance(creator, dict) else {}
+        profile = (creator or {}).get("profile", {}) if isinstance(creator, dict) else {}
         db_path.parent.mkdir(parents=True, exist_ok=True)
         now_ms = int(time.time() * 1000)
         values = {
             "user_id": user_id,
-            "nickname": creator.get("nickname"),
-            "gender": creator.get("gender"),
-            "avatar": creator.get("avatar"),
-            "desc": creator.get("desc"),
-            "ip_location": creator.get("ip_location"),
-            "follows": creator.get("follows"),
-            "fans": creator.get("fans"),
-            "interaction": creator.get("interaction"),
-            "last_modify_ts": creator.get("last_modify_ts") or now_ms,
+            "nickname": profile.get("user_name"),
+            "gender": "Female" if profile.get("gender") == "F" else "Male",
+            "avatar": profile.get("headurl"),
+            "desc": profile.get("user_text"),
+            "ip_location": "",
+            "follows": owner_count.get("follow"),
+            "fans": owner_count.get("fan"),
+            "interaction": owner_count.get("photo_public"),
+            "last_modify_ts": now_ms,
         }
         with sqlite3.connect(db_path) as conn:
-            # MyCrawler 上游未建快手 creator 表，这里补齐最小可导入结构。
+            # MyCrawler 上游未建快手 creator 表，这里补齐项目导入需要的最小结构。
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS kuaishou_creator (
@@ -481,8 +484,8 @@ def _patch_ks_creator_sqlite_store() -> None:
             )
         utils.logger.info(f"[AI_Customer.ks_creator_store] saved kuaishou creator user_id:{user_id}")
 
-    store_creator._ai_customer_ks_creator_sqlite = True  # type: ignore[attr-defined]
-    store_class.store_creator = store_creator
+    save_creator._ai_customer_ks_creator_sqlite = True  # type: ignore[attr-defined]
+    kuaishou_store.save_creator = save_creator
 
 
 def _patch_douyin_http_resilience() -> None:
