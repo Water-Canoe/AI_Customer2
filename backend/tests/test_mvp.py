@@ -5237,6 +5237,64 @@ def test_agent_command_retries_failure_badge_items(tmp_path: Path, monkeypatch: 
     assert [row["status"] for row in rows] == ["failed", "pending"]
 
 
+def test_agent_command_deletes_non_competitors_and_non_customers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import ai_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status)
+            VALUES('dy', 'non-comp-agent', '非竞品账号', '非竞品')
+            """
+        ).lastrowid
+        lead_account_id = conn.execute(
+            "INSERT INTO user_accounts(platform, platform_user_id, nickname) VALUES('dy', 'non-customer-agent', '非客户账号')"
+        ).lastrowid
+        lead_id = conn.execute(
+            """
+            INSERT INTO lead_user_accounts(account_id, screening_status, follow_status)
+            VALUES(?, '非客户', '非客户')
+            """,
+            (lead_account_id,),
+        ).lastrowid
+
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps({"action": "lead_auto", "lead_operation": "customers"}),
+    )
+
+    client = TestClient(app)
+    preview = client.post(
+        "/api/agent/commands/preview",
+        json={"command": "为我删除所有非竞品号和非客户账号", "workspace": "lead"},
+    )
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["requires_confirmation"] is True
+    assert payload["plan"]["action"] == "system_action"
+    assert payload["plan"]["operation"] == "ai_delete_non_targets"
+    assert set(payload["plan"]["params"]["target_types"]) == {"competitors", "customers"}
+
+    executed = client.post(
+        "/api/agent/commands/execute",
+        json={"command": "为我删除所有非竞品号和非客户账号", "workspace": "lead", "plan": payload["plan"]},
+    )
+    assert executed.status_code == 200
+    result = executed.json()["result"]["data"]
+    assert result["non_competitors"]["deleted"] == 1
+    assert result["non_customers"]["deleted"] == 1
+    with database.connect() as conn:
+        assert conn.execute("SELECT 1 FROM user_accounts WHERE id = ?", (account_id,)).fetchone() is None
+        assert conn.execute("SELECT 1 FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone() is None
+
+
 def test_agent_command_rejects_unsafe_sql(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app

@@ -108,6 +108,7 @@ SYSTEM_ACTIONS = {
     "ai_jobs_list": False,
     "ai_delete_non_competitors": True,
     "ai_delete_non_customers": True,
+    "ai_delete_non_targets": True,
     "platform_capabilities": False,
     "agent_runs_list": False,
     "agent_run_detail": False,
@@ -298,6 +299,14 @@ def _normalize_plan(plan: dict[str, Any], payload: AgentCommandRequest) -> dict[
         normalized["operation"] = inferred_operation
         normalized["title"] = normalized.get("title") or "处理失败待查"
         normalized["summary"] = normalized.get("summary") or "失败待查包含采集失败任务和 AI 分析失败任务；确认后会重试可处理的失败项。"
+    elif inferred_operation == "ai_delete_non_targets":
+        action = "system_action"
+        normalized["operation"] = inferred_operation
+        normalized["title"] = normalized.get("title") or "删除非目标账号"
+        normalized["summary"] = normalized.get("summary") or "删除已被判定为非竞品或非客户的数据。"
+        params = normalized.get("params") if isinstance(normalized.get("params"), dict) else {}
+        params["target_types"] = _infer_non_target_types(payload.command)
+        normalized["params"] = params
     elif inferred_metric == "failures":
         action = "answer_stats"
     if action not in ALLOWED_ACTIONS:
@@ -641,6 +650,39 @@ def _ai_job_retry(params: dict[str, Any]) -> dict[str, Any]:
     return ai_service.retry_ai_job(_required_str(params, "job_id"))
 
 
+def _ai_delete_non_targets(params: dict[str, Any]) -> dict[str, Any]:
+    license_service.ensure_authorized()
+    target_types = _normalize_non_target_types(params.get("target_types") or params.get("types"))
+    result: dict[str, Any] = {"target_types": target_types}
+    with database.connect() as conn:
+        if "competitors" in target_types:
+            competitor_ids = [
+                int(row["id"])
+                for row in conn.execute("SELECT id FROM user_accounts WHERE competitor_status = '非竞品'").fetchall()
+            ]
+        else:
+            competitor_ids = []
+        if "customers" in target_types:
+            customer_ids = [
+                int(row["id"])
+                for row in conn.execute(
+                    """
+                    SELECT id
+                    FROM lead_user_accounts
+                    WHERE hidden = 0
+                      AND (screening_status = '非客户' OR follow_status IN ('非客户', '无需跟进'))
+                    """
+                ).fetchall()
+            ]
+        else:
+            customer_ids = []
+    if "competitors" in target_types:
+        result["non_competitors"] = ai_service.delete_workbench_non_competitors(competitor_ids)
+    if "customers" in target_types:
+        result["non_customers"] = ai_service.delete_workbench_non_customers(customer_ids)
+    return result
+
+
 def _bulk_action_preview(params: dict[str, Any]) -> dict[str, Any]:
     return bulk_actions.preview_bulk_action(BulkActionPreview(**params))
 
@@ -915,6 +957,7 @@ _SYSTEM_ACTION_HANDLERS = {
     "ai_jobs_list": lambda _params: ai_service.list_ai_jobs(),
     "ai_delete_non_competitors": lambda params: ai_service.delete_workbench_non_competitors(AiBulkDelete(**params).target_ids),
     "ai_delete_non_customers": lambda params: ai_service.delete_workbench_non_customers(AiBulkDelete(**params).target_ids),
+    "ai_delete_non_targets": _ai_delete_non_targets,
     "platform_capabilities": lambda _params: views.platform_capabilities(),
     "agent_runs_list": lambda params: agent_service.list_runs(str(params.get("run_type") or "")),
     "agent_run_detail": lambda params: agent_service.get_run(_required_str(params, "run_id")) or {},
@@ -1098,6 +1141,13 @@ def _system_action_done_answer(plan: dict[str, Any], result: dict[str, Any]) -> 
             f"重新创建采集任务 {int(data.get('created_task_count') or 0)} 个，"
             f"失败 {len(data.get('errors') or [])} 个。"
         )
+    if operation == "ai_delete_non_targets":
+        competitors = data.get("non_competitors") if isinstance(data.get("non_competitors"), dict) else {}
+        customers = data.get("non_customers") if isinstance(data.get("non_customers"), dict) else {}
+        return (
+            f"已删除非目标数据：非竞品账号 {int(competitors.get('deleted') or 0)} 个，"
+            f"非客户 {int(customers.get('deleted') or 0)} 个。"
+        )
     mutates = "已执行" if result.get("mutates") else "已查询"
     return f"{mutates}系统操作：{operation}。"
 
@@ -1155,6 +1205,8 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 def _infer_action(command: str, workspace: str) -> str:
     text = str(command or "")
+    if _is_non_target_delete_command(text):
+        return "system_action"
     if "失败待查" in text or ("失败" in text and ("待查" in text or "重试" in text)):
         return "answer_stats"
     if re.search(r"(多少|几个|检查|查看|统计|列出|查询|数据库)", text):
@@ -1168,6 +1220,8 @@ def _infer_action(command: str, workspace: str) -> str:
 
 def _infer_system_operation(command: str, workspace: str) -> str:
     text = str(command or "")
+    if _is_non_target_delete_command(text):
+        return "ai_delete_non_targets"
     if "重试" in text and ("失败待查" in text or "失败" in text):
         return "failed_retry"
     if re.search(r"(设置|配置)", text):
@@ -1208,6 +1262,35 @@ def _infer_metric(command: str) -> str:
     if "客户" in text:
         return "target_customers"
     return "overview"
+
+
+def _is_non_target_delete_command(text: str) -> bool:
+    return bool(re.search(r"(删除|清理|移除|删掉|剔除)", text)) and ("非竞品" in text or "非客户" in text)
+
+
+def _infer_non_target_types(command: str) -> list[str]:
+    text = str(command or "")
+    result: list[str] = []
+    if "非竞品" in text:
+        result.append("competitors")
+    if "非客户" in text or "无需跟进" in text:
+        result.append("customers")
+    return result or ["competitors", "customers"]
+
+
+def _normalize_non_target_types(values: Any) -> list[str]:
+    if isinstance(values, str):
+        values = re.split(r"[,，\s]+", values)
+    if not isinstance(values, list):
+        values = ["competitors", "customers"]
+    result: list[str] = []
+    for value in values:
+        item = str(value or "").strip()
+        if item in {"competitor", "competitors", "non_competitors", "非竞品"} and "competitors" not in result:
+            result.append("competitors")
+        if item in {"customer", "customers", "non_customers", "非客户"} and "customers" not in result:
+            result.append("customers")
+    return result or ["competitors", "customers"]
 
 
 def _infer_lead_operation(command: str) -> str:
@@ -1255,6 +1338,14 @@ def _plan_answer(plan: dict[str, Any]) -> str:
         return "我会创建抖音引流计划并立即启动执行批次。"
     if action == "system_action" and plan.get("operation") == "failed_retry":
         return "失败待查=采集失败任务+AI分析失败任务。确认后我会重试 AI 失败任务，并按原参数重新创建采集失败任务。"
+    if action == "system_action" and plan.get("operation") == "ai_delete_non_targets":
+        types = set(plan.get("params", {}).get("target_types") or [])
+        labels = []
+        if "competitors" in types:
+            labels.append("非竞品账号")
+        if "customers" in types:
+            labels.append("非客户")
+        return f"确认后会删除所有已判定为{'和'.join(labels) or '非目标'}的数据；未被判定为非目标的数据会跳过。"
     return "确认后执行。"
 
 
