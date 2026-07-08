@@ -13,8 +13,9 @@ import TrafficWorkbenchPage from './pages/TrafficWorkbenchPage'
 export const routes = [
   {
     path: '/',
-    redirect: '/auto-leads',
+    redirect: '/tasks',
   },
+  // AI自动化页面暂时不在侧边栏展示，保留路由便于后续恢复入口。
   {
     path: '/auto-leads',
     name: 'auto-leads',
