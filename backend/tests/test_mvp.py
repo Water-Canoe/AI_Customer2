@@ -136,6 +136,24 @@ def create_raw_db(raw_db: Path) -> None:
                 add_ts INTEGER, last_modify_ts INTEGER, desc TEXT, gender TEXT,
                 follows TEXT, fans TEXT, interaction TEXT, videos_count TEXT
             );
+            CREATE TABLE kuaishou_video (
+                user_id TEXT, nickname TEXT, avatar TEXT,
+                add_ts INTEGER, last_modify_ts INTEGER, video_id TEXT,
+                video_type TEXT, title TEXT, desc TEXT, create_time INTEGER,
+                liked_count TEXT, viewd_count TEXT, video_url TEXT,
+                video_cover_url TEXT, video_play_url TEXT, source_keyword TEXT
+            );
+            CREATE TABLE kuaishou_video_comment (
+                user_id TEXT, nickname TEXT, avatar TEXT,
+                add_ts INTEGER, last_modify_ts INTEGER, comment_id TEXT,
+                video_id TEXT, content TEXT, create_time INTEGER,
+                sub_comment_count TEXT
+            );
+            CREATE TABLE kuaishou_creator (
+                user_id TEXT, nickname TEXT, gender TEXT, avatar TEXT,
+                desc TEXT, ip_location TEXT, follows TEXT, fans TEXT,
+                interaction TEXT, add_ts INTEGER, last_modify_ts INTEGER
+            );
             INSERT INTO douyin_aweme VALUES (
                 'creator-1', 'sec-1', '', 'unique-1', 'AI客服竞品号',
                 '', '专注AI客服系统', '', 1, 1, 10001, 'video',
@@ -150,6 +168,10 @@ def create_raw_db(raw_db: Path) -> None:
             INSERT INTO dy_creator VALUES (
                 'creator-1', 'AI客服竞品号', '', '', 1, 1,
                 '专注AI客服系统', '', '10', '2000', '88', '12'
+            );
+            INSERT INTO kuaishou_creator VALUES (
+                'ks-creator-1', '快手竞品号', 'Male', '',
+                '专注AI客服和私域转化', '', '8', '1200', '6', 1, 1
             );
             """
         )
@@ -258,6 +280,49 @@ def test_task_command_mapping_and_import(tmp_path: Path) -> None:
     assert account_metrics["customer_count"] == 2
     assert account_metrics["target_customer_count"] == 1
     assert account_metrics["non_customer_count"] == 1
+
+
+def test_import_kuaishou_creator_profile_for_account_analysis(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+
+    task = crawler_adapter.create_task(
+        TaskCreate(
+            mode="profile_enrichment",
+            platform="ks",
+            creator_id="https://www.kuaishou.com/profile/ks-creator-1",
+            execute_crawler=False,
+        )
+    )
+
+    result = import_for_task(str(task["id"]))
+
+    assert result["accounts"] == 1
+    with database.connect() as conn:
+        account = conn.execute(
+            """
+            SELECT nickname, signature, fans, content_total_count
+            FROM user_accounts
+            WHERE platform = 'ks' AND platform_user_id = 'ks-creator-1'
+            """
+        ).fetchone()
+        ref_count = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM raw_source_refs
+            WHERE task_id = ? AND platform = 'ks' AND raw_table = 'kuaishou_creator'
+            """,
+            (task["id"],),
+        ).fetchone()["c"]
+
+    assert account["nickname"] == "快手竞品号"
+    assert account["signature"] == "专注AI客服和私域转化"
+    assert account["fans"] == 1200
+    assert account["content_total_count"] == 6
+    assert ref_count == 1
 
 
 def test_reimport_existing_comments_does_not_count_as_new_leads(tmp_path: Path) -> None:
@@ -2402,6 +2467,65 @@ def test_keyword_account_analysis_creates_unanalysed_tasks_and_skips_running(tmp
     assert all(row["mode"] == "account_analysis" for row in rows)
 
 
+def test_keyword_account_analysis_includes_kuaishou_accounts(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import account_actions, crawler_adapter
+
+    with database.connect() as conn:
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status, profile_url)
+            VALUES('ks', 'ks-candidate', '快手待分析', '未分析', 'https://www.kuaishou.com/profile/ks-candidate')
+            """
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword)
+            VALUES('ks', 'ks-content-1', ?, '关键词内容', 'AI客服')
+            """,
+            (account_id,),
+        )
+
+    result = account_actions.create_keyword_account_analysis_tasks("ks", "AI客服")
+
+    assert result["created"] == 1
+    assert result["account_count"] == 1
+    task = crawler_adapter.get_task(result["task_ids"][0])
+    assert task is not None
+    assert task["platform"] == "ks"
+    assert task["creator_id"] == "https://www.kuaishou.com/profile/ks-candidate"
+
+
+def test_kuaishou_find_customer_creates_comment_crawl_task(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import account_actions, crawler_adapter
+
+    with database.connect() as conn:
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status, profile_url, content_total_count)
+            VALUES('ks', 'ks-competitor', '快手竞品', '竞品', 'https://www.kuaishou.com/profile/ks-competitor', 3)
+            """
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, content_url, author_account_id, title, source_keyword)
+            VALUES('ks', 'ks-video-1', 'https://www.kuaishou.com/short-video/ks-video-1', ?, '快手竞品视频', 'AI客服')
+            """,
+            (account_id,),
+        )
+
+    result = account_actions.create_account_find_customer_task(int(account_id))
+
+    assert result["created"] == 2
+    tasks = [crawler_adapter.get_task(task_id) for task_id in result["task_ids"]]
+    assert {task["platform"] for task in tasks if task} == {"ks"}
+    assert any(task and task["crawler_type"] == "detail" for task in tasks)
+    assert any(task and task["crawler_type"] == "creator" for task in tasks)
+
+
 def test_keyword_find_customer_reuses_existing_contents_before_creator(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
@@ -3121,6 +3245,19 @@ def test_media_crawler_sqlite_schema_auto_initializes(tmp_path: Path, monkeypatc
     assert "douyin_aweme" in str(message)
 
 
+def test_kuaishou_profile_enrichment_loads_runtime_shim() -> None:
+    from app.services import crawler_adapter
+
+    env = crawler_adapter._media_crawler_subprocess_env(
+        {},
+        {"platform": "ks", "mode": "profile_enrichment", "crawler_type": "creator", "content_count": 1},
+        None,
+    )
+
+    assert env["AI_CUSTOMER_CREATOR_PLATFORM"] == "ks"
+    assert "mediacrawler_shims" in env["PYTHONPATH"]
+
+
 def test_recover_interrupted_running_tasks_marks_failed(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
@@ -3143,19 +3280,25 @@ def test_recover_interrupted_running_tasks_marks_failed(tmp_path: Path) -> None:
     assert log_count >= 1
 
 
-def test_profile_enrichment_rejects_platform_without_sqlite_creator_store(tmp_path: Path) -> None:
+def test_profile_enrichment_accepts_kuaishou_creator_store(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
     from app.services import crawler_adapter
 
     with database.connect() as conn:
         conn.execute(
-            "INSERT INTO user_accounts(platform, platform_user_id, nickname) VALUES('ks', 'ks-user-1', 'KS User')"
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
+            VALUES('ks', 'ks-user-1', 'KS User', 'https://www.kuaishou.com/profile/ks-user-1')
+            """
         )
         account_id = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'ks-user-1'").fetchone()["id"]
 
-    with pytest.raises(ValueError, match="MyCrawler SQLite"):
-        crawler_adapter.create_profile_enrichment_task(int(account_id))
+    task = crawler_adapter.create_profile_enrichment_task(int(account_id))
+
+    assert task["platform"] == "ks"
+    assert task["mode"] == "profile_enrichment"
+    assert task["creator_id"] == "https://www.kuaishou.com/profile/ks-user-1"
 
 
 def test_batch_profile_enrichment_creates_limited_deduped_tasks(tmp_path: Path) -> None:
@@ -3201,10 +3344,10 @@ def test_batch_profile_enrichment_creates_limited_deduped_tasks(tmp_path: Path) 
     created_task = crawler_adapter.get_task(first["task_ids"][0])
     assert created_task is not None
     assert created_task["mode"] == "profile_enrichment"
-    assert created_task["platform"] in {"dy", "xhs"}
+    assert created_task["platform"] in {"dy", "xhs", "ks"}
 
     second = crawler_adapter.create_profile_enrichment_batch(limit=10)
-    assert second["created"] == 1
+    assert second["created"] == 2
     assert set(first["task_ids"]).isdisjoint(second["task_ids"])
 
     no_more = crawler_adapter.create_profile_enrichment_batch(limit=10)
@@ -5781,8 +5924,9 @@ def test_env_check_reports_platform_raw_data_diagnostics(tmp_path: Path) -> None
     assert dy_content_fields["signature"]["non_empty"] == 1
 
     ks = diagnostics["ks"]
-    assert ks["tables"]["creator"]["supported"] is False
-    assert any("creator" in warning for warning in ks["warnings"])
+    assert ks["tables"]["creator"]["supported"] is True
+    assert ks["tables"]["creator"]["table"] == "kuaishou_creator"
+    assert ks["tables"]["creator"]["row_count"] == 1
     assert payload["project_quality"]["summary"]["contents"] == 0
     assert any(issue["title"] == "项目库还没有内容" for issue in payload["project_quality"]["issues"])
 
@@ -5809,9 +5953,10 @@ def test_platform_capabilities_explain_field_limits(tmp_path: Path) -> None:
     assert xhs["fields"]["creator_signature"]["table"] == "xhs_creator"
 
     ks = capabilities["ks"]
-    assert ks["profile_enrichment_supported"] is False
-    assert ks["fields"]["creator_signature"]["supported"] is False
-    assert any("不能通过补资料" in warning for warning in ks["warnings"])
+    assert ks["profile_enrichment_supported"] is True
+    assert ks["fields"]["creator_signature"]["supported"] is True
+    assert ks["fields"]["creator_signature"]["table"] == "kuaishou_creator"
+    assert any("补资料" in warning for warning in ks["modes"]["competitor_discovery"]["warnings"])
     assert ks["modes"]["competitor_crawl"]["comments_default"] is True
 
 

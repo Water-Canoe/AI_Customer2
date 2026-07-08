@@ -19,7 +19,7 @@ LIBRARY_LABELS = {
 }
 
 PLATFORM_LABELS = {"dy": "抖音", "xhs": "小红书", "ks": "快手"}
-PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
+PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs", "ks"}
 ACCOUNT_SOURCE_GROUPS = {
     "competitor_crawl": "竞品账号爬取",
     "own_account": "自家账号互动",
@@ -245,8 +245,8 @@ def _platform_capability_warnings(platform: str) -> list[str]:
             "小红书线索判断应优先看内容、评论和昵称，不要假设评论者简介可用。",
         ]
     return [
-        "快手当前没有 creator 主页资料表，主页简介和粉丝数不能通过补资料回填。",
-        "快手候选筛选只能依赖昵称、内容和评论证据，不会伪造主页简介。",
+        "快手搜索结果没有作者主页简介映射，主页简介依赖 kuaishou_creator.desc 补资料。",
+        "快手线索判断应优先看内容、评论和昵称；账号分析会补齐主页简介后再判断竞品。",
     ]
 
 
@@ -538,7 +538,7 @@ def workbench_actions() -> dict[str, Any]:
             """
             SELECT COUNT(DISTINCT ua.id) AS count
             FROM user_accounts ua
-            WHERE ua.platform IN ('dy', 'xhs')
+            WHERE ua.platform IN ('dy', 'xhs', 'ks')
               AND COALESCE(ua.signature, '') = ''
               AND (
                 EXISTS (SELECT 1 FROM contents c WHERE c.author_account_id = ua.id)

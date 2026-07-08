@@ -458,7 +458,7 @@ function overviewActions(node: Dict, handlers: OverviewHandlers) {
     ]
   }
   if (node.kind === 'keyword') {
-    const canAnalyzeKeyword = ['dy', 'xhs'].includes(metrics.platform)
+    const canAnalyzeKeyword = ['dy', 'xhs', 'ks'].includes(metrics.platform)
     return [
       h('button', {
         class: 'overview-action reserved',
@@ -496,7 +496,7 @@ function overviewActions(node: Dict, handlers: OverviewHandlers) {
   if (node.kind !== 'account') return []
   const isCompetitor = metrics.competitor_status === '竞品'
   const isOwnAccount = Boolean(metrics.is_own_account) || metrics.account_role === 'own_account'
-  const canAnalyze = ['dy', 'xhs'].includes(metrics.platform)
+  const canAnalyze = ['dy', 'xhs', 'ks'].includes(metrics.platform)
   const isAnalysisBusy = ['排队分析', '正在分析'].includes(overviewAccountStatus(metrics))
   if (isOwnAccount) {
     return [

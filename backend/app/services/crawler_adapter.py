@@ -28,7 +28,7 @@ MODE_LABELS = {
     "profile_enrichment": "账号资料补全",
     "account_analysis": "账号分析",
 }
-PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs"}
+PROFILE_ENRICHMENT_PLATFORMS = {"dy", "xhs", "ks"}
 
 RUNNING_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 CDP_BROWSER_CONTEXT: Any | None = None
@@ -36,10 +36,12 @@ CDP_BROWSER_CONTEXT: Any | None = None
 ACCOUNT_ANALYSIS_AWEME_LOG_MARKERS = (
     "store.douyin.update_douyin_aweme",
     "store.xhs.update_xhs_note",
+    "store.kuaishou.update_kuaishou_video",
 )
 ACCOUNT_ANALYSIS_CREATOR_LOG_MARKERS = (
     "store.douyin.save_creator",
     "store.xhs.save_creator",
+    "store.kuaishou.save_creator",
 )
 
 
@@ -202,7 +204,7 @@ def _preview_warnings(task: TaskCreate, crawler_type: str, sanitized: dict[str, 
     if task.mode in ("competitor_crawl", "own_account") and not task.collect_comments:
         warnings.append("该模式会自动打开评论采集，因为线索客户来自评论区。")
     if task.platform == "ks" and task.mode == "competitor_discovery":
-        warnings.append("快手不能补齐主页简介，竞品候选更依赖昵称和内容证据。")
+        warnings.append("快手搜索结果的作者简介通常为空，竞品候选会先按昵称和内容入库，再通过账号分析补主页简介。")
     return warnings
 
 
@@ -328,7 +330,7 @@ def create_profile_enrichment_task(
         account = database.row_to_dict(row)
         platform = str(account.get("platform") or "")
         if platform not in PROFILE_ENRICHMENT_PLATFORMS:
-            raise ValueError("MyCrawler SQLite 目前仅支持抖音/小红书账号主页资料采集，快手主页资料不会写入 SQLite")
+            raise ValueError("MyCrawler SQLite 目前仅支持抖音/小红书/快手账号主页资料采集")
         creator_id = _account_profile_identifier(account)
         if not creator_id:
             raise ValueError("账号缺少主页链接或平台ID，无法采集主页资料")
@@ -365,7 +367,7 @@ def create_profile_enrichment_batch(limit: int = 10) -> dict[str, object]:
             """
             SELECT ua.id
             FROM user_accounts ua
-            WHERE ua.platform IN ('dy', 'xhs')
+            WHERE ua.platform IN ('dy', 'xhs', 'ks')
               AND COALESCE(ua.signature, '') = ''
               AND (
                 COALESCE(ua.profile_url, '') <> ''
@@ -479,7 +481,7 @@ def _task_outcome(conn, task: dict[str, object]) -> dict[str, object]:
                 WHERE ls.task_id = ? AND ls.active = 1
             ) related
             JOIN user_accounts ua ON ua.id = related.account_id
-            WHERE ua.platform IN ('dy', 'xhs') AND COALESCE(ua.signature, '') = ''
+            WHERE ua.platform IN ('dy', 'xhs', 'ks') AND COALESCE(ua.signature, '') = ''
             """,
             (task_id, task_id, task_id, task_id),
         ),
@@ -912,7 +914,7 @@ def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, obje
         env["AI_CUSTOMER_DY_DETAIL_SLEEP_SEC"] = _douyin_detail_sleep_seconds()
         shim_required = True
     if (
-        task.get("mode") in ("account_analysis", "competitor_crawl", "own_account")
+        task.get("mode") in ("account_analysis", "profile_enrichment", "competitor_crawl", "own_account")
         and task.get("crawler_type") == "creator"
         and task.get("platform") in ("dy", "xhs", "ks")
     ):

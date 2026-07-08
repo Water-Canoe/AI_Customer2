@@ -133,9 +133,9 @@ ICP 画像里的 `company_name` 是可选字段：填写后 AI 私信话术可�
 
 任务管理页不再保留顶部提示条和平台能力面板，只保留模式选择、参数表单、执行预览和最近任务，减少创建任务时的视觉干扰。前端也不再为任务页拉取 `/platform-capabilities`。
 
-`account_analysis` 任务的“创作者主页/ID”可以包含多个标签。后端会按 MyCrawler creator 模式支持的逗号格式传入 `--creator_id`，并在启动前逐个匹配项目库中的原账号；匹配成功后只创建一个账号分析任务，任务名默认显示为“账号分析-xx个竞品账号”，采集成功后再为这些账号批量创建 competitor AI job，并按设置页“AI分析并行数”并发执行竞品判断。抖音 creator 模式上游默认会先拉完第一个账号的全部视频再进入下一个账号，容易让“一键竞品分析”长期卡在第一个账号；项目适配器会在子进程运行时注入每账号视频上限，只对抖音 `account_analysis` 生效，确保每个账号最多采集设置页“账号分析内容数”条内容后继续下一个账号。失败或取消的账号分析任务被删除时，后端会释放这些账号的临时 `排队分析 / 正在分析` 状态，并清理未完成的 competitor AI job；这些账号仍保持 `未分析`，后续可以再次被“一键竞品分析”选中。任务与日志页点击失败任务“重试”后，如果表单中恢复了多个主页标签，再次点击“开始采集并导入”会继续走这个批量账号分析链路。
+`account_analysis` 任务的“创作者主页/ID”可以包含多个标签。后端会按 MyCrawler creator 模式支持的逗号格式传入 `--creator_id`，并在启动前逐个匹配项目库中的原账号；匹配成功后只创建一个账号分析任务，任务名默认显示为“账号分析-xx个竞品账号”，采集成功后再为这些账号批量创建 competitor AI job，并按设置页“AI分析并行数”并发执行竞品判断。三平台 creator 模式都可能因为单账号内容过多而拖慢批量分析；项目适配器会在子进程运行时注入每账号视频/笔记上限，确保每个账号最多采集设置页“账号分析内容数”条内容后继续下一个账号。失败或取消的账号分析任务被删除时，后端会释放这些账号的临时 `排队分析 / 正在分析` 状态，并清理未完成的 competitor AI job；这些账号仍保持 `未分析`，后续可以再次被“一键竞品分析”选中。任务与日志页点击失败任务“重试”后，如果表单中恢复了多个主页标签，再次点击“开始采集并导入”会继续走这个批量账号分析链路。
 
-账号主页简介不是所有采集模式都会带回。抖音关键词搜索当前常见结果只会写内容作者字段，`user_signature` 可能为空。总览树账号行的“账号分析”会创建 `account_analysis` 任务，使用 MyCrawler creator 模式补采主页资料和少量视频；采集视频数量由设置页“账号分析内容数”控制，默认 5 条，后端会限制在 1-50 条内。导入时以 `dy_creator.desc` / `xhs_creator.desc` 作为主页简介权威来源，并按该配置写入内容库。账号分析补采视频只作为该账号的分析素材，不会因为空 `source_keyword` 在总览树生成“未标记关键词”分支。抖音 creator 表的 `user_id` 可能是 sec_uid，而内容表作者 ID 可能是数字 ID；导入时会用 `sec_uid/profile_url` 归并到同一个 `user_accounts` 账号，避免主页简介写到另一个重复账号上。抖音 creator 模式上游会按页拉取视频列表，可能实际返回超过目标条数；项目适配器会在日志中确认主页资料和目标数量视频已写入后提前结束子进程，再执行归一化导入。总览树账号行会把真实结论和临时进度分开：账号采集 pending/running 阶段显示“排队分析”，AI job running 阶段显示“正在分析”，AI 成功后再显示最终的 `竞品 / 非竞品`。采集成功后系统会把账号资料和最近若干条视频打包发送给 AI，写回 `competitor_status` 和 `competitor_reason`：竞品账号显示“找客户”和“删除”；非竞品可在账号行单独删除，也可在关键词行用“一键删除非竞品”批量清理。设置页打开“自动分析竞品账号”后，`competitor_discovery` 搜索任务成功导入候选账号后会自动创建一个批量 `account_analysis` 任务，先补主页资料和近期内容，再逐个触发 AI 判断；设置页打开“自动删除非竞品账号”后，AI 将候选账号判为 `非竞品` 时会复用总览树账号删除路径自动清理该账号及其证据链。
+账号主页简介不是所有采集模式都会带回。关键词搜索当前常见结果通常只会写内容作者字段，抖音的 `user_signature` 可能为空，小红书和快手内容表没有作者主页简介映射。总览树账号行的“账号分析”会创建 `account_analysis` 任务，使用 MyCrawler creator 模式补采主页资料和少量视频；采集视频数量由设置页“账号分析内容数”控制，默认 5 条，后端会限制在 1-50 条内。导入时以 `dy_creator.desc` / `xhs_creator.desc` / `kuaishou_creator.desc` 作为主页简介权威来源，并按该配置写入内容库。快手上游 SQLite store 没有内置 creator 表，项目通过运行时 `sitecustomize` shim 在快手 creator 模式写入最小 `kuaishou_creator` 表，再由项目导入器统一归一化；不修改 MyCrawler 源码。账号分析补采视频只作为该账号的分析素材，不会因为空 `source_keyword` 在总览树生成“未标记关键词”分支。抖音 creator 表的 `user_id` 可能是 sec_uid，而内容表作者 ID 可能是数字 ID；导入时会用 `sec_uid/profile_url` 归并到同一个 `user_accounts` 账号，避免主页简介写到另一个重复账号上。creator 模式上游会按页拉取视频列表，可能实际返回超过目标条数；项目适配器会在日志中确认主页资料和目标数量视频已写入后提前结束子进程，再执行归一化导入。总览树账号行会把真实结论和临时进度分开：账号采集 pending/running 阶段显示“排队分析”，AI job running 阶段显示“正在分析”，AI 成功后再显示最终的 `竞品 / 非竞品`。采集成功后系统会把账号资料和最近若干条视频打包发送给 AI，写回 `competitor_status` 和 `competitor_reason`：竞品账号显示“找客户”和“删除”；非竞品可在账号行单独删除，也可在关键词行用“一键删除非竞品”批量清理。设置页打开“自动分析竞品账号”后，`competitor_discovery` 搜索任务成功导入候选账号后会自动创建一个批量 `account_analysis` 任务，先补主页资料和近期内容，再逐个触发 AI 判断；设置页打开“自动删除非竞品账号”后，AI 将候选账号判为 `非竞品` 时会复用总览树账号删除路径自动清理该账号及其证据链。
 
 总览树统计分两种口径：平台行、关键词行和账号任务来源行统计的是当前分支范围内的数据；竞品账号卡片统计的是账号全量数据。关键词行同时读取 `contents.source_keyword` 和 `account_sources.keyword`，因此同一竞品账号可以按来源证据出现在多个关键词分支下，不会因为内容表只能保留一个主关键词而丢失其它关键词关联。真正带关键词的搜索来源仍显示为“关键词：xxx”；`competitor_crawl` 和 `own_account` 这类没有关键词的账号任务会显示为“账号任务：竞品账号爬取 / 自家账号互动”来源分支，而不是混入“未标记关键词”，避免数据已经入库但在总览树看起来像丢失。自家账号互动导入的内容作者会标记为 `account_role=own_account` 和 `is_own_account=1`，页面可显示“自家账号”角色。账号卡片的“内容总数”来自 creator 主页资料里的作品总数，“已爬取内容”统计项目库中该账号名下的全部内容，不受 `source_keyword` 是否为空影响；“评论”统计这些内容下的全部评论；“线索”统计该账号作为来源账号或其内容评论产生的全部有效客户线索；“客户数”统计已被 AI 判定为目标客户并进入 `未私信 / 已私信 / 未回复 / 已回复 / 未成交 / 已成交` 跟进流的线索；“非客户数”统计已被 AI 判定为 `非客户` 或旧状态 `无需跟进` 的线索。未分析线索只进入“线索”，不会计入“客户数”或“非客户数”。这样账号分析、找客户任务和自家账号互动任务导入的无关键词内容，也会正确反映在同一个账号卡片上。
 
@@ -238,7 +238,7 @@ npm run dev
 - `GET /api/overview/tree`：查看平台、关键词、账号、内容、客户的总览树。
 - `GET /api/settings/env-check`：检查项目库、MyCrawler 路径、底层库、AI 配置；同时返回项目库关键字段质量和按平台诊断的 MyCrawler 原始表、行数、关键字段非空情况。
 - `POST /api/settings/clear-data`：清空项目业务库和当前设置指向的 MyCrawler SQLite 业务表，必须输入确认文本 `清空所有数据`。
-- `POST /api/accounts/{account_id}/profile-enrichment`：为抖音/小红书账号创建主页资料补全任务。导入 creator 主页简介后会自动复判竞品关键词命中关系；快手当前不会创建该任务，因为 MyCrawler SQLite store 未写入快手 creator 资料。
+- `POST /api/accounts/{account_id}/profile-enrichment`：为抖音/小红书/快手账号创建主页资料补全任务。导入 creator 主页简介后会自动复判竞品关键词命中关系；快手由项目运行时 shim 写入 `kuaishou_creator` 后再导入。
 - `POST /api/accounts/profile-enrichment/batch`：批量创建主页资料补全任务，默认最多 10 个并串行执行；`limit` 最大 50，前端使用 10。
 - `POST /api/accounts/{account_id}/analysis`：总览树“账号分析”入口，创建 `account_analysis` 任务，采集主页资料和少量视频；任务成功后自动发起竞品 AI 分析。
 - `POST /api/accounts/{account_id}/find-customers`：总览树或数据表“找客户”入口，只允许已判定为竞品的账号创建客户发现任务；后端优先对已入库内容创建 detail 评论采集任务，已有内容不足时再创建 creator 补采任务。
@@ -247,7 +247,7 @@ npm run dev
 - `POST /api/overview/accounts/{account_id}/customers/analyze`：总览树竞品账号行“一键意向分析”入口，按账号范围批量创建客户意向 AI job，并按设置页“AI分析并行数”后台并行执行。
 - `POST /api/overview/accounts/{account_id}/customers/non-customers/delete`：总览树竞品账号行“删除非客户”入口，删除该竞品账号下已判定为非客户的客户来源关系、可删除评论证据和无其它引用的客户账号，并写入防重复墓碑。
 - `DELETE /api/overview/customers/{lead_id}`：总览树客户行“删除”入口，按客户线索删除当前来源关系、可删除评论证据和无其它引用的客户账号，不走账号范围删除。
-- `POST /api/overview/keywords/analyze`：总览树关键词行“一键竞品分析”入口，按平台和关键词把所有“未分析”的抖音/小红书账号合并成一个 `account_analysis` 任务，`creator_id` 使用 MyCrawler 支持的逗号分隔多账号格式，并跳过已有 pending/running 账号分析任务的账号。
+- `POST /api/overview/keywords/analyze`：总览树关键词行“一键竞品分析”入口，按平台和关键词把所有“未分析”的抖音/小红书/快手账号合并成一个 `account_analysis` 任务，`creator_id` 使用 MyCrawler 支持的逗号分隔多账号格式，并跳过已有 pending/running 账号分析任务的账号。
 - `POST /api/overview/keywords/find-customers`：总览树关键词行“一键找客户”入口，按平台和关键词收集该分组下的竞品账号，优先复用这些账号已入库内容补采评论；已有内容不足的账号会合并成一个 creator 补采任务，并跳过已有 pending/running 找客户任务的账号。
 - `POST /api/overview/keywords/non-competitors/delete`：按平台和关键词删除已判定为“非竞品”的账号，并写入账号删除墓碑；后续采集再遇到同一账号会跳过。
 - `DELETE /api/overview/platforms/{platform}`：删除某个平台在总览树范围内的内容、评论、线索、账号来源和可清理账号，并为账号、内容、评论写入删除墓碑。
@@ -365,4 +365,4 @@ Windows 测试包通过 `script/build_package.ps1` 生成。脚本会先执行 `
 - 首版只覆盖文档要求的平台：抖音、小红书、快手。
 - 自动测试默认使用模拟 MyCrawler SQLite，不会触发真实采集。
 - 如果真实采集失败，应先看“任务与日志”的失败诊断，不会使用假数据兜底。
-- 快手上游 SQLite store 目前没有保存 creator 主页资料，因此“补资料”只支持抖音和小红书；快手账号的主页简介不会被伪造，任务页也会提前显示该限制。
+- 快手网页版不提供稳定私信入口，因此自动私信只覆盖抖音；快手仍支持竞品发现、账号分析、找客户、客户意向分析和手动跟进。

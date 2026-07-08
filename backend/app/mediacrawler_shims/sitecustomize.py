@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 import sys
+import time
+from pathlib import Path
 from typing import Any, Callable
 
 
@@ -392,6 +395,96 @@ def _patch_ks_creator_video_limit() -> None:
     kuaishou_client.KuaiShouClient.get_all_videos_by_creator = limited_get_all_videos_by_creator
 
 
+def _patch_ks_creator_sqlite_store() -> None:
+    platform = _creator_platform()
+    if platform and platform != "ks":
+        return
+    try:
+        from config.db_config import sqlite_db_config
+        from store.kuaishou import _store_impl as kuaishou_store_impl
+        from tools import utils
+    except ModuleNotFoundError:
+        sys.path.insert(0, os.getcwd())
+        from config.db_config import sqlite_db_config
+        from store.kuaishou import _store_impl as kuaishou_store_impl
+        from tools import utils
+
+    store_class = kuaishou_store_impl.KuaishouSqliteStoreImplement
+    if getattr(store_class.store_creator, "_ai_customer_ks_creator_sqlite", False):
+        return
+
+    async def store_creator(self, creator: dict[str, Any]) -> None:
+        user_id = str((creator or {}).get("user_id") or "").strip()
+        if not user_id:
+            return
+        raw_db_path = str(sqlite_db_config.get("db_path") or "") if isinstance(sqlite_db_config, dict) else ""
+        db_path = Path(raw_db_path) if raw_db_path else Path(os.getcwd()) / "database" / "sqlite_tables.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        now_ms = int(time.time() * 1000)
+        values = {
+            "user_id": user_id,
+            "nickname": creator.get("nickname"),
+            "gender": creator.get("gender"),
+            "avatar": creator.get("avatar"),
+            "desc": creator.get("desc"),
+            "ip_location": creator.get("ip_location"),
+            "follows": creator.get("follows"),
+            "fans": creator.get("fans"),
+            "interaction": creator.get("interaction"),
+            "last_modify_ts": creator.get("last_modify_ts") or now_ms,
+        }
+        with sqlite3.connect(db_path) as conn:
+            # MyCrawler 上游未建快手 creator 表，这里补齐最小可导入结构。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS kuaishou_creator (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    nickname TEXT,
+                    gender TEXT,
+                    avatar TEXT,
+                    desc TEXT,
+                    ip_location TEXT,
+                    follows TEXT,
+                    fans TEXT,
+                    interaction TEXT,
+                    add_ts INTEGER,
+                    last_modify_ts INTEGER
+                )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_kuaishou_creator_user_id ON kuaishou_creator(user_id)"
+            )
+            conn.execute(
+                """
+                INSERT INTO kuaishou_creator(
+                    user_id, nickname, gender, avatar, desc, ip_location,
+                    follows, fans, interaction, add_ts, last_modify_ts
+                )
+                VALUES(
+                    :user_id, :nickname, :gender, :avatar, :desc, :ip_location,
+                    :follows, :fans, :interaction, :last_modify_ts, :last_modify_ts
+                )
+                ON CONFLICT(user_id) DO UPDATE SET
+                    nickname = excluded.nickname,
+                    gender = excluded.gender,
+                    avatar = excluded.avatar,
+                    desc = excluded.desc,
+                    ip_location = excluded.ip_location,
+                    follows = excluded.follows,
+                    fans = excluded.fans,
+                    interaction = excluded.interaction,
+                    last_modify_ts = excluded.last_modify_ts
+                """,
+                values,
+            )
+        utils.logger.info(f"[AI_Customer.ks_creator_store] saved kuaishou creator user_id:{user_id}")
+
+    store_creator._ai_customer_ks_creator_sqlite = True  # type: ignore[attr-defined]
+    store_class.store_creator = store_creator
+
+
 def _patch_douyin_http_resilience() -> None:
     if not _dy_resilient_http_enabled():
         return
@@ -471,6 +564,7 @@ def _patch_douyin_sleep_interval() -> None:
 
 
 _patch_douyin_sleep_interval()
+_patch_ks_creator_sqlite_store()
 _patch_douyin_creator_video_limit()
 _patch_xhs_creator_note_limit()
 _patch_ks_creator_video_limit()

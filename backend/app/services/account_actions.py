@@ -164,7 +164,7 @@ def create_keyword_account_analysis_tasks(platform: str, keyword: str, limit: in
             JOIN user_accounts ua ON ua.id = c.author_account_id
             WHERE c.platform = ?
               AND c.source_keyword = ?
-              AND ua.platform IN ('dy', 'xhs')
+              AND ua.platform IN ('dy', 'xhs', 'ks')
               AND COALESCE(NULLIF(ua.competitor_status, ''), '未分析') = '未分析'
             ORDER BY ua.updated_at DESC, ua.id DESC
             LIMIT ?
@@ -193,7 +193,7 @@ def create_task_account_analysis_task(source_task_id: str, limit: int = 100) -> 
             JOIN user_accounts ua ON ua.id = src.account_id
             WHERE src.task_id = ?
               AND src.active = 1
-              AND ua.platform IN ('dy', 'xhs')
+              AND ua.platform IN ('dy', 'xhs', 'ks')
               AND COALESCE(NULLIF(ua.competitor_status, ''), '未分析') = '未分析'
             ORDER BY ua.updated_at DESC, ua.id DESC
             LIMIT ?

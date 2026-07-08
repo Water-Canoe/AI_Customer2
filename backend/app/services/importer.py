@@ -115,6 +115,7 @@ COMMENT_TABLES = {
 CREATOR_TABLES = {
     "dy": {"table": "dy_creator", "id": "user_id", "nickname": "nickname", "signature": "desc", "avatar": "avatar", "fans": "fans", "content_total": "videos_count"},
     "xhs": {"table": "xhs_creator", "id": "user_id", "nickname": "nickname", "signature": "desc", "avatar": "avatar", "fans": "fans", "content_total": ""},
+    "ks": {"table": "kuaishou_creator", "id": "user_id", "nickname": "nickname", "signature": "desc", "avatar": "avatar", "fans": "fans", "content_total": "interaction"},
 }
 
 

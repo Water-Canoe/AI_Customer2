@@ -1056,7 +1056,7 @@ async function analyzeKeywordCompetitors(node: Dict) {
     ElMessage.error('当前关键词缺少平台或关键词信息，无法分析')
     return
   }
-  if (!['dy', 'xhs'].includes(platform)) {
+  if (!['dy', 'xhs', 'ks'].includes(platform)) {
     ElMessage.error('当前平台不支持主页资料采集，无法批量账号分析')
     return
   }

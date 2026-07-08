@@ -204,9 +204,8 @@ function renderRow(library: string, row: Dict, emit: any, accountLibraries: stri
 function renderEnrichButton(library: string, row: Dict, emit: any, accountLibraries: string[]) {
   if (!accountLibraries.includes(library)) return null
   return h('button', {
-    class: ['icon-button', row.platform === 'ks' ? 'is-disabled' : ''],
-    disabled: row.platform === 'ks',
-    title: row.platform === 'ks' ? '快手主页资料暂不能从 SQLite 补回' : '补资料',
+    class: 'icon-button',
+    title: '补资料',
     onClick: () => emit('enrich-profile', library, row)
   }, [h(Refresh)])
 }
