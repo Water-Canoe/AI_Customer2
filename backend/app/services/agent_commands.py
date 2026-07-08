@@ -140,6 +140,7 @@ SYSTEM_ACTIONS = {
     "profile_enrichment_batch": True,
     "account_analysis": True,
     "account_find_customers": True,
+    "account_find_customers_from_competitors": True,
     "customer_intent_analysis": True,
     "customer_follow_status": True,
     "account_customers_analyze": True,
@@ -306,6 +307,15 @@ def _normalize_plan(plan: dict[str, Any], payload: AgentCommandRequest) -> dict[
         normalized["summary"] = normalized.get("summary") or "删除已被判定为非竞品或非客户的数据。"
         params = normalized.get("params") if isinstance(normalized.get("params"), dict) else {}
         params["target_types"] = _infer_non_target_types(payload.command)
+        normalized["params"] = params
+    elif inferred_operation == "account_find_customers_from_competitors":
+        action = "system_action"
+        normalized["operation"] = inferred_operation
+        normalized["title"] = normalized.get("title") or "从已有竞品账号找客户"
+        normalized["summary"] = normalized.get("summary") or "复用当前已判定的竞品账号找客户，不按关键词重新找竞品，也不自动私信。"
+        params = normalized.get("params") if isinstance(normalized.get("params"), dict) else {}
+        params["platform"] = params.get("platform") or "dy"
+        params["limit"] = _bounded_int(params.get("limit"), 20, 1, 100)
         normalized["params"] = params
     elif inferred_metric == "failures":
         action = "answer_stats"
@@ -599,6 +609,44 @@ def _account_find_customers(params: dict[str, Any]) -> dict[str, Any]:
     if params.get("run_now", True) and result.get("task_ids"):
         _background(crawler_adapter.run_tasks_serially, result["task_ids"])
     return result
+
+
+def _account_find_customers_from_competitors(params: dict[str, Any]) -> dict[str, Any]:
+    license_service.ensure_authorized()
+    platform = str(params.get("platform") or "dy")
+    limit = _bounded_int(params.get("limit"), 20, 1, 100)
+    with database.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, nickname
+            FROM user_accounts
+            WHERE platform = ? AND competitor_status = '竞品'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (platform, limit),
+        ).fetchall()
+    task_ids: list[str] = []
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for row in rows:
+        try:
+            result = account_actions.create_account_find_customer_task(int(row["id"]))
+            results.append(result)
+            task_ids.extend(str(task_id) for task_id in result.get("task_ids", []))
+        except Exception as exc:
+            errors.append({"account_id": str(row["id"]), "nickname": str(row["nickname"] or ""), "error": str(exc)})
+    if params.get("run_now", True) and task_ids:
+        _background(crawler_adapter.run_tasks_serially, task_ids)
+    return {
+        "ok": True,
+        "platform": platform,
+        "account_count": len(rows),
+        "created": len(task_ids),
+        "task_ids": task_ids,
+        "results": results,
+        "errors": errors,
+    }
 
 
 def _customer_intent_analysis(params: dict[str, Any]) -> dict[str, Any]:
@@ -989,6 +1037,7 @@ _SYSTEM_ACTION_HANDLERS = {
     "profile_enrichment_batch": _profile_enrichment_batch,
     "account_analysis": _account_analysis,
     "account_find_customers": _account_find_customers,
+    "account_find_customers_from_competitors": _account_find_customers_from_competitors,
     "customer_intent_analysis": _customer_intent_analysis,
     "customer_follow_status": _customer_follow_status,
     "account_customers_analyze": _account_customers_analyze,
@@ -1148,6 +1197,11 @@ def _system_action_done_answer(plan: dict[str, Any], result: dict[str, Any]) -> 
             f"已删除非目标数据：非竞品账号 {int(competitors.get('deleted') or 0)} 个，"
             f"非客户 {int(customers.get('deleted') or 0)} 个。"
         )
+    if operation == "account_find_customers_from_competitors":
+        return (
+            f"已从已有竞品账号创建找客户任务：覆盖 {int(data.get('account_count') or 0)} 个竞品账号，"
+            f"创建 {int(data.get('created') or 0)} 个采集任务。"
+        )
     mutates = "已执行" if result.get("mutates") else "已查询"
     return f"{mutates}系统操作：{operation}。"
 
@@ -1205,6 +1259,8 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 def _infer_action(command: str, workspace: str) -> str:
     text = str(command or "")
+    if _is_existing_competitor_customer_command(text):
+        return "system_action"
     if _is_non_target_delete_command(text):
         return "system_action"
     if "失败待查" in text or ("失败" in text and ("待查" in text or "重试" in text)):
@@ -1220,6 +1276,8 @@ def _infer_action(command: str, workspace: str) -> str:
 
 def _infer_system_operation(command: str, workspace: str) -> str:
     text = str(command or "")
+    if _is_existing_competitor_customer_command(text):
+        return "account_find_customers_from_competitors"
     if _is_non_target_delete_command(text):
         return "ai_delete_non_targets"
     if "重试" in text and ("失败待查" in text or "失败" in text):
@@ -1266,6 +1324,11 @@ def _infer_metric(command: str) -> str:
 
 def _is_non_target_delete_command(text: str) -> bool:
     return bool(re.search(r"(删除|清理|移除|删掉|剔除)", text)) and ("非竞品" in text or "非客户" in text)
+
+
+def _is_existing_competitor_customer_command(text: str) -> bool:
+    has_existing_competitor = bool(re.search(r"(从|用|根据|基于|已有|现有|当前).{0,8}竞品(账号|账户|号)?", text))
+    return has_existing_competitor and "找" in text and "客户" in text
 
 
 def _infer_non_target_types(command: str) -> list[str]:
@@ -1346,6 +1409,8 @@ def _plan_answer(plan: dict[str, Any]) -> str:
         if "customers" in types:
             labels.append("非客户")
         return f"确认后会删除所有已判定为{'和'.join(labels) or '非目标'}的数据；未被判定为非目标的数据会跳过。"
+    if action == "system_action" and plan.get("operation") == "account_find_customers_from_competitors":
+        return "确认后会从当前已有竞品账号中找客户；不会按关键词重新找竞品，也不会自动私信。"
     return "确认后执行。"
 
 

@@ -30,6 +30,7 @@
 
 Agent 已内置顶部状态词“失败待查”的固定语义：它等于未归档失败采集任务数加失败 AI 分析任务数。用户询问“失败待查是什么意思”会走固定统计回答；用户说“重试失败待查/为我重试”会生成 `system_action=failed_retry`，确认后重试失败 AI job，并按原参数重新创建失败采集任务。
 Agent 也内置“非竞品账号 / 非客户”的数据清理语义：用户说“删除/清理所有非竞品和非客户”时不会创建拓客批次，而是生成确认型 `system_action=ai_delete_non_targets`，只删除已被系统明确判定为 `非竞品` 或 `非客户 / 无需跟进` 的记录。
+Agent 会区分“按关键词找客户”和“从已有竞品账号找客户”：用户说“从竞品账号中找客户 / 用已有竞品账号找客户”时生成确认型 `system_action=account_find_customers_from_competitors`，复用当前已判定为 `竞品` 的账号创建找客户采集任务，不重新按关键词找竞品，也不会自动私信。
 设置页新增 `产品关键词` 标签输入，保存为 `settings.product_keywords` JSON 数组。自然语言执行类指令会优先让 AI 从用户目标和产品关键词中选择本次关键词；若用户指令本身已经包含明确关键词，则计划会直接带入。没有 AI 配置、没有产品关键词且计划也没有明确关键词时，创建自动化批次会明确失败。
 
 `AI自动拓客` 首版只跑抖音，支持四种确定性动作：`lead_operation=competitors` 只找竞品；`lead_operation=customers` 找竞品和客户但不私信；`lead_operation=message` 只从私信工作台读取当前未私信关键词队列并创建自动私信批次；`lead_operation=full` 跑完整闭环。完整闭环会校验拓客授权、AI 配置、MediaCrawler 路径和底层 SQLite，按关键词创建 `competitor_discovery` 采集任务，复用“一键竞品分析”补主页并触发竞品 AI 判断，再复用“一键找客户”创建找客户任务，采集评论后触发客户意向 AI 分析。需要私信时，后端按 AI 计划里的 `dm_count / interval_min_seconds / interval_max_seconds` 创建自动私信批次；设置页若开启“自动私信只填内容不发送”，仍会沿用私信工作台现有安全开关，只填话术并等待人工发送。

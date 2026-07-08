@@ -5295,6 +5295,57 @@ def test_agent_command_deletes_non_competitors_and_non_customers(tmp_path: Path,
         assert conn.execute("SELECT 1 FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone() is None
 
 
+def test_agent_command_finds_customers_from_existing_competitors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.services import agent_commands, ai_service
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, sec_uid, nickname, competitor_status, profile_url)
+            VALUES('dy', 'competitor-agent', 'sec-competitor-agent', '竞品账号', '竞品', 'https://www.douyin.com/user/sec-competitor-agent')
+            """
+        ).lastrowid
+
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps({"action": "lead_auto", "lead_operation": "customers", "auto_dm": False}),
+    )
+    monkeypatch.setattr(agent_commands, "_background", lambda *_args, **_kwargs: None)
+
+    client = TestClient(app)
+    preview = client.post(
+        "/api/agent/commands/preview",
+        json={"command": "从竞品账号中找一些客户。不用私信", "workspace": "lead"},
+    )
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["requires_confirmation"] is True
+    assert payload["plan"]["action"] == "system_action"
+    assert payload["plan"]["operation"] == "account_find_customers_from_competitors"
+
+    executed = client.post(
+        "/api/agent/commands/execute",
+        json={"command": "从竞品账号中找一些客户。不用私信", "workspace": "lead", "plan": payload["plan"]},
+    )
+
+    assert executed.status_code == 200
+    result = executed.json()["result"]["data"]
+    assert result["account_count"] == 1
+    assert result["created"] >= 1
+    with database.connect() as conn:
+        task = conn.execute("SELECT mode, creator_id FROM crawl_jobs ORDER BY id DESC LIMIT 1").fetchone()
+    assert task["mode"] == "competitor_crawl"
+    assert "sec-competitor-agent" in task["creator_id"]
+    assert account_id > 0
+
+
 def test_agent_command_rejects_unsafe_sql(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app
