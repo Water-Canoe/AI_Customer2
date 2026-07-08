@@ -215,10 +215,12 @@ async def inspect_profile_dm(user_url: str) -> dict[str, Any]:
             await page.mouse.click(more["x"], more["y"])
             await page.wait_for_timeout(1500)
             body = await page.locator("body").inner_text(timeout=10000)
+        private_message_visible = any(word in body for word in ["\u79c1\u4fe1", "\u53d1\u79c1\u4fe1"])
+        report_visible = "\u4e3e\u62a5\u4f5c\u8005" in body
         return {
             "ok": True,
-            "private_message_visible": any(word in body for word in ["私信", "发私信"]),
-            "report_visible": "举报作者" in body,
+            "private_message_visible": private_message_visible,
+            "report_visible": report_visible,
             "body_head": body[:1200],
         }
     finally:
