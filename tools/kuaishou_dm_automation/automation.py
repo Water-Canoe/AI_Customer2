@@ -12,18 +12,7 @@ from cloakbrowser import launch_persistent_context_async
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_PROFILE_DIR = APP_DIR / "runtime" / "cloak_profile"
 RECO_URL = "https://www.kuaishou.com/new-reco"
-KUAISHOU_HOSTS = {"www.kuaishou.com", "kuaishou.com", "live.kuaishou.com"}
 RECO_ACTIONS = {"follow", "like", "favorite"}
-
-
-def validate_kuaishou_url(value: str) -> str:
-    url = value.strip()
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("Kuaishou URL must start with http:// or https://")
-    if parsed.netloc not in KUAISHOU_HOSTS:
-        raise ValueError("Only kuaishou.com URLs are supported")
-    return url
 
 
 def parse_actions(value: str) -> list[str]:
@@ -152,19 +141,7 @@ async def send_text_comment(page: Any, message: str, dry_run: bool) -> dict[str,
     return {"action": "comment", "point": point, "send": send, "clicked": True}
 
 
-async def assert_no_image_comment_support(page: Any, image_path: str | None) -> None:
-    if not image_path:
-        return
-    if not Path(image_path).is_file():
-        raise ValueError(f"Image file not found: {image_path}")
-    inputs = await page.evaluate(
-        "() => [...document.querySelectorAll('input[type=file]')].map(el => ({accept: el.accept, multiple: el.multiple}))"
-    )
-    if not inputs:
-        raise RuntimeError("Kuaishou Web comment panel exposes no image upload input; image comments need App/mobile automation.")
-
-
-async def run_reco(actions: list[str], comment: str | None, image_path: str | None, dry_run: bool) -> dict[str, Any]:
+async def run_reco(actions: list[str], comment: str | None, dry_run: bool) -> dict[str, Any]:
     context = await open_context()
     page = context.pages[0] if context.pages else await context.new_page()
     events: list[dict[str, Any]] = []
@@ -175,16 +152,6 @@ async def run_reco(actions: list[str], comment: str | None, image_path: str | No
         await page.wait_for_timeout(8000)
 
         results = [await click_reco_action(page, action, dry_run) for action in actions]
-        if image_path:
-            point = await visible_center(page, "comment")
-            if not point:
-                raise RuntimeError("Comment button was not visible")
-            results.append({"action": "image-comment", "point": point, "clicked": False})
-            if not dry_run:
-                await page.mouse.click(point["x"], point["y"])
-                await page.wait_for_timeout(3000)
-                results[-1]["clicked"] = True
-            await assert_no_image_comment_support(page, image_path)
         if comment:
             results.append(await send_text_comment(page, comment, dry_run))
         await page.wait_for_timeout(3000)
@@ -193,53 +160,16 @@ async def run_reco(actions: list[str], comment: str | None, image_path: str | No
         await context.close()
 
 
-async def inspect_profile_dm(user_url: str) -> dict[str, Any]:
-    context = await open_context()
-    page = context.pages[0] if context.pages else await context.new_page()
-    try:
-        page.set_default_timeout(12000)
-        await page.goto(validate_kuaishou_url(user_url), wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(6000)
-        body = await page.locator("body").inner_text(timeout=10000)
-        more = await page.evaluate(
-            """
-            () => {
-              const el = [...document.querySelectorAll('*')].find(e => String(e.className || '').includes('more-btn'));
-              if (!el) return null;
-              const r = el.getBoundingClientRect();
-              return {x: r.x + r.width / 2, y: r.y + r.height / 2};
-            }
-            """
-        )
-        if more:
-            await page.mouse.click(more["x"], more["y"])
-            await page.wait_for_timeout(1500)
-            body = await page.locator("body").inner_text(timeout=10000)
-        private_message_visible = any(word in body for word in ["\u79c1\u4fe1", "\u53d1\u79c1\u4fe1"])
-        report_visible = "\u4e3e\u62a5\u4f5c\u8005" in body
-        return {
-            "ok": True,
-            "private_message_visible": private_message_visible,
-            "report_visible": report_visible,
-            "body_head": body[:1200],
-        }
-    finally:
-        await context.close()
-
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Kuaishou web automation probe")
+    parser = argparse.ArgumentParser(description="Kuaishou web recommendation interaction automation")
     parser.add_argument("--actions", default="", help="Comma-separated: follow,like,favorite")
     parser.add_argument("--comment", default="", help="Text comment to send on the recommendation video")
-    parser.add_argument("--image", default="", help="Image path for comment image probe; currently fails on Web if no file input exists")
-    parser.add_argument("--profile-url", default="", help="Kuaishou profile URL to inspect for private-message entry")
     parser.add_argument("--dry-run", action="store_true", help="Locate controls without clicking")
     parser.add_argument("--self-check", action="store_true", help="Run cheap argument checks")
     return parser
 
 
 def self_check() -> None:
-    assert validate_kuaishou_url("https://www.kuaishou.com/profile/abc").endswith("/abc")
     assert parse_actions("follow,like,favorite") == ["follow", "like", "favorite"]
     try:
         parse_actions("follow,dm")
@@ -253,12 +183,10 @@ async def async_main(args: argparse.Namespace) -> dict[str, Any]:
     if args.self_check:
         self_check()
         return {"ok": True, "self_check": True}
-    if args.profile_url:
-        return await inspect_profile_dm(args.profile_url)
     actions = parse_actions(args.actions) if args.actions else []
-    if not actions and not args.comment and not args.image:
-        raise ValueError("Provide --actions, --comment, --image, --profile-url, or --self-check")
-    return await run_reco(actions, args.comment.strip() or None, args.image.strip() or None, args.dry_run)
+    if not actions and not args.comment:
+        raise ValueError("Provide --actions, --comment, or --self-check")
+    return await run_reco(actions, args.comment.strip() or None, args.dry_run)
 
 
 def main() -> None:

@@ -63,7 +63,7 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 
 ## 快手 Web 互动自动化验证工具
 
-`tools/kuaishou_dm_automation/` 是快手 Web 端的单用户自动化验证目录，复用 `backend/.venv` 里的 `playwright` 和 `cloakbrowser`，使用独立 `runtime/cloak_profile/` 保存快手登录态。`open_login_browser.py` 只负责打开最大化快手登录窗口；`automation.py` 提供最小 CLI，可在推荐流当前视频执行关注、点赞、收藏和文字评论，也可检查指定主页是否暴露私信入口。
+`tools/kuaishou_dm_automation/` 是快手 Web 端的单用户自动化验证目录，复用 `backend/.venv` 里的 `playwright` 和 `cloakbrowser`，使用独立 `runtime/cloak_profile/` 保存快手登录态。`open_login_browser.py` 只负责打开最大化快手登录窗口；`automation.py` 提供最小 CLI，只保留已真实验证的推荐流动作：关注、点赞、收藏和文字评论。
 
 运行命令：
 
@@ -73,9 +73,6 @@ backend\.venv\Scripts\python.exe tools\kuaishou_dm_automation\open_login_browser
 
 # 在推荐流执行已验证的互动动作
 backend\.venv\Scripts\python.exe tools\kuaishou_dm_automation\automation.py --actions follow,like,favorite --comment "codex-auto-test-ignore"
-
-# 检查指定快手主页是否有 Web 私信入口
-backend\.venv\Scripts\python.exe tools\kuaishou_dm_automation\automation.py --profile-url "https://www.kuaishou.com/profile/3xqhxwgsjvvwpe9"
 ```
 
 当前实测接口结果：关注走 `POST /rest/v/relation/follow`，点赞走 `POST /rest/v/photo/like`，收藏走 `POST /rest/v/photo/collect`，文字评论走 `POST /rest/v/photo/comment/add`，均可返回 `result=1`。评论面板底部真实输入框是 `.comment-input input`，发送按钮是 `.comment-input .send-btn`；脚本用 DOM 找中心点后调用 `page.mouse.click()`，避免普通 locator click 被快手滚动、遮挡或设备缩放卡住。
