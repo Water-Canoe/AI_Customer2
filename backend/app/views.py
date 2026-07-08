@@ -77,6 +77,12 @@ def get_settings() -> dict[str, Any]:
         result["product_keywords"] = product_keywords if isinstance(product_keywords, list) else []
     except json.JSONDecodeError:
         result["product_keywords"] = []
+    for key in ("lead_agent_commands", "traffic_agent_commands"):
+        try:
+            value = json.loads(result.get(key, "[]"))
+            result[key] = value if isinstance(value, list) else []
+        except json.JSONDecodeError:
+            result[key] = []
     for key in ("content_cutoff_days", "comment_cutoff_days", "comment_recrawl_cooldown_hours", "ai_analysis_concurrency", "unreplied_reminder_days", "auto_dm_timeout_seconds"):
         try:
             result[key] = int(result.get(key, 0) or 0)
@@ -101,7 +107,13 @@ def update_settings(values: dict[str, Any]) -> dict[str, Any]:
         for key, value in values.items():
             if key in protected_keys:
                 continue
-            if key in ("icp_profile", "own_accounts", "product_keywords"):
+            if key in (
+                "icp_profile",
+                "own_accounts",
+                "product_keywords",
+                "lead_agent_commands",
+                "traffic_agent_commands",
+            ):
                 value = json.dumps(value, ensure_ascii=False)
             elif isinstance(value, bool):
                 value = "true" if value else "false"

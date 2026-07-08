@@ -561,6 +561,24 @@ DEFAULT_SETTINGS = {
     "ai_api_key": "",
     "ai_model": "deepseek-chat",
     "product_keywords": json.dumps([], ensure_ascii=False),
+    "lead_agent_commands": json.dumps(
+        [
+            "检查下我现在有多少竞品账户和目标客户",
+            "我现在还有多少用户未私信",
+            "为我找些做跨境电商AI客服的竞品",
+            "为我找些对AI客服有需求的客户，先不私信",
+            "将还未私信的客户私信",
+        ],
+        ensure_ascii=False,
+    ),
+    "traffic_agent_commands": json.dumps(
+        [
+            "检查最近的引流执行情况",
+            "帮我围绕AI客服做一轮抖音点赞引流",
+            "找跨境电商相关视频，点赞并关注，每轮处理10个",
+        ],
+        ensure_ascii=False,
+    ),
     "default_content_count": "20",
     "default_comment_count": "20",
     "content_cutoff_days": "0",

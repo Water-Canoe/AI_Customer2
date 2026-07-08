@@ -4919,6 +4919,15 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     response = client.put("/api/settings", json={"values": {"product_keywords": product_keywords}})
     assert response.status_code == 200
     assert response.json()["product_keywords"] == product_keywords
+    lead_commands = ["检查未私信客户", "从已有竞品账号找客户"]
+    traffic_commands = ["围绕AI客服点赞10个视频"]
+    response = client.put(
+        "/api/settings",
+        json={"values": {"lead_agent_commands": lead_commands, "traffic_agent_commands": traffic_commands}},
+    )
+    assert response.status_code == 200
+    assert response.json()["lead_agent_commands"] == lead_commands
+    assert response.json()["traffic_agent_commands"] == traffic_commands
     own_accounts = {
         "dy": ["https://www.douyin.com/user/a", "https://www.douyin.com/user/b"],
         "xhs": ["xhs-account"],

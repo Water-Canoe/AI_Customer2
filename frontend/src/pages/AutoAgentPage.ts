@@ -1,14 +1,14 @@
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { DataLine, MagicStick, Message, Promotion, Refresh, Search, Tickets, VideoPlay } from '@element-plus/icons-vue'
+import { DataLine, Delete, Edit, MagicStick, Message, Plus, Promotion, Refresh, Search, Tickets, VideoPlay } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
 import { emptyState, metricTile, pageAction, sectionTitle } from '../components/ui/Workbench'
 
-const leadExamples = [
+const defaultLeadExamples = [
   '检查下我现在有多少竞品账户和目标客户',
   '我现在还有多少用户未私信',
   '为我找些做跨境电商AI客服的竞品',
@@ -16,7 +16,7 @@ const leadExamples = [
   '将还未私信的客户私信',
 ]
 
-const trafficExamples = [
+const defaultTrafficExamples = [
   '检查最近的引流执行情况',
   '帮我围绕AI客服做一轮抖音点赞引流',
   '找跨境电商相关视频，点赞并关注，每轮处理10个',
@@ -35,15 +35,23 @@ export default defineComponent({
     const loading = ref(false)
     const thinking = ref(false)
     const executing = ref(false)
+    const editingExamples = ref(false)
+    const savingExamples = ref(false)
+    const commandSets = ref({
+      lead: [...defaultLeadExamples],
+      traffic: [...defaultTrafficExamples],
+    })
     let timer: ReturnType<typeof window.setInterval> | null = null
 
     const runType = computed(() => route.name === 'traffic-auto' ? 'traffic_auto' : 'lead_auto')
     const workspace = computed(() => route.name === 'traffic-auto' ? 'traffic' : 'lead')
     const isTraffic = computed(() => runType.value === 'traffic_auto')
     const title = computed(() => isTraffic.value ? 'AI自动引流' : 'AI自动拓客')
-    const examples = computed(() => isTraffic.value ? trafficExamples : leadExamples)
+    const examples = computed(() => isTraffic.value ? commandSets.value.traffic : commandSets.value.lead)
+    const defaultExamples = computed(() => isTraffic.value ? defaultTrafficExamples : defaultLeadExamples)
 
     onMounted(() => {
+      loadCommandSets()
       loadRunsAndEvents()
       // 轮询只刷新批次、日志和结果，指令解析仍由用户主动触发。
       timer = window.setInterval(loadRunsAndEvents, 3000)
@@ -56,8 +64,61 @@ export default defineComponent({
       preview.value = null
       selectedRun.value = null
       events.value = []
+      editingExamples.value = false
       loadRunsAndEvents()
     })
+
+    async function loadCommandSets() {
+      // 自定义快捷指令保存在后端 settings，拓客和引流互不影响。
+      try {
+        const { data } = await api.get('/settings')
+        commandSets.value = {
+          lead: normalizeExamples(data.lead_agent_commands, defaultLeadExamples),
+          traffic: normalizeExamples(data.traffic_agent_commands, defaultTrafficExamples),
+        }
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '快捷指令加载失败')
+      }
+    }
+
+    async function saveExamples(next: string[]) {
+      savingExamples.value = true
+      try {
+        const key = isTraffic.value ? 'traffic_agent_commands' : 'lead_agent_commands'
+        const { data } = await api.put('/settings', { values: { [key]: normalizeExamples(next, []) } })
+        commandSets.value = {
+          lead: normalizeExamples(data.lead_agent_commands, defaultLeadExamples),
+          traffic: normalizeExamples(data.traffic_agent_commands, defaultTrafficExamples),
+        }
+        return true
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '快捷指令保存失败')
+        return false
+      } finally {
+        savingExamples.value = false
+      }
+    }
+
+    async function addCurrentExample() {
+      const text = command.value.trim()
+      if (!text) {
+        ElMessage.warning('先输入要保存的指令')
+        return
+      }
+      if (await saveExamples([text, ...examples.value.filter(item => item !== text)])) {
+        ElMessage.success('已保存快捷指令')
+      }
+    }
+
+    async function removeExample(value: string) {
+      await saveExamples(examples.value.filter(item => item !== value))
+    }
+
+    async function resetExamples() {
+      if (await saveExamples([...defaultExamples.value])) {
+        ElMessage.success('已恢复默认指令')
+      }
+    }
 
     async function loadRunsAndEvents() {
       loading.value = true
@@ -148,7 +209,19 @@ export default defineComponent({
           icon: isTraffic.value ? Promotion : MagicStick,
           tone: isTraffic.value ? 'blue' : 'teal',
         }),
-        renderCommandBox(command.value, examples.value, thinking.value, previewCommand, value => { command.value = value }),
+        renderCommandBox(
+          command.value,
+          examples.value,
+          thinking.value,
+          editingExamples.value,
+          savingExamples.value,
+          previewCommand,
+          value => { command.value = value },
+          addCurrentExample,
+          removeExample,
+          resetExamples,
+          () => { editingExamples.value = !editingExamples.value },
+        ),
         renderPreview(preview.value, executing.value, executePreview),
       ]),
       side: () => h('aside', { class: 'pane side-pane auto-agent-side' }, [
@@ -164,8 +237,14 @@ function renderCommandBox(
   command: string,
   examples: string[],
   thinking: boolean,
+  editingExamples: boolean,
+  savingExamples: boolean,
   submit: () => void,
   update: (value: string) => void,
+  addExample: () => void,
+  removeExample: (value: string) => void,
+  resetExamples: () => void,
+  toggleEditing: () => void,
 ) {
   return h('section', { class: 'auto-agent-section' }, [
     sectionTitle({ title: '我要做什么', subtitle: '直接输入自然语言指令', icon: Search, tone: 'teal' }),
@@ -173,18 +252,44 @@ function renderCommandBox(
       h('span', '指令'),
       h('textarea', {
         value: command,
-        placeholder: '例如：为我找些对AI客服有需求的客户，先不私信',
+        placeholder: examples[0] ? `例如：${examples[0]}` : '输入你想让AI做什么',
         onInput: (event: Event) => update((event.target as HTMLTextAreaElement).value),
         onKeydown: (event: KeyboardEvent) => {
           if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') submit()
         },
       }),
     ]),
-    h('div', { class: 'auto-agent-examples' }, examples.map(item => h('button', {
-      type: 'button',
-      class: 'secondary-action compact-action',
-      onClick: () => update(item),
-    }, item))),
+    h('div', { class: 'auto-agent-examples' }, examples.length
+      ? examples.map(item => h('span', { class: ['auto-agent-example-chip', editingExamples ? 'is-editing' : ''] }, [
+          h('button', {
+            type: 'button',
+            class: 'secondary-action compact-action',
+            disabled: savingExamples,
+            onClick: () => update(item),
+          }, item),
+          editingExamples ? h('button', {
+            type: 'button',
+            class: 'auto-agent-example-remove',
+            disabled: savingExamples,
+            title: '删除这条快捷指令',
+            onClick: () => removeExample(item),
+          }, h(Delete, { class: 'inline-icon' })) : null,
+        ]))
+      : h('span', { class: 'auto-agent-example-empty' }, '暂无快捷指令')),
+    h('div', { class: 'auto-agent-example-tools' }, [
+      h('button', { class: 'secondary-action compact-action', disabled: savingExamples || !command.trim(), onClick: addExample }, [
+        h(Plus, { class: 'inline-icon' }),
+        '保存当前指令',
+      ]),
+      h('button', { class: 'secondary-action compact-action', disabled: savingExamples, onClick: toggleEditing }, [
+        h(Edit, { class: 'inline-icon' }),
+        editingExamples ? '完成管理' : '管理指令',
+      ]),
+      editingExamples ? h('button', { class: 'secondary-action compact-action', disabled: savingExamples, onClick: resetExamples }, [
+        h(Refresh, { class: 'inline-icon' }),
+        '恢复默认',
+      ]) : null,
+    ]),
     h('div', { class: 'auto-agent-submit' }, [
       h('button', { class: 'primary-action', disabled: thinking, onClick: submit }, [
         h(MagicStick, { class: 'inline-icon' }),
@@ -192,6 +297,19 @@ function renderCommandBox(
       ]),
     ]),
   ])
+}
+
+function normalizeExamples(value: unknown, fallback: string[]) {
+  const source = Array.isArray(value) ? value : fallback
+  const seen = new Set<string>()
+  return source
+    .map(item => String(item || '').trim())
+    .filter(item => {
+      if (!item || seen.has(item)) return false
+      seen.add(item)
+      return true
+    })
+    .slice(0, 20)
 }
 
 function renderPreview(preview: Dict | null, executing: boolean, execute: () => void) {

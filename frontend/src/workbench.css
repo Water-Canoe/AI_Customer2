@@ -5316,6 +5316,45 @@ input[type='checkbox'] {
   flex-wrap: wrap;
 }
 
+.auto-agent-example-chip {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.auto-agent-example-chip .secondary-action {
+  border-radius: 6px;
+}
+
+.auto-agent-example-chip.is-editing .secondary-action {
+  border-radius: 6px 0 0 6px;
+}
+
+.auto-agent-example-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-height: 36px;
+  border: 1px solid #fecaca;
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+  color: #dc2626;
+  background: #fff7f7;
+  cursor: pointer;
+}
+
+.auto-agent-example-tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auto-agent-example-empty {
+  color: #64748b;
+  font-size: 13px;
+}
+
 .auto-agent-plan {
   display: grid;
   gap: 10px;
