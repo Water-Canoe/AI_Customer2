@@ -361,6 +361,42 @@ def test_overview_groups_unlabeled_account_tasks_by_source_mode(tmp_path: Path) 
     assert own_account["metrics"]["is_own_account"] == 1
 
 
+def test_overview_shows_same_competitor_under_multiple_keywords(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database, views
+
+    with database.connect() as conn:
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status, account_role)
+            VALUES('dy', 'shared-competitor', '同一竞品账号', '竞品', 'competitor')
+            """
+        ).lastrowid
+        content_id = conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword)
+            VALUES('dy', 'shared-content', ?, '同一账号内容', '关键词A')
+            """,
+            (account_id,),
+        ).lastrowid
+        for keyword in ("关键词A", "关键词B"):
+            conn.execute(
+                """
+                INSERT INTO account_sources(account_id, content_id, keyword, source_kind)
+                VALUES(?, ?, ?, 'keyword_author')
+                """,
+                (account_id, content_id, keyword),
+            )
+
+    tree = views.overview_tree()
+    keywords = {child["label"]: child for child in tree[0]["children"] if child["kind"] == "keyword"}
+
+    assert {"关键词A", "关键词B"}.issubset(keywords)
+    for keyword in ("关键词A", "关键词B"):
+        assert keywords[keyword]["metrics"]["competitors"] == 1
+        assert [account["label"] for account in keywords[keyword]["children"]] == ["同一竞品账号"]
+
+
 def test_own_account_task_requires_own_account_identifier(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TaskCreate

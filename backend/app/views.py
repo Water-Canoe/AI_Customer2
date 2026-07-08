@@ -809,21 +809,39 @@ def overview_tree() -> list[dict[str, Any]]:
             platform_key = platform["platform"]
             keywords = conn.execute(
                 """
-                SELECT c.source_keyword AS keyword,
+                WITH keyword_scope AS (
+                    SELECT c.source_keyword AS keyword,
+                           c.id AS content_id,
+                           c.author_account_id AS account_id,
+                           c.updated_at AS latest
+                    FROM contents c
+                    WHERE c.platform = ? AND NULLIF(c.source_keyword, '') IS NOT NULL
+                    UNION
+                    SELECT ac.keyword AS keyword,
+                           ac.content_id AS content_id,
+                           ac.account_id AS account_id,
+                           COALESCE(c.updated_at, ac.created_at) AS latest
+                    FROM account_sources ac
+                    JOIN user_accounts source_ua ON source_ua.id = ac.account_id
+                    LEFT JOIN contents c ON c.id = ac.content_id
+                    WHERE ac.active = 1
+                      AND NULLIF(ac.keyword, '') IS NOT NULL
+                      AND COALESCE(c.platform, source_ua.platform) = ?
+                )
+                SELECT ks.keyword AS keyword,
                        COUNT(DISTINCT CASE WHEN ua.competitor_status = '竞品' THEN ua.id END) AS competitors,
-                       COUNT(DISTINCT c.id) AS contents,
+                       COUNT(DISTINCT ks.content_id) AS contents,
                        COUNT(DISTINCT cm.id) AS comments,
                        COUNT(DISTINCT lua.id) AS customers,
-                       MAX(c.updated_at) AS latest
-                FROM contents c
-                LEFT JOIN user_accounts ua ON ua.id = c.author_account_id
-                LEFT JOIN comments cm ON cm.content_id = c.id
-                LEFT JOIN lead_sources ls ON ls.content_id = c.id
+                       MAX(ks.latest) AS latest
+                FROM keyword_scope ks
+                LEFT JOIN user_accounts ua ON ua.id = ks.account_id
+                LEFT JOIN comments cm ON cm.content_id = ks.content_id
+                LEFT JOIN lead_sources ls ON ls.content_id = ks.content_id
                 LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-                WHERE c.platform = ? AND NULLIF(c.source_keyword, '') IS NOT NULL
-                GROUP BY c.source_keyword
+                GROUP BY ks.keyword
                 """,
-                (platform_key,),
+                (platform_key, platform_key),
             ).fetchall()
             account_source_groups = conn.execute(
                 """
@@ -914,25 +932,41 @@ def _keyword_node(conn, platform: str, keyword: str, metrics: dict[str, Any]) ->
     # 返回完整账号列表，由前端逐层分页，避免后端静默截断业务数据。
     accounts = conn.execute(
         """
+        WITH keyword_accounts AS (
+            SELECT c.author_account_id AS account_id,
+                   c.id AS content_id,
+                   c.updated_at AS latest
+            FROM contents c
+            WHERE c.platform = ? AND c.source_keyword = ?
+            UNION
+            SELECT ac.account_id AS account_id,
+                   ac.content_id AS content_id,
+                   COALESCE(c.updated_at, ac.created_at) AS latest
+            FROM account_sources ac
+            JOIN user_accounts source_ua ON source_ua.id = ac.account_id
+            LEFT JOIN contents c ON c.id = ac.content_id
+            WHERE ac.active = 1
+              AND ac.keyword = ?
+              AND COALESCE(c.platform, source_ua.platform) = ?
+        )
         SELECT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
                ua.nickname, ua.profile_url, ua.fans, ua.signature,
                ua.account_role, ua.competitor_status, ua.competitor_reason,
                ua.content_total_count, ua.is_own_account,
                ua.raw_payload,
-               COUNT(DISTINCT c.id) AS content_count,
+               COUNT(DISTINCT ka.content_id) AS content_count,
                COUNT(DISTINCT cm.id) AS comment_count,
                COUNT(DISTINCT lua.id) AS customer_count,
-               MAX(c.updated_at) AS latest
-        FROM contents c
-        JOIN user_accounts ua ON ua.id = c.author_account_id
-        LEFT JOIN comments cm ON cm.content_id = c.id
-        LEFT JOIN lead_sources ls ON ls.content_id = c.id
+               MAX(ka.latest) AS latest
+        FROM keyword_accounts ka
+        JOIN user_accounts ua ON ua.id = ka.account_id
+        LEFT JOIN comments cm ON cm.content_id = ka.content_id
+        LEFT JOIN lead_sources ls ON ls.content_id = ka.content_id
         LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-        WHERE c.platform = ? AND c.source_keyword = ?
         GROUP BY ua.id
         ORDER BY latest DESC, ua.id DESC
         """,
-        (platform, keyword),
+        (platform, keyword, keyword, platform),
     ).fetchall()
     analysis_states = _overview_account_analysis_states(conn, platform, accounts)
     node_metrics = dict(metrics)
