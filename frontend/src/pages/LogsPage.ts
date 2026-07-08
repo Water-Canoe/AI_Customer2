@@ -1,4 +1,4 @@
-﻿import { computed, defineComponent, h, nextTick, ref, watch } from 'vue'
+﻿import { computed, defineComponent, h, ref, watch } from 'vue'
 import { Document, Tickets, Warning } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
 import { clamp, platformName } from '../shared/format'
@@ -17,10 +17,6 @@ export default defineComponent({
     const taskSearch = ref('')
     const taskPage = ref(1)
     const taskPageSize = 5
-    const logConsoleRef = ref<HTMLElement | null>(null)
-    const logAutoFollow = ref(true)
-    const LOG_BOTTOM_THRESHOLD = 28
-
     const filteredTasks = computed(() => {
       const keyword = taskSearch.value.trim().toLowerCase()
       const tasks = props.tasks as Dict[]
@@ -42,27 +38,6 @@ export default defineComponent({
       taskPage.value = clamp(taskPage.value + delta, 1, totalTaskPages.value)
     }
 
-    // 用户主动上滑后暂停自动跟随，避免自动同步把历史日志拉回底部。
-    function isLogNearBottom(logConsole: HTMLElement) {
-      return logConsole.scrollHeight - logConsole.scrollTop - logConsole.clientHeight <= LOG_BOTTOM_THRESHOLD
-    }
-
-    function updateLogFollowState() {
-      const logConsole = logConsoleRef.value
-      if (!logConsole) return
-      logAutoFollow.value = isLogNearBottom(logConsole)
-    }
-
-    function scrollLogToBottom(force = false) {
-      nextTick(() => {
-        const logConsole = logConsoleRef.value
-        if (!logConsole) return
-        if (!force && !logAutoFollow.value) return
-        logConsole.scrollTop = logConsole.scrollHeight
-        logAutoFollow.value = true
-      })
-    }
-
     watch(() => [taskSearch.value, (props.tasks as Dict[]).length], () => {
       taskPage.value = 1
     })
@@ -70,24 +45,6 @@ export default defineComponent({
     watch(totalTaskPages, pages => {
       if (taskPage.value > pages) taskPage.value = pages
     })
-
-    watch(
-      () => ({
-        taskId: String(props.selectedTask?.id || ''),
-        logCount: (props.selectedTask?.logs || []).length
-      }),
-      (current, previous) => {
-        if (!current.taskId) return
-        const taskChanged = !previous || current.taskId !== previous.taskId
-        if (taskChanged) {
-          logAutoFollow.value = true
-          scrollLogToBottom(true)
-          return
-        }
-        if (!previous || current.logCount > previous.logCount) scrollLogToBottom(false)
-      },
-      { immediate: true }
-    )
 
     return () => h(SplitPane, { storageKey: 'logs', side: 'right', defaultSideWidth: 390 }, {
       default: () => [
@@ -100,21 +57,18 @@ export default defineComponent({
         }),
         props.selectedTask ? renderTaskOutcome(props.selectedTask as Dict) : emptyState({
           title: '请选择一个任务',
-          description: '从右侧任务列表选择任务后，这里会显示产出、失败诊断、防重复记录和实时日志。',
+          description: '从右侧任务列表选择任务后，这里会显示产出、失败诊断和防重复记录。',
           icon: Tickets,
           tone: 'gray'
         }),
         props.selectedTask ? renderDiagnostics(props.diagnostics as Dict) : null,
-        props.selectedTask ? renderDedupSummary(props.dedupSummary as Dict) : null,
-        props.selectedTask ? h('div', { class: 'log-console', ref: logConsoleRef, onScroll: updateLogFollowState }, (props.selectedTask?.logs || []).length
-          ? (props.selectedTask?.logs || []).map((log: Dict) => h('p', [h('time', log.created_at), h('span', log.message)]))
-          : [h('p', [h('span', '暂无日志输出')])]
-        ) : null
+        props.selectedTask ? renderDedupSummary(props.dedupSummary as Dict) : null
+        // 原始采集运行日志暂时隐藏，保留任务产出和诊断信息。
       ])
       ],
       side: () => [
       h('aside', { class: 'pane side-pane' }, [
-        sectionTitle({ title: '任务列表', subtitle: '归档前先看日志', icon: Tickets, tone: 'blue' }),
+        sectionTitle({ title: '任务列表', subtitle: '归档前先看结果', icon: Tickets, tone: 'blue' }),
         h('div', { class: 'task-list-tools' }, [
           h('input', {
             value: taskSearch.value,

@@ -420,9 +420,8 @@ function renderEnv(envValue: Dict) {
       h('span', label),
       h('strong', { class: item?.ok ? 'ok' : 'warn' }, item?.ok ? '正常' : '待处理'),
       h('small', item?.path || item?.base_url || item?.model || '')
-    ]))),
-    renderProjectQuality(envValue?.project_quality || {}),
-    renderPlatformDiagnostics(envValue?.platform_diagnostics || [])
+    ])))
+    // 环境检查详情暂时隐藏，只保留用户需要处理的概览状态。
   ])
 }
 
