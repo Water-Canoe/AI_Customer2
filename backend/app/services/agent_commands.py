@@ -615,38 +615,11 @@ def _account_find_customers_from_competitors(params: dict[str, Any]) -> dict[str
     license_service.ensure_authorized()
     platform = str(params.get("platform") or "dy")
     limit = _bounded_int(params.get("limit"), 20, 1, 100)
-    with database.connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, nickname
-            FROM user_accounts
-            WHERE platform = ? AND competitor_status = '竞品'
-            ORDER BY updated_at DESC, id DESC
-            LIMIT ?
-            """,
-            (platform, limit),
-        ).fetchall()
-    task_ids: list[str] = []
-    results: list[dict[str, Any]] = []
-    errors: list[dict[str, str]] = []
-    for row in rows:
-        try:
-            result = account_actions.create_account_find_customer_task(int(row["id"]))
-            results.append(result)
-            task_ids.extend(str(task_id) for task_id in result.get("task_ids", []))
-        except Exception as exc:
-            errors.append({"account_id": str(row["id"]), "nickname": str(row["nickname"] or ""), "error": str(exc)})
+    result = account_actions.create_competitors_find_customer_task(platform, limit=limit)
+    task_ids = [str(task_id) for task_id in result.get("task_ids", [])]
     if params.get("run_now", True) and task_ids:
         _background(crawler_adapter.run_tasks_serially, task_ids)
-    return {
-        "ok": True,
-        "platform": platform,
-        "account_count": len(rows),
-        "created": len(task_ids),
-        "task_ids": task_ids,
-        "results": results,
-        "errors": errors,
-    }
+    return result
 
 
 def _customer_intent_analysis(params: dict[str, Any]) -> dict[str, Any]:

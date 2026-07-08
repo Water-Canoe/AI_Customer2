@@ -5311,6 +5311,12 @@ def test_agent_command_finds_customers_from_existing_competitors(tmp_path: Path,
             VALUES('dy', 'competitor-agent', 'sec-competitor-agent', '竞品账号', '竞品', 'https://www.douyin.com/user/sec-competitor-agent')
             """
         ).lastrowid
+        account_id_2 = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, sec_uid, nickname, competitor_status, profile_url)
+            VALUES('dy', 'competitor-agent-2', 'sec-competitor-agent-2', '竞品账号2', '竞品', 'https://www.douyin.com/user/sec-competitor-agent-2')
+            """
+        ).lastrowid
 
     monkeypatch.setattr(
         ai_service,
@@ -5337,13 +5343,17 @@ def test_agent_command_finds_customers_from_existing_competitors(tmp_path: Path,
 
     assert executed.status_code == 200
     result = executed.json()["result"]["data"]
-    assert result["account_count"] == 1
-    assert result["created"] >= 1
+    assert result["account_count"] == 2
+    assert result["created"] == 1
     with database.connect() as conn:
-        task = conn.execute("SELECT mode, creator_id FROM crawl_jobs ORDER BY id DESC LIMIT 1").fetchone()
+        tasks = conn.execute("SELECT mode, creator_id FROM crawl_jobs ORDER BY id").fetchall()
+    assert len(tasks) == 1
+    task = tasks[0]
     assert task["mode"] == "competitor_crawl"
     assert "sec-competitor-agent" in task["creator_id"]
+    assert "sec-competitor-agent-2" in task["creator_id"]
     assert account_id > 0
+    assert account_id_2 > 0
 
 
 def test_agent_command_rejects_unsafe_sql(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
