@@ -767,6 +767,47 @@ def test_traffic_browse_only_plan_can_start_and_logs_user_reason(tmp_path: Path,
     assert detail["logs"][-1]["suggestion"]
 
 
+def test_traffic_stop_run_marks_running_batch_stopped_immediately(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="停止测试", platform="dy"))
+    run = traffic_workbench.create_run(plan["id"])
+    with database.connect() as conn:
+        conn.execute("UPDATE traffic_runs SET status = 'running' WHERE id = ?", (run["id"],))
+
+    stopped = traffic_workbench.stop_run(run["id"])
+    traffic_workbench._finish_run(run["id"], "completed", "不应覆盖", "不应覆盖", "不应覆盖")
+    detail = traffic_workbench.get_run(run["id"])
+
+    assert stopped["status"] == "stopped"
+    assert detail is not None
+    assert detail["status"] == "stopped"
+    assert detail["stop_requested"] == 1
+    assert detail["stop_reason"] == "用户手动停止任务"
+
+
+def test_traffic_wait_or_stop_checks_stop_before_sleep(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    class FakePage:
+        def wait_for_timeout(self, _: int) -> None:
+            pytest.fail("stop_requested should be checked before waiting")
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="等待停止", platform="dy"))
+    run = traffic_workbench.create_run(plan["id"])
+    with database.connect() as conn:
+        conn.execute("UPDATE traffic_runs SET status = 'running', stop_requested = 1 WHERE id = ?", (run["id"],))
+
+    with pytest.raises(traffic_workbench.TrafficStop):
+        traffic_workbench._wait_or_stop(FakePage(), run["id"], 5000)
+
+
 def test_traffic_run_uses_plan_round_video_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.services import traffic_workbench

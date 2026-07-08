@@ -327,24 +327,28 @@ def stop_run(run_id: str) -> dict[str, Any]:
         conn.execute(
             """
             UPDATE traffic_runs
-            SET stop_requested = 1, updated_at = datetime('now', 'localtime')
+            SET stop_requested = 1,
+                status = CASE WHEN status IN ('running', 'queued') THEN 'stopped' ELSE status END,
+                stop_reason = CASE WHEN status IN ('running', 'queued') THEN '用户手动停止任务' ELSE stop_reason END,
+                stop_suggestion = CASE WHEN status IN ('running', 'queued') THEN '可以在操作记录查看已经处理的视频；如需继续，请重新启动批次。' ELSE stop_suggestion END,
+                finished_at = CASE WHEN status IN ('running', 'queued') THEN datetime('now', 'localtime') ELSE finished_at END,
+                updated_at = datetime('now', 'localtime')
             WHERE id = ?
             """,
             (run_id,),
         )
-        if row["status"] not in {"running", "queued"}:
-            return get_run(run_id) or {}
-        _insert_log(
-            conn,
-            run_id,
-            "warning",
-            "stop",
-            "已收到停止请求，当前视频处理完会停止。",
-            "用户手动停止任务",
-            "无需重复点击，稍等几秒后查看最终状态。",
-            {},
-        )
-        return get_run(run_id) or {}
+        if row["status"] in {"running", "queued"}:
+            _insert_log(
+                conn,
+                run_id,
+                "warning",
+                "stop",
+                "任务已按你的要求停止。",
+                "用户手动停止任务",
+                "可以在操作记录查看已经处理的视频；如需继续，请重新启动批次。",
+                {},
+            )
+    return get_run(run_id) or {}
 
 
 def archive_run(run_id: str) -> dict[str, Any]:
@@ -718,7 +722,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
             _append_log(run_id, "info", "login", "正在打开抖音页面。", "准备执行引流批次", "如果弹出登录，请先到引流设置完成扫码登录。", {"url": target_url})
             if not _goto_with_timeout_tolerance(page, target_url, 60_000):
                 _append_log(run_id, "warning", "probe", "抖音页面加载超时，继续检查当前页面。", "页面可能已经可用，但浏览器没有收到加载完成信号", "系统会继续识别当前页面；如果确实没有内容，会再给出明确原因。", {"url": target_url, "current_url": page.url})
-            page.wait_for_timeout(4000)
+            _wait_or_stop(page, run_id, 4000)
             _ensure_page_ready(page)
             _navigate_to_executable_video(page, run_id, plan["source_mode"], video_cache, author_cooldown_hours, project_author_keys, plan.get("source_value", ""))
             if plan["actions"] and action_budget <= 0:
@@ -779,7 +783,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                 watch_seconds = random.randint(min_watch, max_watch)
                 if not plan["actions"]:
                     _append_log(run_id, "info", "browse", f"正在浏览视频：{video['video_desc'][:36] or video['video_id']}。", "按设置随机停留", f"本次停留约 {watch_seconds} 秒。", {"video_id": video["video_id"]})
-                page.wait_for_timeout(watch_seconds * 1000)
+                _wait_or_stop(page, run_id, watch_seconds * 1000)
                 done_actions, comment_text, image_path, skipped_by_error = _execute_actions_with_retry(run_id, plan, page, video, action_budget, action_probability)
                 action_budget = max(0, action_budget - _real_action_count(done_actions))
                 if skipped_by_error:
@@ -840,7 +844,15 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                 "probe",
                 {"error": str(exc)},
             ) from exc
-        except Exception:
+        except Exception as exc:
+            if _is_browser_closed_error(exc):
+                raise TrafficStop(
+                    "浏览器窗口已关闭，任务已停止。",
+                    "执行中的抖音浏览器被手动关闭。",
+                    "如需继续，请重新启动批次；如果只是想复盘，请在任务停止后再关闭窗口。",
+                    "stop",
+                    {"error": repr(exc)},
+                ) from exc
             if not close_browser_on_failure:
                 close_context = False
                 _append_log(run_id, "warning", "stop", "任务已停止，浏览器已保留用于复盘。", "引流设置关闭了“失败后关闭浏览器”", "请复盘完成后手动关闭浏览器，再启动新的引流批次。", {"url": getattr(page, "url", "")})
@@ -848,7 +860,11 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     finally:
         if close_context:
             if context is not None:
-                context.close()
+                try:
+                    context.close()
+                except Exception as exc:
+                    if not _is_browser_closed_error(exc):
+                        raise
         elif context is not None:
             TRAFFIC_REVIEW_SESSIONS.append({"context": context})
     return {}
@@ -926,6 +942,21 @@ def _is_recoverable_playwright_error(exc: Exception) -> bool:
     name = exc.__class__.__name__.lower()
     message = str(exc).lower()
     return "timeout" in name or "timeout" in message or "element is not attached" in message
+
+
+def _is_browser_closed_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "browser has been closed" in message or "target page, context or browser has been closed" in message
+
+
+def _wait_or_stop(page: Any, run_id: str, timeout_ms: int) -> None:
+    remaining = max(0, int(timeout_ms))
+    while remaining > 0:
+        _raise_if_stop_requested(run_id)
+        step = min(1000, remaining)
+        page.wait_for_timeout(step)
+        remaining -= step
+    _raise_if_stop_requested(run_id)
 
 
 def _ensure_page_ready(page: Any) -> None:
@@ -2384,17 +2415,19 @@ def _finish_run(
 ) -> None:
     level = "success" if status == "completed" else "error" if status == "failed" else "warning"
     with database.connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE traffic_runs
             SET status = ?, stop_reason = ?, stop_suggestion = ?,
                 finished_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
+              AND NOT (status = 'stopped' AND stop_requested = 1)
             """,
             (status, reason, suggestion, run_id),
         )
-        _insert_log(conn, run_id, level, phase, message, reason, suggestion, details or {})
+        if cursor.rowcount:
+            _insert_log(conn, run_id, level, phase, message, reason, suggestion, details or {})
 
 
 def _append_log(run_id: str, level: str, phase: str, message: str, reason: str, suggestion: str, details: dict[str, Any]) -> None:
