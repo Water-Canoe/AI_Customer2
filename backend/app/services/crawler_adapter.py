@@ -72,7 +72,7 @@ def normalize_task_defaults(payload: TaskCreate) -> TaskCreate:
     creator_id = payload.creator_id.strip()
     if crawler_type == "search":
         if not keywords:
-            raise ValueError("搜索型任务必须填写关键词，避免使用 MediaCrawler 默认关键词")
+            raise ValueError("搜索型任务必须填写关键词，避免使用 MyCrawler 默认关键词")
         specified_id = ""
         creator_id = ""
     elif crawler_type == "detail":
@@ -109,7 +109,7 @@ def normalize_task_defaults(payload: TaskCreate) -> TaskCreate:
 
 
 def build_command(task: dict[str, object], media_crawler_path: str) -> list[str]:
-    """Translate project task fields to MediaCrawler CLI flags."""
+    """Translate project task fields to MyCrawler CLI flags."""
     command = [
         _python_launcher(),
         "main.py",
@@ -152,7 +152,7 @@ def _python_launcher() -> str:
     python_path = shutil.which("python")
     if python_path:
         return python_path
-    raise RuntimeError("未找到可执行的 python，无法启动 MediaCrawler")
+    raise RuntimeError("未找到可执行的 python，无法启动 MyCrawler")
 
 
 def preview_task(payload: TaskCreate) -> dict[str, object]:
@@ -194,11 +194,11 @@ def _preview_warnings(task: TaskCreate, crawler_type: str, sanitized: dict[str, 
         cleaned = "、".join(_task_field_label(field) for field in sanitized)
         warnings.append(f"已按采集类型净化参数：{cleaned}")
     if crawler_type == "search":
-        warnings.append("搜索型任务只会向 MediaCrawler 传递关键词，不会传递创作者主页或内容ID。")
+        warnings.append("搜索型任务只会向 MyCrawler 传递关键词，不会传递创作者主页或内容ID。")
     elif crawler_type == "detail":
-        warnings.append("详情任务只会向 MediaCrawler 传递指定内容ID/链接，不会传递关键词或创作者主页。")
+        warnings.append("详情任务只会向 MyCrawler 传递指定内容ID/链接，不会传递关键词或创作者主页。")
     else:
-        warnings.append(f"{_mode_creator_label(task.mode)}任务只会向 MediaCrawler 传递{_creator_input_label(task.mode)}，不会传递关键词或内容ID。")
+        warnings.append(f"{_mode_creator_label(task.mode)}任务只会向 MyCrawler 传递{_creator_input_label(task.mode)}，不会传递关键词或内容ID。")
     if task.mode in ("competitor_crawl", "own_account") and not task.collect_comments:
         warnings.append("该模式会自动打开评论采集，因为线索客户来自评论区。")
     if task.platform == "ks" and task.mode == "competitor_discovery":
@@ -302,7 +302,7 @@ def set_task_skip_content_ids(task_id: str, content_ids: list[str]) -> None:
 
 
 def _account_profile_identifier(account: dict[str, object]) -> str:
-    # creator 模式优先使用主页链接；抖音主页链接内含 sec_uid，跨平台也更贴近 MediaCrawler 的解析入口。
+    # creator 模式优先使用主页链接；抖音主页链接内含 sec_uid，跨平台也更贴近 MyCrawler 的解析入口。
     platform = str(account.get("platform") or "")
     profile_url = str(account.get("profile_url") or "").strip()
     sec_uid = str(account.get("sec_uid") or "").strip()
@@ -328,7 +328,7 @@ def create_profile_enrichment_task(
         account = database.row_to_dict(row)
         platform = str(account.get("platform") or "")
         if platform not in PROFILE_ENRICHMENT_PLATFORMS:
-            raise ValueError("MediaCrawler SQLite 目前仅支持抖音/小红书账号主页资料采集，快手主页资料不会写入 SQLite")
+            raise ValueError("MyCrawler SQLite 目前仅支持抖音/小红书账号主页资料采集，快手主页资料不会写入 SQLite")
         creator_id = _account_profile_identifier(account)
         if not creator_id:
             raise ValueError("账号缺少主页链接或平台ID，无法采集主页资料")
@@ -405,7 +405,7 @@ def create_profile_enrichment_batch(limit: int = 10) -> dict[str, object]:
 
 
 def run_tasks_serially(task_ids: list[str]) -> None:
-    # 批量补资料串行执行，避免同时启动多个 MediaCrawler 子进程。
+    # 批量补资料串行执行，避免同时启动多个 MyCrawler 子进程。
     for task_id in task_ids:
         run_task(str(task_id))
 
@@ -575,7 +575,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
 
     media_dir = Path(media_path)
     if not media_dir.exists():
-        _fail_task(task_id, f"MediaCrawler 路径不存在：{media_path}")
+        _fail_task(task_id, f"MyCrawler 路径不存在：{media_path}")
         return
 
     env = os.environ.copy()
@@ -583,7 +583,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
     try:
         schema_message = _ensure_media_crawler_sqlite_schema(media_dir, str(task["platform"]), env)
     except Exception as exc:
-        _fail_task(task_id, f"初始化 MediaCrawler SQLite 表结构失败：{exc}")
+        _fail_task(task_id, f"初始化 MyCrawler SQLite 表结构失败：{exc}")
         return
     if schema_message:
         with database.connect() as conn:
@@ -608,7 +608,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         cdp_message = _ensure_cdp_browser_for_existing_mode(media_dir, bool(task.get("headless")))
     except Exception as exc:
         browser_slot.release()
-        _fail_task(task_id, f"启动 MediaCrawler 前置 CDP 浏览器失败：{exc}")
+        _fail_task(task_id, f"启动 MyCrawler 前置 CDP 浏览器失败：{exc}")
         return
     if cdp_message:
         with database.connect() as conn:
@@ -630,7 +630,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         if cdp_message:
             _close_cdp_browser_context()
         browser_slot.release()
-        _fail_task(task_id, f"启动 MediaCrawler 失败：{exc}")
+        _fail_task(task_id, f"启动 MyCrawler 失败：{exc}")
         return
 
     controlled_stop = False
@@ -639,7 +639,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         RUNNING_PROCESSES[task_id] = process
         with database.connect() as conn:
             conn.execute("UPDATE crawl_jobs SET process_id = ? WHERE id = ?", (process.pid, task_id))
-            log_task(conn, task_id, "info", f"MediaCrawler 进程已启动，PID={process.pid}")
+            log_task(conn, task_id, "info", f"MyCrawler 进程已启动，PID={process.pid}")
 
         assert process.stdout is not None
         for line in process.stdout:
@@ -653,7 +653,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
             if _should_stop_account_analysis(task, message, analysis_progress):
                 controlled_stop = True
                 with database.connect() as conn:
-                    log_task(conn, task_id, "info", f"账号分析已采集到 {analysis_progress['contents']} 条视频，提前结束 MediaCrawler 子进程")
+                    log_task(conn, task_id, "info", f"账号分析已采集到 {analysis_progress['contents']} 条视频，提前结束 MyCrawler 子进程")
                 _terminate_process_tree(process)
                 break
 
@@ -666,7 +666,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
             _close_cdp_browser_context()
         browser_slot.release()
     if return_code != 0 and not controlled_stop:
-        _fail_task(task_id, f"MediaCrawler 退出码异常：{return_code}")
+        _fail_task(task_id, f"MyCrawler 退出码异常：{return_code}")
         return
 
     try:
@@ -718,7 +718,7 @@ def _ensure_media_crawler_sqlite_schema(media_dir: Path, platform_value: str, en
     if not _sqlite_table_exists(db_path, required_table):
         output = (result.stdout or "").strip()
         raise RuntimeError(f"初始化完成后仍缺少表 {required_table}：{output}")
-    return f"检测到 MediaCrawler SQLite 缺少 {required_table} 表，已自动执行 python main.py --init_db sqlite 初始化表结构"
+    return f"检测到 MyCrawler SQLite 缺少 {required_table} 表，已自动执行 python main.py --init_db sqlite 初始化表结构"
 
 
 def _sqlite_table_exists(db_path: Path, table_name: str) -> bool:
@@ -768,7 +768,7 @@ def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> st
     if not headless:
         args.append("--start-maximized")
 
-    # CloakBrowser 持有 Playwright context，MediaCrawler 通过 CDP 端口复用这个浏览器。
+    # CloakBrowser 持有 Playwright context，MyCrawler 通过 CDP 端口复用这个浏览器。
     CDP_BROWSER_CONTEXT = launch_persistent_context(
         str(user_data_dir),
         headless=headless,
@@ -782,7 +782,7 @@ def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> st
         finally:
             CDP_BROWSER_CONTEXT = None
         raise RuntimeError(f"CloakBrowser 已启动但 CDP 端口 {debug_port} 未就绪")
-    return f"检测到 MediaCrawler 需要连接已有 CDP 浏览器，但端口 {debug_port} 未开启；已自动启动 CloakBrowser 调试实例"
+    return f"检测到 MyCrawler 需要连接已有 CDP 浏览器，但端口 {debug_port} 未开启；已自动启动 CloakBrowser 调试实例"
 
 
 def _close_cdp_browser_context() -> None:

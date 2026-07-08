@@ -61,7 +61,7 @@ def clear_all_data(confirm: str) -> dict[str, Any]:
         raw_db_value = str(database.get_setting(conn, "media_crawler_db_path", "")).strip().strip('"').strip("'")
         raw_db_path = Path(raw_db_value).expanduser()
         if not raw_db_path.exists():
-            raise ValueError(f"MediaCrawler SQLite 不存在：{raw_db_path}")
+            raise ValueError(f"MyCrawler SQLite 不存在：{raw_db_path}")
         project_result = _clear_project_database(conn)
 
     raw_result = _clear_media_crawler_database(raw_db_path)

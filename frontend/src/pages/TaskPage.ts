@@ -16,7 +16,7 @@ function renderTaskPreviewPanel(preview: Dict | null, error: string, loading: bo
     h('div', { class: 'preview-head' }, [
       h('div', [
         h('small', '执行预览'),
-        h('strong', loading ? '正在计算实际参数...' : (error || '确认后会按以下命令启动 MediaCrawler'))
+        h('strong', loading ? '正在计算实际参数...' : (error || '确认后会按以下命令启动 MyCrawler'))
       ]),
       preview ? h('span', { class: 'preview-status' }, `${platformName(preview.platform)} / ${preview.crawler_type}`) : null
     ]),
@@ -207,7 +207,7 @@ export default defineComponent({
     }
     function previewInputError(payload: Dict) {
       if (['competitor_discovery', 'demand_content'].includes(payload.mode) && !payload.keywords) {
-        return '搜索型任务必须填写关键词，避免使用 MediaCrawler 默认关键词'
+        return '搜索型任务必须填写关键词，避免使用 MyCrawler 默认关键词'
       }
       if (['account_analysis', 'profile_enrichment'].includes(payload.mode) && !payload.creator_id) {
         return '账号资料任务必须填写创作者主页/ID'

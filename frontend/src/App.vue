@@ -582,7 +582,7 @@ function consumeRetryDraft() {
 }
 
 async function deleteTask(id: string) {
-  await ElMessageBox.confirm('任务删除会同步删除项目库和 MediaCrawler 底层映射数据。确认继续？', '硬删除确认', { type: 'warning' })
+  await ElMessageBox.confirm('任务删除会同步删除项目库和 MyCrawler 底层映射数据。确认继续？', '硬删除确认', { type: 'warning' })
   await api.delete(`/tasks/${id}`)
   ElMessage.success('任务已硬删除')
   selectedTask.value = null
@@ -1103,7 +1103,7 @@ async function deleteOverviewAccount(node: Dict) {
     return
   }
   try {
-    await ElMessageBox.confirm('此操作会删除该账号相关内容、评论、线索来源和可清理账号，并同步 MediaCrawler 底层映射。确认删除该账号？', '删除账号确认', { type: 'warning' })
+    await ElMessageBox.confirm('此操作会删除该账号相关内容、评论、线索来源和可清理账号，并同步 MyCrawler 底层映射。确认删除该账号？', '删除账号确认', { type: 'warning' })
     const { data } = await api.delete(`/overview/accounts/${accountId}`)
     ElMessage.success(scopeDeleteMessage('账号数据已删除', data))
     await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks()])
@@ -1158,7 +1158,7 @@ async function deleteOverviewPlatform(node: Dict) {
     return
   }
   try {
-    await ElMessageBox.confirm(`将硬删除“${platformName(platform)}”平台下的内容、评论、线索、账号来源，并同步 MediaCrawler 底层映射。确认继续？`, '删除平台数据', { type: 'warning' })
+    await ElMessageBox.confirm(`将硬删除“${platformName(platform)}”平台下的内容、评论、线索、账号来源，并同步 MyCrawler 底层映射。确认继续？`, '删除平台数据', { type: 'warning' })
     const { data } = await api.delete(`/overview/platforms/${encodeURIComponent(platform)}`)
     ElMessage.success(scopeDeleteMessage('平台数据已删除', data))
     await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks()])
@@ -1175,7 +1175,7 @@ async function deleteOverviewKeyword(node: Dict) {
     return
   }
   try {
-    await ElMessageBox.confirm(`将硬删除“${platformName(platform)} / ${keyword}”关键词下的内容、评论、线索、账号来源，并同步 MediaCrawler 底层映射。确认继续？`, '删除关键词数据', { type: 'warning' })
+    await ElMessageBox.confirm(`将硬删除“${platformName(platform)} / ${keyword}”关键词下的内容、评论、线索、账号来源，并同步 MyCrawler 底层映射。确认继续？`, '删除关键词数据', { type: 'warning' })
     const { data } = await api.delete('/overview/keywords', { params: { platform, keyword } })
     ElMessage.success(scopeDeleteMessage('关键词数据已删除', data))
     await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadTasks()])
@@ -1266,7 +1266,7 @@ async function clearAllData() {
   let value = ''
   try {
     const result = await ElMessageBox.prompt(
-      '这会清空项目业务库、任务日志、AI结果、证据链，并清空当前设置指向的 MediaCrawler SQLite 所有业务表内容。数据库文件和设置项会保留。请输入“清空所有数据”确认。',
+      '这会清空项目业务库、任务日志、AI结果、证据链，并清空当前设置指向的 MyCrawler SQLite 所有业务表内容。数据库文件和设置项会保留。请输入“清空所有数据”确认。',
       '清空所有数据',
       {
         confirmButtonText: '清空',

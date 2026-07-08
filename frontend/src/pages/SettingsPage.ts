@@ -240,7 +240,7 @@ export default defineComponent({
             tone: settingsDirty.value ? 'amber' : 'teal'
           }),
           h('div', { class: 'form-grid' }, [
-            inputField(local, 'media_crawler_path', 'MediaCrawler路径', 'text', '', markSettingsDirty),
+            inputField(local, 'media_crawler_path', 'MyCrawler路径', 'text', '', markSettingsDirty),
             inputField(local, 'media_crawler_db_path', '底层SQLite路径', 'text', '', markSettingsDirty),
             inputField(local, 'ai_base_url', 'AI Base URL', 'text', '', markSettingsDirty),
             inputField(local, 'ai_api_key', 'API Key', 'password', '', markSettingsDirty),
@@ -287,7 +287,7 @@ export default defineComponent({
           renderTombstones(props.tombstoneSummary as Dict, props.tombstones as Dict, props.tombstoneFilters as Dict, filters => emit('load-tombstones', filters)),
           h('div', { class: 'danger-zone' }, [
             sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Warning, tone: 'red', compact: true }),
-            h('p', '清空项目库和 MediaCrawler 底层库中的所有采集、线索、AI、日志数据。'),
+            h('p', '清空项目库和 MyCrawler 底层库中的所有采集、线索、AI、日志数据。'),
             h('button', { class: 'wide-action danger-action', onClick: () => emit('clear-data') }, [h(Delete, { class: 'inline-icon' }), '清空所有数据'])
           ])
         ])
@@ -411,7 +411,7 @@ function toggleField(local: Dict, key: string, label: string, markDirty?: () => 
 function renderEnv(envValue: Dict) {
   const items = [
     ['项目库', envValue?.project_db],
-    ['MediaCrawler路径', envValue?.media_crawler_path],
+    ['MyCrawler路径', envValue?.media_crawler_path],
     ['底层SQLite', envValue?.media_crawler_db],
     ['AI配置', envValue?.ai_config]
   ]

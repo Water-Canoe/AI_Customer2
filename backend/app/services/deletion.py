@@ -712,7 +712,7 @@ def delete_task(task_id: str) -> dict[str, Any]:
 
 
 def _task_project_counts(conn: sqlite3.Connection, task_id: str) -> dict[str, int]:
-    # 没有任何业务数据的任务只删除任务记录和日志，不触碰 MediaCrawler 底层库。
+    # 没有任何业务数据的任务只删除任务记录和日志，不触碰 MyCrawler 底层库。
     return {
         "contents": int(conn.execute("SELECT COUNT(*) AS c FROM contents WHERE task_id = ?", (task_id,)).fetchone()["c"]),
         "comments": int(conn.execute("SELECT COUNT(*) AS c FROM comments WHERE task_id = ?", (task_id,)).fetchone()["c"]),

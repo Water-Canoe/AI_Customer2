@@ -53,7 +53,7 @@ def _account_profile_identifier(account: dict[str, Any]) -> str:
 
 
 def _creator_id_items(value: object) -> list[str]:
-    # MediaCrawler creator 模式支持逗号分隔多个账号，这里保持同一拆分规则。
+    # MyCrawler creator 模式支持逗号分隔多个账号，这里保持同一拆分规则。
     return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
 

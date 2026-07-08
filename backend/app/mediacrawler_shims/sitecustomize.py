@@ -465,7 +465,7 @@ def _patch_douyin_sleep_interval() -> None:
         import config
         from tools import utils
 
-    # MediaCrawler reads this global in Douyin detail/comment throttling paths.
+    # MyCrawler reads this global in Douyin detail/comment throttling paths.
     config.CRAWLER_MAX_SLEEP_SEC = value
     utils.logger.info(f"[AI_Customer.sleep_interval] CRAWLER_MAX_SLEEP_SEC set to {value:g}")
 

@@ -54,7 +54,7 @@ output/playwright/
 lark_whiteboard_preview_*.png
 
 # External crawler dependency kept outside source control
-MediaCrawler/
+MyCrawler/
 
 # OS metadata
 .DS_Store

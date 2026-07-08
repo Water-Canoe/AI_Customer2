@@ -336,9 +336,9 @@ def _validate_lead_environment(settings: dict[str, Any]) -> None:
     media_path = Path(str(settings.get("media_crawler_path") or "").strip().strip('"').strip("'"))
     raw_db = Path(str(settings.get("media_crawler_db_path") or "").strip().strip('"').strip("'"))
     if not media_path.exists():
-        raise ValueError("MediaCrawler 路径不存在，请先在设置页配置")
+        raise ValueError("MyCrawler 路径不存在，请先在设置页配置")
     if not raw_db.exists():
-        raise ValueError("MediaCrawler SQLite 路径不存在，请先在设置页配置")
+        raise ValueError("MyCrawler SQLite 路径不存在，请先在设置页配置")
 
 
 def _resolve_keywords(payload: AgentRunCreate, settings: dict[str, Any]) -> list[str]:

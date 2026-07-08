@@ -128,7 +128,7 @@ def import_for_task(task_id: str) -> dict[str, int]:
 
     raw_path = Path(raw_db)
     if not raw_path.exists():
-        raise FileNotFoundError(f"MediaCrawler SQLite 不存在：{raw_db}")
+        raise FileNotFoundError(f"MyCrawler SQLite 不存在：{raw_db}")
 
     raw_conn = sqlite3.connect(raw_path)
     raw_conn.row_factory = sqlite3.Row
@@ -226,7 +226,7 @@ def _raw_ts_seconds(row: sqlite3.Row, column: str) -> int | None:
     value = _int_or_none(_value(row, column))
     if value is None or value <= 0:
         return None
-    # MediaCrawler platforms mix second and millisecond timestamps.
+    # MyCrawler platforms mix second and millisecond timestamps.
     return value // 1000 if value > 10_000_000_000 else value
 
 

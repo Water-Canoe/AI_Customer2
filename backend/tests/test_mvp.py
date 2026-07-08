@@ -96,7 +96,7 @@ def test_packaged_launcher_keeps_data_outside_version_dir(tmp_path: Path, monkey
 
     version_dir = tmp_path / "versions" / "1.0.1"
     version_dir.mkdir(parents=True)
-    (tmp_path / "MediaCrawler").mkdir()
+    (tmp_path / "MyCrawler").mkdir()
     monkeypatch.delenv("AI_CUSTOMER_DATA_DIR", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_DB", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", raising=False)
@@ -105,7 +105,7 @@ def test_packaged_launcher_keeps_data_outside_version_dir(tmp_path: Path, monkey
 
     assert os.environ["AI_CUSTOMER_DATA_DIR"] == str(tmp_path / "data")
     assert os.environ["AI_CUSTOMER_DB"] == str(tmp_path / "data" / "ai_customer.sqlite3")
-    assert os.environ["AI_CUSTOMER_MEDIA_CRAWLER_PATH"] == str(tmp_path / "MediaCrawler")
+    assert os.environ["AI_CUSTOMER_MEDIA_CRAWLER_PATH"] == str(tmp_path / "MyCrawler")
 
 
 def create_raw_db(raw_db: Path) -> None:
@@ -2914,15 +2914,15 @@ def test_account_analysis_progress_stops_after_target_content_count(tmp_path: Pa
         TaskCreate(mode="account_analysis", platform="dy", creator_id="creator-1", content_count=2, execute_crawler=False)
     )
     progress = {"creator": False, "contents": 0}
-    assert crawler_adapter._should_stop_account_analysis(task, "MediaCrawler INFO [store.douyin.save_creator] creator:{}", progress) is False
-    assert crawler_adapter._should_stop_account_analysis(task, "MediaCrawler INFO [store.douyin.update_douyin_aweme] douyin aweme id:1", progress) is False
-    assert crawler_adapter._should_stop_account_analysis(task, "MediaCrawler INFO [store.douyin.update_douyin_aweme] douyin aweme id:2", progress) is True
+    assert crawler_adapter._should_stop_account_analysis(task, "MyCrawler INFO [store.douyin.save_creator] creator:{}", progress) is False
+    assert crawler_adapter._should_stop_account_analysis(task, "MyCrawler INFO [store.douyin.update_douyin_aweme] douyin aweme id:1", progress) is False
+    assert crawler_adapter._should_stop_account_analysis(task, "MyCrawler INFO [store.douyin.update_douyin_aweme] douyin aweme id:2", progress) is True
 
     multi_task = crawler_adapter.create_task(
         TaskCreate(mode="account_analysis", platform="dy", creator_id="creator-1,creator-2", content_count=2, execute_crawler=False)
     )
     multi_progress = {"creator": True, "contents": 99}
-    assert crawler_adapter._should_stop_account_analysis(multi_task, "MediaCrawler INFO [store.douyin.update_douyin_aweme] douyin aweme id:99", multi_progress) is False
+    assert crawler_adapter._should_stop_account_analysis(multi_task, "MyCrawler INFO [store.douyin.update_douyin_aweme] douyin aweme id:99", multi_progress) is False
 
 
 def test_account_analysis_subprocess_env_limits_douyin_creator_videos(tmp_path: Path) -> None:
@@ -3015,7 +3015,7 @@ def test_content_cutoff_subprocess_env_applies_without_comment_collection(tmp_pa
 def test_cdp_existing_mode_auto_launches_browser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import crawler_adapter
 
-    media_dir = tmp_path / "MediaCrawler"
+    media_dir = tmp_path / "MyCrawler"
     config_dir = media_dir / "config"
     config_dir.mkdir(parents=True)
     (config_dir / "base_config.py").write_text(
@@ -3060,7 +3060,7 @@ def test_cdp_existing_mode_auto_launches_browser(tmp_path: Path, monkeypatch: py
 def test_media_crawler_sqlite_schema_auto_initializes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import crawler_adapter
 
-    media_dir = tmp_path / "MediaCrawler"
+    media_dir = tmp_path / "MyCrawler"
     db_path = media_dir / "database" / "sqlite_tables.db"
     db_path.parent.mkdir(parents=True)
     db_path.touch()
@@ -3118,7 +3118,7 @@ def test_profile_enrichment_rejects_platform_without_sqlite_creator_store(tmp_pa
         )
         account_id = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'ks-user-1'").fetchone()["id"]
 
-    with pytest.raises(ValueError, match="MediaCrawler SQLite"):
+    with pytest.raises(ValueError, match="MyCrawler SQLite"):
         crawler_adapter.create_profile_enrichment_task(int(account_id))
 
 

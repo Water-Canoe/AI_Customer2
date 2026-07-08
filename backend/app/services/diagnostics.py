@@ -16,29 +16,29 @@ DIAGNOSTIC_RULES: list[Rule] = [
     (
         "数据库缺表",
         ("no such table", "sqlite3.operationalerror", "douyin_aweme", "xhs_note", "kuaishou_video"),
-        "MediaCrawler 底层数据库缺少任务需要读取的表，通常是路径指向了空库或未初始化的库。",
-        ["在设置页确认 MediaCrawler 数据库路径指向实际采集库", "重新运行一次对应平台任务，让 MediaCrawler 初始化表结构", "如果刚换过 MediaCrawler 路径，确认新路径下 database/sqlite_tables.db 存在"],
+        "MyCrawler 底层数据库缺少任务需要读取的表，通常是路径指向了空库或未初始化的库。",
+        ["在设置页确认 MyCrawler 数据库路径指向实际采集库", "重新运行一次对应平台任务，让 MyCrawler 初始化表结构", "如果刚换过 MyCrawler 路径，确认新路径下 database/sqlite_tables.db 存在"],
         True,
     ),
     (
         "浏览器CDP",
         ("cdp port", "remote debugging", "chrome://inspect", "browser connection disconnected", "still waiting for browser"),
-        "浏览器远程调试端口不可用或连接中断，MediaCrawler 没有拿到稳定的登录浏览器环境。",
+        "浏览器远程调试端口不可用或连接中断，MyCrawler 没有拿到稳定的登录浏览器环境。",
         ["先关闭旧的浏览器调试进程，再重新启动后端和任务", "确认 Chrome/浏览器已开启 9222 远程调试端口", "如果使用扫码登录，保持登录窗口可用并避免手动关闭浏览器"],
         True,
     ),
     (
         "路径配置",
         ("media crawler path", "media_crawler_path", "no such file", "找不到路径", "系统找不到指定的路径", "不是有效的 mediacrawler"),
-        "MediaCrawler 路径或运行入口配置不正确，后端无法按预期启动采集程序。",
-        ["在设置页检查 MediaCrawler 根目录", "确认该目录下存在 main.py 和 pyproject.toml", "修改路径后重启后端，避免旧配置仍在运行"],
+        "MyCrawler 路径或运行入口配置不正确，后端无法按预期启动采集程序。",
+        ["在设置页检查 MyCrawler 根目录", "确认该目录下存在 main.py 和 pyproject.toml", "修改路径后重启后端，避免旧配置仍在运行"],
         True,
     ),
     (
         "路径配置",
         ("failed to spawn", "应用程序控制策略", "os error 4551", "blocked this file", "applocker"),
-        "本机 Windows 应用控制策略阻止了 Python 启动，MediaCrawler 子进程没有真正开始采集。",
-        ["更新后重启后端，确认任务命令已变为 python main.py", "如果仍被拦截，在设置页确认 MediaCrawler 路径下 .venv 依赖完整", "让系统管理员放行当前可执行的 Python，或把可执行 Python 加入系统允许列表"],
+        "本机 Windows 应用控制策略阻止了 Python 启动，MyCrawler 子进程没有真正开始采集。",
+        ["更新后重启后端，确认任务命令已变为 python main.py", "如果仍被拦截，在设置页确认 MyCrawler 路径下 .venv 依赖完整", "让系统管理员放行当前可执行的 Python，或把可执行 Python 加入系统允许列表"],
         True,
     ),
     (
@@ -73,7 +73,7 @@ DIAGNOSTIC_RULES: list[Rule] = [
         "导入失败",
         ("归一化导入失败", "导入失败", "import failed", "normaliz"),
         "采集完成后导入项目库失败，可能是底层字段结构变化或数据异常。",
-        ["查看日志中导入失败前后的字段信息", "确认当前 MediaCrawler 版本和数据库表结构", "保留失败日志后再调整导入映射"],
+        ["查看日志中导入失败前后的字段信息", "确认当前 MyCrawler 版本和数据库表结构", "保留失败日志后再调整导入映射"],
         True,
     ),
     (
@@ -111,7 +111,7 @@ def task_diagnostics(task_id: str) -> dict[str, Any]:
             "category": "无有效数据",
             "summary": "任务成功结束，但没有导入有效业务数据。",
             "evidence": [_counts_evidence(counts)],
-            "next_steps": ["检查关键词/主页/ID 是否正确", "检查设置页的平台诊断和采集日期窗口", "确认 MediaCrawler 底层库路径不是空库或旧库"],
+            "next_steps": ["检查关键词/主页/ID 是否正确", "检查设置页的平台诊断和采集日期窗口", "确认 MyCrawler 底层库路径不是空库或旧库"],
             "retryable": True,
         }
 

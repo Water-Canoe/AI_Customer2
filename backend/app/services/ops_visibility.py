@@ -131,7 +131,7 @@ def task_dedup_summary(task_id: str) -> dict[str, Any]:
         "audit": audit,
         "diagnostic": diagnostics.task_diagnostics(task_id),
         "notes": [
-            "重复跳过数量只能从项目库墓碑、删除审计和当前入库状态推导，不等同于 MediaCrawler 底层去重总数。",
+            "重复跳过数量只能从项目库墓碑、删除审计和当前入库状态推导，不等同于 MyCrawler 底层去重总数。",
             "已删除内容和评论会通过墓碑阻止后续重复导入；已存在但未删除的内容仍可作为评论采集入口。",
         ],
     }

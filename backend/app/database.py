@@ -11,7 +11,7 @@ from typing import Any, Iterator
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = BACKEND_ROOT.parent
 DEFAULT_DATA_ROOT = WORKSPACE_ROOT / "data"
-DEFAULT_MEDIA_CRAWLER_PATH = Path(os.getenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", str(WORKSPACE_ROOT / "MediaCrawler")))
+DEFAULT_MEDIA_CRAWLER_PATH = Path(os.getenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", str(WORKSPACE_ROOT / "MyCrawler")))
 DEFAULT_MEDIA_CRAWLER_DB = DEFAULT_MEDIA_CRAWLER_PATH / "database" / "sqlite_tables.db"
 
 

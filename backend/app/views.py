@@ -184,7 +184,7 @@ def _platform_capability(platform: str) -> dict[str, Any]:
                 status="supported" if profile_supported else "unsupported",
                 note="补资料任务会从 creator 表导入主页简介。"
                 if profile_supported
-                else "MediaCrawler SQLite 当前没有该平台 creator 主页资料表。",
+                else "MyCrawler SQLite 当前没有该平台 creator 主页资料表。",
             ),
             "creator_fans": _field_capability(
                 creator_mapping,
@@ -193,7 +193,7 @@ def _platform_capability(platform: str) -> dict[str, Any]:
                 status="supported" if profile_supported else "unsupported",
                 note="补资料任务会从 creator 表导入粉丝数。"
                 if profile_supported
-                else "MediaCrawler SQLite 当前没有该平台 creator 粉丝数字段。",
+                else "MyCrawler SQLite 当前没有该平台 creator 粉丝数字段。",
             ),
         },
         "modes": {mode: _mode_capability(mode, profile_supported) for mode in (
@@ -388,7 +388,7 @@ def _project_quality_issues(sections: list[dict[str, Any]], tasks_with_comments:
         issues.append({
             "severity": "warning",
             "title": "项目库还没有内容",
-            "detail": "采集任务成功不等于业务数据已入库；先检查任务日志和 MediaCrawler 原始表。",
+            "detail": "采集任务成功不等于业务数据已入库；先检查任务日志和 MyCrawler 原始表。",
         })
     signature = field_map[("accounts", "主页简介")]
     if int(section_map["accounts"]["total"]) > 0 and int(signature["non_empty"]) < int(signature["total"]):
@@ -415,7 +415,7 @@ def _project_quality_issues(sections: list[dict[str, Any]], tasks_with_comments:
         issues.append({
             "severity": "warning",
             "title": "任务要求采评论但评论库为空",
-            "detail": "检查平台登录状态、内容ID/账号主页、评论开关和 MediaCrawler 原始评论表。",
+            "detail": "检查平台登录状态、内容ID/账号主页、评论开关和 MyCrawler 原始评论表。",
         })
     lead_sources = field_map[("leads", "证据来源")]
     if int(section_map["leads"]["total"]) > 0 and int(lead_sources["non_empty"]) < int(lead_sources["total"]):
@@ -453,7 +453,7 @@ def _platform_diagnostic(raw_conn: sqlite3.Connection, platform: str) -> dict[st
     if comment["exists"] and comment["row_count"] == 0:
         warnings.append(f"{PLATFORM_LABELS[platform]}评论表暂无原始行")
     if platform not in PROFILE_ENRICHMENT_PLATFORMS:
-        warnings.append("MediaCrawler SQLite 当前不写入该平台 creator 主页资料，补资料不可用")
+        warnings.append("MyCrawler SQLite 当前不写入该平台 creator 主页资料，补资料不可用")
     elif not creator["exists"]:
         warnings.append(f"{PLATFORM_LABELS[platform]}creator 表不存在，主页简介和粉丝数无法补全")
     return {

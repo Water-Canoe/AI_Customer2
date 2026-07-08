@@ -30,7 +30,7 @@ def configure_environment(base_dir: Path) -> None:
     root_dir = install_root(base_dir)
     data_dir = Path(os.environ.get("AI_CUSTOMER_DATA_DIR", str(root_dir / "data")))
     frontend_dist = base_dir / "frontend_dist"
-    media_crawler_dir = root_dir / "MediaCrawler"
+    media_crawler_dir = root_dir / "MyCrawler"
 
     data_dir.mkdir(parents=True, exist_ok=True)
 
