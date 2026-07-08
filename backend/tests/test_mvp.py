@@ -3258,51 +3258,47 @@ def test_kuaishou_profile_enrichment_loads_runtime_shim() -> None:
     assert "mediacrawler_shims" in env["PYTHONPATH"]
 
 
-def test_kuaishou_runtime_shim_persists_creator_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_mycrawler_kuaishou_sqlite_store_creator_persists_profile(tmp_path: Path) -> None:
+    pytest.importorskip("sqlalchemy")
+    pytest.importorskip("aiosqlite")
+    mycrawler_root = BACKEND_ROOT.parent / "MyCrawler"
     db_path = tmp_path / "sqlite_tables.db"
-    config_pkg = types.ModuleType("config")
-    db_config_module = types.ModuleType("config.db_config")
-    db_config_module.sqlite_db_config = {"db_path": str(db_path)}
-    store_pkg = types.ModuleType("store")
-    store_pkg.__path__ = []  # type: ignore[attr-defined]
-    kuaishou_module = types.ModuleType("store.kuaishou")
-    calls: list[str] = []
+    before_modules = set(sys.modules)
+    sys.path.insert(0, str(mycrawler_root))
+    try:
+        import config
+        from config import db_config
+        from database import db_session
+        from store.kuaishou._store_impl import KuaishouSqliteStoreImplement
 
-    async def original_save_creator(user_id: str, creator: dict[str, object]) -> None:
-        calls.append(user_id)
+        config.SAVE_DATA_OPTION = "sqlite"
+        db_config.sqlite_db_config["db_path"] = str(db_path)
+        db_session._engines.clear()
 
-    kuaishou_module.save_creator = original_save_creator  # type: ignore[attr-defined]
-    store_pkg.kuaishou = kuaishou_module  # type: ignore[attr-defined]
-    tools_pkg = types.ModuleType("tools")
-    utils_module = types.ModuleType("tools.utils")
-    utils_module.logger = types.SimpleNamespace(info=lambda message: None)
-    monkeypatch.setenv("AI_CUSTOMER_CREATOR_PLATFORM", "ks")
-    monkeypatch.setitem(sys.modules, "config", config_pkg)
-    monkeypatch.setitem(sys.modules, "config.db_config", db_config_module)
-    monkeypatch.setitem(sys.modules, "store", store_pkg)
-    monkeypatch.setitem(sys.modules, "store.kuaishou", kuaishou_module)
-    monkeypatch.setitem(sys.modules, "tools", tools_pkg)
-    monkeypatch.setitem(sys.modules, "tools.utils", utils_module)
-
-    spec = importlib.util.spec_from_file_location(
-        "sitecustomize_ks_test",
-        BACKEND_ROOT / "app" / "mediacrawler_shims" / "sitecustomize.py",
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    asyncio.run(kuaishou_module.save_creator(  # type: ignore[attr-defined]
-        "ks-user",
-        {
-            "profile": {"user_name": "快手账号", "user_text": "主营AI客服", "headurl": "avatar", "gender": "F"},
-            "ownerCount": {"follow": 3, "fan": 88, "photo_public": 7},
-        },
-    ))
+        asyncio.run(KuaishouSqliteStoreImplement().store_creator({
+            "user_id": "ks-user",
+            "nickname": "快手账号",
+            "gender": "Female",
+            "avatar": "avatar",
+            "desc": "主营AI客服",
+            "ip_location": "",
+            "follows": "3",
+            "fans": "88",
+            "interaction": "7",
+            "last_modify_ts": 123,
+        }))
+        for engine in list(db_session._engines.values()):
+            asyncio.run(engine.dispose())
+        db_session._engines.clear()
+    finally:
+        if str(mycrawler_root) in sys.path:
+            sys.path.remove(str(mycrawler_root))
+        for name in set(sys.modules) - before_modules:
+            if name.split(".", 1)[0] in {"base", "config", "database", "store", "tools", "var"}:
+                sys.modules.pop(name, None)
 
     with sqlite3.connect(db_path) as conn:
         row = conn.execute("SELECT user_id, nickname, desc, fans, interaction FROM kuaishou_creator").fetchone()
-    assert calls == ["ks-user"]
     assert row == ("ks-user", "快手账号", "主营AI客服", "88", "7")
 
 
