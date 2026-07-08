@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from app import database
 from app.schemas import TrafficPlanCreate, TrafficSettingsUpdate
+from app.services import browser_queue
 
 
 # 引流设置默认值只覆盖缺失项，避免覆盖用户在设置页保存的配置。
@@ -626,7 +627,20 @@ def run_traffic_run(run_id: str) -> None:
         return
     _mark_run_running(run_id)
     try:
-        completion = _run_with_playwright(run_id, plan) or {}
+        with browser_queue.browser_slot(
+            f"traffic:{run_id}",
+            on_wait=lambda message: _append_log(
+                run_id,
+                "info",
+                "browser_queue",
+                message,
+                "浏览器环境一次只能由一个任务使用。",
+                "系统会自动排队执行，不需要重复点击启动。",
+                {},
+            ),
+            should_stop=lambda: _traffic_run_stop_requested(run_id),
+        ):
+            completion = _run_with_playwright(run_id, plan) or {}
         _finish_run(
             run_id,
             "completed",
@@ -643,6 +657,16 @@ def run_traffic_run(run_id: str) -> None:
             exc.suggestion,
             exc.phase,
             exc.details or {},
+        )
+    except browser_queue.BrowserQueueCancelled:
+        _finish_run(
+            run_id,
+            "stopped",
+            "任务已按你的要求停止。",
+            "任务等待浏览器资源时收到停止请求。",
+            "可以在执行监控查看已经写入的日志。",
+            "stop",
+            {},
         )
     except Exception as exc:
         _finish_run(
@@ -2393,6 +2417,12 @@ def _raise_if_stop_requested(run_id: str) -> None:
         row = conn.execute("SELECT stop_requested FROM traffic_runs WHERE id = ?", (run_id,)).fetchone()
     if row and int(row["stop_requested"] or 0):
         raise TrafficStop("任务已按你的要求停止。", "用户手动停止任务", "可以在操作记录查看已经处理的视频。", "stop", {})
+
+
+def _traffic_run_stop_requested(run_id: str) -> bool:
+    with database.connect() as conn:
+        row = conn.execute("SELECT stop_requested FROM traffic_runs WHERE id = ?", (run_id,)).fetchone()
+    return bool(row and int(row["stop_requested"] or 0))
 
 
 def _pick_text() -> str:

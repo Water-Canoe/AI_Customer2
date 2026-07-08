@@ -15,6 +15,7 @@ from typing import Any, Callable, Literal
 
 from app import database
 from app.schemas import TaskCreate
+from app.services import browser_queue
 from app.services.importer import CONTENT_TABLES, import_for_task
 
 
@@ -538,6 +539,12 @@ def log_task(conn, task_id: str, level: str, message: str) -> None:
     )
 
 
+def _task_cancelled(task_id: str) -> bool:
+    with database.connect() as conn:
+        row = conn.execute("SELECT status FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
+    return bool(row and row["status"] == "cancelled")
+
+
 def run_task_background(task_id: str, after_log: Callable[[str], None] | None = None) -> None:
     thread = threading.Thread(target=run_task, args=(task_id, after_log), daemon=True)
     thread.start()
@@ -582,9 +589,25 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         with database.connect() as conn:
             log_task(conn, task_id, "info", schema_message)
 
+    def emit_queue_message(message: str) -> None:
+        with database.connect() as conn:
+            log_task(conn, task_id, "info", message)
+        if after_log:
+            after_log(message)
+
+    try:
+        browser_slot = browser_queue.acquire(
+            f"crawler:{task_id}",
+            on_wait=emit_queue_message,
+            should_stop=lambda: _task_cancelled(task_id),
+        )
+    except browser_queue.BrowserQueueCancelled:
+        return
+
     try:
         cdp_message = _ensure_cdp_browser_for_existing_mode(media_dir, bool(task.get("headless")))
     except Exception as exc:
+        browser_slot.release()
         _fail_task(task_id, f"启动 MediaCrawler 前置 CDP 浏览器失败：{exc}")
         return
     if cdp_message:
@@ -606,36 +629,42 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
     except Exception as exc:
         if cdp_message:
             _close_cdp_browser_context()
+        browser_slot.release()
         _fail_task(task_id, f"启动 MediaCrawler 失败：{exc}")
         return
 
-    RUNNING_PROCESSES[task_id] = process
-    with database.connect() as conn:
-        conn.execute("UPDATE crawl_jobs SET process_id = ? WHERE id = ?", (process.pid, task_id))
-        log_task(conn, task_id, "info", f"MediaCrawler 进程已启动，PID={process.pid}")
-
     controlled_stop = False
     analysis_progress: dict[str, Any] = {"creator": False, "contents": 0}
-    assert process.stdout is not None
-    for line in process.stdout:
-        message = line.rstrip()
-        if not message:
-            continue
+    try:
+        RUNNING_PROCESSES[task_id] = process
         with database.connect() as conn:
-            log_task(conn, task_id, "info", message)
-        if after_log:
-            after_log(message)
-        if _should_stop_account_analysis(task, message, analysis_progress):
-            controlled_stop = True
-            with database.connect() as conn:
-                log_task(conn, task_id, "info", f"账号分析已采集到 {analysis_progress['contents']} 条视频，提前结束 MediaCrawler 子进程")
-            _terminate_process_tree(process)
-            break
+            conn.execute("UPDATE crawl_jobs SET process_id = ? WHERE id = ?", (process.pid, task_id))
+            log_task(conn, task_id, "info", f"MediaCrawler 进程已启动，PID={process.pid}")
 
-    return_code = process.wait()
-    RUNNING_PROCESSES.pop(task_id, None)
-    if cdp_message:
-        _close_cdp_browser_context()
+        assert process.stdout is not None
+        for line in process.stdout:
+            message = line.rstrip()
+            if not message:
+                continue
+            with database.connect() as conn:
+                log_task(conn, task_id, "info", message)
+            if after_log:
+                after_log(message)
+            if _should_stop_account_analysis(task, message, analysis_progress):
+                controlled_stop = True
+                with database.connect() as conn:
+                    log_task(conn, task_id, "info", f"账号分析已采集到 {analysis_progress['contents']} 条视频，提前结束 MediaCrawler 子进程")
+                _terminate_process_tree(process)
+                break
+
+        return_code = process.wait()
+    finally:
+        if process.poll() is None:
+            _terminate_process_tree(process)
+        RUNNING_PROCESSES.pop(task_id, None)
+        if cdp_message:
+            _close_cdp_browser_context()
+        browser_slot.release()
     if return_code != 0 and not controlled_stop:
         _fail_task(task_id, f"MediaCrawler 退出码异常：{return_code}")
         return

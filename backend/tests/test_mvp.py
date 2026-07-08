@@ -5,6 +5,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import types
 import importlib.util
 import asyncio
@@ -40,6 +41,50 @@ def prepare_project(tmp_path: Path) -> tuple[Path, Path]:
         database.set_setting(conn, "media_crawler_db_path", str(raw_db))
         database.set_setting(conn, "media_crawler_path", str(tmp_path))
     return project_db, raw_db
+
+
+def test_browser_queue_serializes_shared_browser_access() -> None:
+    from app.services import browser_queue
+
+    events: list[str] = []
+    first_started = threading.Event()
+    first_release = threading.Event()
+    second_waiting = threading.Event()
+
+    def first_worker() -> None:
+        with browser_queue.browser_slot("test:first"):
+            events.append("first:start")
+            first_started.set()
+            assert first_release.wait(2)
+            events.append("first:end")
+
+    def second_worker() -> None:
+        assert first_started.wait(2)
+
+        def on_wait(message: str) -> None:
+            events.append(f"second:{message}")
+            second_waiting.set()
+
+        with browser_queue.browser_slot("test:second", on_wait=on_wait):
+            events.append("second:start")
+
+    first_thread = threading.Thread(target=first_worker)
+    second_thread = threading.Thread(target=second_worker)
+    first_thread.start()
+    second_thread.start()
+
+    assert first_started.wait(2)
+    assert second_waiting.wait(2)
+    assert "second:start" not in events
+
+    first_release.set()
+    first_thread.join(2)
+    second_thread.join(2)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert events.index("first:end") < events.index("second:start")
+    assert any(event.startswith("second:等待浏览器资源") for event in events)
 
 
 def test_packaged_launcher_keeps_data_outside_version_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

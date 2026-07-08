@@ -33,6 +33,7 @@
 `AI自动拓客` 首版只跑抖音，支持四种确定性动作：`lead_operation=competitors` 只找竞品；`lead_operation=customers` 找竞品和客户但不私信；`lead_operation=message` 只从私信工作台读取当前未私信关键词队列并创建自动私信批次；`lead_operation=full` 跑完整闭环。完整闭环会校验拓客授权、AI 配置、MediaCrawler 路径和底层 SQLite，按关键词创建 `competitor_discovery` 采集任务，复用“一键竞品分析”补主页并触发竞品 AI 判断，再复用“一键找客户”创建找客户任务，采集评论后触发客户意向 AI 分析。需要私信时，后端按 AI 计划里的 `dm_count / interval_min_seconds / interval_max_seconds` 创建自动私信批次；设置页若开启“自动私信只填内容不发送”，仍会沿用私信工作台现有安全开关，只填话术并等待人工发送。
 
 `AI自动引流` 首版只真实执行抖音：自然语言计划会生成来源模式、来源值、动作组合和每轮视频数；用户确认后，后端校验引流授权和 CloakBrowser/Playwright 环境，创建 `traffic_plan`，随后立即创建并执行 `traffic_run`。结果会关联到既有执行监控和操作记录页面。
+浏览器自动化现在由 `backend/app/services/browser_queue.py` 统一排队。MediaCrawler 采集、引流执行、单个自动私信和批量自动私信都会在打开共享 `data/douyin_cloak_profile/` 前获取同一个浏览器资源锁；如果前方已有任务占用浏览器，后续任务会等待并在对应任务日志或引流日志中记录“等待浏览器资源”，用户不需要重复点击执行。AI/数据库查询、AI 文本分析等不占用浏览器的步骤仍可按原机制执行。
 
 版本控制只保留项目源码和文档；`data/`、`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MediaCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 

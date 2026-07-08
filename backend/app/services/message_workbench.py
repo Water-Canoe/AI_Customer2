@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from app import database
+from app.services import browser_queue
 
 
 TARGET_FOLLOW_STATUSES = ("未私信", "已私信", "未回复", "已回复", "未成交", "已成交")
@@ -249,13 +250,14 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
 
     sender = _load_douyin_dm_sender()
     async with _auto_dm_lock():
-        result = await sender(
-            customer["profile_url"],
-            customer["script"],
-            profile_dir=database.get_douyin_cloak_profile_dir(),
-            dry_run=effective_dry_run,
-            manual_send_timeout_seconds=effective_timeout,
-        )
+        async with browser_queue.async_browser_slot(f"message_customer:{lead_id}"):
+            result = await sender(
+                customer["profile_url"],
+                customer["script"],
+                profile_dir=database.get_douyin_cloak_profile_dir(),
+                dry_run=effective_dry_run,
+                manual_send_timeout_seconds=effective_timeout,
+            )
 
     follow_update: dict[str, Any] | None = None
     current_status = customer["follow_status"] or customer["screening_status"]
@@ -290,42 +292,50 @@ async def run_auto_message_batch(batch_id: str) -> None:
         module = _load_douyin_dm_module()
         context = None
         try:
-            context = await module.open_douyin_context(profile_dir=database.get_douyin_cloak_profile_dir())
-            while True:
-                with database.connect() as conn:
-                    batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
-                    if not batch or int(batch["stop_requested"] or 0):
-                        _cancel_pending_items(conn, batch_id)
-                        _finish_batch(conn, batch_id, "cancelled", "用户取消")
-                        return
-                    item = conn.execute(
-                        """
-                        SELECT *
-                        FROM message_batch_items
-                        WHERE batch_id = ? AND status = 'pending'
-                        ORDER BY id ASC
-                        LIMIT 1
-                        """,
-                        (batch_id,),
-                    ).fetchone()
-                    if not item:
-                        _finish_batch(conn, batch_id, "succeeded", "")
-                        return
-                    conn.execute(
-                        """
-                        UPDATE message_batch_items
-                        SET status = 'running', started_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
-                        WHERE id = ?
-                        """,
-                        (item["id"],),
-                    )
-                    conn.execute(
-                        "UPDATE message_batches SET current_lead_id = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
-                        (item["lead_account_id"], batch_id),
-                    )
+            async with browser_queue.async_browser_slot(
+                f"message_batch:{batch_id}",
+                should_stop=lambda: _message_batch_stop_requested(batch_id),
+            ):
+                context = await module.open_douyin_context(profile_dir=database.get_douyin_cloak_profile_dir())
+                while True:
+                    with database.connect() as conn:
+                        batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
+                        if not batch or int(batch["stop_requested"] or 0):
+                            _cancel_pending_items(conn, batch_id)
+                            _finish_batch(conn, batch_id, "cancelled", "用户取消")
+                            return
+                        item = conn.execute(
+                            """
+                            SELECT *
+                            FROM message_batch_items
+                            WHERE batch_id = ? AND status = 'pending'
+                            ORDER BY id ASC
+                            LIMIT 1
+                            """,
+                            (batch_id,),
+                        ).fetchone()
+                        if not item:
+                            _finish_batch(conn, batch_id, "succeeded", "")
+                            return
+                        conn.execute(
+                            """
+                            UPDATE message_batch_items
+                            SET status = 'running', started_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
+                            WHERE id = ?
+                            """,
+                            (item["id"],),
+                        )
+                        conn.execute(
+                            "UPDATE message_batches SET current_lead_id = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+                            (item["lead_account_id"], batch_id),
+                        )
 
-                await _run_batch_item(context, database.row_to_dict(item) or {}, database.row_to_dict(batch) or {}, module)
-                await _sleep_between_batch_items(batch_id, int(batch["interval_min_seconds"] or 0), int(batch["interval_max_seconds"] or 0))
+                    await _run_batch_item(context, database.row_to_dict(item) or {}, database.row_to_dict(batch) or {}, module)
+                    await _sleep_between_batch_items(batch_id, int(batch["interval_min_seconds"] or 0), int(batch["interval_max_seconds"] or 0))
+        except browser_queue.BrowserQueueCancelled:
+            with database.connect() as conn:
+                _cancel_pending_items(conn, batch_id)
+                _finish_batch(conn, batch_id, "cancelled", "用户取消")
         except Exception as exc:
             with database.connect() as conn:
                 _fail_pending_items(conn, batch_id, str(exc))
@@ -390,6 +400,12 @@ async def _sleep_between_batch_items(batch_id: str, minimum: int, maximum: int) 
     if not pending or (batch and int(batch["stop_requested"] or 0)):
         return
     await asyncio.sleep(random.randint(minimum, maximum) if maximum > minimum else minimum)
+
+
+def _message_batch_stop_requested(batch_id: str) -> bool:
+    with database.connect() as conn:
+        row = conn.execute("SELECT stop_requested FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
+    return bool(row and int(row["stop_requested"] or 0))
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
