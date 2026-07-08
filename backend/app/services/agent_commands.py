@@ -83,6 +83,7 @@ SYSTEM_ACTIONS = {
     "task_diagnostics": False,
     "task_dedup_summary": False,
     "tasks_list": False,
+    "failed_retry": True,
     "task_delete": True,
     "table_list": False,
     "table_update": True,
@@ -290,13 +291,20 @@ def _build_plan(payload: AgentCommandRequest) -> dict[str, Any]:
 def _normalize_plan(plan: dict[str, Any], payload: AgentCommandRequest) -> dict[str, Any]:
     normalized = dict(plan or {})
     action = str(normalized.get("action") or "").strip()
+    inferred_metric = _infer_metric(payload.command)
+    inferred_operation = _infer_system_operation(payload.command, payload.workspace)
+    if inferred_operation == "failed_retry":
+        action = "system_action"
+        normalized["operation"] = inferred_operation
+        normalized["title"] = normalized.get("title") or "处理失败待查"
+        normalized["summary"] = normalized.get("summary") or "失败待查包含采集失败任务和 AI 分析失败任务；确认后会重试可处理的失败项。"
+    elif inferred_metric == "failures":
+        action = "answer_stats"
     if action not in ALLOWED_ACTIONS:
-        inferred_operation = _infer_system_operation(payload.command, payload.workspace)
         action = "system_action" if inferred_operation else _infer_action(payload.command, payload.workspace)
         if inferred_operation:
             normalized["operation"] = normalized.get("operation") or inferred_operation
     if action == "unknown":
-        inferred_operation = _infer_system_operation(payload.command, payload.workspace)
         action = "system_action" if inferred_operation else _infer_action(payload.command, payload.workspace)
         if inferred_operation:
             normalized["operation"] = normalized.get("operation") or inferred_operation
@@ -306,11 +314,10 @@ def _normalize_plan(plan: dict[str, Any], payload: AgentCommandRequest) -> dict[
     normalized["steps"] = _clean_steps(normalized.get("steps"), action)
     normalized["keywords"] = _clean_keywords(normalized.get("keywords", []))
     if action == "answer_stats":
-        inferred_metric = _infer_metric(payload.command)
         metric = str(normalized.get("metric") or inferred_metric).strip()
         if inferred_metric != "overview":
             metric = inferred_metric
-        normalized["metric"] = metric if metric in {"overview", "competitors", "target_customers", "unmessaged", "dm_summary"} else "overview"
+        normalized["metric"] = metric if metric in {"overview", "competitors", "target_customers", "unmessaged", "dm_summary", "failures"} else "overview"
     if action == "lead_auto":
         normalized.update(_normalize_lead_plan(normalized, payload.command))
     if action == "traffic_auto":
@@ -757,6 +764,96 @@ def _tombstones_list(params: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _failed_overview(limit: int = 10) -> dict[str, Any]:
+    with database.connect() as conn:
+        failed_tasks = database.rows_to_dicts(
+            conn.execute(
+                """
+                SELECT id, name, mode, platform, error, keywords, creator_id, specified_id, updated_at
+                FROM crawl_jobs
+                WHERE status = 'failed' AND archived = 0
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+        failed_ai_jobs = database.rows_to_dicts(
+            conn.execute(
+                """
+                SELECT id, target_type, target_id, error, updated_at
+                FROM analysis_jobs
+                WHERE status = 'failed'
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        )
+        counts = {
+            "failed_tasks": _scalar(conn, "SELECT COUNT(*) FROM crawl_jobs WHERE status = 'failed' AND archived = 0"),
+            "failed_ai_jobs": _scalar(conn, "SELECT COUNT(*) FROM analysis_jobs WHERE status = 'failed'"),
+        }
+    counts["failures"] = counts["failed_tasks"] + counts["failed_ai_jobs"]
+    return {"counts": counts, "failed_tasks": failed_tasks, "failed_ai_jobs": failed_ai_jobs}
+
+
+def _task_retry_payload(task_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        row = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
+    if not row:
+        raise ValueError(f"任务不存在：{task_id}")
+    return {
+        "name": str(row["name"] or ""),
+        "mode": str(row["mode"] or ""),
+        "platform": str(row["platform"] or "dy"),
+        "login_type": str(row["login_type"] or "qrcode"),
+        "keywords": str(row["keywords"] or ""),
+        "specified_id": str(row["specified_id"] or ""),
+        "creator_id": str(row["creator_id"] or ""),
+        "content_count": int(row["content_count"] or 20),
+        "comment_count": int(row["comment_count"] or 20),
+        "collect_content": bool(row["collect_content"]),
+        "collect_comments": bool(row["collect_comments"]),
+        "collect_authors": bool(row["collect_authors"]),
+        "collect_sub_comments": bool(row["collect_sub_comments"]),
+        "max_concurrency": int(row["max_concurrency"] or 1),
+        "tcp_mode": bool(row["tcp_mode"]),
+        "headless": bool(row["headless"]),
+        "execute_crawler": bool(row["execute_crawler"]),
+    }
+
+
+def _failed_retry(params: dict[str, Any]) -> dict[str, Any]:
+    license_service.ensure_authorized()
+    limit = _bounded_int(params.get("limit"), 10, 1, 50)
+    overview = _failed_overview(limit)
+    retried_ai_jobs: list[dict[str, Any]] = []
+    created_tasks: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    for job in overview["failed_ai_jobs"]:
+        try:
+            retried_ai_jobs.append(ai_service.retry_ai_job(str(job["id"])))
+        except Exception as exc:
+            errors.append({"type": "ai_job", "id": str(job["id"]), "error": str(exc)})
+
+    for task in overview["failed_tasks"]:
+        try:
+            created_tasks.append(_task_create(_task_retry_payload(str(task["id"]))))
+        except Exception as exc:
+            errors.append({"type": "task", "id": str(task["id"]), "error": str(exc)})
+
+    return {
+        "overview": overview,
+        "retried_ai_count": len(retried_ai_jobs),
+        "created_task_count": len(created_tasks),
+        "retried_ai_jobs": retried_ai_jobs,
+        "created_tasks": created_tasks,
+        "errors": errors,
+    }
+
+
 def _background(fn: Any, *args: Any) -> None:
     # ponytail: one daemon thread matches existing agent/task execution; add a queue only if concurrency becomes painful.
     threading.Thread(target=fn, args=args, daemon=True).start()
@@ -793,6 +890,7 @@ _SYSTEM_ACTION_HANDLERS = {
     "task_diagnostics": _task_diagnostics,
     "task_dedup_summary": _task_dedup_summary,
     "tasks_list": _tasks_list,
+    "failed_retry": _failed_retry,
     "task_delete": _task_delete,
     "table_list": _table_list,
     "table_update": _table_update,
@@ -891,7 +989,10 @@ def _answer_stats(metric: str) -> dict[str, Any]:
                   AND (params LIKE '%"lead_operation": "message"%' OR params LIKE '%"lead_operation":"message"%')
                 """,
             ),
+            "failed_tasks": _scalar(conn, "SELECT COUNT(*) FROM crawl_jobs WHERE status = 'failed' AND archived = 0"),
+            "failed_ai_jobs": _scalar(conn, "SELECT COUNT(*) FROM analysis_jobs WHERE status = 'failed'"),
         }
+        values["failures"] = values["failed_tasks"] + values["failed_ai_jobs"]
     keyword_stats = message_workbench.list_keywords()
     keyword_unmessaged = int(keyword_stats[0].get("unmessaged_count") or values["unmessaged"]) if keyword_stats else values["unmessaged"]
     values["unmessaged"] = keyword_unmessaged
@@ -990,6 +1091,13 @@ def _schema_summary() -> dict[str, list[str]]:
 
 def _system_action_done_answer(plan: dict[str, Any], result: dict[str, Any]) -> str:
     operation = str(plan.get("operation") or "")
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    if operation == "failed_retry":
+        return (
+            f"已处理失败待查：重试 AI 失败任务 {int(data.get('retried_ai_count') or 0)} 个，"
+            f"重新创建采集任务 {int(data.get('created_task_count') or 0)} 个，"
+            f"失败 {len(data.get('errors') or [])} 个。"
+        )
     mutates = "已执行" if result.get("mutates") else "已查询"
     return f"{mutates}系统操作：{operation}。"
 
@@ -1047,6 +1155,8 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 def _infer_action(command: str, workspace: str) -> str:
     text = str(command or "")
+    if "失败待查" in text or ("失败" in text and ("待查" in text or "重试" in text)):
+        return "answer_stats"
     if re.search(r"(多少|几个|检查|查看|统计|列出|查询|数据库)", text):
         return "answer_stats"
     if "引流" in text or workspace == "traffic":
@@ -1058,6 +1168,8 @@ def _infer_action(command: str, workspace: str) -> str:
 
 def _infer_system_operation(command: str, workspace: str) -> str:
     text = str(command or "")
+    if "重试" in text and ("失败待查" in text or "失败" in text):
+        return "failed_retry"
     if re.search(r"(设置|配置)", text):
         return "settings_read"
     if "抖音" in text and "登录" in text:
@@ -1083,6 +1195,8 @@ def _infer_system_operation(command: str, workspace: str) -> str:
 
 def _infer_metric(command: str) -> str:
     text = str(command or "")
+    if "失败待查" in text or ("失败" in text and "待查" in text):
+        return "failures"
     if "未私信" in text:
         return "unmessaged"
     if "私信" in text:
@@ -1139,10 +1253,17 @@ def _plan_answer(plan: dict[str, Any]) -> str:
         return f"我会执行：{operation_label}。关键词由AI从你的指令和产品关键词中决定，确认后会创建批次。"
     if action == "traffic_auto":
         return "我会创建抖音引流计划并立即启动执行批次。"
+    if action == "system_action" and plan.get("operation") == "failed_retry":
+        return "失败待查=采集失败任务+AI分析失败任务。确认后我会重试 AI 失败任务，并按原参数重新创建采集失败任务。"
     return "确认后执行。"
 
 
 def _stat_answer(metric: str, values: dict[str, int]) -> str:
+    if metric == "failures":
+        return (
+            f"失败待查表示当前需要排查或重试的失败项：采集任务失败 {values['failed_tasks']} 个，"
+            f"AI分析失败 {values['failed_ai_jobs']} 个，合计 {values['failures']} 个。"
+        )
     if metric == "competitors":
         return f"当前已有 {values['competitors']} 个竞品账户。"
     if metric == "target_customers":

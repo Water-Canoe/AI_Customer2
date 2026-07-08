@@ -5146,6 +5146,97 @@ def test_agent_command_overrides_wrong_metric_for_unmessaged_question(tmp_path: 
     assert response.json()["plan"]["metric"] == "unmessaged"
 
 
+def test_agent_command_understands_failure_badge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import ai_service, crawler_adapter
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_discovery", platform="dy", keywords="AI客服", execute_crawler=False)
+    )
+    with database.connect() as conn:
+        conn.execute("UPDATE crawl_jobs SET status = 'failed', error = '测试失败' WHERE id = ?", (task["id"],))
+        conn.execute(
+            "INSERT INTO analysis_jobs(id, target_type, target_id, status, error) VALUES('job-failed', 'lead', 1, 'failed', '测试AI失败')"
+        )
+
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps({"action": "unknown"}),
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/agent/commands/preview", json={"command": "失败待查是什么意思", "workspace": "lead"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["executed"] is True
+    assert payload["plan"]["action"] == "answer_stats"
+    assert payload["plan"]["metric"] == "failures"
+    assert payload["result"]["values"]["failed_tasks"] == 1
+    assert payload["result"]["values"]["failed_ai_jobs"] == 1
+
+
+def test_agent_command_retries_failure_badge_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import agent_commands, ai_service, crawler_adapter
+
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_base_url", "https://example.test")
+        database.set_setting(conn, "ai_api_key", "test-key")
+        database.set_setting(conn, "ai_model", "test-model")
+    task = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_discovery", platform="dy", keywords="AI客服", execute_crawler=False)
+    )
+    with database.connect() as conn:
+        conn.execute("UPDATE crawl_jobs SET status = 'failed', error = '测试失败' WHERE id = ?", (task["id"],))
+        conn.execute(
+            "INSERT INTO analysis_jobs(id, target_type, target_id, status, error) VALUES('job-failed', 'lead', 1, 'failed', '测试AI失败')"
+        )
+
+    monkeypatch.setattr(
+        ai_service,
+        "call_openai_compatible",
+        lambda *_args, **_kwargs: json.dumps({"action": "unknown"}),
+    )
+    monkeypatch.setattr(ai_service, "retry_ai_job", lambda job_id: {"id": job_id, "status": "succeeded"})
+    monkeypatch.setattr(agent_commands, "_background", lambda *_args, **_kwargs: None)
+
+    client = TestClient(app)
+    preview = client.post(
+        "/api/agent/commands/preview",
+        json={"command": "有个失败待查，是什么意思？为我重试", "workspace": "lead"},
+    )
+    assert preview.status_code == 200
+    plan = preview.json()["plan"]
+    assert preview.json()["requires_confirmation"] is True
+    assert plan["action"] == "system_action"
+    assert plan["operation"] == "failed_retry"
+
+    executed = client.post(
+        "/api/agent/commands/execute",
+        json={"command": "有个失败待查，是什么意思？为我重试", "workspace": "lead", "plan": plan},
+    )
+
+    assert executed.status_code == 200
+    result = executed.json()["result"]["data"]
+    assert result["retried_ai_count"] == 1
+    assert result["created_task_count"] == 1
+    with database.connect() as conn:
+        rows = conn.execute("SELECT id, status FROM crawl_jobs ORDER BY id ASC").fetchall()
+    assert [row["status"] for row in rows] == ["failed", "pending"]
+
+
 def test_agent_command_rejects_unsafe_sql(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app
