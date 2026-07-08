@@ -61,6 +61,27 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 
 抖音当前发送按钮是输入区右侧的红色圆形上箭头，不包含“发送”文本；脚本会点击 `.messageMsgInputinputAction svg` 中最后一个可见图标的中心点，再校验聊天记录里是否出现本人发送的消息气泡，最后才退回 Enter。
 
+## 快手 Web 互动自动化验证工具
+
+`tools/kuaishou_dm_automation/` 是快手 Web 端的单用户自动化验证目录，复用 `backend/.venv` 里的 `playwright` 和 `cloakbrowser`，使用独立 `runtime/cloak_profile/` 保存快手登录态。`open_login_browser.py` 只负责打开最大化快手登录窗口；`automation.py` 提供最小 CLI，可在推荐流当前视频执行关注、点赞、收藏和文字评论，也可检查指定主页是否暴露私信入口。
+
+运行命令：
+
+```powershell
+# 打开快手登录窗口
+backend\.venv\Scripts\python.exe tools\kuaishou_dm_automation\open_login_browser.py
+
+# 在推荐流执行已验证的互动动作
+backend\.venv\Scripts\python.exe tools\kuaishou_dm_automation\automation.py --actions follow,like,favorite --comment "codex-auto-test-ignore"
+
+# 检查指定快手主页是否有 Web 私信入口
+backend\.venv\Scripts\python.exe tools\kuaishou_dm_automation\automation.py --profile-url "https://www.kuaishou.com/profile/3xqhxwgsjvvwpe9"
+```
+
+当前实测接口结果：关注走 `POST /rest/v/relation/follow`，点赞走 `POST /rest/v/photo/like`，收藏走 `POST /rest/v/photo/collect`，文字评论走 `POST /rest/v/photo/comment/add`，均可返回 `result=1`。评论面板底部真实输入框是 `.comment-input input`，发送按钮是 `.comment-input .send-btn`；脚本用 DOM 找中心点后调用 `page.mouse.click()`，避免普通 locator click 被快手滚动、遮挡或设备缩放卡住。
+
+当前 Web 边界：`www.kuaishou.com/profile/...` 目标主页只显示关注和三点举报菜单，`live.kuaishou.com/profile/...` 只显示关注和房间入口，`/message`、`/messages`、`/im`、`/chat` 等常见消息路由均返回 404，因此快手 Web 端暂未发现可自动化的私信入口。评论面板只暴露文字输入、表情按钮和发送按钮，没有 `input[type=file]`，所以 Web 端暂不支持图片评论；如需图片评论或私信，需要切到快手 App/移动端自动化或官方能力验证。
+
 ## 前端结构
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts` 和 `TrafficWorkbenchPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
