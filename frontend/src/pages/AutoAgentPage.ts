@@ -37,9 +37,14 @@ export default defineComponent({
     const executing = ref(false)
     const editingExamples = ref(false)
     const savingExamples = ref(false)
+    const savingAutoExecute = ref(false)
     const commandSets = ref({
       lead: [...defaultLeadExamples],
       traffic: [...defaultTrafficExamples],
+    })
+    const autoExecuteSettings = ref({
+      lead: false,
+      traffic: false,
     })
     let timer: ReturnType<typeof window.setInterval> | null = null
 
@@ -49,6 +54,7 @@ export default defineComponent({
     const title = computed(() => isTraffic.value ? 'AI自动引流' : 'AI自动拓客')
     const examples = computed(() => isTraffic.value ? commandSets.value.traffic : commandSets.value.lead)
     const defaultExamples = computed(() => isTraffic.value ? defaultTrafficExamples : defaultLeadExamples)
+    const autoExecute = computed(() => isTraffic.value ? autoExecuteSettings.value.traffic : autoExecuteSettings.value.lead)
 
     onMounted(() => {
       loadCommandSets()
@@ -76,6 +82,10 @@ export default defineComponent({
           lead: normalizeExamples(data.lead_agent_commands, defaultLeadExamples),
           traffic: normalizeExamples(data.traffic_agent_commands, defaultTrafficExamples),
         }
+        autoExecuteSettings.value = {
+          lead: Boolean(data.lead_agent_auto_execute),
+          traffic: Boolean(data.traffic_agent_auto_execute),
+        }
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '快捷指令加载失败')
       }
@@ -90,12 +100,33 @@ export default defineComponent({
           lead: normalizeExamples(data.lead_agent_commands, defaultLeadExamples),
           traffic: normalizeExamples(data.traffic_agent_commands, defaultTrafficExamples),
         }
+        autoExecuteSettings.value = {
+          lead: Boolean(data.lead_agent_auto_execute),
+          traffic: Boolean(data.traffic_agent_auto_execute),
+        }
         return true
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '快捷指令保存失败')
         return false
       } finally {
         savingExamples.value = false
+      }
+    }
+
+    async function saveAutoExecute(value: boolean) {
+      savingAutoExecute.value = true
+      try {
+        const key = isTraffic.value ? 'traffic_agent_auto_execute' : 'lead_agent_auto_execute'
+        const { data } = await api.put('/settings', { values: { [key]: value } })
+        autoExecuteSettings.value = {
+          lead: Boolean(data.lead_agent_auto_execute),
+          traffic: Boolean(data.traffic_agent_auto_execute),
+        }
+        ElMessage.success(value ? '已开启AI自动执行' : '已关闭AI自动执行')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || 'AI自动执行设置保存失败')
+      } finally {
+        savingAutoExecute.value = false
       }
     }
 
@@ -156,7 +187,12 @@ export default defineComponent({
       try {
         const { data } = await api.post('/agent/commands/preview', { command: text, workspace: workspace.value })
         preview.value = data
-        if (data.executed) ElMessage.success('AI已完成查询')
+        // AI自动执行只跳过前端二次确认，后端仍按白名单计划执行。
+        if (data.requires_confirmation && data.plan && autoExecute.value) {
+          await executePlan(text, data.plan)
+        } else if (data.executed) {
+          ElMessage.success('AI已完成查询')
+        }
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || 'AI指令解析失败')
       } finally {
@@ -167,12 +203,16 @@ export default defineComponent({
     async function executePreview() {
       const text = command.value.trim()
       if (!text || !preview.value?.plan) return
+      await executePlan(text, preview.value.plan)
+    }
+
+    async function executePlan(text: string, plan: Dict) {
       executing.value = true
       try {
         const { data } = await api.post('/agent/commands/execute', {
           command: text,
           workspace: workspace.value,
-          plan: preview.value.plan,
+          plan,
         })
         preview.value = data
         const runId = data.run?.id || data.result?.run?.id
@@ -215,12 +255,16 @@ export default defineComponent({
           thinking.value,
           editingExamples.value,
           savingExamples.value,
+          savingAutoExecute.value,
+          autoExecute.value,
           previewCommand,
           value => { command.value = value },
           addCurrentExample,
           removeExample,
           resetExamples,
           () => { editingExamples.value = !editingExamples.value },
+          saveAutoExecute,
+          executing.value,
         ),
         renderPreview(preview.value, executing.value, executePreview),
       ]),
@@ -239,12 +283,16 @@ function renderCommandBox(
   thinking: boolean,
   editingExamples: boolean,
   savingExamples: boolean,
+  savingAutoExecute: boolean,
+  autoExecute: boolean,
   submit: () => void,
   update: (value: string) => void,
   addExample: () => void,
   removeExample: (value: string) => void,
   resetExamples: () => void,
   toggleEditing: () => void,
+  updateAutoExecute: (value: boolean) => void,
+  executing: boolean,
 ) {
   return h('section', { class: 'auto-agent-section' }, [
     sectionTitle({ title: '我要做什么', subtitle: '直接输入自然语言指令', icon: Search, tone: 'teal' }),
@@ -290,10 +338,22 @@ function renderCommandBox(
         '恢复默认',
       ]) : null,
     ]),
+    h('label', { class: 'auto-agent-setting' }, [
+      h('input', {
+        type: 'checkbox',
+        checked: autoExecute,
+        disabled: savingAutoExecute,
+        onChange: (event: Event) => updateAutoExecute((event.target as HTMLInputElement).checked),
+      }),
+      h('span', [
+        h('b', 'AI自动执行'),
+        h('small', '开启后点击运行会直接执行AI计划，不再二次确认。'),
+      ]),
+    ]),
     h('div', { class: 'auto-agent-submit' }, [
-      h('button', { class: 'primary-action', disabled: thinking, onClick: submit }, [
+      h('button', { class: 'primary-action', disabled: thinking || executing, onClick: submit }, [
         h(MagicStick, { class: 'inline-icon' }),
-        thinking ? '理解中' : '让AI处理',
+        executing ? '执行中' : thinking ? '理解中' : autoExecute ? '让AI处理并执行' : '让AI处理',
       ]),
     ]),
   ])

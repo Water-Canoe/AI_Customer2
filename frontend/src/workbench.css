@@ -5355,6 +5355,30 @@ input[type='checkbox'] {
   font-size: 13px;
 }
 
+.auto-agent-setting {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.auto-agent-setting input {
+  margin-top: 3px;
+}
+
+.auto-agent-setting span {
+  display: grid;
+  gap: 2px;
+  color: #0f172a;
+}
+
+.auto-agent-setting small {
+  color: #64748b;
+}
+
 .auto-agent-plan {
   display: grid;
   gap: 10px;

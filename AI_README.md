@@ -12,7 +12,7 @@
 
 ## AI 自动化入口
 
-当前两个非技术用户主入口是拓客工作台的 `AI自动拓客` 和引流工作台的 `AI自动引流`。两个页面共用 `frontend/src/pages/AutoAgentPage.ts`，左侧只保留一个自然语言指令输入框和可自定义快捷指令，右侧展示 `AI任务批次`、运行日志和结果汇总；运行中每 3 秒轮询 `/api/agent/runs` 与 `/api/agent/runs/{id}/events`，首版不引入 WebSocket。快捷指令分别保存为 `settings.lead_agent_commands` 和 `settings.traffic_agent_commands`，用户可在对应工作台把当前输入保存为快捷指令、删除旧指令或恢复默认。用户可以输入“检查下我现在有多少竞品账户/目标客户”“我现在还有多少用户未私信”“为我找些做xxx的竞品”“为我找些对xxx有需求的客户，先不私信”“将还未私信的客户私信”等指令，不再手动填写关键词、私信数量或引流动作参数。
+当前两个非技术用户主入口是拓客工作台的 `AI自动拓客` 和引流工作台的 `AI自动引流`。两个页面共用 `frontend/src/pages/AutoAgentPage.ts`，左侧只保留一个自然语言指令输入框和可自定义快捷指令，右侧展示 `AI任务批次`、运行日志和结果汇总；运行中每 3 秒轮询 `/api/agent/runs` 与 `/api/agent/runs/{id}/events`，首版不引入 WebSocket。快捷指令分别保存为 `settings.lead_agent_commands` 和 `settings.traffic_agent_commands`，用户可在对应工作台把当前输入保存为快捷指令、删除旧指令或恢复默认；`settings.lead_agent_auto_execute` 和 `settings.traffic_agent_auto_execute` 控制“AI自动执行”，开启后点击运行会在 AI 解析出可执行计划后直接执行，不再要求二次确认。用户可以输入“检查下我现在有多少竞品账户/目标客户”“我现在还有多少用户未私信”“为我找些做xxx的竞品”“为我找些对xxx有需求的客户，先不私信”“将还未私信的客户私信”等指令，不再手动填写关键词、私信数量或引流动作参数。
 
 后端新增 `backend/app/services/agent_commands.py` 作为自然语言指令规划器，使用已配置的 OpenAI 兼容模型把用户输入解析为白名单计划。查询类计划会直接返回本地统计、只读 SQL 查询结果或只读系统操作结果；执行类计划会先返回可确认的计划，再调用白名单系统操作或通过 `agent_runs` 创建真实批次。`agent_runs` 和 `agent_run_events` 由 `backend/app/services/agent_service.py` 以确定性状态机执行，不引入 LangGraph/CrewAI/AutoGen。`run_type=lead_auto` 表示自动拓客，`run_type=traffic_auto` 表示自动引流；Agent 只调用现有白名单服务函数，不驱动前端页面，不执行写入类 SQL，也不执行任意 Python/PowerShell。公开接口包括：
 

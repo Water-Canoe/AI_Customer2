@@ -579,6 +579,8 @@ DEFAULT_SETTINGS = {
         ],
         ensure_ascii=False,
     ),
+    "lead_agent_auto_execute": "false",
+    "traffic_agent_auto_execute": "false",
     "default_content_count": "20",
     "default_comment_count": "20",
     "content_cutoff_days": "0",

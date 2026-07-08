@@ -4928,6 +4928,13 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json()["lead_agent_commands"] == lead_commands
     assert response.json()["traffic_agent_commands"] == traffic_commands
+    response = client.put(
+        "/api/settings",
+        json={"values": {"lead_agent_auto_execute": True, "traffic_agent_auto_execute": True}},
+    )
+    assert response.status_code == 200
+    assert response.json()["lead_agent_auto_execute"] is True
+    assert response.json()["traffic_agent_auto_execute"] is True
     own_accounts = {
         "dy": ["https://www.douyin.com/user/a", "https://www.douyin.com/user/b"],
         "xhs": ["xhs-account"],

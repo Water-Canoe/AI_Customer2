@@ -61,6 +61,8 @@ def get_settings() -> dict[str, Any]:
         "auto_delete_non_customers",
         "auto_dm_fill_only",
         "headless",
+        "lead_agent_auto_execute",
+        "traffic_agent_auto_execute",
     ):
         result[key] = result.get(key, "false") == "true"
     try:
