@@ -79,6 +79,17 @@ backend\.venv\Scripts\python.exe tools\kuaishou_dm_automation\automation.py --ac
 
 当前 Web 边界：`www.kuaishou.com/profile/...` 目标主页只显示关注和三点举报菜单，`live.kuaishou.com/profile/...` 只显示关注和房间入口，`/message`、`/messages`、`/im`、`/chat` 等常见消息路由均返回 404，因此快手 Web 端暂未发现可自动化的私信入口。评论面板只暴露文字输入、表情按钮和发送按钮，没有 `input[type=file]`，所以 Web 端暂不支持图片评论；如需图片评论或私信，需要切到快手 App/移动端自动化或官方能力验证。
 
+## 小红书 Web 自动化验证工具
+
+`tools/xiaohongshu_automation/` 是小红书 Web 端的单用户自动化验证目录，复用 `backend/.venv` 里的 `playwright` 和 `cloakbrowser`，使用独立 `runtime/cloak_profile/` 保存小红书登录态。当前只提供 `open_login_browser.py` 登录窗口，后续关注、点赞、收藏、评论等动作验证复用该登录态。
+
+运行命令：
+
+```powershell
+# 打开小红书登录窗口
+backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser.py
+```
+
 ## 前端结构
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts` 和 `TrafficWorkbenchPage.ts`。可复用控件放在 `frontend/src/components/ui/`，当前包括可拖拽双栏 `SplitPane`、标签输入 `TagInput` 和共享视觉渲染工具 `Workbench.ts`；共享 API、类型和格式化工具放在 `frontend/src/shared/`。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
