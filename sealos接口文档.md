@@ -18,6 +18,12 @@
 - `POST /ai-customer/get-permission`：旧 demo，按 `deviceId` 查询是否授权。
 - `POST /ai-customer/add-permission`：旧 demo，添加测试授权设备。
 - `POST /ai-customer/get-permission-list`：旧 demo，查询某个 `deviceId` 的授权记录列表。
+- `GET /ai-customer/update/health`：检查远程更新数据库和对象存储。
+- `POST /ai-customer/update/check`：已授权设备检查可用更新并获取限时下载地址。
+- `POST /ai-customer/update/admin/upload-url`：生成版本包限时上传地址。
+- `POST /ai-customer/update/admin/releases`：登记签名版本元数据。
+- `GET /ai-customer/update/admin/releases`：查询版本列表。
+- `PUT /ai-customer/update/admin/release-status`：调整启用、强制更新和灰度状态。
 
 PowerShell 测试 JSON 请求时，推荐把请求体写入临时 JSON 文件，再用 `curl.exe --data-binary "@文件路径"` 发送，避免 Windows 命令行把 JSON 双引号吃掉。
 
@@ -92,6 +98,79 @@ PowerShell 测试 JSON 请求时，推荐把请求体写入临时 JSON 文件，
 ```
 
 解绑只把设备状态改为 `revoked`，不删除历史记录。解绑后 active 设备数减少，新的设备可以继续绑定。
+
+# 远程更新
+
+更新接口代码位于 Sealos `~/project/routers/AI_Customer/update.js`，对象存储桶保持私有。Access Key 和 Secret Key 只配置在远端 `.env`，客户端和本地 Git 仓库都不保存对象存储凭证。
+
+## 检查更新
+
+`POST /ai-customer/update/check`
+
+```json
+{
+  "licenseCode": "LIC-XXXX",
+  "deviceId": "device-fingerprint",
+  "business": "lead",
+  "currentVersion": "1.1.0",
+  "updaterVersion": "1.0.0",
+  "channel": "stable",
+  "platform": "windows",
+  "arch": "x64"
+}
+```
+
+更新检查不会自动绑定新设备。授权码和设备必须已经是 `active`；无更新时返回 `available=false` 和 `reason=NO_UPDATE`。有更新时返回原始 `manifestText`、Ed25519 `signature` 和有效期有限的 `downloadUrl`。客户端必须先验证签名，再按签名清单中的大小和 SHA-256 校验下载文件。
+
+## 发布管理
+
+所有管理请求必须携带：
+
+```text
+x-ai-customer-admin-token: <远端管理凭证>
+```
+
+发布顺序：
+
+1. `POST /ai-customer/update/admin/upload-url` 获取不可覆盖的对象路径和限时 PUT 地址。
+2. 直接向 `uploadUrl` 上传 ZIP。
+3. 在发布机上生成精简签名清单，并使用 Ed25519 私钥签名原始 JSON 文本。
+4. `POST /ai-customer/update/admin/releases` 登记 `manifestText` 和 Base64 签名；服务端确认对象存在且大小一致，新记录默认禁用。
+5. `PUT /ai-customer/update/admin/release-status` 设置 `enabled=true` 和 `rolloutPercent` 后开始下发。
+
+上传地址请求示例：
+
+```json
+{
+  "version": "1.2.0",
+  "platform": "windows",
+  "arch": "x64"
+}
+```
+
+签名清单格式：
+
+```json
+{
+  "format": 1,
+  "product": "AI Customer Desktop",
+  "version": "1.2.0",
+  "platform": "windows",
+  "arch": "x64",
+  "schema_version": 3,
+  "min_updater_version": "1.0.0",
+  "published_at": "2026-07-10T08:00:00.000Z",
+  "package": {
+    "object_key": "releases/1.2.0/AI_Customer_1.2.0_windows_x64.zip",
+    "size": 123456789,
+    "sha256": "64位小写十六进制SHA-256"
+  }
+}
+```
+
+`manifestText` 必须是上述 JSON 的原始字符串且不能包含首尾空白，签名必须覆盖完全相同的 UTF-8 字节。版本对象不可覆盖；需要修正安装包时必须发布新版本号。`stable` 通道拒绝预发布版本，`beta` 可使用 `1.2.0-beta.1`。灰度比例是 `0` 到 `100` 的整数，同一设备对同一版本的灰度结果保持稳定；强制更新不受灰度比例限制。
+
+服务端使用 MongoDB 集合 `AI_Customer-Release` 保存版本元数据。停用版本使用状态接口，不提供远程删除接口。
 
 # 旧 demo
 ```js
