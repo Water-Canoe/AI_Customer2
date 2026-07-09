@@ -4652,6 +4652,25 @@ input[type='checkbox'] {
   background: #f3fbf9;
 }
 
+.primary-action:disabled,
+.wide-action:disabled,
+.text-icon-button:disabled,
+.text-icon-button.is-platform-disabled {
+  cursor: not-allowed;
+  border-color: #dbe3ea;
+  background: #eef2f6;
+  color: #94a3b8;
+  box-shadow: none;
+  opacity: 0.62;
+}
+
+.primary-action:disabled:hover,
+.wide-action:disabled:hover,
+.text-icon-button:disabled:hover {
+  border-color: #dbe3ea;
+  background: #eef2f6;
+}
+
 .task-list {
   display: grid;
   gap: 10px;

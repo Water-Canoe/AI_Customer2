@@ -202,7 +202,8 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
   const keyword = String(filters.keyword || '')
   const platform = String(filters.platform || '')
   const active = batches.active
-  const disabled = Boolean(active) || platform !== 'dy' || !keyword
+  const unsupportedPlatform = Boolean(platform) && platform !== 'dy'
+  const disabled = Boolean(active) || unsupportedPlatform || !keyword
   return h('section', { class: 'auto-message-batch-panel' }, [
     h('div', { class: 'auto-message-batch-title' }, [
       h('strong', 'AI一键私信'),
@@ -234,7 +235,7 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
         type: 'button',
         class: 'primary-action compact-action',
         disabled,
-        title: active ? '已有自动私信批次正在执行' : platform !== 'dy' ? 'AI一键私信当前只支持抖音' : !keyword ? '请先选择具体关键词' : '启动批量自动私信',
+        title: active ? '已有自动私信批次正在执行' : unsupportedPlatform ? 'AI一键私信会跳过快手/小红书平台' : !keyword ? '请先选择具体关键词' : '启动批量自动私信',
         onClick: actions.start
       }, [h(Promotion), h('span', active ? '运行中' : 'AI一键私信')]),
       active ? h('button', { type: 'button', class: 'secondary-action compact-action', onClick: () => actions.cancel(active) }, '取消批次') : null,
@@ -307,6 +308,7 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict) {
   const script = rawScript || '暂无AI话术'
   const sendScript = selectedMessageScript(row, settings)
   const missingScriptTip = scriptMode(settings) === 'fixed' ? '固定话术为空，请先到设置页填写' : '暂无AI话术'
+  const autoDmUnsupported = row.platform !== 'dy'
   return h('tr', { class: row.overdue ? 'is-overdue' : '', onClick: () => emit('select-customer', row.lead_id) }, [
     h('td', { class: 'message-customer-cell' }, [
       row.profile_url
@@ -342,9 +344,9 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict) {
         h('div', { class: 'message-action-row' }, [
           h('button', {
             type: 'button',
-            class: 'text-icon-button',
-            disabled: row.platform !== 'dy' || !sendScript || !row.profile_url,
-            title: row.platform !== 'dy' ? '自动私信当前只支持抖音客户' : !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : '自动打开抖音主页并处理话术',
+            class: ['text-icon-button', autoDmUnsupported ? 'is-platform-disabled' : ''],
+            disabled: autoDmUnsupported || !sendScript || !row.profile_url,
+            title: autoDmUnsupported ? '自动私信当前只支持抖音客户' : !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : '自动打开抖音主页并处理话术',
             onClick: () => emit('auto-message-customer', row)
           }, [h(Promotion), h('span', '自动私信')]),
           h('button', {

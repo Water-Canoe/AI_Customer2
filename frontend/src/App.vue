@@ -1014,6 +1014,10 @@ async function autoMessageWorkbenchCustomer(row: Dict) {
 }
 
 async function startMessageAutoBatch(payload: Dict) {
+  if (String(payload.platform || '') !== 'dy') {
+    ElMessage.info('AI一键私信已跳过快手/小红书平台，请选择抖音关键词')
+    return
+  }
   try {
     const { data } = await api.post('/message-workbench/auto-message-batches', payload)
     ElMessage.success(`自动私信批次 ${data.id} 已启动`)
