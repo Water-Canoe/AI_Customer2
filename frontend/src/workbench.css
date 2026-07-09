@@ -3562,7 +3562,8 @@ input[type='checkbox'] {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .message-search {
@@ -3685,7 +3686,7 @@ input[type='checkbox'] {
 
 .message-table-wrap {
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 0 0 clamp(360px, 52vh, 560px);
   overflow: auto;
   border: 1px solid #e1ece8;
   border-radius: 8px;
