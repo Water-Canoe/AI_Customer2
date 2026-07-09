@@ -246,7 +246,10 @@ def list_traffic_records(
 
 @app.delete("/api/traffic/records")
 def clear_traffic_records() -> dict[str, object]:
-    return traffic_workbench.clear_records()
+    try:
+        return traffic_workbench.clear_records()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/traffic/settings")

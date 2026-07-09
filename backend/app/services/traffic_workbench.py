@@ -471,15 +471,33 @@ def list_records(
 
 def clear_records() -> dict[str, Any]:
     with database.connect() as conn:
+        active = conn.execute(
+            "SELECT 1 FROM traffic_runs WHERE status IN ('queued', 'running') LIMIT 1"
+        ).fetchone()
+        if active:
+            raise ValueError("仍有运行中的引流批次，请先停止批次后再清除引流数据")
         counts = {
+            "plans": conn.execute("SELECT COUNT(*) AS c FROM traffic_plans").fetchone()["c"],
             "records": conn.execute("SELECT COUNT(*) AS c FROM traffic_records").fetchone()["c"],
             "runs": conn.execute("SELECT COUNT(*) AS c FROM traffic_runs").fetchone()["c"],
+            "dedup": conn.execute("SELECT COUNT(*) AS c FROM traffic_dedup_ledger").fetchone()["c"],
         }
+        legacy_campaigns = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'traffic_campaigns'"
+        ).fetchone()
+        if legacy_campaigns:
+            counts["campaigns"] = conn.execute("SELECT COUNT(*) AS c FROM traffic_campaigns").fetchone()["c"]
         conn.execute("DELETE FROM traffic_dedup_ledger")
         conn.execute("DELETE FROM traffic_records")
         conn.execute("DELETE FROM traffic_action_logs")
         conn.execute("DELETE FROM traffic_run_items")
         conn.execute("DELETE FROM traffic_runs")
+        conn.execute("DELETE FROM traffic_plans")
+        if legacy_campaigns:
+            conn.execute("DELETE FROM traffic_campaigns")
+        conn.execute("UPDATE traffic_material_texts SET used_count = 0")
+        conn.execute("UPDATE traffic_material_images SET used_count = 0")
+        conn.execute("DELETE FROM settings WHERE key = ?", (TRAFFIC_LAST_VIDEO_URL_KEY,))
     return {"cleared": True, **counts}
 
 

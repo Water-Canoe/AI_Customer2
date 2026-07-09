@@ -354,10 +354,16 @@ export default defineComponent({
     }
 
     async function clearRecords() {
-      await ElMessageBox.confirm('会清除引流批次、日志、操作记录和防重复账本，文案/图片/授权不会删除。', '清除引流记录', { type: 'warning' })
-      await api.delete('/traffic/records')
-      ElMessage.success('引流记录已清除')
-      await Promise.all([loadRecords(), loadRuns()])
+      try {
+        await ElMessageBox.confirm('会清除计划列表、批次列表、日志、视频明细、操作记录和防重复账本，并重置素材使用次数；配置项、文案、图片和授权不会删除。', '清除引流记录', { type: 'warning' })
+        await api.delete('/traffic/records')
+        selectedRun.value = null
+        ElMessage.success('引流工作台数据已清除')
+        await Promise.all([loadPlans(), loadRuns(), loadRecords(), loadSettings()])
+      } catch (error: any) {
+        if (isUserCancel(error)) return
+        ElMessage.error(error?.response?.data?.detail || '引流记录清除失败')
+      }
     }
 
     async function openLicense() {

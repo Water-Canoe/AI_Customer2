@@ -1039,6 +1039,73 @@ def test_traffic_hard_delete_clears_related_rows_and_dedup(tmp_path: Path) -> No
     assert traffic_workbench.list_plans(include_archived=True) == []
 
 
+def test_traffic_clear_records_removes_workbench_data_and_keeps_settings_materials(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="清空计划", platform="dy"))
+    run = traffic_workbench.create_run(plan["id"])
+
+    with pytest.raises(ValueError, match="运行中"):
+        traffic_workbench.clear_records()
+
+    with database.connect() as conn:
+        conn.execute("UPDATE traffic_runs SET status = 'completed' WHERE id = ?", (run["id"],))
+        conn.execute(
+            """
+            INSERT INTO traffic_run_items(run_id, video_id, author_id, status)
+            VALUES(?, 'video-1', 'author-1', 'done')
+            """,
+            (run["id"],),
+        )
+        conn.execute(
+            """
+            INSERT INTO traffic_action_logs(run_id, level, phase, message)
+            VALUES(?, 'info', 'browse', '已处理视频')
+            """,
+            (run["id"],),
+        )
+        conn.execute(
+            "INSERT INTO traffic_material_texts(text, enabled, used_count) VALUES('不错！', 1, 3)"
+        )
+        conn.execute(
+            "INSERT INTO traffic_material_images(path, enabled, used_count) VALUES('C:/tmp/a.png', 1, 2)"
+        )
+        record_id = conn.execute(
+            """
+            INSERT INTO traffic_records(run_id, plan_id, platform, video_id, author_id, actions, status)
+            VALUES(?, ?, 'dy', 'video-1', 'author-1', '["like"]', 'done')
+            """,
+            (run["id"], plan["id"]),
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO traffic_dedup_ledger(platform, video_id, author_id, action_type, content_hash, run_id, record_id)
+            VALUES('dy', 'video-1', 'author-1', 'like', '', ?, ?)
+            """,
+            (run["id"], record_id),
+        )
+        database.set_setting(conn, "traffic_daily_action_limit", "88")
+        database.set_setting(conn, traffic_workbench.TRAFFIC_LAST_VIDEO_URL_KEY, "https://www.douyin.com/video/1")
+
+    result = traffic_workbench.clear_records()
+    assert result["cleared"] is True
+    assert result["plans"] == 1
+    assert result["runs"] == 1
+    assert result["records"] == 1
+    assert result["dedup"] == 1
+
+    with database.connect() as conn:
+        for table in ["traffic_plans", "traffic_runs", "traffic_run_items", "traffic_action_logs", "traffic_records", "traffic_dedup_ledger"]:
+            assert conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"] == 0
+        assert conn.execute("SELECT used_count FROM traffic_material_texts").fetchone()["used_count"] == 0
+        assert conn.execute("SELECT used_count FROM traffic_material_images").fetchone()["used_count"] == 0
+        assert database.get_setting(conn, "traffic_daily_action_limit", "") == "88"
+        assert database.get_setting(conn, traffic_workbench.TRAFFIC_LAST_VIDEO_URL_KEY, "") == ""
+
+
 def test_traffic_comment_actions_require_materials(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficPlanCreate
