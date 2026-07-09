@@ -130,6 +130,40 @@ PowerShell 测试 JSON 请求时，推荐把请求体写入临时 JSON 文件，
 x-ai-customer-admin-token: <远端管理凭证>
 ```
 
+日常发布推荐使用根目录 `script/publish_release.ps1`，无需打开 Sealos 控制台。正式私钥只位于 `%USERPROFILE%/.ssh/sealos/ai_customer_update_signing_private.pem`，仓库只保存 `packaging/update_signing_public.pem`。公钥 SHA-256 指纹为 `187b00ee49f5ba2666b4722a3a569ec119bd3f6731300a2abb8e536abc0499f3`。
+
+准备当前 PowerShell 会话：
+
+```powershell
+# 指定用户提供的 Sealos SSH 私钥。
+$sshKey = "$HOME\.ssh\sealos\bja.sealos.run_ns-0lgzvp7r_medician-ai-back"
+
+# 通过 SSH 读取管理凭证，只保存在当前 PowerShell 进程中且不打印。
+$env:AI_CUSTOMER_UPDATE_ADMIN_TOKEN = (ssh -i $sshKey -p 2233 devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_UPDATE_ADMIN_TOKEN=//p' /home/devbox/project/.env").Trim()
+
+# 指向仓库外的正式发布私钥。
+$env:AI_CUSTOMER_UPDATE_PRIVATE_KEY = "$HOME\.ssh\sealos\ai_customer_update_signing_private.pem"
+```
+
+先做无远端改动的准备检查：
+
+```powershell
+# 校验、压缩、签名和验签，但不申请上传地址、不上传、不登记版本。
+powershell -ExecutionPolicy Bypass -File ".\script\publish_release.ps1" -Version "1.2.0" -ReleasePath ".\dist\releases\AI_Customer_1.2.0_时间戳" -PrepareOnly
+```
+
+正式发布时二选一：
+
+```powershell
+# 上传并登记版本，但保持禁用，客户端不会收到该版本。
+powershell -ExecutionPolicy Bypass -File ".\script\publish_release.ps1" -Version "1.2.0" -ReleasePath ".\dist\releases\AI_Customer_1.2.0_时间戳" -Notes "更新说明"
+
+# 上传、登记并立即向10%的设备启用；该命令不能和上一条对同一版本重复执行。
+powershell -ExecutionPolicy Bypass -File ".\script\publish_release.ps1" -Version "1.2.0" -ReleasePath ".\dist\releases\AI_Customer_1.2.0_时间戳" -Notes "更新说明" -Enable -RolloutPercent 10
+```
+
+脚本不会覆盖本地或远端同版本产物。每次运行产生独立审计目录，包含 ZIP、`update-manifest.json`、`update-manifest.sig` 和不含密钥的 `publish-result.json`。`-Mandatory` 只能和 `-Enable` 一起使用；普通启用要求灰度比例大于零。
+
 发布顺序：
 
 1. `POST /ai-customer/update/admin/upload-url` 获取不可覆盖的对象路径和限时 PUT 地址。

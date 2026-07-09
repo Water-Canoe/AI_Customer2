@@ -354,6 +354,10 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 
 Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并设置启用/强制更新/灰度比例。客户端检查更新时必须提交已有授权码和 active 设备，服务器只返回限时下载地址，不向客户端暴露对象存储密钥。发布签名固定为 Ed25519，签名覆盖原始 `manifestText`，安装包大小与 SHA-256 位于签名清单内。详细请求格式见根目录 `sealos接口文档.md`。
 
+发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本会重新校验 `release-manifest.json` 的文件集合、大小和 SHA-256，在唯一的 `output/release_publish_<版本>_<时间>/` 中生成 ZIP、精简更新清单和分离签名，然后申请限时上传地址、流式上传、登记版本；默认只登记不启用，传入 `-Enable -RolloutPercent <比例>` 才开始下发。`-PrepareOnly` 只生成并验证本地产物，不访问远端。脚本要求管理 Token 位于当前进程环境变量 `AI_CUSTOMER_UPDATE_ADMIN_TOKEN`，正式私钥位于仓库外并通过 `-PrivateKeyPath` 或 `AI_CUSTOMER_UPDATE_PRIVATE_KEY` 指定。
+
+正式 Ed25519 公钥保存在 `packaging/update_signing_public.pem`，SHA-256 指纹为 `187b00ee49f5ba2666b4722a3a569ec119bd3f6731300a2abb8e536abc0499f3`；对应私钥仅保存在本机 `%USERPROFILE%/.ssh/sealos/ai_customer_update_signing_private.pem`，已限制为当前 Windows 用户访问。发布脚本会在上传前用仓库公钥复验签名，防止误用其它私钥。私钥丢失或更换意味着需要发布包含新公钥的客户端信任根更新，不能临时重新生成后继续推送。
+
 ## 数据生命周期与数据库升级
 
 项目数据库从正式交付改造开始使用有序迁移，不再依赖启动时零散执行 `_ensure_column()`。迁移登记在 `schema_migrations`，同时写入 SQLite `user_version`；当前初始结构为版本 1，版本 2 清理由已移除 AI 编排功能遗留的 `agent_runs / agent_run_events`，版本 3 创建持久化运行任务队列 `runtime_jobs`。后续结构变更必须新增迁移版本，不能直接修改已经发布的旧迁移。启动发现待执行迁移且旧库存在业务数据时，会先在数据库同级 `backups/<时间戳>/` 创建完整备份，再执行迁移；迁移版本不一致或校验信息异常时直接停止启动，不使用兼容兜底掩盖问题。
