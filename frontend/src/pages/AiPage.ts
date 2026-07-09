@@ -329,7 +329,7 @@ function renderDetailPane(row: Dict | null, tab: string) {
     sectionTitle({ title: '分析详情', subtitle: '选择左侧条目', icon: View, tone: 'blue' }),
     emptyState({
       title: '选择一条分析对象',
-      description: '点击任意账号、客户或失败任务，右侧会显示输入证据、AI 结果和提示词回看。',
+      description: '点击任意账号、客户或失败任务，右侧会显示输入证据和 AI 结果。',
       icon: DataAnalysis,
       tone: 'gray'
     })
@@ -355,8 +355,7 @@ function renderDetailPane(row: Dict | null, tab: string) {
       ['话术', row.result_script || row.script || ''],
       ['任务', row.job_id || row.id || '-'],
       ['更新时间', row.job_updated_at || row.updated_at || '-']
-    ]),
-    renderPromptReview(row)
+    ])
   ])
 }
 
@@ -371,63 +370,6 @@ function renderDetailBlock(title: string, rows: Array<[string, unknown]>) {
       return h('div', [h('small', label), h('p', { title: text }, text)])
     })
   ])
-}
-
-function renderPromptReview(row: Dict) {
-  const hasPrompt = row.prompt_version || row.system_prompt || row.user_prompt || row.input_payload || row.raw_output || row.output_payload
-  if (!hasPrompt) return null
-  const promptText = [
-    `Prompt Version: ${row.prompt_version || '-'}`,
-    `Model: ${row.model || '-'}`,
-    `Base URL: ${row.base_url || '-'}`,
-    '',
-    'System Prompt:',
-    row.system_prompt || '',
-    '',
-    'User Prompt:',
-    row.user_prompt || '',
-  ].join('\n')
-  return h('div', { class: 'ai-detail-block ai-prompt-review' }, [
-    h('div', { class: 'ai-prompt-head' }, [
-      h('h3', '提示词回看'),
-      h('button', {
-        type: 'button',
-        class: 'overview-action',
-        onClick: () => navigator.clipboard?.writeText(promptText)
-      }, '复制提示词')
-    ]),
-    renderPromptKV('版本', row.prompt_version || '-'),
-    renderPromptKV('模型', row.model || '-'),
-    renderPromptKV('Base URL', row.base_url || '-'),
-    renderPromptPre('输入 payload', row.input_payload),
-    renderPromptPre('System Prompt', row.system_prompt),
-    renderPromptPre('User Prompt', row.user_prompt),
-    renderPromptPre('AI原始输出', row.raw_output),
-    renderPromptPre('解析结果', row.output_payload)
-  ])
-}
-
-function renderPromptKV(label: string, value: unknown) {
-  return h('div', [h('small', label), h('p', String(value || '-'))])
-}
-
-function renderPromptPre(label: string, value: unknown) {
-  const text = formatPayload(value)
-  if (!text.trim()) return null
-  return h('div', { class: 'prompt-pre-wrap' }, [
-    h('small', label),
-    h('pre', text)
-  ])
-}
-
-function formatPayload(value: unknown) {
-  if (!value) return ''
-  if (typeof value === 'string') return value
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
 }
 
 function renderObjectTitle(label: string, href: string) {

@@ -1,4 +1,4 @@
-import { defineComponent, h, reactive, ref, watch } from 'vue'
+import { defineComponent, h, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
 import { Check, DataAnalysis, Delete, Key, Monitor, Refresh, Setting, Tools, User, Warning } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
@@ -7,7 +7,7 @@ import { LicenseDialog } from '../components/ui/LicenseDialog'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, splitTagText } from '../components/ui/TagInput'
 import { platformName } from '../shared/format'
-import { pageAction, sectionTitle } from '../components/ui/Workbench'
+import { pageAction, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 const icpFields = [
   { key: 'product', label: '产品/服务', placeholder: '例如：AI客服、获客工具' },
@@ -223,42 +223,45 @@ export default defineComponent({
             icon: Setting,
             tone: settingsDirty.value ? 'amber' : 'teal'
           }),
-          sectionTitle({
+          settingsFoldPanel({
             title: '基础配置',
             subtitle: settingsDirty.value ? '有未保存修改，自动同步不会覆盖草稿' : '没有配置时 AI 分析会明确失败',
             icon: Tools,
             tone: settingsDirty.value ? 'amber' : 'teal'
-          }),
-          h('div', { class: 'form-grid' }, [
-            inputField(local, 'media_crawler_path', 'MyCrawler路径', 'text', '', markSettingsDirty),
-            inputField(local, 'media_crawler_db_path', '底层SQLite路径', 'text', '', markSettingsDirty),
-            inputField(local, 'ai_base_url', 'AI Base URL', 'text', '', markSettingsDirty),
-            inputField(local, 'ai_api_key', 'API Key', 'password', '', markSettingsDirty),
-            inputField(local, 'ai_model', '模型名', 'text', '', markSettingsDirty),
-            inputField(local, 'default_content_count', '默认内容数', 'number', '', markSettingsDirty),
-            inputField(local, 'default_comment_count', '默认评论数', 'number', '', markSettingsDirty),
-            selectField(local, 'content_cutoff_days', '内容截至日期', commentCutoffOptions, markSettingsDirty),
-            selectField(local, 'comment_cutoff_days', '评论截至日期', commentCutoffOptions, markSettingsDirty),
-            inputField(local, 'comment_recrawl_cooldown_hours', '评论复采间隔小时', 'number', '默认 24；填 0 表示每次找客户都复采已有内容评论', markSettingsDirty),
-            inputField(local, 'account_analysis_content_count', '账号分析内容数', 'number', '', markSettingsDirty),
-            inputField(local, 'ai_analysis_concurrency', 'AI分析并行数', 'number', '建议 1-5，过高容易触发模型限流', markSettingsDirty),
-            inputField(local, 'unreplied_reminder_days', '未回复提醒天数', 'number', '默认 3 天，填 0 表示不提醒', markSettingsDirty),
-            inputField(local, 'auto_dm_timeout_seconds', '自动私信等待秒数', 'number', '只填内容不发送时，窗口保留等待人工发送的秒数', markSettingsDirty),
-            inputField(local, 'douyin_detail_sleep_seconds', '抖音详情等待秒数', 'number', '建议 0.5-2，越小越快但越容易限流', markSettingsDirty),
-            inputField(local, 'max_concurrency', '默认并发', 'number', '', markSettingsDirty)
+          }, [
+            h('div', { class: 'form-grid' }, [
+              inputField(local, 'media_crawler_path', 'MyCrawler路径', 'text', '', markSettingsDirty),
+              inputField(local, 'media_crawler_db_path', '底层SQLite路径', 'text', '', markSettingsDirty),
+              inputField(local, 'ai_base_url', 'AI Base URL', 'text', '', markSettingsDirty),
+              inputField(local, 'ai_api_key', 'API Key', 'password', '', markSettingsDirty),
+              inputField(local, 'ai_model', '模型名', 'text', '', markSettingsDirty),
+              inputField(local, 'default_content_count', '默认内容数', 'number', '', markSettingsDirty),
+              inputField(local, 'default_comment_count', '默认评论数', 'number', '', markSettingsDirty),
+              selectField(local, 'content_cutoff_days', '内容截至日期', commentCutoffOptions, markSettingsDirty),
+              selectField(local, 'comment_cutoff_days', '评论截至日期', commentCutoffOptions, markSettingsDirty),
+              inputField(local, 'comment_recrawl_cooldown_hours', '评论复采间隔小时', 'number', '默认 24；填 0 表示每次找客户都复采已有内容评论', markSettingsDirty),
+              inputField(local, 'account_analysis_content_count', '账号分析内容数', 'number', '', markSettingsDirty),
+              inputField(local, 'ai_analysis_concurrency', 'AI分析并行数', 'number', '建议 1-5，过高容易触发模型限流', markSettingsDirty),
+              inputField(local, 'unreplied_reminder_days', '未回复提醒天数', 'number', '默认 3 天，填 0 表示不提醒', markSettingsDirty),
+              inputField(local, 'auto_dm_timeout_seconds', '自动私信等待秒数', 'number', '只填内容不发送时，窗口保留等待人工发送的秒数', markSettingsDirty),
+              inputField(local, 'douyin_detail_sleep_seconds', '抖音详情等待秒数', 'number', '建议 0.5-2，越小越快但越容易限流', markSettingsDirty),
+              inputField(local, 'max_concurrency', '默认并发', 'number', '', markSettingsDirty)
+            ]),
+            h('div', { class: 'toggles' }, [
+              toggleField(local, 'headless', '默认无头模式', markSettingsDirty),
+              toggleField(local, 'auto_analyze_competitors', '自动分析竞品账号', markSettingsDirty),
+              toggleField(local, 'auto_delete_non_competitors', '自动删除非竞品账号', markSettingsDirty),
+              toggleField(local, 'auto_analyze_leads', '自动分析线索用户', markSettingsDirty),
+              toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty),
+              toggleField(local, 'auto_dm_fill_only', '自动私信只填内容不发送', markSettingsDirty)
+            ])
           ]),
-          h('div', { class: 'toggles' }, [
-            toggleField(local, 'headless', '默认无头模式', markSettingsDirty),
-            toggleField(local, 'auto_analyze_competitors', '自动分析竞品账号', markSettingsDirty),
-            toggleField(local, 'auto_delete_non_competitors', '自动删除非竞品账号', markSettingsDirty),
-            toggleField(local, 'auto_analyze_leads', '自动分析线索用户', markSettingsDirty),
-            toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty),
-            toggleField(local, 'auto_dm_fill_only', '自动私信只填内容不发送', markSettingsDirty)
+          settingsFoldPanel({ title: '自家账号', subtitle: '同平台可多个，跨平台分任务运行', icon: User, tone: 'blue' }, [
+            h('div', { class: 'own-account-grid' }, ownAccountPlatforms.map(platform => renderOwnAccountField(ownAccounts, platform, markSettingsDirty)))
           ]),
-          sectionTitle({ title: '自家账号', subtitle: '同平台可多个，跨平台分任务运行', icon: User, tone: 'blue', compact: true }),
-          h('div', { class: 'own-account-grid' }, ownAccountPlatforms.map(platform => renderOwnAccountField(ownAccounts, platform, markSettingsDirty))),
-          sectionTitle({ title: 'ICP画像', subtitle: 'AI筛选时会带入这些信息', icon: DataAnalysis, tone: 'purple', compact: true }),
-          h('div', { class: 'icp-grid' }, icpFields.map(field => renderIcpField(icpProfile, field, markSettingsDirty))),
+          settingsFoldPanel({ title: 'ICP画像', subtitle: 'AI筛选时会带入这些信息', icon: DataAnalysis, tone: 'purple' }, [
+            h('div', { class: 'icp-grid' }, icpFields.map(field => renderIcpField(icpProfile, field, markSettingsDirty)))
+          ]),
           h('div', { class: 'action-row' }, [
             h('button', {
               class: 'primary-action',
@@ -287,6 +290,16 @@ export default defineComponent({
     }
   }
 })
+
+function settingsFoldPanel(options: { title: string, subtitle: string, icon: Component, tone: WorkbenchTone }, children: VNodeChild[]) {
+  return h('details', { class: 'settings-fold' }, [
+    h('summary', [
+      sectionTitle({ ...options, compact: true }),
+      h('span', { class: 'settings-fold-hint' })
+    ]),
+    h('div', { class: 'settings-fold-body' }, children)
+  ])
+}
 
 function renderOwnAccountField(accounts: Dict, platform: string, markDirty: () => void) {
   return h('label', { class: 'own-account-field' }, [

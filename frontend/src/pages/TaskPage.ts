@@ -1,44 +1,12 @@
-﻿import { computed, defineComponent, h, onBeforeUnmount, reactive, ref, watch } from 'vue'
+﻿import { computed, defineComponent, h, reactive, ref, watch } from 'vue'
 import type { Component } from 'vue'
 import { Aim, ChatDotRound, Compass, Search, Tickets, User, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
-import { platformName, taskModeName } from '../shared/format'
+import { taskModeName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, joinTags, splitTagText } from '../components/ui/TagInput'
 import { iconBadge, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
-
-function renderTaskPreviewPanel(preview: Dict | null, error: string, loading: boolean) {
-  const normalized = preview?.normalized || {}
-  const mainInput = normalized.keywords || normalized.creator_id || normalized.specified_id || '-'
-  return h('section', { class: ['task-preview', error ? 'has-error' : ''] }, [
-    h('div', { class: 'preview-head' }, [
-      h('div', [
-        h('small', '执行预览'),
-        h('strong', loading ? '正在计算实际参数...' : (error || '确认后会按以下命令启动 MyCrawler'))
-      ]),
-      preview ? h('span', { class: 'preview-status' }, `${platformName(preview.platform)} / ${preview.crawler_type}`) : null
-    ]),
-    preview ? h('div', { class: 'preview-grid' }, [
-      previewItem('任务名', preview.name),
-      previewItem('输入', mainInput),
-      previewItem('内容数', normalized.content_count),
-      previewItem('单条评论', normalized.comment_count),
-      previewItem('采评论', normalized.collect_comments ? '是' : '否'),
-      previewItem('立即运行', normalized.execute_crawler ? '是' : '否')
-    ]) : null,
-    preview?.command_text ? h('pre', { class: 'command-line' }, preview.command_text) : null,
-    preview?.warnings?.length ? h('ul', { class: 'preview-warnings' }, preview.warnings.map((warning: string) => h('li', warning))) : null
-  ])
-}
-
-function previewItem(label: string, value: unknown) {
-  return h('span', { class: 'preview-field' }, [
-    h('em', label),
-    h('strong', String(value ?? '-'))
-  ])
-}
 
 export default defineComponent({
   props: {
@@ -91,10 +59,6 @@ export default defineComponent({
       if (form.mode === 'competitor_crawl') return '输入竞品账号主页或ID后按回车'
       return modeNeedsCreator.value ? '输入账号主页或ID后按回车' : '详情任务可不填'
     })
-    const taskPreview = ref<Dict | null>(null)
-    const previewError = ref('')
-    const previewLoading = ref(false)
-    let previewTimer: ReturnType<typeof setTimeout> | null = null
     function configuredOwnAccounts(platform: string) {
       const raw = (props.settings as Dict)?.own_accounts
       let source = raw
@@ -184,69 +148,6 @@ export default defineComponent({
       }
       return payload
     }
-    async function refreshPreview() {
-      previewLoading.value = true
-      const payload = buildTaskPayload()
-      const localError = previewInputError(payload)
-      if (localError) {
-        taskPreview.value = null
-        previewError.value = localError
-        previewLoading.value = false
-        return
-      }
-      try {
-        const { data } = await api.post('/tasks/preview', payload)
-        taskPreview.value = data
-        previewError.value = ''
-      } catch (error: any) {
-        taskPreview.value = null
-        previewError.value = error?.response?.data?.detail || '任务参数还不完整'
-      } finally {
-        previewLoading.value = false
-      }
-    }
-    function previewInputError(payload: Dict) {
-      if (['competitor_discovery', 'demand_content'].includes(payload.mode) && !payload.keywords) {
-        return '搜索型任务必须填写关键词，避免使用 MyCrawler 默认关键词'
-      }
-      if (['account_analysis', 'profile_enrichment'].includes(payload.mode) && !payload.creator_id) {
-        return '账号资料任务必须填写创作者主页/ID'
-      }
-      if (payload.mode === 'own_account' && !payload.creator_id && !payload.specified_id) {
-        return '自家账号互动任务必须填写自家账号主页/ID或指定内容ID'
-      }
-      if (payload.mode === 'competitor_crawl' && !payload.creator_id && !payload.specified_id) {
-        return '竞品账号爬取任务必须填写竞品账号主页/ID或指定内容ID'
-      }
-      if (!['competitor_discovery', 'demand_content'].includes(payload.mode) && !payload.creator_id && !payload.specified_id) {
-        return '账号/详情采集任务必须填写创作者主页/ID或指定内容ID'
-      }
-      return ''
-    }
-    function schedulePreview() {
-      if (previewTimer) clearTimeout(previewTimer)
-      previewTimer = setTimeout(refreshPreview, 250)
-    }
-    watch(
-      () => [
-        form.mode,
-        form.platform,
-        form.login_type,
-        form.keyword_tags.join('|'),
-        form.creator_id_tags.join('|'),
-        form.specified_id_tags.join('|'),
-        form.content_count,
-        form.comment_count,
-        form.max_concurrency,
-        form.collect_comments,
-        form.collect_sub_comments,
-        form.headless,
-        form.tcp_mode,
-        form.execute_crawler
-      ],
-      schedulePreview,
-      { immediate: true }
-    )
     watch(
       () => props.settings,
       () => {
@@ -270,9 +171,6 @@ export default defineComponent({
       },
       { immediate: true }
     )
-    onBeforeUnmount(() => {
-      if (previewTimer) clearTimeout(previewTimer)
-    })
     function submit() {
       const payload = buildTaskPayload()
       if (modeUsesKeywords.value && !payload.keywords) {
@@ -348,8 +246,7 @@ export default defineComponent({
         ]),
         h('div', { class: 'action-row' }, [
           h('button', { class: 'primary-action', onClick: submit }, [h(VideoPlay, { class: 'inline-icon' }), prefillSource.value ? '按当前参数重新启动' : '开始采集并导入'])
-        ]),
-        renderTaskPreviewPanel(taskPreview.value, previewError.value, previewLoading.value)
+        ])
       ])
       ],
       side: () => [

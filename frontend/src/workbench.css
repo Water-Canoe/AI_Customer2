@@ -2555,8 +2555,7 @@ input[type='checkbox'] {
   gap: 8px;
 }
 
-.diagnostic-evidence pre,
-.prompt-pre-wrap pre {
+.diagnostic-evidence pre {
   max-height: 180px;
   margin: 0;
   padding: 10px;
@@ -2623,6 +2622,49 @@ input[type='checkbox'] {
   border: 1px solid #dbe7e2;
   border-radius: 6px;
   background: #ffffff;
+}
+
+.settings-fold {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  border: 1px solid #dbe7e2;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.settings-fold summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-fold summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-fold summary .section-title {
+  flex: 1;
+  margin: 0;
+}
+
+.settings-fold-hint::after {
+  content: "展开";
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-fold[open] .settings-fold-hint::after {
+  content: "收起";
+}
+
+.settings-fold-body {
+  padding: 0 14px 14px;
 }
 
 .own-account-grid {
@@ -3309,22 +3351,6 @@ input[type='checkbox'] {
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
-}
-
-.ai-prompt-review {
-  gap: 10px;
-}
-
-.ai-prompt-head {
-  display: flex !important;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.prompt-pre-wrap pre {
-  max-height: 220px;
-  background: #111827;
 }
 
 .tombstone-panel {
