@@ -257,6 +257,8 @@ export default defineComponent({
               inputField(local, 'ai_analysis_concurrency', 'AI分析并行数', 'number', '建议 1-5，过高容易触发模型限流', markSettingsDirty),
               inputField(local, 'unreplied_reminder_days', '未回复提醒天数', 'number', '默认 3 天，填 0 表示不提醒', markSettingsDirty),
               inputField(local, 'auto_dm_timeout_seconds', '自动私信等待秒数', 'number', '只填内容不发送时，窗口保留等待人工发送的秒数', markSettingsDirty),
+              dmScriptModeField(local, markSettingsDirty),
+              fixedDmScriptField(local, markSettingsDirty),
               inputField(local, 'douyin_detail_sleep_seconds', '抖音详情等待秒数', 'number', '建议 0.5-2，越小越快但越容易限流', markSettingsDirty),
               inputField(local, 'max_concurrency', '默认并发', 'number', '', markSettingsDirty)
             ]),
@@ -397,6 +399,40 @@ function selectField(local: Dict, key: string, label: string, options: { value: 
         markDirty?.()
       }
     }, options.map(option => h('option', { value: String(option.value) }, option.label)))
+  ])
+}
+
+function dmScriptModeField(local: Dict, markDirty?: () => void) {
+  return h('label', [
+    '私信话术来源',
+    h('select', {
+      value: String(local.dm_script_mode || 'ai'),
+      onFocus: markDirty,
+      onChange: (event: Event) => {
+        local.dm_script_mode = (event.target as HTMLSelectElement).value
+        markDirty?.()
+      }
+    }, [
+      h('option', { value: 'ai' }, '发送AI话术'),
+      h('option', { value: 'fixed' }, '发送固定话术')
+    ])
+  ])
+}
+
+function fixedDmScriptField(local: Dict, markDirty?: () => void) {
+  return h('label', { class: 'form-field field-full' }, [
+    '固定话术输入栏',
+    h('textarea', {
+      value: local.fixed_dm_script || '',
+      placeholder: '选择“发送固定话术”时，私信按钮复制这里的内容，AI一键私信也发送这里的内容。',
+      rows: 4,
+      onFocus: markDirty,
+      onCompositionstart: markDirty,
+      onInput: (event: Event) => {
+        local.fixed_dm_script = (event.target as HTMLTextAreaElement).value
+        markDirty?.()
+      }
+    })
   ])
 }
 

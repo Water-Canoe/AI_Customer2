@@ -189,6 +189,7 @@ const routeProps = computed(() => {
       filters: messageFilters.value,
       loading: messageLoading.value,
       batches: messageBatches.value,
+      settings: settings.value,
     }
   }
   if (activeView.value === 'logs') {
@@ -847,16 +848,32 @@ async function updateOverviewCustomerFollowStatus(node: Dict, status: string) {
   }
 }
 
+function selectedDmScript(aiScript: unknown) {
+  const fixedMode = String(settings.value.dm_script_mode || 'ai') === 'fixed'
+  if (fixedMode) {
+    return {
+      text: String(settings.value.fixed_dm_script || '').trim(),
+      label: '固定话术',
+      emptyMessage: '固定话术为空，请先到设置页填写固定话术',
+    }
+  }
+  return {
+    text: String(aiScript || '').trim(),
+    label: 'AI话术',
+    emptyMessage: '当前客户暂无AI话术，请先做意向分析',
+  }
+}
+
 async function messageOverviewCustomer(node: Dict) {
   const leadId = node.metrics?.lead_id || node.metrics?.id || String(node.id || '').split(':')[1]
-  const script = String(node.metrics?.script || '').trim()
+  const scriptSelection = selectedDmScript(node.metrics?.script)
   const profileUrl = String(node.metrics?.profile_url || '').trim()
   if (!leadId) {
     ElMessage.error('当前客户缺少线索ID，无法标记私信')
     return
   }
-  if (!script) {
-    ElMessage.error('当前客户暂无AI话术，请先做意向分析')
+  if (!scriptSelection.text) {
+    ElMessage.error(scriptSelection.emptyMessage)
     return
   }
   if (!profileUrl) {
@@ -870,18 +887,18 @@ async function messageOverviewCustomer(node: Dict) {
       return
     }
     homepage.opener = null
-    await navigator.clipboard.writeText(script)
+    await navigator.clipboard.writeText(scriptSelection.text)
 
     const currentStatus = String(node.metrics?.follow_status || node.metrics?.screening_status || '待筛选')
     const shouldMarkMessaged = ['待筛选', '未分析', '目标客户', '未私信'].includes(currentStatus)
     if (shouldMarkMessaged) {
       await api.patch(`/overview/customers/${leadId}/follow-status`, {
         follow_status: '已私信',
-        note: '点击私信按钮：复制AI话术并打开客户主页'
+        note: `点击私信按钮：复制${scriptSelection.label}并打开客户主页`
       })
-      ElMessage.success('AI话术已复制，客户主页已打开，跟进状态已更新为“已私信”')
+      ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开，跟进状态已更新为“已私信”`)
     } else {
-      ElMessage.success(`AI话术已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
+      ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
     }
     await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadAiJobs()])
   } catch (error: any) {
@@ -927,14 +944,14 @@ async function updateMessageWorkbenchFollowStatus(row: Dict, status: string) {
 
 async function messageWorkbenchCustomer(row: Dict) {
   const leadId = row.lead_id || row.id
-  const script = String(row.script || '').trim()
+  const scriptSelection = selectedDmScript(row.script)
   const profileUrl = String(row.profile_url || '').trim()
   if (!leadId) {
     ElMessage.error('当前客户缺少线索ID，无法标记私信')
     return
   }
-  if (!script) {
-    ElMessage.error('当前客户暂无AI话术，请先做意向分析')
+  if (!scriptSelection.text) {
+    ElMessage.error(scriptSelection.emptyMessage)
     return
   }
   if (!profileUrl) {
@@ -948,18 +965,18 @@ async function messageWorkbenchCustomer(row: Dict) {
       return
     }
     homepage.opener = null
-    await navigator.clipboard.writeText(script)
+    await navigator.clipboard.writeText(scriptSelection.text)
 
     const currentStatus = String(row.follow_status || row.screening_status || '未私信')
     const shouldMarkMessaged = ['待筛选', '未分析', '目标客户', '未私信'].includes(currentStatus)
     if (shouldMarkMessaged) {
       await api.patch(`/overview/customers/${leadId}/follow-status`, {
         follow_status: '已私信',
-        note: '私信工作台：复制AI话术并打开客户主页'
+        note: `私信工作台：复制${scriptSelection.label}并打开客户主页`
       })
-      ElMessage.success('AI话术已复制，客户主页已打开，跟进状态已更新为“已私信”')
+      ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开，跟进状态已更新为“已私信”`)
     } else {
-      ElMessage.success(`AI话术已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
+      ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
     }
     await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
   } catch (error: any) {

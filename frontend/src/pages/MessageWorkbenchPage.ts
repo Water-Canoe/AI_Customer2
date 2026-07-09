@@ -18,6 +18,7 @@ export default defineComponent({
     detail: { type: Object, default: () => ({}) },
     filters: { type: Object, default: () => ({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 }) },
     batches: { type: Object, default: () => ({ batches: [], active: null, items: [] }) },
+    settings: { type: Object, default: () => ({}) },
     loading: { type: Boolean, default: false },
   },
   emits: ['filter-change', 'select-customer', 'message-customer', 'auto-message-customer', 'start-auto-message-batch', 'cancel-auto-message-batch', 'update-follow-status', 'close-detail'],
@@ -111,7 +112,7 @@ export default defineComponent({
             h('button', { type: 'button', onClick: runSearch }, [h(Search), h('span', '搜索')])
           ])
         ]),
-        renderCustomerTable(rows.value, props.loading, emit),
+        renderCustomerTable(rows.value, props.loading, emit, props.settings as Dict),
         h('div', { class: 'message-pagination' }, [
           h('span', `共 ${total.value} 个客户`),
           h('div', [
@@ -276,11 +277,11 @@ function batchStatusLabel(status: string) {
   } as Record<string, string>)[String(status || '')] || String(status || '-')
 }
 
-function renderCustomerTable(rows: Dict[], loading: boolean, emit: any) {
+function renderCustomerTable(rows: Dict[], loading: boolean, emit: any, settings: Dict) {
   const body = loading
     ? [h('tr', [h('td', { colspan: 6, class: 'message-empty' }, '加载中...')])]
     : rows.length
-      ? rows.map(row => renderCustomerRow(row, emit))
+      ? rows.map(row => renderCustomerRow(row, emit, settings))
       : [h('tr', [h('td', { colspan: 6, class: 'message-empty' }, '当前筛选下暂无客户')])]
 
   return h('div', { class: 'message-table-wrap' }, [
@@ -300,9 +301,11 @@ function renderCustomerTable(rows: Dict[], loading: boolean, emit: any) {
   ])
 }
 
-function renderCustomerRow(row: Dict, emit: any) {
+function renderCustomerRow(row: Dict, emit: any, settings: Dict) {
   const rawScript = String(row.script || '').trim()
   const script = rawScript || '暂无AI话术'
+  const sendScript = selectedMessageScript(row, settings)
+  const missingScriptTip = scriptMode(settings) === 'fixed' ? '固定话术为空，请先到设置页填写' : '暂无AI话术'
   return h('tr', { class: row.overdue ? 'is-overdue' : '', onClick: () => emit('select-customer', row.lead_id) }, [
     h('td', { class: 'message-customer-cell' }, [
       row.profile_url
@@ -339,15 +342,15 @@ function renderCustomerRow(row: Dict, emit: any) {
           h('button', {
             type: 'button',
             class: 'text-icon-button',
-            disabled: row.platform !== 'dy' || !row.script || !row.profile_url,
-            title: row.platform !== 'dy' ? '自动私信当前只支持抖音客户' : !row.script ? '暂无AI话术' : !row.profile_url ? '缺少客户主页' : '自动打开抖音主页并处理AI话术',
+            disabled: row.platform !== 'dy' || !sendScript || !row.profile_url,
+            title: row.platform !== 'dy' ? '自动私信当前只支持抖音客户' : !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : '自动打开抖音主页并处理话术',
             onClick: () => emit('auto-message-customer', row)
           }, [h(Promotion), h('span', '自动私信')]),
           h('button', {
             type: 'button',
             class: 'text-icon-button',
-            disabled: !row.script || !row.profile_url,
-            title: !row.script ? '暂无AI话术' : !row.profile_url ? '缺少客户主页' : '复制话术、打开主页并标记已私信',
+            disabled: !sendScript || !row.profile_url,
+            title: !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : '复制话术、打开主页并标记已私信',
             onClick: () => emit('message-customer', row)
           }, [h(CopyDocument), h('span', '私信')])
         ]),
@@ -363,6 +366,16 @@ function renderCustomerRow(row: Dict, emit: any) {
       ])
     ])
   ])
+}
+
+function selectedMessageScript(row: Dict, settings: Dict) {
+  return scriptMode(settings) === 'fixed'
+    ? String(settings.fixed_dm_script || '').trim()
+    : String(row.script || '').trim()
+}
+
+function scriptMode(settings: Dict) {
+  return String(settings.dm_script_mode || 'ai') === 'fixed' ? 'fixed' : 'ai'
 }
 
 function loadAutoBatchConfig() {

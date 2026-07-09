@@ -112,9 +112,9 @@ def create_auto_message_batch(
             raise ValueError(f"已有自动私信批次 {active['id']} 正在执行，请先等待结束或取消")
         fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
         timeout_seconds = _bounded_int(database.get_setting(conn, "auto_dm_timeout_seconds", "300"), 300, 0, 3600)
-        customers = _batch_candidates(conn, platform, keyword, count)
+        customers = _with_selected_scripts(conn, _batch_candidates(conn, platform, keyword))[:count]
         if not customers:
-            raise ValueError("当前关键词下没有可自动私信的未私信目标客户")
+            raise ValueError("当前关键词下没有可自动私信的未私信目标客户或可发送话术")
 
         batch_id = uuid4().hex[:8]
         conn.execute(
@@ -133,7 +133,7 @@ def create_auto_message_batch(
                 INSERT INTO message_batch_items(batch_id, lead_account_id, nickname, profile_url, script)
                 VALUES(?, ?, ?, ?, ?)
                 """,
-                (batch_id, customer["lead_id"], customer["nickname"], customer["profile_url"], customer["script"]),
+                (batch_id, customer["lead_id"], customer["nickname"], customer["profile_url"], customer["selected_script"]),
             )
 
     if run_now:
@@ -238,12 +238,10 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
         raise ValueError("自动私信当前只支持抖音客户")
     if not customer["profile_url"]:
         raise ValueError("当前客户缺少主页链接，无法自动私信")
-    if not str(customer["script"] or "").strip():
-        raise ValueError("当前客户暂无AI话术，请先做意向分析")
-
     with database.connect() as conn:
         fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
         configured_timeout = _bounded_int(database.get_setting(conn, "auto_dm_timeout_seconds", "300"), 300, 0, 3600)
+        message_script, script_label = _selected_message_script(conn, customer["script"])
     # 设置页的“只填不发”优先，避免前端旧请求误触发送。
     effective_dry_run = bool(dry_run or fill_only)
     effective_timeout = _bounded_int(timeout_seconds, configured_timeout, 0, 3600) if timeout_seconds else configured_timeout
@@ -253,7 +251,7 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
         async with browser_queue.async_browser_slot(f"message_customer:{lead_id}"):
             result = await sender(
                 customer["profile_url"],
-                customer["script"],
+                message_script,
                 profile_dir=database.get_douyin_cloak_profile_dir(),
                 dry_run=effective_dry_run,
                 manual_send_timeout_seconds=effective_timeout,
@@ -267,7 +265,7 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
         follow_update = account_actions.update_customer_follow_status(
             lead_id,
             "已私信",
-            "私信工作台：自动发送AI话术",
+            f"私信工作台：自动发送{script_label}",
         )
     return {"ok": True, "dm": result, "follow_update": follow_update}
 
@@ -361,7 +359,7 @@ async def _run_batch_item(context: Any, item: dict[str, Any], batch: dict[str, A
             _mark_batch_item(item["id"], "skipped", "缺少客户主页链接")
             return
         if not str(item.get("script") or "").strip():
-            _mark_batch_item(item["id"], "skipped", "缺少AI话术")
+            _mark_batch_item(item["id"], "skipped", "缺少私信话术")
             return
         fill_only = bool(batch.get("fill_only"))
         await module.send_douyin_dm_on_page(
@@ -444,7 +442,7 @@ def _douyin_dm_automation_path() -> Path:
     raise ValueError("找不到 tools/douyin_dm_automation/automation.py，无法自动私信")
 
 
-def _batch_candidates(conn, platform: str, keyword: str, count: int) -> list[dict[str, Any]]:
+def _batch_candidates(conn, platform: str, keyword: str) -> list[dict[str, Any]]:
     # 一键私信只处理当前关键词下仍处于“未私信”的目标客户。
     customers = _aggregate_customers(_target_source_rows(conn), _reminder_days(conn))
     rows = [
@@ -452,7 +450,36 @@ def _batch_candidates(conn, platform: str, keyword: str, count: int) -> list[dic
         if _matches_customer(customer, keyword, platform, "未私信", "")
     ]
     rows.sort(key=lambda item: (item["comment_at"] or item["latest_at"] or item["updated_at"] or ""), reverse=True)
-    return rows[:count]
+    return rows
+
+
+def _with_selected_scripts(conn, customers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for customer in customers:
+        try:
+            script, _ = _selected_message_script(conn, customer.get("script"))
+        except ValueError:
+            if _dm_script_mode(conn) == "fixed":
+                raise
+            continue
+        selected.append({**customer, "selected_script": script})
+    return selected
+
+
+def _selected_message_script(conn, ai_script: Any) -> tuple[str, str]:
+    if _dm_script_mode(conn) == "fixed":
+        script = str(database.get_setting(conn, "fixed_dm_script", "") or "").strip()
+        if not script:
+            raise ValueError("固定话术为空，请先到设置页填写固定话术")
+        return script, "固定话术"
+    script = str(ai_script or "").strip()
+    if not script:
+        raise ValueError("当前客户暂无AI话术，请先做意向分析")
+    return script, "AI话术"
+
+
+def _dm_script_mode(conn) -> str:
+    return "fixed" if database.get_setting(conn, "dm_script_mode", "ai") == "fixed" else "ai"
 
 
 def _batch_items(conn, batch_id: str) -> list[dict[str, Any]]:

@@ -4580,6 +4580,7 @@ input[type='checkbox'] {
 
 .form-grid input,
 .form-grid select,
+.form-grid textarea,
 .ai-toolbar select,
 .message-search input,
 .follow-select {
@@ -4590,6 +4591,7 @@ input[type='checkbox'] {
 
 .form-grid input:focus,
 .form-grid select:focus,
+.form-grid textarea:focus,
 .ai-search:focus-within,
 .message-search input:focus,
 .follow-select:focus {

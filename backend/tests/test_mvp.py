@@ -4250,6 +4250,80 @@ def test_message_workbench_auto_message_fill_only_keeps_status(tmp_path: Path, m
         assert row["follow_status"] == "未私信"
 
 
+def test_message_workbench_auto_message_uses_fixed_script_when_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import message_workbench
+
+    with database.connect() as conn:
+        database.set_setting(conn, "dm_script_mode", "fixed")
+        database.set_setting(conn, "fixed_dm_script", "你好，这是统一固定话术。")
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
+            VALUES('dy', 'lead-fixed-script', '固定话术客户', 'https://www.douyin.com/user/fixed-script')
+            """
+        ).lastrowid
+        lead_id = conn.execute(
+            """
+            INSERT INTO lead_user_accounts(account_id, screening_status, follow_status, script)
+            VALUES(?, '目标客户', '未私信', '')
+            """,
+            (account_id,),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO lead_sources(lead_account_id, keyword, source_type) VALUES(?, '电动车', 'competitor_crawl')",
+            (lead_id,),
+        )
+
+    calls: list[dict[str, object]] = []
+
+    async def fake_sender(user_url: str, message: str, **kwargs: object) -> dict[str, object]:
+        calls.append({"user_url": user_url, "message": message, **kwargs})
+        return {"ok": True, "sent": True}
+
+    monkeypatch.setattr(message_workbench, "_load_douyin_dm_sender", lambda: fake_sender)
+
+    result = asyncio.run(message_workbench.auto_message_customer(int(lead_id)))
+
+    assert result["ok"] is True
+    assert calls[0]["message"] == "你好，这是统一固定话术。"
+    with database.connect() as conn:
+        row = conn.execute("SELECT follow_status FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone()
+        assert row["follow_status"] == "已私信"
+
+
+def test_message_workbench_auto_message_batch_uses_fixed_script(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import message_workbench
+
+    with database.connect() as conn:
+        database.set_setting(conn, "dm_script_mode", "fixed")
+        database.set_setting(conn, "fixed_dm_script", "批量统一话术")
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
+            VALUES('dy', 'lead-fixed-batch', '批量固定客户', 'https://www.douyin.com/user/fixed-batch')
+            """
+        ).lastrowid
+        lead_id = conn.execute(
+            """
+            INSERT INTO lead_user_accounts(account_id, screening_status, follow_status, script)
+            VALUES(?, '目标客户', '未私信', '')
+            """,
+            (account_id,),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO lead_sources(lead_account_id, keyword, source_type) VALUES(?, '电动车', 'competitor_crawl')",
+            (lead_id,),
+        )
+
+    batch = message_workbench.create_auto_message_batch("dy", "电动车", 1, 0, 0, run_now=False)
+
+    assert batch["items"][0]["script"] == "批量统一话术"
+
+
 def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database
