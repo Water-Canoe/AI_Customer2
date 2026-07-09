@@ -124,7 +124,7 @@ function renderJob(
 }
 
 
-function runtimeKindLabel(kind: string) {
+export function runtimeKindLabel(kind: string) {
   return ({
     crawl_task: '采集任务',
     crawl_batch: '批量采集',
@@ -140,7 +140,7 @@ function runtimeKindLabel(kind: string) {
 }
 
 
-function runtimeStatusLabel(status: string) {
+export function runtimeStatusLabel(status: string) {
   return ({
     queued: '排队中',
     running: '执行中',
@@ -152,7 +152,7 @@ function runtimeStatusLabel(status: string) {
 }
 
 
-function runtimeJobSummary(job: Dict) {
+export function runtimeJobSummary(job: Dict) {
   const parts = [`资源：${job.resource === 'browser' ? '浏览器' : job.resource === 'ai' ? 'AI' : '后台'}`, `尝试：${job.attempt || 0}/${job.max_attempts || 1}`]
   if (job.error) parts.push(String(job.error))
   else if (job.started_at) parts.push(`开始：${job.started_at}`)

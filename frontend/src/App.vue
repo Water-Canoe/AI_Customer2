@@ -83,6 +83,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from './shared/api'
 import type { Dict } from './shared/types'
 import { competitorStatusLabel, platformName } from './shared/format'
+import { createAutoSyncController, type AutoSyncReason } from './composables/autoSync'
 
 const router = useRouter()
 const route = useRoute()
@@ -119,12 +120,6 @@ const trafficRefreshSeq = ref(0)
 const tombstoneSummary = ref<Dict>({})
 const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
-const autoSyncing = ref(false)
-const lastAutoSyncAt = ref(0)
-
-const AUTO_SYNC_ACTIVE_MS = 3000
-const AUTO_SYNC_IDLE_MS = 12000
-let autoSyncTimer: ReturnType<typeof window.setInterval> | null = null
 let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
@@ -146,6 +141,10 @@ const hasActiveAsyncWork = computed(() => {
     || aiJobs.value.some(job => isActiveStatus(job.status))
     || isActiveStatus(messageBatches.value?.active?.status)
     || trafficRuns.value.some(run => isActiveStatus(run.status))
+})
+const autoSync = createAutoSyncController({
+  sync: syncCurrentView,
+  interval: () => hasActiveAsyncWork.value ? 3000 : 12000,
 })
 const dashboardInsights = computed(() => {
   if (isTrafficView.value) {
@@ -308,12 +307,12 @@ async function refreshAll() {
   if (isTrafficView.value) {
     await loadTrafficShell()
     trafficRefreshSeq.value += 1
-    lastAutoSyncAt.value = Date.now()
+    autoSync.markSynced()
     return
   }
   // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
   await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadMessageWorkbench(true), loadTombstoneSummary(), loadTombstones(), loadTable(activeLibrary.value)])
-  lastAutoSyncAt.value = Date.now()
+  autoSync.markSynced()
 }
 
 function createFromTopbar() {
@@ -459,54 +458,26 @@ function compactCount(value: unknown) {
   return String(count)
 }
 
-function startAutoSync() {
-  if (autoSyncTimer) window.clearInterval(autoSyncTimer)
-  autoSyncTimer = window.setInterval(() => {
-    void syncCurrentView('auto')
-  }, 1000)
-}
+async function syncCurrentView(_reason: AutoSyncReason) {
+  const loaders = new Map<string, () => Promise<unknown>>()
+  // 任务和 AI job 是全局运行态来源，当前页面之外的异步变化也要持续感知。
+  loaders.set('tasks', loadTasks)
+  loaders.set('ai', loadAiJobs)
+  if (isTrafficView.value) loaders.set('traffic-shell', loadTrafficShell)
 
-function stopAutoSync() {
-  if (!autoSyncTimer) return
-  window.clearInterval(autoSyncTimer)
-  autoSyncTimer = null
-}
-
-function handleVisibilityChange() {
-  if (!document.hidden) void syncCurrentView('visible')
-}
-
-async function syncCurrentView(reason: 'auto' | 'route' | 'visible') {
-  if (autoSyncing.value) return
-  if (document.hidden) return
-  const interval = hasActiveAsyncWork.value ? AUTO_SYNC_ACTIVE_MS : AUTO_SYNC_IDLE_MS
-  if (reason === 'auto' && Date.now() - lastAutoSyncAt.value < interval) return
-
-  autoSyncing.value = true
-  try {
-    const loaders = new Map<string, () => Promise<unknown>>()
-    // 任务和 AI job 是全局运行态来源，当前页面之外的异步变化也要持续感知。
-    loaders.set('tasks', loadTasks)
-    loaders.set('ai', loadAiJobs)
-    if (isTrafficView.value) loaders.set('traffic-shell', loadTrafficShell)
-
-    if (activeView.value === 'logs') loaders.set('selected-task', refreshSelectedTask)
-    if (activeView.value === 'overview') loaders.set('overview', loadOverview)
-    if (activeView.value === 'message-workbench') loaders.set('message-workbench', () => loadMessageWorkbench(true))
-    if (activeView.value === 'tables') loaders.set('table', () => loadTable(activeLibrary.value, true))
-    if (activeView.value === 'settings') {
-      // 设置页有未保存草稿时，不用后台刷新覆盖本地输入。
-      if (!settingsDraftDirty.value) loaders.set('settings', loadSettings)
-      loaders.set('env', checkEnv)
-      loaders.set('tombstones-summary', loadTombstoneSummary)
-      loaders.set('tombstones', () => loadTombstones())
-    }
-
-    await Promise.allSettled(Array.from(loaders.values()).map(loader => loader()))
-  } finally {
-    lastAutoSyncAt.value = Date.now()
-    autoSyncing.value = false
+  if (activeView.value === 'logs') loaders.set('selected-task', refreshSelectedTask)
+  if (activeView.value === 'overview') loaders.set('overview', loadOverview)
+  if (activeView.value === 'message-workbench') loaders.set('message-workbench', () => loadMessageWorkbench(true))
+  if (activeView.value === 'tables') loaders.set('table', () => loadTable(activeLibrary.value, true))
+  if (activeView.value === 'settings') {
+    // 设置页有未保存草稿时，不用后台刷新覆盖本地输入。
+    if (!settingsDraftDirty.value) loaders.set('settings', loadSettings)
+    loaders.set('env', checkEnv)
+    loaders.set('tombstones-summary', loadTombstoneSummary)
+    loaders.set('tombstones', () => loadTombstones())
   }
+
+  await Promise.allSettled(Array.from(loaders.values()).map(loader => loader()))
 }
 
 async function changeLibrary(library: string) {
@@ -1341,17 +1312,15 @@ async function clearAllData() {
 }
 
 watch(activeView, () => {
-  void syncCurrentView('route')
+  void autoSync.trigger('route')
 })
 
 onMounted(async () => {
   await refreshAll()
-  startAutoSync()
-  document.addEventListener('visibilitychange', handleVisibilityChange)
+  autoSync.start()
 })
 
 onBeforeUnmount(() => {
-  stopAutoSync()
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  autoSync.stop()
 })
 </script>

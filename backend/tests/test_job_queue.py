@@ -157,6 +157,9 @@ def test_shutdown_requeues_safe_ai_job(tmp_path: Path, monkeypatch: pytest.Monke
 
     result = job_queue.shutdown(0.05)
     release.set()
+    deadline = time.monotonic() + 2
+    while any(job_queue.active_summary().values()) and time.monotonic() < deadline:
+        time.sleep(0.01)
 
     assert result == {"requested": 1, "interrupted": 0, "resumed": 1}
     assert job_queue.get_job(str(job["id"]))["status"] == "queued"
