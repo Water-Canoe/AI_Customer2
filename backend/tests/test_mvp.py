@@ -1883,6 +1883,7 @@ def test_traffic_random_feed_starts_from_homepage(tmp_path: Path) -> None:
     traffic_workbench._save_last_douyin_video_url("https://www.douyin.com/video/7123")
 
     assert traffic_workbench._target_url({"source_mode": "random_feed", "source_value": ""}) == "https://www.douyin.com/?recommend=1"
+    assert traffic_workbench._target_url({"platform": "ks", "source_mode": "random_feed", "source_value": ""}) == "https://www.kuaishou.com/new-reco"
 
 
 def test_traffic_random_feed_jingxuan_clicks_page_video_not_project_video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2173,15 +2174,51 @@ def test_traffic_random_numeric_video_uses_modal_feed_url() -> None:
     assert traffic_workbench._modal_feed_url("https://www.douyin.com/video/not-numeric") == ""
 
 
-def test_traffic_developing_platform_cannot_start(tmp_path: Path) -> None:
+def test_traffic_kuaishou_random_feed_can_start_and_unsupported_modes_are_rejected(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficPlanCreate
     from app.services import traffic_workbench
 
     plan = traffic_workbench.create_plan(TrafficPlanCreate(name="快手计划", platform="ks"))
+    assert traffic_workbench.create_run(plan["id"])["plan_id"] == plan["id"]
 
+    image_plan = traffic_workbench.create_plan(TrafficPlanCreate(name="快手图片", platform="ks", action_comment_image=True))
+    with pytest.raises(ValueError, match="评论图片"):
+        traffic_workbench.create_run(image_plan["id"])
+
+    search_plan = traffic_workbench.create_plan(TrafficPlanCreate(name="快手搜索", platform="ks", source_mode="search_keyword", source_value="AI"))
+    with pytest.raises(ValueError, match="随机推荐流"):
+        traffic_workbench.create_run(search_plan["id"])
+
+    xhs_plan = traffic_workbench.create_plan(TrafficPlanCreate(name="小红书计划", platform="xhs"))
     with pytest.raises(ValueError, match="正在开发"):
-        traffic_workbench.create_run(plan["id"])
+        traffic_workbench.create_run(xhs_plan["id"])
+
+
+def test_traffic_kuaishou_helpers_parse_feed_and_keep_dedup_platform(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.services import traffic_workbench
+
+    feed = {
+        "photo": {
+            "id": "ks-photo-1",
+            "caption": "AI获客演示",
+            "likeCount": 12,
+            "photoUrls": [{"url": "https://v.kwaicdn.com/a.mp4?clientCacheKey=ks-photo-1_x"}],
+        },
+        "author": {"id": "ks-author-1", "name": "快手作者"},
+        "comment": {"count": 3},
+    }
+    video = traffic_workbench._video_from_kuaishou_feed(feed, "https://www.kuaishou.com/new-reco")
+    assert video["platform"] == "ks"
+    assert video["video_id"] == "ks-photo-1"
+    assert video["author_id"] == "ks-author-1"
+    assert traffic_workbench._kuaishou_feed_for_src({"_order": ["ks-photo-1"], "ks-photo-1": feed}, "https://v.kwaicdn.com/a.mp4?x=1") == feed
+    assert traffic_workbench._payload_status_ok({"result": 1}) is True
+
+    traffic_workbench._insert_dedup(video, "like", "", "done")
+    assert traffic_workbench._dedup_exists(video, "like", "") is True
+    assert traffic_workbench._dedup_exists({"platform": "dy", "video_id": "ks-photo-1"}, "like", "") is False
 
 
 def test_traffic_run_route_requires_traffic_license(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

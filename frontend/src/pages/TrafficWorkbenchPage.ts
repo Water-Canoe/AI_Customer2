@@ -73,6 +73,7 @@ export default defineComponent({
     const envInstalling = ref(false)
     const envInstallResult = ref<Dict | null>(null)
     const douyinLoginOpening = ref(false)
+    const kuaishouLoginOpening = ref(false)
     const planArchiveFilter = ref('active')
     const runArchiveFilter = ref('active')
     const planPage = ref(1)
@@ -183,11 +184,28 @@ export default defineComponent({
     }
 
     function choosePlatform(platform: string) {
-      if (platform !== 'dy') {
+      if (platform === 'xhs') {
         ElMessage.info('正在开发')
         return
       }
       planDraft.value.platform = platform
+      if (platform === 'ks' && planDraft.value.source_mode !== 'random_feed') {
+        planDraft.value.source_mode = 'random_feed'
+        planDraft.value.source_value = ''
+        ElMessage.info('快手当前先支持随机推荐流')
+      }
+      if (platform === 'ks' && planDraft.value.action_comment_image) {
+        planDraft.value.action_comment_image = false
+        ElMessage.info('快手 Web 端暂不支持评论图片')
+      }
+    }
+
+    function setSourceMode(value: string) {
+      if (planDraft.value.platform === 'ks' && value !== 'random_feed') {
+        ElMessage.info('快手当前先支持随机推荐流')
+        return
+      }
+      planDraft.value.source_mode = value
     }
 
     async function createPlan(startNow = false) {
@@ -353,6 +371,18 @@ export default defineComponent({
       }
     }
 
+    async function openKuaishouLogin() {
+      kuaishouLoginOpening.value = true
+      try {
+        const { data } = await api.post('/settings/platform-login/ks')
+        ElMessage.success(data.message || '快手登录窗口已打开')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '快手登录窗口打开失败')
+      } finally {
+        kuaishouLoginOpening.value = false
+      }
+    }
+
     async function clearRecords() {
       try {
         await ElMessageBox.confirm('会清除计划列表、批次列表、日志、视频明细、操作记录和防重复账本，并重置素材使用次数；配置项、文案、图片和授权不会删除。', '清除引流记录', { type: 'warning' })
@@ -408,7 +438,7 @@ export default defineComponent({
           renderPlatformTabs(),
           h('div', { class: 'form-grid traffic-plan-form' }, [
             labelInput('计划名称', planDraft.value.name, value => planDraft.value.name = value, 'field-wide', `留空自动生成：${sourceLabel(planDraft.value.source_mode)}-计划ID`),
-            labelSelect('来源模式', planDraft.value.source_mode, sourceOptions, value => planDraft.value.source_mode = value),
+            labelSelect('来源模式', planDraft.value.source_mode, sourceOptions, setSourceMode),
             labelInput('每轮视频上限', String(planDraft.value.round_video_limit || 5), value => planDraft.value.round_video_limit = value.trim() || 5, '', '', 'number'),
             labelInput(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide'),
             h('label', { class: 'form-field field-full' }, [
@@ -425,6 +455,7 @@ export default defineComponent({
           ]),
           h('div', { class: 'bulk-preview-warning' }, [
             h('li', planActions(planDraft.value).length ? `将执行：${planActionLabel(planDraft.value)}` : '未选择动作：只自动刷视频并记录，不点赞、不收藏、不关注、不评论。'),
+            planDraft.value.platform === 'ks' ? h('li', '快手当前支持随机推荐流、点赞、收藏、关注和文字评论；图片评论和关键词/项目库来源暂不支持。') : null,
           ]),
           renderSourceShortcuts(),
           h('div', { class: 'task-card-actions traffic-form-actions' }, [
@@ -571,6 +602,11 @@ export default defineComponent({
           h('div', { class: 'task-card-actions traffic-login-actions' }, [
             h('button', { class: 'primary-action', disabled: douyinLoginOpening.value, onClick: openDouyinLogin }, douyinLoginOpening.value ? '打开中...' : '打开抖音登录窗口'),
           ]),
+          sectionTitle({ title: '快手登录态', subtitle: '登录后用于快手推荐流引流', icon: VideoPlay, tone: 'green', compact: true }),
+          h('p', { class: 'traffic-env-suggestion' }, '快手使用独立登录态；登录后请确认推荐流能正常播放，再手动关闭窗口。'),
+          h('div', { class: 'task-card-actions traffic-login-actions' }, [
+            h('button', { class: 'primary-action', disabled: kuaishouLoginOpening.value, onClick: openKuaishouLogin }, kuaishouLoginOpening.value ? '打开中...' : '打开快手登录窗口'),
+          ]),
           renderTrafficEnvironment(),
           sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Delete, tone: 'red', compact: true }),
           h('button', { class: 'text-icon-button danger', onClick: clearRecords }, [h(Delete, { class: 'inline-icon' }), '清除引流记录']),
@@ -581,7 +617,7 @@ export default defineComponent({
     function renderPlatformTabs() {
       return h('div', { class: 'library-list traffic-platform-tabs' }, [
         h('button', { class: { selected: planDraft.value.platform === 'dy' }, onClick: () => choosePlatform('dy') }, '抖音'),
-        h('button', { onClick: () => choosePlatform('ks') }, '快手'),
+        h('button', { class: { selected: planDraft.value.platform === 'ks' }, onClick: () => choosePlatform('ks') }, '快手'),
         h('button', { onClick: () => choosePlatform('xhs') }, '小红书'),
       ])
     }
@@ -792,10 +828,18 @@ export default defineComponent({
     }
 
     function actionToggle(key: string, text: string) {
+      const disabled = planDraft.value.platform === 'ks' && key === 'action_comment_image'
       return h('label', [h('input', {
         type: 'checkbox',
+        disabled,
         checked: Boolean(planDraft.value[key]),
-        onChange: (event: Event) => planDraft.value[key] = (event.target as HTMLInputElement).checked,
+        onChange: (event: Event) => {
+          if (disabled) {
+            ElMessage.info('快手 Web 端暂不支持评论图片')
+            return
+          }
+          planDraft.value[key] = (event.target as HTMLInputElement).checked
+        },
       }), text])
     }
 

@@ -33,7 +33,9 @@ TRAFFIC_SETTING_KEYS = {
 
 TRAFFIC_IMAGE_DIR = database.get_data_root() / "traffic_images"
 TRAFFIC_DOUYIN_PROFILE_DIR = database.get_douyin_cloak_profile_dir()
+TRAFFIC_KUAISHOU_PROFILE_DIR = database.get_data_root() / "kuaishou_cloak_profile"
 TRAFFIC_LAST_VIDEO_URL_KEY = "traffic_last_douyin_video_url"
+KUAISHOU_RECO_URL = "https://www.kuaishou.com/new-reco"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 300
@@ -228,7 +230,7 @@ def create_run(plan_id: str) -> dict[str, Any]:
             run_id,
             "info",
             "probe",
-            "批次已创建，等待打开抖音。",
+            "批次已创建，等待打开平台页面。",
             "任务已进入队列",
             "请保持网络正常，不要关闭本地服务。",
             {"plan_id": plan_id},
@@ -752,7 +754,9 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     close_browser_on_failure = _bool_setting(settings, "traffic_close_browser_on_failure", True)
     headless = _bool_setting(settings, "traffic_headless", False)
     action_probability = _int_setting(settings, "traffic_action_probability", 60, 0, 100)
-    action_budget = max(0, daily_action_limit - _daily_action_count())
+    if plan.get("platform") == "ks":
+        return _run_kuaishou_with_playwright(run_id, plan, PlaywrightTimeoutError)
+    action_budget = max(0, daily_action_limit - _daily_action_count("dy"))
     no_progress_count = 0
     project_author_keys: set[str] = set()
 
@@ -915,6 +919,123 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
+def _run_kuaishou_with_playwright(run_id: str, plan: dict[str, Any], timeout_error: Any) -> dict[str, str]:
+    settings = get_settings()["values"]
+    limit = int(plan.get("round_video_limit") or 5)
+    daily_action_limit = _int_setting(settings, "traffic_daily_action_limit", 50, 0, 1000)
+    min_watch = _int_setting(settings, "traffic_min_watch_seconds", 3, 0, 120)
+    max_watch = _int_setting(settings, "traffic_max_watch_seconds", 8, min_watch, 300)
+    stop_after_failures = _int_setting(settings, "traffic_stop_after_failures", 3, 1, 10)
+    close_browser_on_failure = _bool_setting(settings, "traffic_close_browser_on_failure", True)
+    headless = _bool_setting(settings, "traffic_headless", False)
+    action_probability = _int_setting(settings, "traffic_action_probability", 60, 0, 100)
+    action_budget = max(0, daily_action_limit - _daily_action_count("ks"))
+    context = None
+    close_context = True
+    try:
+        context = _launch_context(TRAFFIC_KUAISHOU_PROFILE_DIR, headless)
+        page = context.pages[0] if context.pages else context.new_page()
+        video_cache = _setup_kuaishou_data_cache(page)
+        target_url = _target_url(plan)
+        try:
+            _append_log(run_id, "info", "login", "正在打开快手推荐流。", "准备执行快手引流批次", "如果弹出登录，请先到引流设置打开快手登录窗口完成登录。", {"url": target_url})
+            if not _goto_with_timeout_tolerance(page, target_url, 60_000):
+                _append_log(run_id, "warning", "probe", "快手页面加载超时，继续检查当前页面。", "页面可能已经可用，但浏览器没有收到加载完成信号", "系统会继续识别当前页面；如果确实没有内容，会再给出明确原因。", {"url": target_url, "current_url": page.url})
+            _wait_or_stop(page, run_id, 5000)
+            _ensure_kuaishou_page_ready(page)
+            if plan["actions"] and action_budget <= 0:
+                _append_log(run_id, "success", "stop", "已达到每日动作上限，任务已自动完成。", "今日真实互动动作数量已经达到设置值", "可以明天继续，或到引流设置调整每日动作上限。", {"daily_action_limit": daily_action_limit})
+                return {"message": "已达到每日动作上限，任务已自动完成。", "reason": "今日真实互动动作数量已经达到设置值", "suggestion": "可以明天继续，或到引流设置调整每日动作上限。"}
+
+            handled_count = 0
+            seen_count = 0
+            no_progress_count = 0
+            max_seen_count = limit * 10 + WARMUP_VIDEO_SKIP_COUNT
+            while handled_count < limit:
+                _raise_if_stop_requested(run_id)
+                video = _read_kuaishou_active_video(page, video_cache)
+                if not video["video_id"]:
+                    no_progress_count += 1
+                    if no_progress_count >= stop_after_failures:
+                        raise TrafficStop(
+                            f"连续 {no_progress_count} 次没有找到可执行的快手视频，任务已停止。",
+                            "当前快手页面没有可识别的视频 ID。",
+                            "请确认快手已经登录，并且推荐流能正常播放视频。",
+                            "probe",
+                            {"url": page.url},
+                        )
+                    _advance_kuaishou_video(page, "")
+                    continue
+                no_progress_count = 0
+                seen_count += 1
+                if seen_count <= WARMUP_VIDEO_SKIP_COUNT:
+                    _advance_kuaishou_video(page, video["video_id"])
+                    continue
+                skip_reason = _kuaishou_video_skip_reason(video)
+                if skip_reason:
+                    _record_video(run_id, plan, video, ["跳过"], "", "", "skipped", skip_reason)
+                    _advance_kuaishou_video(page, video["video_id"])
+                    continue
+                watch_seconds = random.randint(min_watch, max_watch)
+                if not plan["actions"]:
+                    _append_log(run_id, "info", "browse", f"正在浏览快手视频：{video['video_desc'][:36] or video['video_id']}。", "按设置随机停留", f"本次停留约 {watch_seconds} 秒。", {"video_id": video["video_id"]})
+                _wait_or_stop(page, run_id, watch_seconds * 1000)
+                done_actions, comment_text, image_path, skipped_by_error = _execute_kuaishou_actions_with_retry(run_id, plan, page, video, action_budget, action_probability)
+                action_budget = max(0, action_budget - _real_action_count(done_actions))
+                if skipped_by_error:
+                    _record_video(run_id, plan, video, ["跳过"], comment_text, image_path, "skipped", "连续动作失败，已跳过当前视频")
+                    _advance_kuaishou_video(page, video["video_id"])
+                    continue
+                if plan["actions"] and not done_actions:
+                    if seen_count >= max_seen_count:
+                        raise TrafficStop(
+                            "连续跳过的视频过多，任务已停止。",
+                            "本轮没有凑够可执行互动的快手视频。",
+                            "请降低防重复限制、提高操作执行概率，或稍后再试。",
+                            "advance",
+                            {"seen_count": seen_count, "target_count": limit},
+                        )
+                    _advance_kuaishou_video(page, video["video_id"])
+                    continue
+                record_actions = done_actions or ["仅浏览"]
+                _record_video(run_id, plan, video, record_actions, comment_text, image_path, "browsed" if not plan["actions"] or record_actions == ["仅浏览"] else "done")
+                handled_count += 1
+                if plan["actions"] and action_budget <= 0:
+                    _append_log(run_id, "success", "stop", "已达到每日动作上限，任务已自动完成。", "今日真实互动动作数量已经达到设置值", "可以明天继续，或到引流设置调整每日动作上限。", {"daily_action_limit": daily_action_limit})
+                    return {"message": "已达到每日动作上限，任务已自动完成。", "reason": "今日真实互动动作数量已经达到设置值", "suggestion": "可以明天继续，或到引流设置调整每日动作上限。"}
+                if handled_count < limit and not _advance_kuaishou_video(page, video["video_id"]):
+                    raise TrafficStop(
+                        "连续 3 次没有切换到新的快手视频，任务已停止。",
+                        "翻页后视频 ID 没有变化。",
+                        "请到引流设置重新打开快手并确认推荐流可以正常切换。",
+                        "advance",
+                        {"video_id": video["video_id"], "url": page.url},
+                    )
+        except timeout_error as exc:
+            if not close_browser_on_failure:
+                close_context = False
+                _append_log(run_id, "warning", "stop", "任务已停止，浏览器已保留用于复盘。", "引流设置关闭了“失败后关闭浏览器”", "请复盘完成后手动关闭浏览器，再启动新的引流批次。", {"url": getattr(page, "url", "")})
+            raise TrafficStop("快手页面加载超时，任务已停止。", "浏览器等待页面响应超时。", "请检查网络和快手页面是否能手动打开。", "probe", {"error": str(exc)}) from exc
+        except Exception as exc:
+            if _is_browser_closed_error(exc):
+                raise TrafficStop("浏览器窗口已关闭，任务已停止。", "执行中的快手浏览器被手动关闭。", "如需继续，请重新启动批次；如果只是想复盘，请在任务停止后再关闭窗口。", "stop", {"error": repr(exc)}) from exc
+            if not close_browser_on_failure:
+                close_context = False
+                _append_log(run_id, "warning", "stop", "任务已停止，浏览器已保留用于复盘。", "引流设置关闭了“失败后关闭浏览器”", "请复盘完成后手动关闭浏览器，再启动新的引流批次。", {"url": getattr(page, "url", "")})
+            raise
+    finally:
+        if close_context:
+            if context is not None:
+                try:
+                    context.close()
+                except Exception as exc:
+                    if not _is_browser_closed_error(exc):
+                        raise
+        elif context is not None:
+            TRAFFIC_REVIEW_SESSIONS.append({"context": context})
+    return {}
+
+
 def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
     value = str(settings.get(key, "true" if default else "false")).strip().lower()
     if value in {"1", "true", "yes", "on"}:
@@ -933,12 +1054,16 @@ def _hold_platform_login_window(platform: str) -> None:
     if not target:
         raise ValueError("不支持的平台登录配置")
     # 登录和安全验证必须可见，执行批次才允许无头。
-    context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR, False)
+    context = _launch_context(_traffic_profile_dir(platform), False)
     page = context.pages[0] if context.pages else context.new_page()
     page.goto(str(target["url"]), wait_until="domcontentloaded", timeout=60_000)
     while True:
         # 登录窗口只负责保活，不检测登录状态，避免扫码后自动化读页触发窗口关闭。
         page.wait_for_timeout(1000)
+
+
+def _traffic_profile_dir(platform: str) -> Path:
+    return TRAFFIC_KUAISHOU_PROFILE_DIR if platform == "ks" else TRAFFIC_DOUYIN_PROFILE_DIR
 
 
 def _launch_context(profile_dir: Path, headless: bool = False) -> Any:
@@ -973,6 +1098,8 @@ def _launch_context(profile_dir: Path, headless: bool = False) -> Any:
 
 
 def _target_url(plan: dict[str, Any]) -> str:
+    if plan.get("platform") == "ks":
+        return KUAISHOU_RECO_URL
     if plan["source_mode"] == "search_keyword" and plan["source_value"]:
         return f"https://www.douyin.com/search/{quote(plan['source_value'])}"
     if plan["source_mode"] == "competitor_videos" and plan["source_value"].startswith("http"):
@@ -1463,6 +1590,180 @@ def _video_from_aweme(item: dict[str, Any], fallback_url: str) -> dict[str, Any]
     }
 
 
+def _setup_kuaishou_data_cache(page: Any) -> dict[str, Any]:
+    cache: dict[str, Any] = {"_order": []}
+
+    def remember(response: Any) -> None:
+        if "/rest/v/feed/hot" not in str(getattr(response, "url", "")):
+            return
+        try:
+            payload = response.json()
+        except Exception:
+            return
+        for feed in payload.get("feeds", []) or []:
+            photo = feed.get("photo") or {}
+            photo_id = str(photo.get("id") or photo.get("photoId") or "")
+            if not photo_id:
+                continue
+            cache[photo_id] = feed
+            if photo_id not in cache["_order"]:
+                cache["_order"].append(photo_id)
+
+    page.on("response", remember)
+    return cache
+
+
+def _read_kuaishou_active_video(page: Any, video_cache: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = dict(page.evaluate(
+        """
+        () => {
+          const visibleVideos = Array.from(document.querySelectorAll('video')).map(video => {
+            const rect = video.getBoundingClientRect();
+            const visibleWidth = Math.max(0, Math.min(rect.right, innerWidth) - Math.max(rect.left, 0));
+            const visibleHeight = Math.max(0, Math.min(rect.bottom, innerHeight) - Math.max(rect.top, 0));
+            return {src: video.currentSrc || video.src || '', area: visibleWidth * visibleHeight};
+          }).filter(item => item.src && item.area > 1000).sort((a, b) => b.area - a.area);
+          return {
+            video_url: location.href,
+            video_src: visibleVideos[0]?.src || '',
+            page_text: (document.body?.innerText || document.title || '').replace(/\\s+/g, ' ').trim().slice(0, 800),
+          };
+        }
+        """
+    ))
+    feed = _kuaishou_feed_for_src(video_cache or {}, str(data.get("video_src") or ""))
+    if feed:
+        return _video_from_kuaishou_feed(feed, str(data.get("video_url") or KUAISHOU_RECO_URL))
+    return {
+        "platform": "ks",
+        "video_id": _hash_text(str(data.get("video_src") or data.get("video_url") or ""))[:16] if data.get("video_src") else "",
+        "video_url": str(data.get("video_url") or KUAISHOU_RECO_URL),
+        "author_id": "",
+        "author_name": "",
+        "video_desc": _clean_kuaishou_text(data.get("page_text", ""))[:800],
+        "like_count": None,
+        "comment_count": None,
+    }
+
+
+def _kuaishou_feed_for_src(cache: dict[str, Any], src: str) -> dict[str, Any] | None:
+    if not src:
+        return None
+    for photo_id in cache.get("_order", []):
+        feed = cache.get(photo_id)
+        if not isinstance(feed, dict):
+            continue
+        if photo_id in src or any(_same_video_url(url, src) for url in _kuaishou_feed_urls(feed)):
+            return feed
+    return None
+
+
+def _same_video_url(url: str, src: str) -> bool:
+    left = str(url or "").split("?", 1)[0]
+    right = str(src or "").split("?", 1)[0]
+    return bool(left and right and (left == right or left in right or right in left))
+
+
+def _kuaishou_feed_urls(feed: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"url", "backupUrl"}:
+                    walk(item)
+                elif isinstance(item, (dict, list)):
+                    walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, str) and value.startswith("http"):
+            urls.append(value)
+
+    walk(feed.get("photo") or {})
+    return urls[:40]
+
+
+def _video_from_kuaishou_feed(feed: dict[str, Any], fallback_url: str) -> dict[str, Any]:
+    photo = feed.get("photo") or {}
+    author = feed.get("author") or {}
+    photo_id = str(photo.get("id") or photo.get("photoId") or "")
+    return {
+        "platform": "ks",
+        "video_id": photo_id,
+        "video_url": f"https://www.kuaishou.com/short-video/{photo_id}" if photo_id else fallback_url,
+        "author_id": str(author.get("id") or ""),
+        "author_name": _clean_kuaishou_text(author.get("name", "")),
+        "video_desc": _clean_kuaishou_text(photo.get("caption", ""))[:800],
+        "like_count": _int_or_none(photo.get("likeCount")),
+        "comment_count": _int_or_none((feed.get("comment") or {}).get("count")),
+        "is_live": bool((author.get("livingInfo") or {}).get("living")),
+        "is_ads": bool(photo.get("ad") or photo.get("adInfo") or feed.get("ad")),
+    }
+
+
+def _clean_kuaishou_text(value: Any) -> str:
+    text = str(value or "").strip()
+    try:
+        # 快手部分接口在 Playwright 中会按 latin1 展示 UTF-8 字节，修正后再入库。
+        return text.encode("latin1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
+def _ensure_kuaishou_page_ready(page: Any) -> None:
+    state = dict(page.evaluate(
+        """
+        () => {
+          const text = (document.body?.innerText || '').replace(/\\s+/g, ' ');
+          return {
+            url: location.href,
+            title: document.title,
+            loginPrompt: /扫码登录|手机号登录|立即登录|登录后/.test(text) && !/退出登录/.test(text),
+            verifyPrompt: /安全验证|人机验证|验证码|captcha|verify/.test(location.href + text),
+          };
+        }
+        """
+    ))
+    if state.get("verifyPrompt"):
+        raise TrafficStop("快手出现安全验证，任务已停止。请在浏览器中手动完成验证，不会自动绕过。", "页面出现安全验证或人机验证。", "手动完成验证后，再重新启动引流任务。", "login", state)
+    if state.get("loginPrompt"):
+        raise TrafficStop("快手登录已失效，任务已停止。请到引流设置重新登录后再启动。", "页面出现登录提示。", "请到引流设置打开快手登录窗口，登录后再重试。", "login", state)
+
+
+def _kuaishou_video_skip_reason(video: dict[str, Any]) -> str:
+    if video.get("is_live"):
+        return "直播视频"
+    if video.get("is_ads"):
+        return "广告视频"
+    return ""
+
+
+def _advance_kuaishou_video(page: Any, previous_video_id: str) -> bool:
+    _close_kuaishou_comment_panel(page)
+    for action in ("next_button", "arrow_down", "wheel", "page_down"):
+        if action == "next_button":
+            page.evaluate(
+                """
+                () => {
+                  const btn = document.querySelector('.next, .hover-tip.nextVideo');
+                  if (btn) btn.click();
+                }
+                """
+            )
+        elif action == "arrow_down":
+            page.keyboard.press("ArrowDown")
+        elif action == "wheel":
+            page.mouse.wheel(0, 1600)
+        else:
+            page.keyboard.press("PageDown")
+        page.wait_for_timeout(1600)
+        next_video = _read_kuaishou_active_video(page)
+        if next_video["video_id"] and next_video["video_id"] != previous_video_id:
+            return True
+    return False
+
+
 def _is_regular_video(video: dict[str, Any]) -> bool:
     aweme_type = _int_or_none(video.get("aweme_type"))
     return aweme_type in (None, 0)
@@ -1511,6 +1812,180 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _execute_kuaishou_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any], action_budget: int | None = None, action_probability: int = 100) -> tuple[list[str], str, str, bool]:
+    if not plan["actions"]:
+        return [], "", "", False
+    done: list[str] = []
+    comment_text = ""
+    remaining = action_budget
+    failed_twice = False
+    attempted = False
+    probability_skipped = False
+    if remaining is not None and remaining <= 0:
+        _append_log(run_id, "warning", "stop", "今日动作上限已用完，当前视频只浏览不互动。", "每日动作上限已达到", "系统会结束本轮任务，避免超过设置的互动频率。", {"video_id": video.get("video_id")})
+        return done, comment_text, "", False
+    for action, label, phase in (
+        ("like", "点赞视频", "like"),
+        ("collect", "收藏视频", "collect"),
+        ("follow", "关注作者", "follow"),
+    ):
+        if action not in plan["actions"]:
+            continue
+        if _skip_action_by_probability(run_id, video, label, phase, action_probability):
+            probability_skipped = True
+            continue
+        attempted = True
+        ok, failed = _run_action_with_retry(run_id, page, video, label, phase, lambda action=action, label=label: _execute_kuaishou_action(run_id, page, video, action, label))
+        failed_twice = failed_twice or failed
+        if ok:
+            done.append(label)
+            remaining = None if remaining is None else remaining - 1
+        elif failed and not done:
+            return done, comment_text, "", True
+        if remaining is not None and remaining <= 0:
+            return done, comment_text, "", False
+    if "comment_text" in plan["actions"]:
+        if _skip_action_by_probability(run_id, video, "评论", "comment", action_probability):
+            probability_skipped = True
+        else:
+            attempted = True
+            comment_text = _pick_text()
+            ok, failed = _run_action_with_retry(run_id, page, video, "评论", "comment", lambda: _execute_kuaishou_comment(run_id, page, video, comment_text))
+            failed_twice = failed_twice or failed
+            if ok:
+                done.append("评论")
+            elif failed and not done:
+                return done, comment_text, "", True
+    if not done and probability_skipped and not attempted:
+        return [], comment_text, "", False
+    return done, comment_text, "", bool(failed_twice and not done)
+
+
+def _execute_kuaishou_action(run_id: str, page: Any, video: dict[str, Any], action: str, label: str) -> bool:
+    if _dedup_exists(video, action, ""):
+        _append_log(run_id, "warning", action, f"这个快手视频已经执行过{label}，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
+        return False
+    point = _kuaishou_visible_center(page, "favorite" if action == "collect" else action)
+    if not point:
+        _append_log(run_id, "warning", action, f"没有找到快手{label}按钮，已跳过。", "当前视频没有可点击的操作按钮", "系统会继续处理后续视频。", {"video_id": video["video_id"]})
+        return False
+    payload = _kuaishou_response_after_click(page, _kuaishou_action_endpoint(action), lambda: page.mouse.click(point["x"], point["y"]))
+    if payload is None or not _kuaishou_action_confirmed(payload):
+        _append_log(run_id, "warning", action, f"没有收到快手服务端确认，已跳过{label}记录。", "前端按钮变化不能证明账号已经真实落账", "系统不会把未确认动作写为成功；如果频繁出现，请降低执行频率或检查账号状态。", {"video_id": video["video_id"], "point": point})
+        return False
+    _append_log(run_id, "success", action, f"{label}已执行。", "已收到快手服务端成功响应", "可以在操作记录中查看本视频结果。", {"video_id": video["video_id"], "response": _compact_payload(payload)})
+    _insert_dedup(video, action, "", "done")
+    return True
+
+
+def _execute_kuaishou_comment(run_id: str, page: Any, video: dict[str, Any], text: str) -> bool:
+    if not text:
+        return False
+    content_hash = _hash_text(text)
+    if _dedup_exists(video, "comment", content_hash):
+        _append_log(run_id, "warning", "comment", "这个快手视频已经发送过相同评论，已跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
+        return False
+    point = _kuaishou_visible_center(page, "comment")
+    if not point:
+        _append_log(run_id, "warning", "comment", "没有找到快手评论按钮，已跳过评论。", "当前视频没有可点击的评论入口", "系统会继续处理后续视频。", {"video_id": video["video_id"]})
+        return False
+    page.mouse.click(point["x"], point["y"])
+    page.wait_for_timeout(1200)
+    editor = page.locator(".comment-input input").last
+    if not editor.is_visible(timeout=3000):
+        _append_log(run_id, "warning", "comment", "没有找到快手评论输入框，已跳过评论。", "评论面板没有正常打开", "系统会继续处理后续视频。", {"video_id": video["video_id"]})
+        return False
+    editor.fill(text)
+    page.wait_for_timeout(500)
+    payload = _kuaishou_response_after_click(page, "/rest/v/photo/comment/add", lambda: _click_kuaishou_comment_send(page))
+    if payload is None or not _payload_status_ok(payload):
+        _append_log(run_id, "warning", "comment", "快手评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应", "系统不会把未确认评论写为成功；请降低执行频率或检查账号状态。", {"video_id": video["video_id"], "text": text})
+        return False
+    _append_log(run_id, "success", "comment", "快手评论已发送。", "评论发布接口返回成功", "可以在操作记录中查看实际文案。", {"video_id": video["video_id"], "text": text, "response": _compact_payload(payload)})
+    _insert_dedup(video, "comment", content_hash, "done")
+    return True
+
+
+def _kuaishou_visible_center(page: Any, kind: str) -> dict[str, Any] | None:
+    point = page.evaluate(
+        """
+        (kind) => {
+          const visible = [...document.querySelectorAll('*')].map(el => {
+            const r = el.getBoundingClientRect();
+            const cls = String(el.className || '');
+            const text = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+            return {el, r, cls, text};
+          }).filter(x =>
+            x.r.width > 5 && x.r.height > 5 && x.r.bottom > 0 && x.r.right > 0 &&
+            x.r.y > 250 && x.r.y < 760 && x.r.x > 1000
+          );
+          let hit = null;
+          if (kind === 'follow') hit = visible.find(x => x.cls === 'btn' && x.r.width >= 15 && x.r.height >= 10 && x.r.y > 300 && x.r.y < 460);
+          else if (kind === 'like') hit = visible.find(x => x.cls.includes('hover-tip like')) || visible.find(x => x.cls.includes('like-btn'));
+          else if (kind === 'favorite') hit = visible.find(x => x.cls.includes('hover-tip favorite')) || visible.find(x => x.cls.includes('star'));
+          else if (kind === 'comment') hit = visible.find(x => x.cls.includes('commentPanel'));
+          if (!hit) return null;
+          return {x: hit.r.x + hit.r.width / 2, y: hit.r.y + hit.r.height / 2, cls: hit.cls, text: hit.text, box: [hit.r.x, hit.r.y, hit.r.width, hit.r.height]};
+        }
+        """,
+        kind,
+    )
+    return dict(point) if point else None
+
+
+def _kuaishou_action_endpoint(action: str) -> str:
+    return {
+        "like": "/rest/v/photo/like",
+        "collect": "/rest/v/photo/collect",
+        "follow": "/rest/v/relation/follow",
+    }[action]
+
+
+def _kuaishou_response_after_click(page: Any, endpoint: str, click: Any) -> dict[str, Any] | None:
+    try:
+        with page.expect_response(lambda response: endpoint in str(getattr(response, "url", "")), timeout=10_000) as response_info:
+            click()
+        payload = _response_json(response_info.value)
+        payload["_request_post_data"] = _request_post_data(response_info.value)
+        payload["_confirm_url"] = _response_path(response_info.value)
+        return payload
+    except Exception:
+        return None
+
+
+def _kuaishou_action_confirmed(payload: dict[str, Any]) -> bool:
+    if not _payload_status_ok(payload):
+        return False
+    post_data = str(payload.get("_request_post_data") or "").replace(" ", "").lower()
+    return '"cancel":1' not in post_data and '"cancel":true' not in post_data
+
+
+def _click_kuaishou_comment_send(page: Any) -> bool:
+    send = page.evaluate(
+        """
+        () => {
+          const el = document.querySelector('.comment-input .send-btn');
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+        }
+        """
+    )
+    if not send:
+        return False
+    page.mouse.click(send["x"], send["y"])
+    return True
+
+
+def _close_kuaishou_comment_panel(page: Any) -> None:
+    try:
+        if page.locator(".comment-input input").last.is_visible(timeout=500):
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(500)
+    except Exception:
+        return
 
 
 def _execute_actions_with_retry(run_id: str, plan: dict[str, Any], page: Any, video: dict[str, Any], action_budget: int | None = None, action_probability: int = 100) -> tuple[list[str], str, str, bool]:
@@ -1619,15 +2094,16 @@ def _run_action_with_retry(run_id: str, page: Any, video: dict[str, Any], label:
     return False, True
 
 
-def _daily_action_count() -> int:
+def _daily_action_count(platform: str = "dy") -> int:
     with database.connect() as conn:
         rows = conn.execute(
             """
             SELECT actions FROM traffic_records
-            WHERE platform = 'dy'
+            WHERE platform = ?
               AND status = 'done'
               AND created_at >= date('now', 'localtime')
-            """
+            """,
+            (platform,),
         ).fetchall()
     total = 0
     for row in rows:
@@ -1810,11 +2286,11 @@ def _response_json(response: Any) -> dict[str, Any]:
 
 def _payload_status_ok(payload: dict[str, Any]) -> bool:
     status = payload.get("status_code", payload.get("status"))
-    return status in (0, "0")
+    return status in (0, "0") or payload.get("result") in (1, "1", True)
 
 
 def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    return {key: payload.get(key) for key in ("status_code", "status_msg", "message", "log_pb") if key in payload}
+    return {key: payload.get(key) for key in ("status_code", "status_msg", "message", "result", "log_pb") if key in payload}
 
 
 def _comment_composer(page: Any) -> Any:
@@ -2275,8 +2751,12 @@ def _record_video(
 
 
 def _validate_run_plan(plan: dict[str, Any]) -> None:
-    if plan["platform"] != "dy":
-        raise ValueError("快手/小红书引流正在开发，当前只能启动抖音计划")
+    if plan["platform"] == "xhs":
+        raise ValueError("小红书引流正在开发，当前只能启动抖音或快手计划")
+    if plan["platform"] == "ks" and plan["source_mode"] != "random_feed":
+        raise ValueError("快手引流当前只支持随机推荐流，暂不支持项目库视频或关键词来源")
+    if plan["platform"] == "ks" and "comment_image" in plan["actions"]:
+        raise ValueError("快手 Web 端暂不支持评论图片，请取消“评论图片”后再启动")
     settings = get_settings()
     if "comment_text" in plan["actions"] and not [item for item in settings["texts"] if item.get("enabled")]:
         raise ValueError("已选择评论文案，但引流设置里还没有可用文案")
@@ -2453,7 +2933,7 @@ def _mark_run_running(run_id: str) -> None:
             """,
             (run_id,),
         )
-        _insert_log(conn, run_id, "info", "probe", "任务已启动，正在检查抖音页面。", "开始执行批次", "请不要关闭浏览器窗口或本地服务。", {})
+        _insert_log(conn, run_id, "info", "probe", "任务已启动，正在检查平台页面。", "开始执行批次", "请不要关闭浏览器窗口或本地服务。", {})
 
 
 def _finish_run(
@@ -2531,15 +3011,16 @@ def _pick_image() -> str:
 
 
 def _dedup_exists(video: dict[str, Any], action: str, content_hash: str) -> bool:
+    platform = str(video.get("platform") or "dy")
     video_id, author_id = _dedup_scope(video, action)
     with database.connect() as conn:
         row = conn.execute(
             """
             SELECT id FROM traffic_dedup_ledger
-            WHERE platform = 'dy' AND video_id = ? AND author_id = ?
+            WHERE platform = ? AND video_id = ? AND author_id = ?
               AND action_type = ? AND content_hash = ?
             """,
-            (video_id, author_id, action, content_hash),
+            (platform, video_id, author_id, action, content_hash),
         ).fetchone()
     return row is not None
 
@@ -2550,13 +3031,14 @@ def _insert_dedup(video: dict[str, Any], action: str, content_hash: str, status:
 
 
 def _insert_dedup_with_conn(conn: Any, video: dict[str, Any], action: str, content_hash: str, status: str, run_id: str | None, record_id: int | None) -> None:
+    platform = str(video.get("platform") or "dy")
     video_id, author_id = _dedup_scope(video, action)
     conn.execute(
         """
         INSERT OR IGNORE INTO traffic_dedup_ledger(platform, video_id, author_id, action_type, content_hash, run_id, record_id, status)
-        VALUES('dy', ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (video_id, author_id, action, content_hash, run_id, record_id, status),
+        (platform, video_id, author_id, action, content_hash, run_id, record_id, status),
     )
 
 
