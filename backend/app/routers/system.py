@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from app import views
 from app.schemas import BackupCreateRequest, BackupRestoreRequest, ClearDataRequest, LicenseUpdate, SettingsUpdate
 from app.services import data_management, license_service, maintenance, traffic_workbench
+from app.version import APP_VERSION
 
 
 router = APIRouter(prefix="/api", tags=["system"])
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/api", tags=["system"])
 
 @router.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": APP_VERSION}
 
 
 @router.get("/license")

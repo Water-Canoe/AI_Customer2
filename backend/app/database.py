@@ -14,7 +14,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = BACKEND_ROOT.parent
 DEFAULT_DATA_ROOT = WORKSPACE_ROOT / "data"
 DEFAULT_MEDIA_CRAWLER_PATH = Path(os.getenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", str(WORKSPACE_ROOT / "MyCrawler")))
-DEFAULT_MEDIA_CRAWLER_DB = DEFAULT_MEDIA_CRAWLER_PATH / "database" / "sqlite_tables.db"
+DEFAULT_MEDIA_CRAWLER_DB = Path(os.getenv("AI_CUSTOMER_MEDIA_CRAWLER_DB", str(DEFAULT_MEDIA_CRAWLER_PATH / "database" / "sqlite_tables.db")))
 
 
 def get_data_root() -> Path:
@@ -553,7 +553,6 @@ DEFAULT_SETTINGS = {
     "own_accounts": json.dumps({"dy": [], "xhs": [], "ks": []}, ensure_ascii=False),
     "license_code": "",
     "device_code": "",
-    "license_server_url": "https://tfwqsfaegbdj.sealosbja.site/ai-customer",
     "license_last_status": "unconfigured",
     "license_last_reason": "",
     "license_last_message": "未填写授权码",
@@ -609,6 +608,10 @@ def init_db() -> None:
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
                 (key, value),
             )
+        # Packaged updates always rebind internal component paths to the stable install root.
+        if os.getenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", "").strip():
+            set_setting(conn, "media_crawler_path", DEFAULT_MEDIA_CRAWLER_PATH)
+            set_setting(conn, "media_crawler_db_path", DEFAULT_MEDIA_CRAWLER_DB)
 
 
 def schema_version() -> dict[str, int]:

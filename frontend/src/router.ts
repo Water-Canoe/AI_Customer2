@@ -18,7 +18,7 @@ export const routes = [
     path: '/tasks',
     name: 'tasks',
     component: TaskPage,
-    meta: { title: '任务管理', subtitle: '选择拓客模式，生成 MyCrawler 参数，并自动导入项目库。', hint: '选择模式后直接开始采集' },
+    meta: { title: '任务管理', subtitle: '选择拓客模式，生成采集任务，并自动导入项目库。', hint: '选择模式后直接开始采集' },
   },
   {
     path: '/overview',
@@ -54,7 +54,7 @@ export const routes = [
     path: '/settings',
     name: 'settings',
     component: SettingsPage,
-    meta: { title: '设置', subtitle: '配置 AI 模型、MyCrawler 路径、自动化和 ICP 画像。', hint: '开始前先把基础环境配好' },
+    meta: { title: '设置', subtitle: '配置 AI 模型、自动化规则和 ICP 画像。', hint: '开始前先把基础环境配好' },
   },
   {
     path: '/traffic-plans',

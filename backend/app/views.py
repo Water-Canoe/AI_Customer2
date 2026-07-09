@@ -49,11 +49,44 @@ DIAGNOSTIC_FIELDS = {
     ],
 }
 
+EDITABLE_SETTING_KEYS = {
+    "ai_base_url",
+    "ai_api_key",
+    "ai_model",
+    "default_content_count",
+    "default_comment_count",
+    "content_cutoff_days",
+    "comment_cutoff_days",
+    "comment_recrawl_cooldown_hours",
+    "account_analysis_content_count",
+    "ai_analysis_concurrency",
+    "unreplied_reminder_days",
+    "dm_script_mode",
+    "fixed_dm_script",
+    "auto_dm_fill_only",
+    "auto_dm_timeout_seconds",
+    "douyin_detail_sleep_seconds",
+    "max_concurrency",
+    "headless",
+    "auto_analyze_competitors",
+    "auto_delete_non_competitors",
+    "auto_analyze_leads",
+    "auto_delete_non_customers",
+    "own_accounts",
+    "icp_profile",
+}
+INTERNAL_SETTING_KEYS = {"media_crawler_path", "media_crawler_db_path", "license_server_url"}
+
 
 def get_settings() -> dict[str, Any]:
     with database.connect() as conn:
         rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
     result = {row["key"]: row["value"] for row in rows}
+    api_key_configured = bool(str(result.get("ai_api_key") or "").strip())
+    for key in INTERNAL_SETTING_KEYS:
+        result.pop(key, None)
+    result["ai_api_key"] = ""
+    result["ai_api_key_configured"] = api_key_configured
     for key in (
         "auto_analyze_competitors",
         "auto_delete_non_competitors",
@@ -85,16 +118,11 @@ def get_settings() -> dict[str, Any]:
 
 
 def update_settings(values: dict[str, Any]) -> dict[str, Any]:
-    protected_keys = {
-        "device_code",
-        "license_last_status",
-        "license_last_reason",
-        "license_last_message",
-        "license_last_checked_at",
-    }
     with database.connect() as conn:
         for key, value in values.items():
-            if key in protected_keys:
+            if key not in EDITABLE_SETTING_KEYS:
+                continue
+            if key == "ai_api_key" and not str(value or "").strip():
                 continue
             if key in (
                 "icp_profile",
@@ -110,21 +138,26 @@ def update_settings(values: dict[str, Any]) -> dict[str, Any]:
 def environment_check() -> dict[str, Any]:
     settings = get_settings()
     schema = database.schema_version()
-    media_path = Path(str(settings.get("media_crawler_path", "")).strip().strip('"').strip("'"))
-    raw_db = Path(str(settings.get("media_crawler_db_path", "")).strip().strip('"').strip("'"))
+    with database.connect() as conn:
+        media_path = Path(database.get_setting(conn, "media_crawler_path", str(database.DEFAULT_MEDIA_CRAWLER_PATH)).strip().strip('"').strip("'"))
+        raw_db = Path(database.get_setting(conn, "media_crawler_db_path", str(database.DEFAULT_MEDIA_CRAWLER_DB)).strip().strip('"').strip("'"))
+        api_key_configured = bool(database.get_setting(conn, "ai_api_key").strip())
     raw_db_exists = raw_db.exists()
+    platform_diagnostics = _platform_diagnostics(raw_db) if raw_db_exists else []
     return {
-        "project_db": {"path": str(database.get_db_path()), "ok": database.get_db_path().exists()},
+        "project_db": {"ok": database.get_db_path().exists()},
         "database_schema": {"ok": schema["current"] == schema["latest"], **schema},
-        "media_crawler_path": {"path": str(media_path), "ok": media_path.exists()},
-        "media_crawler_db": {"path": str(raw_db), "ok": raw_db_exists},
+        "collector_component": {"ok": media_path.is_dir() and (media_path / "main.py").is_file()},
+        "collector_storage": {"ok": raw_db_exists},
         "ai_config": {
-            "ok": bool(settings.get("ai_base_url") and settings.get("ai_api_key") and settings.get("ai_model")),
-            "base_url": settings.get("ai_base_url", ""),
+            "ok": bool(settings.get("ai_base_url") and api_key_configured and settings.get("ai_model")),
             "model": settings.get("ai_model", ""),
         },
         "project_quality": _project_quality(),
-        "platform_diagnostics": _platform_diagnostics(raw_db) if raw_db_exists else [],
+        "platform_status": [
+            {"platform": item["platform"], "label": item["label"], "ok": item["ok"]}
+            for item in platform_diagnostics
+        ],
         "platform_capabilities": platform_capabilities(),
     }
 
@@ -202,8 +235,6 @@ def _field_capability(
     supported = bool(column) and status != "unsupported"
     return {
         "label": label,
-        "table": mapping.get("table", ""),
-        "column": column,
         "supported": supported,
         "status": status if supported else "unsupported",
         "status_label": _field_status_label(status if supported else "unsupported"),

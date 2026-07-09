@@ -7,10 +7,9 @@ from typing import Any
 
 import httpx
 
-from app import database
+from app import database, product_config
 
 
-DEFAULT_LICENSE_SERVER_URL = "https://tfwqsfaegbdj.sealosbja.site/ai-customer"
 LICENSE_CHECK_TIMEOUT = 8.0
 LICENSE_SCOPES = {"lead", "traffic"}
 
@@ -29,7 +28,6 @@ def license_overview_for(scope: str) -> dict[str, Any]:
             "scope": scope,
             "license_code": database.get_setting(conn, _scoped_key(scope, "license_code")),
             "device_code": device_code,
-            "license_server_url": _server_url(conn),
             "authorized": status == "authorized",
             "status": status,
             "reason": database.get_setting(conn, _scoped_key(scope, "license_last_reason")),
@@ -56,7 +54,7 @@ def update_license_code_for(scope: str, license_code: str) -> dict[str, Any]:
 
 
 def check_license(license_code: str | None = None) -> dict[str, Any]:
-    """Validate the current license code against the Sealos authorization service."""
+    """Validate the current license code against the product authorization service."""
     return check_license_for("lead", license_code)
 
 
@@ -67,7 +65,7 @@ def check_license_for(scope: str, license_code: str | None = None) -> dict[str, 
         if license_code is not None:
             database.set_setting(conn, _scoped_key(scope, "license_code"), license_code.strip())
         saved_license_code = database.get_setting(conn, _scoped_key(scope, "license_code")).strip()
-        server_url = _server_url(conn)
+        server_url = _server_url()
 
     if not saved_license_code:
         result = _result(
@@ -77,7 +75,6 @@ def check_license_for(scope: str, license_code: str | None = None) -> dict[str, 
             message="请先在设置页填写授权码",
             device_code=device_code,
             license_code=saved_license_code,
-            server_url=server_url,
         )
         _save_result(scope, result)
         return result
@@ -89,10 +86,9 @@ def check_license_for(scope: str, license_code: str | None = None) -> dict[str, 
             authorized=False,
             status="failed",
             reason="LICENSE_SERVER_UNREACHABLE",
-            message=f"授权服务器不可访问：{exc}",
+            message="授权服务暂时不可用，请检查网络后重试",
             device_code=device_code,
             license_code=saved_license_code,
-            server_url=server_url,
         )
         _save_result(scope, result)
         return result
@@ -108,7 +104,6 @@ def check_license_for(scope: str, license_code: str | None = None) -> dict[str, 
         message=message,
         device_code=device_code,
         license_code=saved_license_code,
-        server_url=server_url,
         max_devices=payload.get("maxDevices"),
         active_device_count=payload.get("activeDeviceCount"),
         bound_new_device=payload.get("boundNewDevice"),
@@ -137,7 +132,7 @@ def _request_license_check(server_url: str, license_code: str, device_code: str,
         "deviceId": device_code,
         "deviceName": socket.gethostname(),
         "business": scope,
-        "remark": "AI_Customer 本地工作台",
+        "remark": "本地工作台",
     }
     with httpx.Client(timeout=LICENSE_CHECK_TIMEOUT) as client:
         response = client.post(url, json=body)
@@ -164,8 +159,8 @@ def _ensure_device_code(conn, scope: str) -> str:
     return device_code
 
 
-def _server_url(conn) -> str:
-    return database.get_setting(conn, "license_server_url", DEFAULT_LICENSE_SERVER_URL).strip() or DEFAULT_LICENSE_SERVER_URL
+def _server_url() -> str:
+    return product_config.license_endpoint()
 
 
 def _result(
@@ -176,7 +171,6 @@ def _result(
     message: str,
     device_code: str,
     license_code: str,
-    server_url: str,
     max_devices: Any = None,
     active_device_count: Any = None,
     bound_new_device: Any = None,
@@ -188,7 +182,6 @@ def _result(
         "message": message,
         "license_code": license_code,
         "device_code": device_code,
-        "license_server_url": server_url,
         "max_devices": max_devices,
         "active_device_count": active_device_count,
         "bound_new_device": bound_new_device,

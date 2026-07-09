@@ -92,7 +92,7 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 ## 工作流
 
-1. 在“设置”页配置 MyCrawler 路径、底层 SQLite 路径、AI Base URL、API Key、模型名和 ICP 画像，并查看项目库关键字段质量与平台原始表诊断；ICP 画像包含可选“公司名”，用于控制私信话术是否可以明说公司身份。
+1. 在“设置”页配置 AI 服务地址、API Key、模型名、自动化规则和 ICP 画像，并查看采集组件、采集存储、项目库和数据库版本状态；采集路径由后端按安装根目录或部署环境自动解析，不在客户页面手工填写。ICP 画像包含可选“公司名”，用于控制私信话术是否可以明说公司身份。
 2. 在“任务管理”页选择四种模式之一：竞品账号采集、竞品账号爬取、找需求内容、自家账号互动；页面只保留模式选择和必要参数，底层执行参数由后端按同一套规则归一化。
 3. 后端通过子进程执行 `python main.py` 调用 MyCrawler，不修改 MyCrawler 源码；运行时会把 `MyCrawler/.venv/Lib/site-packages` 注入 `PYTHONPATH`，避免 `uv run` 在受限 Windows 环境中再次 spawn 被系统策略拦截的 `python.exe`。
 4. 采集完成后自动读取底层 SQLite，并写入项目业务库和 `raw_source_refs`。
@@ -346,7 +346,7 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 
 本地 AI获客系统的“设置”页提供“授权与设备”按钮。点击后弹出授权信息窗口：授权码可编辑并保存，设备码由本机后端首次读取授权信息时生成，前端只读且只能复制，通用 `PUT /api/settings` 会忽略 `device_code` 和授权状态字段，避免误改设备码。弹窗提供“保存授权码”和“保存并校验”，校验会调用本地 `POST /api/license/check`，再由本地后端请求 Sealos `/ai-customer/check-license` 完成授权码和设备绑定校验。
 
-本地后端新增 `GET /api/license`、`PUT /api/license`、`POST /api/license/check`。所有会创建采集任务或 AI 分析任务的入口都会在执行前调用授权校验，包括 `/api/tasks`、账号补资料、账号分析、找客户、关键词一键竞品分析、关键词一键找客户、客户意向分析、批量客户意向分析、AI分析创建和 AI 重试。授权失败时接口返回 `403`，页面会提示 Sealos 返回的明确原因；任务预览、查看、删除、设置保存和环境检查不需要授权。
+本地后端新增 `GET /api/license`、`PUT /api/license`、`POST /api/license/check`。所有会创建采集任务或 AI 分析任务的入口都会在执行前调用授权校验，包括 `/api/tasks`、账号补资料、账号分析、找客户、关键词一键竞品分析、关键词一键找客户、客户意向分析、批量客户意向分析、AI分析创建和 AI 重试。授权失败时接口返回 `403`，页面只展示产品化原因；任务预览、查看、删除、设置保存和环境检查不需要授权。公共授权响应不返回服务地址，通用设置接口也不能覆盖服务地址。
 
 当前实现保留旧 demo 接口 `/ai-customer/get-permission`、`/ai-customer/add-permission`、`/ai-customer/get-permission-list` 便于过渡测试，但正式授权接入应优先使用授权码接口。AI_Customer 路由代码位于 Sealos 服务器 `~/project/routers/AI_Customer/`；`~/project/routers/AI_Medician/` 属于另一个业务，不应在 AI拓客授权迭代中修改。
 
@@ -369,11 +369,15 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 
 ## 本地打包
 
-Windows 测试包通过 `script/build_package.ps1` 生成。脚本会先执行 `frontend/npm run build` 生成静态文件，再使用后端虚拟环境里的 PyInstaller 把 `packaging/ai_customer_launcher.py` 打成 one-folder 包，并把 `frontend/dist` 作为 `frontend_dist` 一起放入包内。生成目录形如 `dist/AI_Customer_Test_yyyyMMdd_HHmmss/`，双击其中的 `AI_Customer_Test_yyyyMMdd_HHmmss.exe` 即可启动本地服务并自动打开浏览器。
+当前产品版本定义在 `backend/app/version.py`，本轮为 `1.1.0`。Windows 发布包通过 `script/build_package.ps1 -Version 1.1.0` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。每次使用带版本和时间戳的新目录，不删除旧构建。
 
-打包启动器会把业务库放在稳定安装目录的 `data/ai_customer.sqlite3`，首次启动自动初始化；如果程序位于 `versions/1.0.1/`，数据仍放在外层 `data/`，所以后续更新只替换 `versions/` 不会覆盖数据库、引流图片和浏览器 Profile。前端由 FastAPI 直接托管，不需要朋友运行 Vite 或 Node。启动器会优先使用稳定安装目录旁的 `MyCrawler/` 作为默认采集器路径，因此如果需要给朋友做完整采集测试，可以把 MyCrawler 目录放到 `versions/` 同级的安装根目录，或让朋友在“设置”页手动填写 MyCrawler 路径和底层 SQLite 路径。当前测试包不把 MyCrawler 打进 exe，因为该目录包含上游源码和虚拟环境，体积约 1GB 以上。
+发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。清单记录版本、数据库 schema 版本、构建时间以及每个文件的大小和 SHA-256。`script/install_release.ps1` 会先验证全部清单项，再把应用复制到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`；只有复制成功后才替换单个稳定启动器并原子切换 `current-version.json`。旧版本和稳定 `data/` 都保留。`script/switch_installed_version.ps1` 只切换版本指针，可用于回滚程序，不修改业务数据。
 
-打包包内不会包含 AI_Customer 的 Python/Vue 源码，但本地软件不能做到绝对防逆向；授权与设备限制仍以 Sealos 服务端为准。分发前如果自己启动过包做 smoke test，需要删除稳定安装目录下明确的单个文件 `data/ai_customer.sqlite3`，避免把测试设备码一起发出去。
+版本应用的业务库、备份、引流图片和浏览器登录状态始终放在安装根目录的 `data/`，不会写进 `versions/`。启动器会把安装根目录下预置的采集组件路径注入后端，并在每次数据库初始化时更新内部路径设置，因此从旧版本升级后不会继续使用旧版本目录；客户设置页不再提供路径编辑入口。
+
+公共 `GET /api/settings` 会屏蔽采集路径、采集库路径、授权服务地址和 AI API Key，只返回 `ai_api_key_configured`；提交空 API Key 表示保留原值。`PUT /api/settings` 使用显式白名单，不能写入任意内部设置。环境检查只返回“采集组件/采集存储正常或待处理”和业务质量，不返回绝对路径、原始表名或列名。授权端点集中在 `product_config.py` 并做轻量字符串隐藏，可降低直接 strings 扫描得到地址的概率，但这不是密码学安全边界。
+
+发布包不包含 AI_Customer 的 Python/Vue 源文件，优化字节码和内部配置收口只能增加静态分析成本，不能让本地客户端绝对不可逆向。真正的授权与设备限制仍由远端服务执行；AI Key 也不通过 API 回传。当前发布包不自动包含约 1GB 的采集组件和其上游源码，正式分发前需由发布方按许可边界决定是否预置。
 
 ## 已知限制
 

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import random
-import sys
 import time
 from datetime import datetime
 from math import ceil
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -494,27 +491,11 @@ def _load_douyin_dm_sender() -> Any:
 
 
 def _load_douyin_dm_module() -> Any:
-    path = _douyin_dm_automation_path()
-    spec = importlib.util.spec_from_file_location("ai_customer_douyin_dm_automation", path)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"抖音自动私信脚本无法加载：{path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _douyin_dm_automation_path() -> Path:
-    bundle_root = Path(getattr(sys, "_MEIPASS", "")) if getattr(sys, "_MEIPASS", "") else None
-    candidates = [
-        database.WORKSPACE_ROOT / "tools" / "douyin_dm_automation" / "automation.py",
-        Path(sys.executable).resolve().parent / "tools" / "douyin_dm_automation" / "automation.py",
-    ]
-    if bundle_root is not None:
-        candidates.append(bundle_root / "tools" / "douyin_dm_automation" / "automation.py")
-    for path in candidates:
-        if path.exists():
-            return path
-    raise ValueError("找不到 tools/douyin_dm_automation/automation.py，无法自动私信")
+    try:
+        from tools.douyin_dm_automation import automation
+    except ImportError as exc:
+        raise ValueError("自动私信组件不可用，请重新安装当前版本") from exc
+    return automation
 
 
 def _batch_candidates(conn, platform: str, keyword: str) -> list[dict[str, Any]]:

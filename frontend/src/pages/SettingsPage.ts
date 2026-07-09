@@ -327,10 +327,8 @@ export default defineComponent({
             tone: settingsDirty.value ? 'amber' : 'teal'
           }, [
             h('div', { class: 'form-grid' }, [
-              inputField(local, 'media_crawler_path', 'MyCrawler路径', 'text', '', markSettingsDirty),
-              inputField(local, 'media_crawler_db_path', '底层SQLite路径', 'text', '', markSettingsDirty),
-              inputField(local, 'ai_base_url', 'AI Base URL', 'text', '', markSettingsDirty),
-              inputField(local, 'ai_api_key', 'API Key', 'password', '', markSettingsDirty),
+              inputField(local, 'ai_base_url', 'AI服务地址', 'text', '', markSettingsDirty),
+              inputField(local, 'ai_api_key', 'API Key', 'password', local.ai_api_key_configured ? '已配置，留空表示不修改' : '请输入 API Key', markSettingsDirty),
               inputField(local, 'ai_model', '模型名', 'text', '', markSettingsDirty),
               inputField(local, 'default_content_count', '默认内容数', 'number', '', markSettingsDirty),
               inputField(local, 'default_comment_count', '默认评论数', 'number', '', markSettingsDirty),
@@ -396,7 +394,7 @@ export default defineComponent({
           renderTombstones(props.tombstoneSummary as Dict, props.tombstones as Dict, props.tombstoneFilters as Dict, filters => emit('load-tombstones', filters)),
           h('div', { class: 'danger-zone' }, [
             sectionTitle({ title: '危险操作', subtitle: '执行前自动备份', icon: Warning, tone: 'red', compact: true }),
-            h('p', '清空项目库和 MyCrawler 底层库中的采集、私信、引流、AI 与日志数据；配置和浏览器登录状态保留。'),
+            h('p', '清空项目库和原始采集库中的采集、私信、引流、AI 与日志数据；配置和浏览器登录状态保留。'),
             h('button', { class: 'wide-action danger-action', onClick: () => emit('clear-data') }, [h(Delete, { class: 'inline-icon' }), '清空所有数据'])
           ])
         ])
@@ -546,15 +544,15 @@ function renderEnv(envValue: Dict) {
   const items = [
     ['项目库', envValue?.project_db],
     ['数据库版本', envValue?.database_schema],
-    ['MyCrawler路径', envValue?.media_crawler_path],
-    ['底层SQLite', envValue?.media_crawler_db],
+    ['采集组件', envValue?.collector_component],
+    ['采集存储', envValue?.collector_storage],
     ['AI配置', envValue?.ai_config]
   ]
   return h('div', { class: 'env-stack' }, [
     h('div', { class: 'env-list' }, items.map(([label, item]: any) => h('div', { class: 'env-item' }, [
       h('span', label),
       h('strong', { class: item?.ok ? 'ok' : 'warn' }, item?.ok ? '正常' : '待处理'),
-      h('small', item?.path || item?.base_url || item?.model || (item?.current !== undefined ? `${item.current}/${item.latest}` : ''))
+      h('small', item?.model || (item?.current !== undefined ? `${item.current}/${item.latest}` : ''))
     ])))
     // 环境检查详情暂时隐藏，只保留用户需要处理的概览状态。
   ])

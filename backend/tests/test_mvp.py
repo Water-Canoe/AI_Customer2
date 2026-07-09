@@ -5545,6 +5545,7 @@ def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch:
     client = TestClient(app)
     first = client.get("/api/license").json()
     assert first["device_code"].startswith("AI-CUS-")
+    assert "license_server_url" not in first
 
     saved = client.put("/api/license", json={"license_code": "LIC-TEST"}).json()
     assert saved["license_code"] == "LIC-TEST"
@@ -5655,14 +5656,18 @@ def test_running_task_without_evidence_must_be_cancelled_before_record_delete(tm
 
 
 def test_env_check_reports_platform_raw_data_diagnostics(tmp_path: Path) -> None:
-    prepare_project(tmp_path)
+    _, raw_db = prepare_project(tmp_path)
+    from app import views
     from app.main import app
 
     client = TestClient(app)
     response = client.get("/api/settings/env-check")
     assert response.status_code == 200
     payload = response.json()
-    diagnostics = {item["platform"]: item for item in payload["platform_diagnostics"]}
+    diagnostics = {item["platform"]: item for item in views._platform_diagnostics(raw_db)}
+    assert "platform_diagnostics" not in payload
+    assert {item["platform"] for item in payload["platform_status"]} == {"dy", "xhs", "ks"}
+    assert str(tmp_path) not in json.dumps(payload, ensure_ascii=False)
 
     dy = diagnostics["dy"]
     assert dy["ok"] is True
@@ -5691,20 +5696,19 @@ def test_platform_capabilities_explain_field_limits(tmp_path: Path) -> None:
 
     dy = capabilities["dy"]
     assert dy["profile_enrichment_supported"] is True
-    assert dy["fields"]["content_signature"]["column"] == "user_signature"
     assert dy["fields"]["content_signature"]["status"] == "partial"
-    assert dy["fields"]["creator_signature"]["column"] == "desc"
+    assert "column" not in dy["fields"]["content_signature"]
+    assert "table" not in dy["fields"]["creator_signature"]
     assert any("补资料" in warning for warning in dy["modes"]["competitor_discovery"]["warnings"])
 
     xhs = capabilities["xhs"]
     assert xhs["profile_enrichment_supported"] is True
     assert xhs["fields"]["content_signature"]["supported"] is False
-    assert xhs["fields"]["creator_signature"]["table"] == "xhs_creator"
+    assert xhs["fields"]["creator_signature"]["supported"] is True
 
     ks = capabilities["ks"]
     assert ks["profile_enrichment_supported"] is True
     assert ks["fields"]["creator_signature"]["supported"] is True
-    assert ks["fields"]["creator_signature"]["table"] == "kuaishou_creator"
     assert any("补资料" in warning for warning in ks["modes"]["competitor_discovery"]["warnings"])
     assert ks["modes"]["competitor_crawl"]["comments_default"] is True
 

@@ -10,7 +10,7 @@ export const LicenseDialog = defineComponent({
     checking: { type: Boolean, default: false },
     info: { type: Object as PropType<Dict>, default: () => ({}) },
     code: { type: String, default: '' },
-    placeholder: { type: String, default: '输入 Sealos 后端创建的授权码' },
+    placeholder: { type: String, default: '输入产品授权码' },
   },
   emits: ['close', 'update:code', 'save', 'check', 'copy-device'],
   setup(props, { emit }) {

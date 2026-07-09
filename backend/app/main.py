@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from app import database
 from app.routers import ai, message, overview, runtime, system, tasks, traffic
 from app.services import job_queue, profile_manager
+from app.version import APP_VERSION
 
 
 @asynccontextmanager
@@ -25,7 +26,7 @@ async def lifespan(_: FastAPI):
         profile_manager.shutdown()
 
 
-app = FastAPI(title="AI拓客工具", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="AI拓客工具", version=APP_VERSION, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

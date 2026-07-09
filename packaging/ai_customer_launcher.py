@@ -40,6 +40,7 @@ def configure_environment(base_dir: Path) -> None:
         os.environ.setdefault("AI_CUSTOMER_FRONTEND_DIST", str(frontend_dist))
     if media_crawler_dir.exists():
         os.environ.setdefault("AI_CUSTOMER_MEDIA_CRAWLER_PATH", str(media_crawler_dir))
+        os.environ.setdefault("AI_CUSTOMER_MEDIA_CRAWLER_DB", str(media_crawler_dir / "database" / "sqlite_tables.db"))
 
 
 def choose_port(default: int = 8000) -> int:

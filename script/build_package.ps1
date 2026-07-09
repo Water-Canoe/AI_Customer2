@@ -1,56 +1,130 @@
+param(
+    [string]$Version = ""
+)
+
 $ErrorActionPreference = "Stop"
 
-# Resolve project paths from this script location.
+# Resolve every build path from the repository root.
 $ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $BackendDir = Join-Path $ProjectRoot "backend"
 $FrontendDir = Join-Path $ProjectRoot "frontend"
-$Launcher = Join-Path $ProjectRoot "packaging\ai_customer_launcher.py"
+$AppLauncher = Join-Path $ProjectRoot "packaging\ai_customer_launcher.py"
+$StableLauncher = Join-Path $ProjectRoot "packaging\ai_customer_bootstrap.py"
 $Readme = Join-Path $ProjectRoot "packaging\PACKAGE_README.txt"
+$Installer = Join-Path $ProjectRoot "script\install_release.ps1"
+$Switcher = Join-Path $ProjectRoot "script\switch_installed_version.ps1"
 $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
 
-# Build a unique package name so old packages do not need to be deleted.
-$Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$PackageName = "AI_Customer_Test_$Stamp"
-
-# Ensure the backend virtual environment exists before packaging.
-if (-not (Test-Path $Python)) {
+# Stop when required local dependencies are missing; packaging never installs them implicitly.
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw "Backend virtual environment not found: $Python"
 }
+& $Python -c "import PyInstaller"
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller is missing from backend/.venv. Install it explicitly before packaging."
+}
 
-# Build the production frontend static files.
+# Read the product version from source unless the caller supplied one.
+if (-not $Version) {
+    $Version = (& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.version import APP_VERSION; print(APP_VERSION)").Trim()
+}
+if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+    throw "Version must use semantic version format, for example 1.1.0"
+}
+
+# Use unique build and release folders so the script never deletes an older package.
+$Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$BuildRoot = Join-Path $ProjectRoot "output\package_build_${Version}_$Stamp"
+$BuildDist = Join-Path $BuildRoot "dist"
+$BuildWork = Join-Path $BuildRoot "work"
+$BuildSpec = Join-Path $BuildRoot "spec"
+$ReleaseDir = Join-Path $ProjectRoot "dist\releases\AI_Customer_${Version}_$Stamp"
+if ((Test-Path -LiteralPath $BuildRoot) -or (Test-Path -LiteralPath $ReleaseDir)) {
+    throw "Unique build output already exists; wait one second and retry."
+}
+New-Item -ItemType Directory -Path $BuildDist, $BuildWork, $BuildSpec, $ReleaseDir | Out-Null
+
+# Run frontend tests before producing release assets.
 Push-Location $FrontendDir
 try {
-    npm run build
+    & npm test
+    if ($LASTEXITCODE -ne 0) { throw "Frontend tests failed" }
+
+    # Build the production frontend after type checking.
+    & npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
 }
 finally {
     Pop-Location
 }
 
-# Install PyInstaller into the project virtual environment when missing.
-$oldErrorActionPreference = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-& $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)"
-$hasPyInstaller = $LASTEXITCODE -eq 0
-$ErrorActionPreference = $oldErrorActionPreference
-if (-not $hasPyInstaller) {
-    & $Python -m pip install pyinstaller
+# Run the full backend suite against the same source that will be packaged.
+Push-Location $ProjectRoot
+try {
+    $env:PYTHONPATH = $BackendDir
+    & $Python -m pytest (Join-Path $BackendDir "tests") -q
+    if ($LASTEXITCODE -ne 0) { throw "Backend tests failed" }
+}
+finally {
+    Pop-Location
 }
 
-# Create a one-folder Windows package that includes the frontend dist files.
+# Build the versioned application folder with optimized bytecode and no source files.
 & $Python -m PyInstaller `
-    --name $PackageName `
+    --name "AI_Customer" `
     --onedir `
+    --optimize 2 `
+    --contents-directory "runtime" `
+    --distpath $BuildDist `
+    --workpath (Join-Path $BuildWork "app") `
+    --specpath $BuildSpec `
     --paths $BackendDir `
     --add-data "$FrontendDir\dist;frontend_dist" `
-    --add-data "$ProjectRoot\tools\douyin_dm_automation\automation.py;tools\douyin_dm_automation" `
-    $Launcher
+    $AppLauncher
+if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
 
-# Copy the package usage note next to the generated exe.
-$PackageDir = Join-Path $ProjectRoot "dist\$PackageName"
-Copy-Item -Path $Readme -Destination (Join-Path $PackageDir "使用说明.txt")
-Copy-Item -Path $Readme -Destination (Join-Path $PackageDir "README.txt")
+# Build a small stable launcher that selects versions through current-version.json.
+& $Python -m PyInstaller `
+    --name "AI_Customer_Launcher" `
+    --onefile `
+    --windowed `
+    --optimize 2 `
+    --distpath $BuildDist `
+    --workpath (Join-Path $BuildWork "bootstrap") `
+    --specpath $BuildSpec `
+    $StableLauncher
+if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 
-Write-Host "Package created:"
-Write-Host "  $PackageDir"
-Write-Host "Start with:"
-Write-Host "  $PackageDir\$PackageName.exe"
+# Assemble the immutable release payload.
+Copy-Item -LiteralPath (Join-Path $BuildDist "AI_Customer") -Destination (Join-Path $ReleaseDir "app") -Recurse
+Copy-Item -LiteralPath (Join-Path $BuildDist "AI_Customer_Launcher.exe") -Destination (Join-Path $ReleaseDir "AI_Customer.exe")
+Copy-Item -LiteralPath $Readme -Destination (Join-Path $ReleaseDir "README.txt")
+Copy-Item -LiteralPath $Installer -Destination (Join-Path $ReleaseDir "install-release.ps1")
+Copy-Item -LiteralPath $Switcher -Destination (Join-Path $ReleaseDir "switch-version.ps1")
+
+# Record every release file hash before writing the manifest itself.
+$ReleasePrefix = $ReleaseDir.TrimEnd('\') + '\'
+$Files = Get-ChildItem -LiteralPath $ReleaseDir -Recurse -File | ForEach-Object {
+    $RelativePath = $_.FullName.Substring($ReleasePrefix.Length).Replace('\', '/')
+    [ordered]@{
+        path = $RelativePath
+        size = $_.Length
+        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+}
+$SchemaVersion = [int](& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.migrations import latest_version; print(latest_version())")
+$Manifest = [ordered]@{
+    format = 1
+    product = "AI Customer Desktop"
+    version = $Version
+    schema_version = $SchemaVersion
+    built_at = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
+    entrypoint = "app/AI_Customer.exe"
+    files = $Files
+}
+$Manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $ReleaseDir "release-manifest.json") -Encoding utf8
+
+Write-Host "Release created:"
+Write-Host "  $ReleaseDir"
+Write-Host "Install or update with:"
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ReleaseDir\install-release.ps1`" -ReleasePath `"$ReleaseDir`""
