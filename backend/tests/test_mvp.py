@@ -1750,11 +1750,13 @@ def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, mo
 
 def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
-    from app.services import traffic_workbench
+    from app.services import profile_manager, traffic_workbench
 
     calls: dict[str, object] = {}
 
     class Proc:
+        pid = 103
+
         def poll(self) -> None:
             return None
 
@@ -1764,9 +1766,10 @@ def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypat
         return Proc()
 
     # 登录窗口只校验启动参数，不真实打开浏览器。
-    monkeypatch.setattr(traffic_workbench, "DOUYIN_LOGIN_PROCESS", None)
-    monkeypatch.setattr(traffic_workbench.time, "sleep", lambda _: None)
-    monkeypatch.setattr(traffic_workbench.subprocess, "Popen", fake_popen)
+    profile_manager.shutdown()
+    monkeypatch.setattr(profile_manager.time, "sleep", lambda _: None)
+    monkeypatch.setattr(profile_manager.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(profile_manager, "_terminate_process_tree", lambda process, timeout_seconds=5.0: None)
     monkeypatch.setattr(
         traffic_workbench.importlib.util,
         "find_spec",
@@ -1774,9 +1777,10 @@ def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypat
     )
 
     result = traffic_workbench.open_douyin_login_window()
+    profile_manager.close_interactive()
 
     assert result["ok"] is True
-    assert "douyin_cloak_profile" in result["profile_dir"]
+    assert "profile_dir" not in result
     assert calls["cwd"] == str(BACKEND_ROOT)
     assert calls["command"] == [
         sys.executable,
@@ -3125,22 +3129,23 @@ def test_deleting_cancelled_account_analysis_releases_accounts_for_reanalysis(tm
     assert result["account_count"] == 2
 
 
-def test_auto_analyze_competitors_runs_creator_batch_after_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auto_analyze_competitors_queues_creator_batch_after_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database
     from app.schemas import TaskCreate
-    from app.services import account_actions, crawler_adapter
+    from app.services import crawler_adapter, job_queue
 
     with database.connect() as conn:
         database.set_setting(conn, "auto_analyze_competitors", "true")
 
     called: dict[str, object] = {}
 
-    def fake_run_batch(account_ids: list[int], task_id: str) -> None:
+    def fake_enqueue(account_ids: list[int], task_id: str, kind: str = "account_analysis") -> dict[str, object]:
         called["account_ids"] = account_ids
         called["task_id"] = task_id
+        return {"id": "runtime-account-analysis"}
 
-    monkeypatch.setattr(account_actions, "run_account_analysis_batch", fake_run_batch)
+    monkeypatch.setattr(job_queue, "enqueue_account_analysis", fake_enqueue)
 
     task = crawler_adapter.create_task(
         TaskCreate(mode="competitor_discovery", platform="dy", keywords="AI客服", execute_crawler=False)
@@ -4596,7 +4601,7 @@ def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path,
         assert {row["follow_status"] for row in rows} == {"已私信"}
 
 
-def test_message_workbench_auto_message_batch_retry_failed_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_message_workbench_auto_message_batch_retry_failed_items(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
     from app.services import message_workbench
@@ -4626,12 +4631,9 @@ def test_message_workbench_auto_message_batch_retry_failed_items(tmp_path: Path,
         conn.execute("UPDATE message_batch_items SET status = 'succeeded' WHERE id = ?", (items[1]["id"],))
         message_workbench._refresh_batch_counts(conn, str(batch["id"]))
 
-    started: list[str] = []
-    monkeypatch.setattr(message_workbench, "_start_auto_message_batch", lambda batch_id: started.append(str(batch_id)))
-
     retry = message_workbench.retry_auto_message_batch(str(batch["id"]))
 
-    assert started == [retry["id"]]
+    assert retry["status"] == "pending"
     assert retry["total_count"] == 1
     assert retry["items"][0]["lead_account_id"] == items[0]["lead_account_id"]
     assert retry["items"][0]["script"] == items[0]["script"]

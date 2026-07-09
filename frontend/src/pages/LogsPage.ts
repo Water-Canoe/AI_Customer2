@@ -4,6 +4,7 @@ import type { Dict } from '../shared/types'
 import { clamp, platformName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
+import { RuntimeQueuePanel } from '../components/runtime/RuntimeQueuePanel'
 
 export default defineComponent({
   props: {
@@ -68,6 +69,7 @@ export default defineComponent({
       ],
       side: () => [
       h('aside', { class: 'pane side-pane' }, [
+        h(RuntimeQueuePanel),
         sectionTitle({ title: '任务列表', subtitle: '归档前先看结果', icon: Tickets, tone: 'blue' }),
         h('div', { class: 'task-list-tools' }, [
           h('input', {

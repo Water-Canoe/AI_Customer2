@@ -869,7 +869,7 @@ def _run_post_success_automation(task_id: str) -> None:
 
     if auto_competitor and task_mode == "competitor_discovery":
         try:
-            from app.services import account_actions
+            from app.services import account_actions, job_queue
 
             result = account_actions.create_task_account_analysis_task(task_id)
             if not result.get("task_ids"):
@@ -880,7 +880,9 @@ def _run_post_success_automation(task_id: str) -> None:
             account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
             with database.connect() as conn:
                 log_task(conn, task_id, "info", f"已创建自动账号分析任务 {analysis_task_id}，账号 {len(account_ids)} 个")
-            account_actions.run_account_analysis_batch(account_ids, analysis_task_id)
+            runtime_job = job_queue.enqueue_account_analysis(account_ids, analysis_task_id)
+            with database.connect() as conn:
+                log_task(conn, task_id, "info", f"账号分析已加入运行队列：{runtime_job['id']}")
         except Exception as exc:
             with database.connect() as conn:
                 log_task(conn, task_id, "error", f"自动分析竞品账号失败：{exc}")
@@ -889,18 +891,22 @@ def _run_post_success_automation(task_id: str) -> None:
         with database.connect() as conn:
             log_task(conn, task_id, "info", "已开启自动分析线索用户，开始执行 AI 筛选")
         try:
-            from app.services import ai_service
+            from app.services import ai_service, job_queue
 
-            result = ai_service.run_auto_lead_analysis_for_task(task_id)
+            result = ai_service.prepare_auto_lead_analysis_jobs(task_id)
+            job_ids = [str(value) for value in result.get("job_ids", [])]
+            runtime_job = job_queue.enqueue_ai_batch(job_ids, entity_id=f"auto-lead:{task_id}") if job_ids else None
             with database.connect() as conn:
                 log_task(
                     conn,
                     task_id,
                     "info",
-                    f"自动线索 AI 分析完成：成功 {result['succeeded']} 个，失败 {result['failed']} 个，自动删除非客户 {result['auto_deleted']} 个",
+                    f"自动线索 AI 分析已排队：目标 {result['target_count']} 个，任务 {len(job_ids)} 个，创建失败 {len(result['errors'])} 个",
                 )
                 if result["errors"]:
-                    log_task(conn, task_id, "error", f"自动线索 AI 分析失败明细：{result['errors']}")
+                    log_task(conn, task_id, "error", f"自动线索 AI 任务创建失败明细：{result['errors']}")
+                if runtime_job:
+                    log_task(conn, task_id, "info", f"线索 AI 分析已加入运行队列：{runtime_job['id']}")
         except Exception as exc:
             with database.connect() as conn:
                 log_task(conn, task_id, "error", f"自动分析线索用户失败：{exc}")

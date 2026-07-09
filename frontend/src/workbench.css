@@ -2938,6 +2938,90 @@ input[type='checkbox'] {
   line-height: 1.6;
 }
 
+.runtime-queue-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d9e7e1;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.runtime-queue-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.runtime-job-list {
+  display: grid;
+  gap: 7px;
+  max-height: 300px;
+  overflow: auto;
+}
+
+.runtime-job-row {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid #e2ebe7;
+  border-left: 3px solid #94a3b8;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.runtime-job-row.runtime-running {
+  border-left-color: #0f766e;
+}
+
+.runtime-job-row.runtime-queued {
+  border-left-color: #2563eb;
+}
+
+.runtime-job-row.runtime-failed,
+.runtime-job-row.runtime-interrupted {
+  border-left-color: #dc2626;
+}
+
+.runtime-job-main,
+.runtime-job-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runtime-job-main > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.runtime-job-main span,
+.runtime-job-row small {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-job-actions {
+  justify-content: flex-end;
+}
+
+.runtime-job-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-size: 12px;
+}
+
 .data-lifecycle-panel {
   display: grid;
   gap: 10px;

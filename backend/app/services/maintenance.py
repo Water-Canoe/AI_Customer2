@@ -11,6 +11,7 @@ from app.services import data_management
 CONFIRM_TEXT = "清空所有数据"
 
 PROJECT_DATA_TABLES = [
+    "runtime_jobs",
     "traffic_action_logs",
     "traffic_records",
     "traffic_run_items",

@@ -102,6 +102,21 @@ def run_ai_jobs_parallel(job_ids: list[str], max_workers: int | None = None) -> 
 
 
 def run_auto_lead_analysis_for_task(task_id: str) -> dict[str, Any]:
+    prepared = prepare_auto_lead_analysis_jobs(task_id)
+    job_ids = [str(value) for value in prepared["job_ids"]]
+    errors = list(prepared["errors"])
+    summary = run_ai_jobs_parallel(job_ids) if job_ids else {"succeeded": 0, "failed": 0, "auto_deleted": 0, "errors": []}
+    return {
+        "task_id": task_id,
+        "target_count": prepared["target_count"],
+        "succeeded": int(summary.get("succeeded", 0)),
+        "failed": len(errors) + int(summary.get("failed", 0)),
+        "auto_deleted": int(summary.get("auto_deleted", 0)),
+        "errors": errors + [{"lead_id": str(item.get("job_id", "")), "reason": str(item.get("reason", ""))} for item in summary.get("errors", [])],
+    }
+
+
+def prepare_auto_lead_analysis_jobs(task_id: str) -> dict[str, Any]:
     with database.connect() as conn:
         rows = conn.execute(
             """
@@ -129,14 +144,11 @@ def run_auto_lead_analysis_for_task(task_id: str) -> dict[str, Any]:
             errors.append({"lead_id": str(lead_id), "reason": detail})
         except Exception as exc:
             errors.append({"lead_id": str(lead_id), "reason": str(exc)})
-    summary = run_ai_jobs_parallel(job_ids) if job_ids else {"succeeded": 0, "failed": 0, "auto_deleted": 0, "errors": []}
     return {
         "task_id": task_id,
         "target_count": len(lead_ids),
-        "succeeded": int(summary.get("succeeded", 0)),
-        "failed": len(errors) + int(summary.get("failed", 0)),
-        "auto_deleted": int(summary.get("auto_deleted", 0)),
-        "errors": errors + [{"lead_id": str(item.get("job_id", "")), "reason": str(item.get("reason", ""))} for item in summary.get("errors", [])],
+        "job_ids": job_ids,
+        "errors": errors,
     }
 
 
@@ -606,8 +618,16 @@ def get_ai_job(job_id: str) -> dict[str, Any]:
         return database.row_to_dict(row) or {}
 
 
-def retry_ai_job(job_id: str) -> dict[str, Any]:
-    return run_ai_job(job_id)
+def retry_ai_job(job_id: str, run_now: bool = True) -> dict[str, Any]:
+    with database.connect() as conn:
+        row = conn.execute("SELECT id FROM analysis_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="AI任务不存在")
+        conn.execute(
+            "UPDATE analysis_jobs SET status = 'pending', error = '', updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (job_id,),
+        )
+    return run_ai_job(job_id) if run_now else get_ai_job(job_id)
 
 
 def run_ai_job(job_id: str) -> dict[str, Any]:

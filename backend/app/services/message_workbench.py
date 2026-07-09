@@ -5,7 +5,6 @@ import importlib.util
 import json
 import random
 import sys
-import threading
 from datetime import datetime
 from math import ceil
 from pathlib import Path
@@ -136,19 +135,7 @@ def create_auto_message_batch(
                 (batch_id, customer["lead_id"], customer["nickname"], customer["profile_url"], customer["selected_script"]),
             )
 
-    if run_now:
-        _start_auto_message_batch(batch_id)
     return get_auto_message_batch(batch_id)
-
-
-def _start_auto_message_batch(batch_id: str) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # 普通后台线程没有事件循环，这里补一个事件循环复用同一批次执行器。
-        threading.Thread(target=lambda: asyncio.run(run_auto_message_batch(batch_id)), daemon=True).start()
-        return
-    loop.create_task(run_auto_message_batch(batch_id))
 
 
 def list_auto_message_batches(batch_id: str = "") -> dict[str, Any]:
@@ -274,7 +261,6 @@ def retry_auto_message_batch(batch_id: str) -> dict[str, Any]:
                 """,
                 (new_batch_id, row["lead_account_id"], row["nickname"], row["profile_url"], row["script"]),
             )
-    _start_auto_message_batch(new_batch_id)
     return get_auto_message_batch(new_batch_id)
 
 

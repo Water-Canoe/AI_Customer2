@@ -1008,7 +1008,7 @@ async function autoMessageWorkbenchCustomer(row: Dict) {
       message_script: scriptSelection.text,
       script_label: scriptSelection.label
     })
-    ElMessage.success(data?.dm?.note || '自动私信已完成，跟进状态已同步')
+    ElMessage.success(`自动私信已加入队列：${String(data?.id || '').slice(0, 8)}`)
     await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '自动私信失败')

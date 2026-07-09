@@ -585,16 +585,14 @@ def create_keyword_find_customer_task(platform: str, keyword: str, limit: int = 
     )
 
 
-def run_account_analysis_batch(account_ids: list[int], task_id: str) -> None:
+def prepare_account_analysis_jobs(account_ids: list[int], task_id: str) -> dict[str, Any]:
     crawler_adapter.run_task(task_id)
     task = crawler_adapter.get_task(task_id)
     if not task or task.get("status") != "succeeded":
         with database.connect() as conn:
             crawler_adapter.log_task(conn, task_id, "error", "批量账号分析已停止：账号主页和视频采集未成功，未触发 AI 分析")
-        return
+        return {"task_id": task_id, "job_ids": [], "errors": [], "ready": False}
 
-    succeeded = 0
-    auto_deleted = 0
     failed: list[dict[str, str]] = []
     job_ids: list[str] = []
     for account_id in account_ids:
@@ -606,6 +604,17 @@ def run_account_analysis_batch(account_ids: list[int], task_id: str) -> None:
             failed.append({"account_id": str(account_id), "reason": detail})
         except Exception as exc:
             failed.append({"account_id": str(account_id), "reason": str(exc)})
+    with database.connect() as conn:
+        crawler_adapter.log_task(conn, task_id, "info", f"账号资料采集完成：AI 分析任务已排队 {len(job_ids)} 个，创建失败 {len(failed)} 个")
+    return {"task_id": task_id, "job_ids": job_ids, "errors": failed, "ready": True}
+
+
+def run_account_analysis_batch(account_ids: list[int], task_id: str) -> None:
+    prepared = prepare_account_analysis_jobs(account_ids, task_id)
+    job_ids = [str(value) for value in prepared.get("job_ids", [])]
+    failed = list(prepared.get("errors", []))
+    if not prepared.get("ready"):
+        return
     summary = ai_service.run_ai_jobs_parallel(job_ids) if job_ids else {"succeeded": 0, "failed": 0, "auto_deleted": 0, "errors": []}
     succeeded = int(summary.get("succeeded", 0))
     auto_deleted = int(summary.get("auto_deleted", 0))
@@ -671,15 +680,13 @@ def resolve_account_analysis_task_account_id(task: dict[str, object]) -> int:
 
 
 def run_account_analysis(account_id: int, task_id: str) -> None:
-    crawler_adapter.run_task(task_id)
-    task = crawler_adapter.get_task(task_id)
-    if not task or task.get("status") != "succeeded":
-        with database.connect() as conn:
-            crawler_adapter.log_task(conn, task_id, "error", "账号分析已停止：主页和视频采集未成功，未触发 AI 分析")
+    prepared = prepare_account_analysis_jobs([account_id], task_id)
+    job_ids = [str(value) for value in prepared.get("job_ids", [])]
+    if not prepared.get("ready") or not job_ids:
         return
 
     try:
-        job = ai_service.create_ai_job("competitor", account_id, run_now=True)
+        job = ai_service.run_ai_job(job_ids[0])
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, ensure_ascii=False)
         with database.connect() as conn:

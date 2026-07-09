@@ -7,7 +7,7 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -30,15 +30,19 @@ from app.schemas import (
     TrafficPlanCreate,
     TrafficSettingsUpdate,
 )
-from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, data_management, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
+from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, data_management, deletion, diagnostics, job_queue, license_service, maintenance, message_workbench, ops_visibility, profile_manager, traffic_workbench
 from app import views
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.init_db()
-    crawler_adapter.recover_interrupted_running_tasks()
-    yield
+    job_queue.start()
+    try:
+        yield
+    finally:
+        job_queue.shutdown()
+        profile_manager.shutdown()
 
 
 app = FastAPI(title="AI拓客工具", version="1.0.0", lifespan=lifespan)
@@ -174,13 +178,13 @@ def restore_traffic_plan(plan_id: str) -> dict[str, object]:
 
 
 @app.post("/api/traffic/plans/{plan_id}/runs")
-def create_traffic_run(plan_id: str, background_tasks: BackgroundTasks) -> dict[str, object]:
+def create_traffic_run(plan_id: str) -> dict[str, object]:
     require_license_for("traffic")
     try:
         run = traffic_workbench.create_run(plan_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    background_tasks.add_task(traffic_workbench.run_traffic_run, str(run["id"]))
+    run["runtime_job"] = job_queue.enqueue_traffic_run(str(run["id"]))
     return run
 
 
@@ -200,6 +204,7 @@ def get_traffic_run(run_id: str) -> dict[str, object]:
 @app.post("/api/traffic/runs/{run_id}/stop")
 def stop_traffic_run(run_id: str) -> dict[str, object]:
     try:
+        job_queue.cancel_by_entity("traffic_run", run_id, "用户停止引流批次")
         return traffic_workbench.stop_run(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -290,6 +295,16 @@ def open_settings_platform_login(platform: str) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/runtime/profile")
+def runtime_profile_status() -> dict[str, object]:
+    return profile_manager.status()
+
+
+@app.post("/api/runtime/profile/close")
+def close_runtime_profile() -> dict[str, object]:
+    return profile_manager.close_interactive()
+
+
 @app.post("/api/traffic/material-images")
 async def upload_traffic_material_image(request: Request, filename: str = Query(default="")) -> dict[str, object]:
     try:
@@ -317,7 +332,7 @@ def list_traffic_source_competitor_videos() -> list[dict[str, object]]:
 
 
 @app.post("/api/tasks")
-def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict[str, object]:
+def create_task(payload: TaskCreate) -> dict[str, object]:
     require_license()
     try:
         payload = _apply_own_account_defaults(payload)
@@ -330,12 +345,9 @@ def create_task(payload: TaskCreate, background_tasks: BackgroundTasks) -> dict[
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if payload.mode == "account_analysis" and account_ids:
-        if len(account_ids) == 1:
-            background_tasks.add_task(account_actions.run_account_analysis, account_ids[0], str(task["id"]))
-        else:
-            background_tasks.add_task(account_actions.run_account_analysis_batch, account_ids, str(task["id"]))
+        task["runtime_job"] = job_queue.enqueue_account_analysis(account_ids, str(task["id"]))
     else:
-        background_tasks.add_task(crawler_adapter.run_task, str(task["id"]))
+        task["runtime_job"] = job_queue.enqueue_crawl_task(str(task["id"]))
     return task
 
 
@@ -349,19 +361,18 @@ def preview_task(payload: TaskCreate) -> dict[str, object]:
 
 
 @app.post("/api/accounts/{account_id}/profile-enrichment")
-def create_profile_enrichment_task(account_id: int, background_tasks: BackgroundTasks) -> dict[str, object]:
+def create_profile_enrichment_task(account_id: int) -> dict[str, object]:
     require_license()
     try:
         task = crawler_adapter.create_profile_enrichment_task(account_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    background_tasks.add_task(crawler_adapter.run_task, str(task["id"]))
+    task["runtime_job"] = job_queue.enqueue_crawl_task(str(task["id"]))
     return task
 
 
 @app.post("/api/accounts/profile-enrichment/batch")
 def create_profile_enrichment_batch(
-    background_tasks: BackgroundTasks,
     limit: int = Query(default=10, ge=1, le=50),
     run_now: bool = True,
 ) -> dict[str, object]:
@@ -371,14 +382,13 @@ def create_profile_enrichment_batch(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if run_now and result["task_ids"]:
-        background_tasks.add_task(crawler_adapter.run_tasks_serially, result["task_ids"])
+        result["runtime_job"] = job_queue.enqueue_crawl_batch(result["task_ids"])
     return result
 
 
 @app.post("/api/accounts/{account_id}/analysis")
 def create_account_analysis_task(
     account_id: int,
-    background_tasks: BackgroundTasks,
     run_now: bool = True,
 ) -> dict[str, object]:
     require_license()
@@ -387,14 +397,13 @@ def create_account_analysis_task(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if run_now:
-        background_tasks.add_task(account_actions.run_account_analysis, account_id, str(task["id"]))
+        task["runtime_job"] = job_queue.enqueue_account_analysis([account_id], str(task["id"]))
     return task
 
 
 @app.post("/api/accounts/{account_id}/find-customers")
 def create_account_find_customer_task(
     account_id: int,
-    background_tasks: BackgroundTasks,
     run_now: bool = True,
 ) -> dict[str, object]:
     require_license()
@@ -403,7 +412,7 @@ def create_account_find_customer_task(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if run_now and result["task_ids"]:
-        background_tasks.add_task(crawler_adapter.run_tasks_serially, result["task_ids"])
+        result["runtime_job"] = job_queue.enqueue_crawl_batch(result["task_ids"])
     return result
 
 
@@ -414,9 +423,12 @@ def analyze_overview_customer_intent(
 ) -> dict[str, object]:
     require_license()
     try:
-        return account_actions.create_customer_intent_analysis(lead_id, run_now=run_now)
+        job = account_actions.create_customer_intent_analysis(lead_id, run_now=False)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run_now:
+        job["runtime_job"] = job_queue.enqueue_ai_job(str(job["id"]))
+    return job
 
 
 @app.patch("/api/overview/customers/{lead_id}/follow-status")
@@ -433,7 +445,6 @@ def update_overview_customer_follow_status(
 @app.post("/api/overview/accounts/{account_id}/customers/analyze")
 def analyze_overview_account_customers(
     account_id: int,
-    background_tasks: BackgroundTasks,
     run_now: bool = True,
 ) -> dict[str, object]:
     require_license()
@@ -442,7 +453,13 @@ def analyze_overview_account_customers(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if run_now and result["job_ids"]:
-        background_tasks.add_task(account_actions.run_account_customer_intent_jobs, result["job_ids"])
+        result["runtime_job"] = job_queue.enqueue(
+            "account_customer_intent",
+            entity_id=f"account:{account_id}",
+            payload={"job_ids": result["job_ids"]},
+            resource="ai",
+            max_attempts=2,
+        )
     return result
 
 
@@ -480,6 +497,7 @@ def get_task_dedup_summary(task_id: str) -> dict[str, object]:
 
 @app.post("/api/tasks/{task_id}/cancel")
 def cancel_task(task_id: str) -> dict[str, object]:
+    job_queue.cancel_jobs_for_domain_id(task_id, "用户取消采集任务")
     return crawler_adapter.cancel_task(task_id)
 
 
@@ -534,7 +552,6 @@ def delete_keyword_non_competitors(
 
 @app.post("/api/overview/keywords/analyze")
 def analyze_keyword_accounts(
-    background_tasks: BackgroundTasks,
     platform: str = Query(...),
     keyword: str = Query(...),
     run_now: bool = True,
@@ -543,13 +560,16 @@ def analyze_keyword_accounts(
     result = account_actions.create_keyword_account_analysis_tasks(platform, keyword)
     if run_now and result["task_ids"]:
         account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
-        background_tasks.add_task(account_actions.run_keyword_account_analysis, account_ids, str(result["task_ids"][0]))
+        result["runtime_job"] = job_queue.enqueue_account_analysis(
+            account_ids,
+            str(result["task_ids"][0]),
+            kind="keyword_account_analysis",
+        )
     return result
 
 
 @app.post("/api/overview/keywords/find-customers")
 def find_keyword_customers(
-    background_tasks: BackgroundTasks,
     platform: str = Query(...),
     keyword: str = Query(...),
     run_now: bool = True,
@@ -557,7 +577,7 @@ def find_keyword_customers(
     require_license()
     result = account_actions.create_keyword_find_customer_task(platform, keyword)
     if run_now and result["task_ids"]:
-        background_tasks.add_task(crawler_adapter.run_tasks_serially, result["task_ids"])
+        result["runtime_job"] = job_queue.enqueue_crawl_batch(result["task_ids"])
     return result
 
 
@@ -647,13 +667,13 @@ def message_workbench_customer_detail(lead_id: int) -> dict[str, object]:
 
 
 @app.post("/api/message-workbench/customers/{lead_id}/auto-message")
-async def message_workbench_customer_auto_message(
+def message_workbench_customer_auto_message(
     lead_id: int,
     payload: CustomerAutoMessageRequest,
 ) -> dict[str, object]:
     require_license()
     try:
-        return await message_workbench.auto_message_customer(
+        return job_queue.enqueue_single_message(
             lead_id,
             dry_run=payload.dry_run,
             timeout_seconds=payload.timeout_seconds,
@@ -673,13 +693,16 @@ def message_workbench_auto_message_batches(batch_id: str = Query(default="")) ->
 async def create_message_workbench_auto_message_batch(payload: MessageAutoBatchCreate) -> dict[str, object]:
     require_license()
     try:
-        return message_workbench.create_auto_message_batch(
+        batch = message_workbench.create_auto_message_batch(
             platform=payload.platform,
             keyword=payload.keyword,
             count=payload.count,
             interval_min_seconds=payload.interval_min_seconds,
             interval_max_seconds=payload.interval_max_seconds,
+            run_now=False,
         )
+        batch["runtime_job"] = job_queue.enqueue_message_batch(str(batch["id"]))
+        return batch
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -688,6 +711,7 @@ async def create_message_workbench_auto_message_batch(payload: MessageAutoBatchC
 def cancel_message_workbench_auto_message_batch(batch_id: str) -> dict[str, object]:
     require_license()
     try:
+        job_queue.cancel_by_entity("message_batch", batch_id, "用户取消自动私信批次")
         return message_workbench.cancel_auto_message_batch(batch_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -697,7 +721,9 @@ def cancel_message_workbench_auto_message_batch(batch_id: str) -> dict[str, obje
 def retry_message_workbench_auto_message_batch(batch_id: str) -> dict[str, object]:
     require_license()
     try:
-        return message_workbench.retry_auto_message_batch(batch_id)
+        batch = message_workbench.retry_auto_message_batch(batch_id)
+        batch["runtime_job"] = job_queue.enqueue_message_batch(str(batch["id"]))
+        return batch
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -724,13 +750,21 @@ def overview_node(node_id: str) -> dict[str, object]:
 @app.post("/api/ai/jobs")
 def create_ai_job(payload: AiJobCreate) -> dict[str, object]:
     require_license()
-    return ai_service.create_ai_job(payload.target_type, payload.target_id, payload.run_now)
+    job = ai_service.create_ai_job(payload.target_type, payload.target_id, run_now=False)
+    if payload.run_now:
+        job["runtime_job"] = job_queue.enqueue_ai_job(str(job["id"]))
+    return job
 
 
 @app.post("/api/ai/jobs/batch")
 def create_ai_jobs(payload: AiBatchCreate) -> list[dict[str, object]]:
     require_license()
-    return ai_service.create_batch_jobs(payload.target_type, payload.target_ids, payload.run_now)
+    jobs = ai_service.create_batch_jobs(payload.target_type, payload.target_ids, run_now=False)
+    if payload.run_now and jobs:
+        runtime_job = job_queue.enqueue_ai_batch([str(job["id"]) for job in jobs])
+        for job in jobs:
+            job["runtime_job"] = runtime_job
+    return jobs
 
 
 @app.get("/api/ai/jobs")
@@ -756,7 +790,51 @@ def delete_ai_workbench_non_customers(payload: AiBulkDelete) -> dict[str, object
 @app.post("/api/ai/jobs/{job_id}/retry")
 def retry_ai_job(job_id: str) -> dict[str, object]:
     require_license()
-    return ai_service.retry_ai_job(job_id)
+    job = ai_service.retry_ai_job(job_id, run_now=False)
+    job["runtime_job"] = job_queue.enqueue_ai_job(job_id)
+    return job
+
+
+@app.get("/api/runtime/jobs")
+def list_runtime_jobs(
+    status: str = Query(default=""),
+    kind: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> dict[str, object]:
+    return job_queue.list_jobs(status=status, kind=kind, page=page, page_size=page_size)
+
+
+@app.get("/api/runtime/jobs/{job_id}")
+def get_runtime_job(job_id: str) -> dict[str, object]:
+    try:
+        return job_queue.get_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/runtime/jobs/{job_id}/cancel")
+def cancel_runtime_job(job_id: str) -> dict[str, object]:
+    try:
+        return job_queue.request_cancel(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/runtime/jobs/{job_id}/retry")
+def retry_runtime_job(job_id: str) -> dict[str, object]:
+    try:
+        return job_queue.retry_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/runtime/jobs/{job_id}")
+def delete_runtime_job(job_id: str) -> dict[str, object]:
+    try:
+        return job_queue.delete_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/settings")

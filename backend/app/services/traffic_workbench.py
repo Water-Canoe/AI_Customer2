@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from app import database
 from app.schemas import TrafficPlanCreate, TrafficSettingsUpdate
-from app.services import browser_queue
+from app.services import browser_queue, profile_manager
 
 
 # 引流设置默认值只覆盖缺失项，避免覆盖用户在设置页保存的配置。
@@ -58,8 +58,6 @@ PLATFORM_LOGIN_TARGETS = {
     "xhs": {"label": "小红书", "url": "https://www.xiaohongshu.com/explore"},
     "ks": {"label": "快手", "url": "https://www.kuaishou.com/"},
 }
-DOUYIN_LOGIN_PROCESS: subprocess.Popen[Any] | None = None
-PLATFORM_LOGIN_PROCESS_PLATFORM = ""
 TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
 COMMENT_EDITOR_SELECTOR = "#videoSideCard textarea, #videoSideCard [contenteditable='true'], #videoSideBar textarea, #videoSideBar [contenteditable='true'], textarea, [contenteditable='true']"
 COMMENT_CONTAINER_SELECTOR = "#videoSideCard .comment-input-inner-container, #videoSideBar .comment-input-inner-container, .comment-input-inner-container"
@@ -587,7 +585,6 @@ def install_environment() -> dict[str, Any]:
 
 
 def open_platform_login_window(platform: str) -> dict[str, Any]:
-    global DOUYIN_LOGIN_PROCESS, PLATFORM_LOGIN_PROCESS_PLATFORM
     target = PLATFORM_LOGIN_TARGETS.get(platform)
     if not target:
         raise ValueError("不支持的平台登录配置")
@@ -595,12 +592,12 @@ def open_platform_login_window(platform: str) -> dict[str, Any]:
         raise ValueError("缺少 Python Playwright 依赖，请先在引流设置执行环境检查并自动安装")
     if importlib.util.find_spec("cloakbrowser") is None:
         raise ValueError("缺少 Python CloakBrowser 依赖，请先在引流设置执行环境检查并自动安装")
-    if DOUYIN_LOGIN_PROCESS and DOUYIN_LOGIN_PROCESS.poll() is None:
-        active_target = PLATFORM_LOGIN_TARGETS.get(PLATFORM_LOGIN_PROCESS_PLATFORM) or target
+    active = profile_manager.status()
+    if active["interactive_active"]:
+        active_target = PLATFORM_LOGIN_TARGETS.get(str(active["interactive_platform"])) or target
         return {
             "ok": True,
-            "message": f"{active_target['label']}登录窗口已经打开。三个平台共用同一个 CloakBrowser Profile，请关闭当前窗口后再打开其它平台。",
-            "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR),
+            "message": f"{active_target['label']}登录窗口已经打开。三个平台共用登录会话，请关闭当前窗口后再打开其它平台。",
         }
 
     runtime_dir = database.get_data_root()
@@ -611,23 +608,17 @@ def open_platform_login_window(platform: str) -> dict[str, Any]:
         "-c",
         f"from app.services.traffic_workbench import _hold_platform_login_window; _hold_platform_login_window('{platform}')",
     ]
-    with log_path.open("a", encoding="utf-8") as log_file:
-        # ponytail: 独立登录进程即可，后续需要托盘控制时再做进程管理页。
-        DOUYIN_LOGIN_PROCESS = subprocess.Popen(
-            command,
-            cwd=str(database.BACKEND_ROOT),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        PLATFORM_LOGIN_PROCESS_PLATFORM = platform
-    time.sleep(1)
-    if DOUYIN_LOGIN_PROCESS.poll() is not None:
-        raise ValueError(f"{target['label']}登录窗口启动失败，请先检查环境。日志：{log_path}")
+    result = profile_manager.launch_interactive(
+        platform,
+        command,
+        cwd=database.BACKEND_ROOT,
+        log_path=log_path,
+    )
+    if not result["started"]:
+        return {"ok": True, "message": f"{target['label']}登录窗口已经打开。"}
     return {
         "ok": True,
         "message": f"{target['label']}登录窗口已打开。登录完成后可手动关闭窗口。",
-        "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR),
     }
 
 
