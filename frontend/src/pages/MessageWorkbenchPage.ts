@@ -237,7 +237,8 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
         title: active ? '已有自动私信批次正在执行' : platform !== 'dy' ? 'AI一键私信当前只支持抖音' : !keyword ? '请先选择具体关键词' : '启动批量自动私信',
         onClick: actions.start
       }, [h(Promotion), h('span', active ? '运行中' : 'AI一键私信')]),
-      active ? h('button', { type: 'button', class: 'secondary-action compact-action', onClick: () => actions.cancel(active) }, '取消批次') : null
+      active ? h('button', { type: 'button', class: 'secondary-action compact-action', onClick: () => actions.cancel(active) }, '取消批次') : null,
+      h('p', { class: 'auto-message-platform-note' }, '由于快手网页版、小红书网页版不提供私信入口，因此快手与小红书两个平台私信功能不可用。请以抖音为主。后续平台优化规则，本系统会一并优化添加私信功能。')
     ])
   ])
 }
