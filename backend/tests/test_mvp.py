@@ -1741,8 +1741,29 @@ def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypat
     assert calls["command"] == [
         sys.executable,
         "-c",
-        "from app.services.traffic_workbench import _hold_douyin_login_window; _hold_douyin_login_window()",
+        "from app.services.traffic_workbench import _hold_platform_login_window; _hold_platform_login_window('dy')",
     ]
+
+
+def test_settings_platform_login_route_supports_xhs_and_kuaishou(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.services import traffic_workbench
+
+    calls: list[str] = []
+
+    def fake_open(platform: str) -> dict[str, object]:
+        calls.append(platform)
+        return {"ok": True, "message": f"{platform} ok"}
+
+    monkeypatch.setattr(traffic_workbench, "open_platform_login_window", fake_open)
+
+    xhs_response = TestClient(app).post("/api/settings/platform-login/xhs")
+    ks_response = TestClient(app).post("/api/settings/platform-login/ks")
+
+    assert xhs_response.status_code == 200
+    assert ks_response.status_code == 200
+    assert calls == ["xhs", "ks"]
 
 
 def test_traffic_login_window_waits_for_manual_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

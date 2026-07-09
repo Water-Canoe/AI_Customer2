@@ -277,6 +277,14 @@ def open_traffic_douyin_login() -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/settings/platform-login/{platform}")
+def open_settings_platform_login(platform: str) -> dict[str, object]:
+    try:
+        return traffic_workbench.open_platform_login_window(platform)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/traffic/material-images")
 async def upload_traffic_material_image(request: Request, filename: str = Query(default="")) -> dict[str, object]:
     try:

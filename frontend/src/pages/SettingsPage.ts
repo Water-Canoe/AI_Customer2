@@ -93,6 +93,7 @@ export default defineComponent({
     const licenseDialogOpen = ref(false)
     const licenseLoading = ref(false)
     const licenseChecking = ref(false)
+    const loginOpening = ref('')
     const licenseInfo = ref<Dict>({})
     const licenseCodeDraft = ref('')
 
@@ -155,6 +156,18 @@ export default defineComponent({
       }
       await navigator.clipboard.writeText(code)
       ElMessage.success('设备码已复制')
+    }
+
+    async function openPlatformLogin(platform: string) {
+      loginOpening.value = platform
+      try {
+        const { data } = await api.post(`/settings/platform-login/${platform}`)
+        ElMessage.success(data.message || `${platformName(platform)}登录窗口已打开`)
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || `${platformName(platform)}登录窗口打开失败`)
+      } finally {
+        loginOpening.value = ''
+      }
     }
 
     function sync() {
@@ -255,6 +268,14 @@ export default defineComponent({
               toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty),
               toggleField(local, 'auto_dm_fill_only', '自动私信只填内容不发送', markSettingsDirty)
             ])
+          ]),
+          settingsFoldPanel({ title: '登录配置', subtitle: '打开平台网页登录窗口完成扫码或账号登录', icon: Key, tone: 'green' }, [
+            h('div', { class: 'platform-login-actions' }, ownAccountPlatforms.map(platform => h('button', {
+              class: 'secondary-action',
+              disabled: Boolean(loginOpening.value),
+              onClick: () => openPlatformLogin(platform)
+            }, loginOpening.value === platform ? '打开中...' : `登录${platformName(platform)}`))),
+            h('p', { class: 'muted-text' }, '抖音、小红书、快手共用同一个 CloakBrowser Profile。登录完成后可手动关闭窗口，再打开其它平台。')
           ]),
           settingsFoldPanel({ title: '自家账号', subtitle: '同平台可多个，跨平台分任务运行', icon: User, tone: 'blue' }, [
             h('div', { class: 'own-account-grid' }, ownAccountPlatforms.map(platform => renderOwnAccountField(ownAccounts, platform, markSettingsDirty)))

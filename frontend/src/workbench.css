@@ -2667,6 +2667,17 @@ input[type='checkbox'] {
   padding: 0 14px 14px;
 }
 
+.platform-login-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.platform-login-actions .secondary-action {
+  min-width: 118px;
+}
+
 .own-account-grid {
   display: grid;
   grid-template-columns: 1fr;

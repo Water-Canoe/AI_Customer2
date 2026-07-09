@@ -51,7 +51,13 @@ SOURCE_MODE_LABELS = {
     "collected_keyword": "已采集关键词",
     "search_keyword": "手动搜索关键词",
 }
+PLATFORM_LOGIN_TARGETS = {
+    "dy": {"label": "抖音", "url": "https://www.douyin.com/?recommend=1"},
+    "xhs": {"label": "小红书", "url": "https://www.xiaohongshu.com/explore"},
+    "ks": {"label": "快手", "url": "https://www.kuaishou.com/"},
+}
 DOUYIN_LOGIN_PROCESS: subprocess.Popen[Any] | None = None
+PLATFORM_LOGIN_PROCESS_PLATFORM = ""
 TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
 COMMENT_EDITOR_SELECTOR = "#videoSideCard textarea, #videoSideCard [contenteditable='true'], #videoSideBar textarea, #videoSideBar [contenteditable='true'], textarea, [contenteditable='true']"
 COMMENT_CONTAINER_SELECTOR = "#videoSideCard .comment-input-inner-container, #videoSideBar .comment-input-inner-container, .comment-input-inner-container"
@@ -560,19 +566,31 @@ def install_environment() -> dict[str, Any]:
     return {"ok": all(step["ok"] for step in steps), "steps": steps, "check": environment_check()}
 
 
-def open_douyin_login_window() -> dict[str, Any]:
-    global DOUYIN_LOGIN_PROCESS
+def open_platform_login_window(platform: str) -> dict[str, Any]:
+    global DOUYIN_LOGIN_PROCESS, PLATFORM_LOGIN_PROCESS_PLATFORM
+    target = PLATFORM_LOGIN_TARGETS.get(platform)
+    if not target:
+        raise ValueError("不支持的平台登录配置")
     if importlib.util.find_spec("playwright") is None:
         raise ValueError("缺少 Python Playwright 依赖，请先在引流设置执行环境检查并自动安装")
     if importlib.util.find_spec("cloakbrowser") is None:
         raise ValueError("缺少 Python CloakBrowser 依赖，请先在引流设置执行环境检查并自动安装")
     if DOUYIN_LOGIN_PROCESS and DOUYIN_LOGIN_PROCESS.poll() is None:
-        return {"ok": True, "message": "抖音登录窗口已经打开。扫码后请保持窗口打开，确认登录稳定后再手动关闭。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
+        active_target = PLATFORM_LOGIN_TARGETS.get(PLATFORM_LOGIN_PROCESS_PLATFORM) or target
+        return {
+            "ok": True,
+            "message": f"{active_target['label']}登录窗口已经打开。三个平台共用同一个 CloakBrowser Profile，请关闭当前窗口后再打开其它平台。",
+            "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR),
+        }
 
     runtime_dir = database.get_data_root()
     runtime_dir.mkdir(parents=True, exist_ok=True)
-    log_path = runtime_dir / "traffic_douyin_login.log"
-    command = [sys.executable, "-c", "from app.services.traffic_workbench import _hold_douyin_login_window; _hold_douyin_login_window()"]
+    log_path = runtime_dir / f"platform_{platform}_login.log"
+    command = [
+        sys.executable,
+        "-c",
+        f"from app.services.traffic_workbench import _hold_platform_login_window; _hold_platform_login_window('{platform}')",
+    ]
     with log_path.open("a", encoding="utf-8") as log_file:
         # ponytail: 独立登录进程即可，后续需要托盘控制时再做进程管理页。
         DOUYIN_LOGIN_PROCESS = subprocess.Popen(
@@ -582,10 +600,19 @@ def open_douyin_login_window() -> dict[str, Any]:
             stderr=subprocess.STDOUT,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        PLATFORM_LOGIN_PROCESS_PLATFORM = platform
     time.sleep(1)
     if DOUYIN_LOGIN_PROCESS.poll() is not None:
-        raise ValueError(f"抖音登录窗口启动失败，请先检查环境。日志：{log_path}")
-    return {"ok": True, "message": "抖音登录窗口已打开。扫码后请保持窗口打开，确认登录稳定后再手动关闭。", "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR)}
+        raise ValueError(f"{target['label']}登录窗口启动失败，请先检查环境。日志：{log_path}")
+    return {
+        "ok": True,
+        "message": f"{target['label']}登录窗口已打开。登录完成后可手动关闭窗口。",
+        "profile_dir": str(TRAFFIC_DOUYIN_PROFILE_DIR),
+    }
+
+
+def open_douyin_login_window() -> dict[str, Any]:
+    return open_platform_login_window("dy")
 
 
 def source_keywords() -> list[dict[str, Any]]:
@@ -880,10 +907,17 @@ def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
 
 
 def _hold_douyin_login_window() -> None:
+    _hold_platform_login_window("dy")
+
+
+def _hold_platform_login_window(platform: str) -> None:
+    target = PLATFORM_LOGIN_TARGETS.get(platform)
+    if not target:
+        raise ValueError("不支持的平台登录配置")
     # 登录和安全验证必须可见，执行批次才允许无头。
     context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR, False)
     page = context.pages[0] if context.pages else context.new_page()
-    page.goto("https://www.douyin.com/?recommend=1", wait_until="domcontentloaded", timeout=60_000)
+    page.goto(str(target["url"]), wait_until="domcontentloaded", timeout=60_000)
     while True:
         # 登录窗口只负责保活，不检测登录状态，避免扫码后自动化读页触发窗口关闭。
         page.wait_for_timeout(1000)

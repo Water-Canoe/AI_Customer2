@@ -213,6 +213,7 @@ npm run dev
 - `POST /api/message-workbench/auto-message-batches/{batch_id}/cancel`：请求取消正在排队或运行中的自动私信批次，未开始的客户会标记为跳过。
 - `GET /api/overview/tree`：查看平台、关键词、账号、内容、客户的总览树。
 - `GET /api/settings/env-check`：检查项目库、MyCrawler 路径、底层库、AI 配置；同时返回项目库关键字段质量和按平台诊断的 MyCrawler 原始表、行数、关键字段非空情况。
+- `POST /api/settings/platform-login/{platform}`：设置页“登录配置”入口，`platform` 支持 `dy / xhs / ks`，会用同一个 CloakBrowser Profile 打开抖音、小红书或快手登录窗口。
 - `POST /api/settings/clear-data`：清空项目业务库和当前设置指向的 MyCrawler SQLite 业务表，必须输入确认文本 `清空所有数据`。
 - `POST /api/accounts/{account_id}/profile-enrichment`：为抖音/小红书/快手账号创建主页资料补全任务。导入 creator 主页简介后会自动复判竞品关键词命中关系；快手由 MyCrawler 的 `kuaishou_creator` 表写入后再导入。
 - `POST /api/accounts/profile-enrichment/batch`：批量创建主页资料补全任务，默认最多 10 个并串行执行；`limit` 最大 50，前端使用 10。
@@ -304,7 +305,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 引流设置页右栏提供“打开抖音登录窗口”按钮，调用 `POST /api/traffic/douyin-login`。后端会启动一个可见的 CloakBrowser 登录窗口，并复用全系统同一个 `data/douyin_cloak_profile/`；登录窗口只负责保活，不再检测登录状态或自动关闭，用户扫码后确认登录稳定再手动关闭窗口。后续随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频。
 
-执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并使用共享浏览器 Profile `data/douyin_cloak_profile/` 保存抖音登录态。可见窗口默认最大化；Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
+执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并使用共享浏览器 Profile `data/douyin_cloak_profile/` 保存平台登录态。可见窗口默认最大化；Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。设置页“登录配置”提供“登录抖音 / 登录小红书 / 登录快手”三个按钮，三者共用同一个 CloakBrowser Profile，登录完成后可手动关闭窗口再切换其它平台。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
 
 来源之间严格隔离：`随机推荐流` 只从抖音首页/精选页当前可见视频卡片进入，能从数字视频链接推导出 `jingxuan?modal_id=...` 时会优先进入随机视频流，不读取拓客项目库；`拓客竞品视频 / 已采集关键词` 才使用项目库视频队列，其中已采集关键词会按 `contents.source_keyword` 过滤候选视频；手动搜索关键词只在搜索结果页点击可见视频，不回退项目库。项目库队列每轮都会按作者冷却和本轮已选作者排除候选，避免沿同一作者视频合集连续互动。
 
