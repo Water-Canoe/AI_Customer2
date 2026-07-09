@@ -111,6 +111,8 @@ class CustomerFollowStatusUpdate(BaseModel):
 class CustomerAutoMessageRequest(BaseModel):
     dry_run: bool = False
     timeout_seconds: int = Field(default=0, ge=0, le=3600)
+    message_script: str = ""
+    script_label: str = ""
 
 
 class MessageAutoBatchCreate(BaseModel):

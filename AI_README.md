@@ -207,7 +207,7 @@ npm run dev
 - `GET /api/message-workbench/keywords`：私信工作台关键词队列统计，返回“全部”和各关键词下的客户数、待私信数、未回复数和超时未回复数。
 - `GET /api/message-workbench/customers`：私信工作台客户分页列表，支持 `keyword/status/query/page/page_size`；只返回已判定为目标客户且仍有有效来源的客户。
 - `GET /api/message-workbench/customers/{lead_id}`：私信工作台客户详情，返回客户资料、全部有效来源证据和 `lead_status_events` 跟进时间线。
-- `POST /api/message-workbench/customers/{lead_id}/auto-message`：私信工作台抖音自动私信入口。会读取设置页“自动私信只填内容不发送”和“自动私信等待秒数”；只填内容模式不会自动修改跟进状态。
+- `POST /api/message-workbench/customers/{lead_id}/auto-message`：私信工作台抖音自动私信入口。前端会把当前页面已解析的话术一起提交，确保设置页“发送 AI 话术 / 发送固定话术”即时生效；后端仍会读取“自动私信只填内容不发送”和“自动私信等待秒数”，只填内容模式不会自动修改跟进状态。
 - `GET /api/message-workbench/auto-message-batches`：查看 AI 一键私信批次列表、当前活动批次和所选批次明细。
 - `POST /api/message-workbench/auto-message-batches`：按抖音关键词、私信数量和时间间隔创建自动私信批次；同一时间只允许一个批次运行，后台复用一个 CloakBrowser 上下文逐个处理客户。
 - `POST /api/message-workbench/auto-message-batches/{batch_id}/cancel`：请求取消正在排队或运行中的自动私信批次，未开始的客户会标记为跳过。

@@ -986,6 +986,7 @@ async function messageWorkbenchCustomer(row: Dict) {
 
 async function autoMessageWorkbenchCustomer(row: Dict) {
   const leadId = row.lead_id || row.id
+  const scriptSelection = selectedDmScript(row.script)
   if (!leadId) {
     ElMessage.error('当前客户缺少线索ID，无法自动私信')
     return
@@ -994,10 +995,16 @@ async function autoMessageWorkbenchCustomer(row: Dict) {
     ElMessage.error('自动私信当前只支持抖音客户')
     return
   }
+  if (!scriptSelection.text) {
+    ElMessage.error(scriptSelection.emptyMessage)
+    return
+  }
   try {
     const { data } = await api.post(`/message-workbench/customers/${leadId}/auto-message`, {
       dry_run: Boolean(settings.value.auto_dm_fill_only),
-      timeout_seconds: Number(settings.value.auto_dm_timeout_seconds || 0)
+      timeout_seconds: Number(settings.value.auto_dm_timeout_seconds || 0),
+      message_script: scriptSelection.text,
+      script_label: scriptSelection.label
     })
     ElMessage.success(data?.dm?.note || '自动私信已完成，跟进状态已同步')
     await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])

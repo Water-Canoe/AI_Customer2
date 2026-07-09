@@ -652,6 +652,8 @@ async def message_workbench_customer_auto_message(
             lead_id,
             dry_run=payload.dry_run,
             timeout_seconds=payload.timeout_seconds,
+            message_script=payload.message_script,
+            script_label=payload.script_label,
         )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

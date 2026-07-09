@@ -4293,6 +4293,53 @@ def test_message_workbench_auto_message_uses_fixed_script_when_configured(tmp_pa
         assert row["follow_status"] == "已私信"
 
 
+def test_message_workbench_auto_message_accepts_frontend_script_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import message_workbench
+
+    with database.connect() as conn:
+        account_id = conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
+            VALUES('dy', 'lead-script-override', '话术覆盖客户', 'https://www.douyin.com/user/script-override')
+            """
+        ).lastrowid
+        lead_id = conn.execute(
+            """
+            INSERT INTO lead_user_accounts(account_id, screening_status, follow_status, script)
+            VALUES(?, '目标客户', '未私信', '这条 AI 话术不应该被发送')
+            """,
+            (account_id,),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO lead_sources(lead_account_id, keyword, source_type) VALUES(?, '电动车', 'competitor_crawl')",
+            (lead_id,),
+        )
+
+    calls: list[dict[str, object]] = []
+
+    async def fake_sender(user_url: str, message: str, **kwargs: object) -> dict[str, object]:
+        calls.append({"user_url": user_url, "message": message, **kwargs})
+        return {"ok": True, "sent": True}
+
+    monkeypatch.setattr(message_workbench, "_load_douyin_dm_sender", lambda: fake_sender)
+
+    result = asyncio.run(
+        message_workbench.auto_message_customer(
+            int(lead_id),
+            message_script="前端已选择的固定话术",
+            script_label="固定话术",
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls[0]["message"] == "前端已选择的固定话术"
+    with database.connect() as conn:
+        row = conn.execute("SELECT follow_status FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone()
+        assert row["follow_status"] == "已私信"
+
+
 def test_message_workbench_auto_message_batch_uses_fixed_script(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database

@@ -231,7 +231,13 @@ def customer_detail(lead_id: int) -> dict[str, Any]:
     }
 
 
-async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_seconds: int = 0) -> dict[str, Any]:
+async def auto_message_customer(
+    lead_id: int,
+    dry_run: bool = False,
+    timeout_seconds: int = 0,
+    message_script: str = "",
+    script_label: str = "",
+) -> dict[str, Any]:
     detail = customer_detail(lead_id)
     customer = detail["customer"]
     if customer["platform"] != "dy":
@@ -241,7 +247,11 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
     with database.connect() as conn:
         fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
         configured_timeout = _bounded_int(database.get_setting(conn, "auto_dm_timeout_seconds", "300"), 300, 0, 3600)
-        message_script, script_label = _selected_message_script(conn, customer["script"])
+        # 单次自动私信以前端当前选中的话术为准，避免设置同步延迟时误用 AI 话术。
+        selected_script = str(message_script or "").strip()
+        selected_label = str(script_label or "").strip() or "私信话术"
+        if not selected_script:
+            selected_script, selected_label = _selected_message_script(conn, customer["script"])
     # 设置页的“只填不发”优先，避免前端旧请求误触发送。
     effective_dry_run = bool(dry_run or fill_only)
     effective_timeout = _bounded_int(timeout_seconds, configured_timeout, 0, 3600) if timeout_seconds else configured_timeout
@@ -251,7 +261,7 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
         async with browser_queue.async_browser_slot(f"message_customer:{lead_id}"):
             result = await sender(
                 customer["profile_url"],
-                message_script,
+                selected_script,
                 profile_dir=database.get_douyin_cloak_profile_dir(),
                 dry_run=effective_dry_run,
                 manual_send_timeout_seconds=effective_timeout,
@@ -265,7 +275,7 @@ async def auto_message_customer(lead_id: int, dry_run: bool = False, timeout_sec
         follow_update = account_actions.update_customer_follow_status(
             lead_id,
             "已私信",
-            f"私信工作台：自动发送{script_label}",
+            f"私信工作台：自动发送{selected_label}",
         )
     return {"ok": True, "dm": result, "follow_update": follow_update}
 
