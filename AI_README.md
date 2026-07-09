@@ -211,6 +211,8 @@ npm run dev
 - `GET /api/message-workbench/auto-message-batches`：查看 AI 一键私信批次列表、当前活动批次和所选批次明细。
 - `POST /api/message-workbench/auto-message-batches`：按抖音关键词、私信数量和时间间隔创建自动私信批次；同一时间只允许一个批次运行，后台复用一个 CloakBrowser 上下文逐个处理客户。
 - `POST /api/message-workbench/auto-message-batches/{batch_id}/cancel`：请求取消正在排队或运行中的自动私信批次，未开始的客户会标记为跳过。
+- `POST /api/message-workbench/auto-message-batches/{batch_id}/retry`：基于历史批次中失败、跳过或未执行的未私信客户创建一个新的重试批次；已成功或已经进入已私信/未回复等跟进状态的客户不会重复发送。
+- `DELETE /api/message-workbench/auto-message-batches/{batch_id}`：删除已结束的自动私信批次历史记录和明细，不删除客户数据；运行中批次需先取消。
 - `GET /api/overview/tree`：查看平台、关键词、账号、内容、客户的总览树。
 - `GET /api/settings/env-check`：检查项目库、MyCrawler 路径、底层库、AI 配置；同时返回项目库关键字段质量和按平台诊断的 MyCrawler 原始表、行数、关键字段非空情况。
 - `POST /api/settings/platform-login/{platform}`：设置页“登录配置”入口，`platform` 支持 `dy / xhs / ks`，会用同一个 CloakBrowser Profile 打开抖音、小红书或快手登录窗口。

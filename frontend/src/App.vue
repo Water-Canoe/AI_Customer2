@@ -264,6 +264,8 @@ const routeListeners = computed(() => {
       'auto-message-customer': autoMessageWorkbenchCustomer,
       'start-auto-message-batch': startMessageAutoBatch,
       'cancel-auto-message-batch': cancelMessageAutoBatch,
+      'retry-auto-message-batch': retryMessageAutoBatch,
+      'delete-auto-message-batch': deleteMessageAutoBatch,
       'update-follow-status': updateMessageWorkbenchFollowStatus,
       'close-detail': closeMessageWorkbenchDetail,
     }
@@ -1039,6 +1041,38 @@ async function cancelMessageAutoBatch(batch: Dict) {
     await loadMessageWorkbench(true)
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '取消自动私信批次失败')
+  }
+}
+
+async function retryMessageAutoBatch(batch: Dict) {
+  const batchId = batch?.id
+  if (!batchId) {
+    ElMessage.error('当前批次缺少ID，无法重试')
+    return
+  }
+  try {
+    const { data } = await api.post(`/message-workbench/auto-message-batches/${batchId}/retry`)
+    ElMessage.success(`已创建重试批次 ${data.id}`)
+    await loadMessageWorkbench(true)
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '重试自动私信批次失败')
+  }
+}
+
+async function deleteMessageAutoBatch(batch: Dict) {
+  const batchId = batch?.id
+  if (!batchId) {
+    ElMessage.error('当前批次缺少ID，无法删除')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(`只删除自动私信批次 ${batchId} 的历史记录，不会删除客户数据。确认继续？`, '删除批次记录', { type: 'warning' })
+    await api.delete(`/message-workbench/auto-message-batches/${batchId}`)
+    ElMessage.success('自动私信批次记录已删除')
+    await loadMessageWorkbench(true)
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error?.response?.data?.detail || '删除自动私信批次失败')
   }
 }
 

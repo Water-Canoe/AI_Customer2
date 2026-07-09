@@ -4623,6 +4623,77 @@ def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path,
         assert {row["follow_status"] for row in rows} == {"已私信"}
 
 
+def test_message_workbench_auto_message_batch_retry_failed_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import message_workbench
+
+    lead_ids: list[int] = []
+    with database.connect() as conn:
+        for index in range(2):
+            account_id = conn.execute(
+                "INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url) VALUES('dy', ?, ?, ?)",
+                (f"retry-lead-{index}", f"重试客户{index}", f"https://www.douyin.com/user/retry-{index}"),
+            ).lastrowid
+            lead_id = conn.execute(
+                "INSERT INTO lead_user_accounts(account_id, screening_status, follow_status, script) VALUES(?, '目标客户', '未私信', ?)",
+                (account_id, f"重试话术{index}"),
+            ).lastrowid
+            lead_ids.append(int(lead_id))
+            conn.execute(
+                "INSERT INTO lead_sources(lead_account_id, keyword, source_type) VALUES(?, '电动车', 'competitor_crawl')",
+                (lead_id,),
+            )
+
+    batch = message_workbench.create_auto_message_batch("dy", "电动车", 2, 0, 0, run_now=False)
+    with database.connect() as conn:
+        items = conn.execute("SELECT id, lead_account_id, script FROM message_batch_items WHERE batch_id = ? ORDER BY id", (batch["id"],)).fetchall()
+        conn.execute("UPDATE message_batches SET status = 'failed' WHERE id = ?", (batch["id"],))
+        conn.execute("UPDATE message_batch_items SET status = 'failed', error = '测试失败' WHERE id = ?", (items[0]["id"],))
+        conn.execute("UPDATE message_batch_items SET status = 'succeeded' WHERE id = ?", (items[1]["id"],))
+        message_workbench._refresh_batch_counts(conn, str(batch["id"]))
+
+    started: list[str] = []
+    monkeypatch.setattr(message_workbench, "_start_auto_message_batch", lambda batch_id: started.append(str(batch_id)))
+
+    retry = message_workbench.retry_auto_message_batch(str(batch["id"]))
+
+    assert started == [retry["id"]]
+    assert retry["total_count"] == 1
+    assert retry["items"][0]["lead_account_id"] == items[0]["lead_account_id"]
+    assert retry["items"][0]["script"] == items[0]["script"]
+
+
+def test_message_workbench_auto_message_batch_delete_history(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import message_workbench
+
+    with database.connect() as conn:
+        account_id = conn.execute(
+            "INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url) VALUES('dy', 'delete-batch-lead', '删除批次客户', 'https://www.douyin.com/user/delete-batch')"
+        ).lastrowid
+        lead_id = conn.execute(
+            "INSERT INTO lead_user_accounts(account_id, screening_status, follow_status, script) VALUES(?, '目标客户', '未私信', '删除批次话术')",
+            (account_id,),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO lead_sources(lead_account_id, keyword, source_type) VALUES(?, '电动车', 'competitor_crawl')",
+            (lead_id,),
+        )
+
+    batch = message_workbench.create_auto_message_batch("dy", "电动车", 1, 0, 0, run_now=False)
+    with database.connect() as conn:
+        conn.execute("UPDATE message_batches SET status = 'failed' WHERE id = ?", (batch["id"],))
+
+    result = message_workbench.delete_auto_message_batch(str(batch["id"]))
+
+    assert result["ok"] is True
+    with database.connect() as conn:
+        assert conn.execute("SELECT 1 FROM message_batches WHERE id = ?", (batch["id"],)).fetchone() is None
+        assert conn.execute("SELECT 1 FROM message_batch_items WHERE batch_id = ?", (batch["id"],)).fetchone() is None
+
+
 def test_ai_result_does_not_override_manual_follow_status(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database

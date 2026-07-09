@@ -3971,6 +3971,37 @@ input[type='checkbox'] {
   overflow: auto;
 }
 
+.batch-history-list {
+  display: grid;
+  gap: 6px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.batch-history-list article {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 72px minmax(170px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #e3eeeb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.batch-history-list small {
+  display: block;
+  overflow: hidden;
+  color: #708097;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-history-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
 .batch-item-list article {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) 72px minmax(160px, 2fr);

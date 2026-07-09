@@ -206,6 +206,78 @@ def cancel_auto_message_batch(batch_id: str) -> dict[str, Any]:
     return get_auto_message_batch(batch_id)
 
 
+def delete_auto_message_batch(batch_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
+        if not batch:
+            raise ValueError("自动私信批次不存在")
+        if batch["status"] in ACTIVE_BATCH_STATUSES:
+            raise ValueError("运行中的自动私信批次不能删除，请先取消")
+        conn.execute("DELETE FROM message_batches WHERE id = ?", (batch_id,))
+    return {"ok": True, "deleted_id": batch_id}
+
+
+def retry_auto_message_batch(batch_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        active = conn.execute(
+            "SELECT id FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if active:
+            raise ValueError(f"已有自动私信批次 {active['id']} 正在执行，请先等待结束或取消")
+        batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
+        if not batch:
+            raise ValueError("自动私信批次不存在")
+        if batch["status"] in ACTIVE_BATCH_STATUSES:
+            raise ValueError("运行中的自动私信批次不能重试")
+        rows = database.rows_to_dicts(
+            conn.execute(
+                """
+                SELECT mbi.*
+                FROM message_batch_items mbi
+                JOIN lead_user_accounts lua ON lua.id = mbi.lead_account_id
+                WHERE mbi.batch_id = ?
+                  AND mbi.status IN ('failed', 'skipped', 'pending')
+                  AND COALESCE(lua.follow_status, '') IN ('', '待筛选', '未分析', '目标客户', '未私信')
+                ORDER BY mbi.id ASC
+                """,
+                (batch_id,),
+            ).fetchall()
+        )
+        if not rows:
+            raise ValueError("当前历史批次没有可重试的未私信客户")
+        new_batch_id = uuid4().hex[:8]
+        conn.execute(
+            """
+            INSERT INTO message_batches(
+                id, platform, keyword, requested_count, interval_min_seconds,
+                interval_max_seconds, fill_only, timeout_seconds, status, total_count
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (
+                new_batch_id,
+                batch["platform"],
+                batch["keyword"],
+                len(rows),
+                batch["interval_min_seconds"],
+                batch["interval_max_seconds"],
+                batch["fill_only"],
+                batch["timeout_seconds"],
+                len(rows),
+            ),
+        )
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO message_batch_items(batch_id, lead_account_id, nickname, profile_url, script)
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (new_batch_id, row["lead_account_id"], row["nickname"], row["profile_url"], row["script"]),
+            )
+    _start_auto_message_batch(new_batch_id)
+    return get_auto_message_batch(new_batch_id)
+
+
 def customer_detail(lead_id: int) -> dict[str, Any]:
     with database.connect() as conn:
         reminder_days = _reminder_days(conn)

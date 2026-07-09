@@ -691,6 +691,24 @@ def cancel_message_workbench_auto_message_batch(batch_id: str) -> dict[str, obje
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.post("/api/message-workbench/auto-message-batches/{batch_id}/retry")
+def retry_message_workbench_auto_message_batch(batch_id: str) -> dict[str, object]:
+    require_license()
+    try:
+        return message_workbench.retry_auto_message_batch(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/message-workbench/auto-message-batches/{batch_id}")
+def delete_message_workbench_auto_message_batch(batch_id: str) -> dict[str, object]:
+    require_license()
+    try:
+        return message_workbench.delete_auto_message_batch(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/platform-capabilities")
 def platform_capabilities() -> list[dict[str, object]]:
     return views.platform_capabilities()

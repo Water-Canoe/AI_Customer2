@@ -21,7 +21,7 @@ export default defineComponent({
     settings: { type: Object, default: () => ({}) },
     loading: { type: Boolean, default: false },
   },
-  emits: ['filter-change', 'select-customer', 'message-customer', 'auto-message-customer', 'start-auto-message-batch', 'cancel-auto-message-batch', 'update-follow-status', 'close-detail'],
+  emits: ['filter-change', 'select-customer', 'message-customer', 'auto-message-customer', 'start-auto-message-batch', 'cancel-auto-message-batch', 'retry-auto-message-batch', 'delete-auto-message-batch', 'update-follow-status', 'close-detail'],
   setup(props, { emit }) {
     const savedBatchConfig = loadAutoBatchConfig()
     const queryDraft = ref(String((props.filters as Dict).query || ''))
@@ -129,7 +129,10 @@ export default defineComponent({
             }, '下一页')
           ])
         ]),
-        renderBatchLog(props.batches as Dict),
+        renderBatchLog(props.batches as Dict, {
+          retry: (batch: Dict) => emit('retry-auto-message-batch', batch),
+          remove: (batch: Dict) => emit('delete-auto-message-batch', batch)
+        }),
         renderDetailDrawer(props.detail as Dict, emit)
       ])
     })
@@ -244,7 +247,7 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
   ])
 }
 
-function renderBatchLog(batches: Dict) {
+function renderBatchLog(batches: Dict, actions: Dict) {
   const batchList = batches.batches || []
   const current = batches.active || batchList[0]
   const items = batches.items || []
@@ -260,11 +263,29 @@ function renderBatchLog(batches: Dict) {
       h('span', `失败 ${current.failed_count || 0}`),
       h('span', `跳过 ${current.skipped_count || 0}`)
     ]) : null,
+    batchList.length ? h('div', { class: 'batch-history-list' }, batchList.map((batch: Dict) => renderBatchHistoryRow(batch, actions))) : null,
     items.length ? h('div', { class: 'batch-item-list' }, items.map((item: Dict) => h('article', [
       h('strong', item.nickname || `客户 ${item.lead_account_id}`),
       h('span', { class: `batch-status is-${item.status || 'pending'}` }, batchStatusLabel(item.status)),
       h('small', item.error || item.finished_at || item.started_at || item.created_at || '')
     ]))) : h('div', { class: 'message-empty compact-empty' }, '暂无自动私信日志')
+  ])
+}
+
+function renderBatchHistoryRow(batch: Dict, actions: Dict) {
+  const active = ['pending', 'running'].includes(String(batch.status || ''))
+  const retryable = !active && Number(batch.failed_count || 0) + Number(batch.skipped_count || 0) > 0
+  return h('article', [
+    h('div', [
+      h('strong', `批次 ${batch.id}`),
+      h('small', `${platformName(batch.platform)} / ${batch.keyword || '-'} · ${batch.created_at || '-'}`)
+    ]),
+    h('span', { class: `batch-status is-${batch.status || 'pending'}` }, batchStatusLabel(batch.status)),
+    h('small', `目标 ${batch.total_count || 0} / 成功 ${batch.success_count || 0} / 失败 ${batch.failed_count || 0} / 跳过 ${batch.skipped_count || 0}`),
+    h('div', { class: 'batch-history-actions' }, [
+      h('button', { type: 'button', class: 'text-icon-button compact', disabled: !retryable, onClick: () => actions.retry(batch) }, '重试'),
+      h('button', { type: 'button', class: 'text-icon-button compact danger', disabled: active, onClick: () => actions.remove(batch) }, '删除')
+    ])
   ])
 }
 
