@@ -915,6 +915,7 @@ def test_traffic_run_uses_plan_round_video_limit(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(traffic_workbench, "_launch_context", lambda *_: FakeContext())
     monkeypatch.setattr(traffic_workbench, "_setup_video_data_cache", lambda *_: {})
     monkeypatch.setattr(traffic_workbench, "_goto_with_timeout_tolerance", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_wait_for_douyin_ready_signal", lambda *_: True)
     monkeypatch.setattr(traffic_workbench, "_ensure_page_ready", lambda *_: None)
     monkeypatch.setattr(traffic_workbench, "_navigate_to_executable_video", lambda *_: None)
     monkeypatch.setattr(traffic_workbench, "_raise_if_stop_requested", lambda *_: None)
@@ -1301,6 +1302,7 @@ def test_traffic_failure_can_keep_browser_open(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(traffic_workbench, "_launch_context", lambda *_: fake_context)
     monkeypatch.setattr(traffic_workbench, "_setup_video_data_cache", lambda *_: {})
     monkeypatch.setattr(traffic_workbench, "_goto_with_timeout_tolerance", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_wait_for_douyin_ready_signal", lambda *_: True)
     monkeypatch.setattr(traffic_workbench, "_ensure_page_ready", lambda *_: None)
     monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: logs.append(args))
 
@@ -4562,6 +4564,9 @@ def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path,
     calls: list[dict[str, object]] = []
 
     class FakePage:
+        def is_closed(self) -> bool:
+            return False
+
         async def close(self) -> None:
             pass
 
@@ -4569,6 +4574,7 @@ def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path,
         pages: list[object] = []
 
         async def new_page(self) -> FakePage:
+            calls.append({"event": "new_page"})
             return FakePage()
 
         async def close(self) -> None:
@@ -4590,6 +4596,7 @@ def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path,
     result = message_workbench.get_auto_message_batch(str(batch["id"]))
 
     assert [call["event"] for call in calls].count("open_context") == 1
+    assert [call["event"] for call in calls].count("new_page") == 1
     assert [call["event"] for call in calls].count("send") == 2
     assert result["success_count"] == 2
     assert all(item["status"] == "succeeded" for item in result["items"])

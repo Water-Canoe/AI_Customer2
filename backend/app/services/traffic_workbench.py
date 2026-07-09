@@ -762,7 +762,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
             _append_log(run_id, "info", "login", "正在打开抖音页面。", "准备执行引流批次", "如果弹出登录，请先到引流设置完成扫码登录。", {"url": target_url})
             if not _goto_with_timeout_tolerance(page, target_url, 60_000):
                 _append_log(run_id, "warning", "probe", "抖音页面加载超时，继续检查当前页面。", "页面可能已经可用，但浏览器没有收到加载完成信号", "系统会继续识别当前页面；如果确实没有内容，会再给出明确原因。", {"url": target_url, "current_url": page.url})
-            _wait_or_stop(page, run_id, 4000)
+            _wait_for_douyin_ready_signal(page, run_id, 4000)
             _ensure_page_ready(page)
             _navigate_to_executable_video(page, run_id, plan["source_mode"], video_cache, author_cooldown_hours, project_author_keys, plan.get("source_value", ""))
             if plan["actions"] and action_budget <= 0:
@@ -1129,6 +1129,44 @@ def _wait_or_stop(page: Any, run_id: str, timeout_ms: int) -> None:
     _raise_if_stop_requested(run_id)
 
 
+def _wait_for_douyin_ready_signal(page: Any, run_id: str, timeout_ms: int) -> bool:
+    """Return as soon as the page exposes a video or a visible login/verify state."""
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000
+    while time.monotonic() < deadline:
+        _raise_if_stop_requested(run_id)
+        ready = bool(page.evaluate(
+            r"""
+            () => {
+              const text = (document.body?.innerText || '').replace(/\s+/g, ' ');
+              return Boolean(
+                document.querySelector('[data-e2e="feed-active-video"]') ||
+                document.querySelector('a[href*="/video/"], a[href*="/note/"]') ||
+                /安全验证|人机验证|扫码登录|手机号登录/.test(text)
+              );
+            }
+            """
+        ))
+        if ready:
+            return True
+        page.wait_for_timeout(min(200, max(1, int((deadline - time.monotonic()) * 1000))))
+    _raise_if_stop_requested(run_id)
+    return False
+
+
+def _wait_for_douyin_video_signal(page: Any, run_id: str, timeout_ms: int = 3000) -> bool:
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000
+    while time.monotonic() < deadline:
+        _raise_if_stop_requested(run_id)
+        state = _douyin_page_state(page)
+        if state.get("activeVideoId"):
+            return True
+        if state.get("loginPrompt") or state.get("verifyPrompt"):
+            return False
+        page.wait_for_timeout(min(200, max(1, int((deadline - time.monotonic()) * 1000))))
+    _raise_if_stop_requested(run_id)
+    return False
+
+
 def _ensure_page_ready(page: Any) -> None:
     state = _douyin_page_state(page)
     if state.get("verifyPrompt"):
@@ -1305,7 +1343,7 @@ def _click_video_candidate(page: Any, run_id: str, candidate: dict[str, Any], me
         )
     if not clicked and not _goto_with_timeout_tolerance(page, url, 60_000):
         _append_log(run_id, "warning", "probe", "视频页面加载超时，继续检查当前页面。", "抖音可能已经打开视频，但没有返回加载完成信号", "系统会继续识别当前页面；如果不能执行，会自动换下一个视频。", {"target_url": url, "current_url": page.url})
-    page.wait_for_timeout(3000)
+    _wait_for_douyin_video_signal(page, run_id)
     _ensure_page_ready(page)
     return True
 
@@ -1334,7 +1372,7 @@ def _goto_video_candidate(page: Any, run_id: str, url: str, message: str, silent
     if not _goto_with_timeout_tolerance(page, url, 60_000):
         if not silent:
             _append_log(run_id, "warning", "probe", "视频页面加载超时，继续检查当前页面。", "抖音可能已经打开视频，但没有返回加载完成信号", "系统会继续识别当前页面；如果不能执行，会自动换下一个视频。", {"target_url": url, "current_url": page.url})
-    page.wait_for_timeout(3000)
+    _wait_for_douyin_video_signal(page, run_id)
     _ensure_page_ready(page)
 
 

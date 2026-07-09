@@ -12,6 +12,8 @@ DOUYIN_HOSTS = {"www.douyin.com", "douyin.com"}
 DEFAULT_PROFILE_DIR = Path(__file__).resolve().parents[2] / "data" / "douyin_cloak_profile"
 DEFAULT_WAIT_SECONDS = 300
 DM_PANEL_WAIT_SECONDS = 25
+DISCOVERY_POLL_MS = 350
+SEND_READY_TIMEOUT_MS = 2500
 
 PROFILE_DM_SELECTORS = [
     "button:has-text('发私信')",
@@ -65,7 +67,7 @@ def normalize_message(value: str) -> str:
     return text
 
 
-async def first_visible(page: Any, selectors: list[str], timeout_ms: int = 700) -> Any | None:
+async def first_visible(page: Any, selectors: list[str], timeout_ms: int = 80) -> Any | None:
     for selector in selectors:
         try:
             locator = page.locator(selector)
@@ -86,7 +88,7 @@ async def wait_for_private_message_button(page: Any, seconds: int) -> Any:
         if button:
             return button
         await dismiss_easy_popups(page)
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(DISCOVERY_POLL_MS)
     raise RuntimeError("等待私信按钮超时。请确认已登录，且目标主页允许私信。")
 
 
@@ -102,7 +104,7 @@ async def dismiss_easy_popups(page: Any) -> None:
     ]:
         try:
             locator = page.locator(selector).first
-            if await locator.is_visible(timeout=300):
+            if await locator.is_visible(timeout=80):
                 await locator.click()
                 return
         except Exception:
@@ -131,22 +133,22 @@ async def click_private_message_button(page: Any, seconds: int) -> None:
 
 
 async def open_dm_panel(page: Any, seconds: int) -> None:
-    if await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=1000):
+    if await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=200):
         return
 
     await click_private_message_button(page, seconds)
 
     deadline = time.monotonic() + min(seconds, DM_PANEL_WAIT_SECONDS)
     while time.monotonic() < deadline:
-        editor = await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=1200)
+        editor = await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=120)
         if editor:
             return
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(DISCOVERY_POLL_MS)
     raise RuntimeError("已点击私信按钮，但没有找到聊天输入框。")
 
 
 async def type_message(page: Any, message: str) -> None:
-    editor = await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=3000)
+    editor = await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=1200)
     if not editor:
         raise RuntimeError("没有找到聊天输入框。")
 
@@ -156,7 +158,7 @@ async def type_message(page: Any, message: str) -> None:
 
     # Draft.js 需要真实输入事件；先用键盘输入，失败再用粘贴事件补一次。
     await page.keyboard.insert_text(message)
-    await page.wait_for_timeout(500)
+    await page.wait_for_timeout(50)
 
     typed = await page.evaluate(
         """text => {
@@ -237,30 +239,32 @@ async def outgoing_message_visible(page: Any, message: str) -> bool:
 
 
 async def click_send(page: Any) -> None:
-    await page.wait_for_timeout(2500)
-    for selector in SEND_ICON_SELECTORS:
-        point = await page.evaluate(
-            """selector => {
-                const icons = Array.from(document.querySelectorAll(selector))
-                    .map(el => {
-                        const rect = el.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0
-                            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
-                            : null;
-                    })
-                    .filter(Boolean);
-                return icons.length ? icons[icons.length - 1] : null;
-            }""",
-            selector,
-        )
-        if point:
-            # ponytail: Douyin's send control is an icon-only SVG; real mouse click triggers it.
-            await page.mouse.click(point["x"], point["y"])
+    deadline = time.monotonic() + SEND_READY_TIMEOUT_MS / 1000
+    while time.monotonic() < deadline:
+        for selector in SEND_ICON_SELECTORS:
+            point = await page.evaluate(
+                """selector => {
+                    const icons = Array.from(document.querySelectorAll(selector))
+                        .map(el => {
+                            const rect = el.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0
+                                ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+                                : null;
+                        })
+                        .filter(Boolean);
+                    return icons.length ? icons[icons.length - 1] : null;
+                }""",
+                selector,
+            )
+            if point:
+                # 抖音发送控件只有 SVG 图标，真实鼠标点击才能稳定触发。
+                await page.mouse.click(point["x"], point["y"])
+                return
+        button = await first_visible(page, SEND_SELECTORS, timeout_ms=80)
+        if button:
+            await button.click(force=True)
             return
-    button = await first_visible(page, SEND_SELECTORS, timeout_ms=2500)
-    if button:
-        await button.click(force=True)
-        return
+        await page.wait_for_timeout(100)
     await page.keyboard.press("Enter")
 
 
@@ -269,7 +273,7 @@ async def wait_until_message_sent(page: Any, message: str) -> None:
     while time.monotonic() < deadline:
         if await outgoing_message_visible(page, message):
             return
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(200)
     if await editor_contains_message(page, message):
         raise RuntimeError("已点击发送按钮，但话术仍在输入框中，未确认发送成功。")
     raise RuntimeError("输入框已变化，但聊天记录中没有出现本人发送的消息气泡，未确认发送成功。")

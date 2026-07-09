@@ -5,6 +5,7 @@ import importlib.util
 import json
 import random
 import sys
+import time
 from datetime import datetime
 from math import ceil
 from pathlib import Path
@@ -357,12 +358,14 @@ async def run_auto_message_batch(batch_id: str) -> None:
         # 批量私信只打开一次 CloakBrowser 上下文，避免每个客户重复启动浏览器。
         module = _load_douyin_dm_module()
         context = None
+        page = None
         try:
             async with browser_queue.async_browser_slot(
                 f"message_batch:{batch_id}",
                 should_stop=lambda: _message_batch_stop_requested(batch_id),
             ):
                 context = await module.open_douyin_context(profile_dir=database.get_douyin_cloak_profile_dir())
+                page = context.pages[0] if context.pages else await context.new_page()
                 while True:
                     with database.connect() as conn:
                         batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
@@ -396,7 +399,9 @@ async def run_auto_message_batch(batch_id: str) -> None:
                             (item["lead_account_id"], batch_id),
                         )
 
-                    await _run_batch_item(context, database.row_to_dict(item) or {}, database.row_to_dict(batch) or {}, module)
+                    if page.is_closed():
+                        page = await context.new_page()
+                    await _run_batch_item(page, database.row_to_dict(item) or {}, database.row_to_dict(batch) or {}, module)
                     await _sleep_between_batch_items(batch_id, int(batch["interval_min_seconds"] or 0), int(batch["interval_max_seconds"] or 0))
         except browser_queue.BrowserQueueCancelled:
             with database.connect() as conn:
@@ -420,8 +425,7 @@ def _auto_dm_lock() -> asyncio.Lock:
     return _AUTO_DM_LOCKS[key]
 
 
-async def _run_batch_item(context: Any, item: dict[str, Any], batch: dict[str, Any], module: Any) -> None:
-    page = await context.new_page()
+async def _run_batch_item(page: Any, item: dict[str, Any], batch: dict[str, Any], module: Any) -> None:
     try:
         if not str(item.get("profile_url") or "").strip():
             _mark_batch_item(item["id"], "skipped", "缺少客户主页链接")
@@ -452,8 +456,6 @@ async def _run_batch_item(context: Any, item: dict[str, Any], batch: dict[str, A
         _mark_batch_item(item["id"], "succeeded", "")
     except Exception as exc:
         _mark_batch_item(item["id"], "failed", str(exc))
-    finally:
-        await page.close()
 
 
 async def _sleep_between_batch_items(batch_id: str, minimum: int, maximum: int) -> None:
@@ -465,7 +467,12 @@ async def _sleep_between_batch_items(batch_id: str, minimum: int, maximum: int) 
         batch = conn.execute("SELECT stop_requested FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
     if not pending or (batch and int(batch["stop_requested"] or 0)):
         return
-    await asyncio.sleep(random.randint(minimum, maximum) if maximum > minimum else minimum)
+    delay = random.randint(minimum, maximum) if maximum > minimum else minimum
+    deadline = time.monotonic() + max(0, delay)
+    while time.monotonic() < deadline:
+        if _message_batch_stop_requested(batch_id):
+            return
+        await asyncio.sleep(min(1.0, deadline - time.monotonic()))
 
 
 def _message_batch_stop_requested(batch_id: str) -> bool:
