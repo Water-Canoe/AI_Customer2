@@ -5,11 +5,22 @@ from pathlib import Path
 from typing import Any
 
 from app import database
+from app.services import data_management
 
 
 CONFIRM_TEXT = "清空所有数据"
 
 PROJECT_DATA_TABLES = [
+    "traffic_action_logs",
+    "traffic_records",
+    "traffic_run_items",
+    "traffic_runs",
+    "traffic_plans",
+    "traffic_material_texts",
+    "traffic_material_images",
+    "traffic_dedup_ledger",
+    "message_batch_items",
+    "message_batches",
     "deletion_audit",
     "analysis_jobs",
     "deleted_identities",
@@ -52,23 +63,37 @@ def _reset_sequences(conn: sqlite3.Connection, tables: list[str]) -> None:
         )
 
 
-def clear_all_data(confirm: str) -> dict[str, Any]:
+def clear_all_data(
+    confirm: str,
+    *,
+    create_backup: bool = True,
+    include_crawler: bool = True,
+) -> dict[str, Any]:
     if confirm != CONFIRM_TEXT:
         raise ValueError(f"确认文本不正确，请输入：{CONFIRM_TEXT}")
+
+    active = data_management.active_jobs()
+    if active:
+        summary = "、".join(f"{item['table']} {item['count']} 个" for item in active)
+        raise ValueError(f"仍有运行中任务，不能清空数据：{summary}")
+
+    backup = data_management.create_backup("pre_clear_all_data") if create_backup else None
 
     with database.connect() as conn:
         # 接受用户从设置页粘贴的带引号路径，但不放宽确认文本。
         raw_db_value = str(database.get_setting(conn, "media_crawler_db_path", "")).strip().strip('"').strip("'")
         raw_db_path = Path(raw_db_value).expanduser()
-        if not raw_db_path.exists():
+        if include_crawler and not raw_db_path.exists():
             raise ValueError(f"MyCrawler SQLite 不存在：{raw_db_path}")
         project_result = _clear_project_database(conn)
 
-    raw_result = _clear_media_crawler_database(raw_db_path)
+    raw_result = _clear_media_crawler_database(raw_db_path) if include_crawler else None
     return {
         "ok": True,
+        "backup": backup,
         "project": project_result,
         "media_crawler": raw_result,
+        "retained_asset_directory": str(database.get_db_path().parent / "traffic_images"),
     }
 
 
@@ -76,10 +101,15 @@ def _clear_project_database(conn: sqlite3.Connection) -> dict[str, Any]:
     deleted: dict[str, int] = {}
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
+        existing_tables = set(_list_user_tables(conn))
+        cleared_tables: list[str] = []
         for table in PROJECT_DATA_TABLES:
+            if table not in existing_tables:
+                continue
             deleted[table] = _table_count(conn, table)
             conn.execute(f"DELETE FROM {database.quote_identifier(table)}")
-        _reset_sequences(conn, PROJECT_DATA_TABLES)
+            cleared_tables.append(table)
+        _reset_sequences(conn, cleared_tables)
         database.set_setting(conn, "next_task_number", "1")
     finally:
         conn.execute("PRAGMA foreign_keys = ON")

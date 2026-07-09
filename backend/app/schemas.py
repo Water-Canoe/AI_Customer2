@@ -71,6 +71,16 @@ class TrafficSettingsUpdate(BaseModel):
 
 class ClearDataRequest(BaseModel):
     confirm: str
+    create_backup: bool = True
+    include_crawler: bool = True
+
+
+class BackupCreateRequest(BaseModel):
+    reason: str = "manual"
+
+
+class BackupRestoreRequest(BaseModel):
+    confirm: str
 
 
 class AiJobCreate(BaseModel):

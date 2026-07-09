@@ -13,6 +13,8 @@ from fastapi.responses import FileResponse
 
 from app import database
 from app.schemas import (
+    BackupCreateRequest,
+    BackupRestoreRequest,
     AiBatchCreate,
     AiBulkDelete,
     AiJobCreate,
@@ -28,7 +30,7 @@ from app.schemas import (
     TrafficPlanCreate,
     TrafficSettingsUpdate,
 )
-from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
+from app.services import account_actions, ai_service, bulk_actions, crawler_adapter, data_management, deletion, diagnostics, license_service, maintenance, message_workbench, ops_visibility, traffic_workbench
 from app import views
 
 
@@ -772,10 +774,35 @@ def env_check() -> dict[str, object]:
     return views.environment_check()
 
 
+@app.get("/api/system/backups")
+def list_system_backups() -> dict[str, object]:
+    return data_management.list_backups()
+
+
+@app.post("/api/system/backups")
+def create_system_backup(payload: BackupCreateRequest) -> dict[str, object]:
+    try:
+        return data_management.create_backup(payload.reason)
+    except (ValueError, RuntimeError, sqlite3.Error, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/system/backups/{backup_id}/restore")
+def restore_system_backup(backup_id: str, payload: BackupRestoreRequest) -> dict[str, object]:
+    try:
+        return data_management.restore_backup(backup_id, payload.confirm)
+    except (ValueError, RuntimeError, sqlite3.Error, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/settings/clear-data")
 def clear_data(payload: ClearDataRequest) -> dict[str, object]:
     try:
-        return maintenance.clear_all_data(payload.confirm)
+        return maintenance.clear_all_data(
+            payload.confirm,
+            create_backup=payload.create_backup,
+            include_crawler=payload.include_crawler,
+        )
     except (ValueError, sqlite3.Error) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

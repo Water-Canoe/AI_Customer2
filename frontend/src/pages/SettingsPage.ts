@@ -1,6 +1,6 @@
-import { defineComponent, h, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
+import { defineComponent, h, onMounted, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
 import { Check, DataAnalysis, Delete, Key, Monitor, Refresh, Setting, Tools, User, Warning } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { api } from '../shared/api'
 import { LicenseDialog } from '../components/ui/LicenseDialog'
@@ -96,6 +96,10 @@ export default defineComponent({
     const loginOpening = ref('')
     const licenseInfo = ref<Dict>({})
     const licenseCodeDraft = ref('')
+    const backups = ref<Dict>({ items: [], total: 0, schema: {} })
+    const backupLoading = ref(false)
+    const backupCreating = ref(false)
+    const backupRestoring = ref('')
 
     async function openLicenseDialog() {
       licenseDialogOpen.value = true
@@ -170,6 +174,54 @@ export default defineComponent({
       }
     }
 
+    async function loadBackups() {
+      backupLoading.value = true
+      try {
+        const { data } = await api.get('/system/backups')
+        backups.value = data
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '备份列表加载失败')
+      } finally {
+        backupLoading.value = false
+      }
+    }
+
+    async function createBackup() {
+      backupCreating.value = true
+      try {
+        await api.post('/system/backups', { reason: 'manual' })
+        ElMessage.success('业务数据库和引流图片已备份')
+        await loadBackups()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '创建备份失败')
+      } finally {
+        backupCreating.value = false
+      }
+    }
+
+    async function restoreBackup(item: Dict) {
+      try {
+        const result = await ElMessageBox.prompt(
+          '恢复前会自动创建当前数据的安全备份。请输入“恢复备份”继续。',
+          '恢复数据备份',
+          { inputPlaceholder: '恢复备份', confirmButtonText: '确认恢复', cancelButtonText: '取消', type: 'warning' }
+        )
+        if (result.value !== '恢复备份') {
+          ElMessage.warning('确认文本不正确，未执行恢复')
+          return
+        }
+        backupRestoring.value = String(item.id || '')
+        await api.post(`/system/backups/${encodeURIComponent(String(item.id || ''))}/restore`, { confirm: result.value })
+        ElMessage.success('备份已恢复，页面即将重新加载')
+        window.setTimeout(() => window.location.reload(), 500)
+      } catch (error: any) {
+        if (error === 'cancel' || error?.toString?.() === 'cancel') return
+        ElMessage.error(error?.response?.data?.detail || '恢复备份失败')
+      } finally {
+        backupRestoring.value = ''
+      }
+    }
+
     function sync() {
       if (settingsDirty.value) return
       syncingFromProps.value = true
@@ -201,6 +253,7 @@ export default defineComponent({
       emit('settings-dirty-change', false)
       sync()
     })
+    onMounted(loadBackups)
 
     function renderLicenseDialog() {
       return h(LicenseDialog, {
@@ -299,10 +352,11 @@ export default defineComponent({
           sectionTitle({ title: '环境状态', subtitle: '运行前先检查', icon: Monitor, tone: 'green' }),
           renderEnv(props.env),
           h('button', { class: 'wide-action', onClick: () => emit('check-env') }, [h(Refresh, { class: 'inline-icon' }), '重新检查']),
+          renderBackups(backups.value, backupLoading.value, backupCreating.value, backupRestoring.value, createBackup, loadBackups, restoreBackup),
           renderTombstones(props.tombstoneSummary as Dict, props.tombstones as Dict, props.tombstoneFilters as Dict, filters => emit('load-tombstones', filters)),
           h('div', { class: 'danger-zone' }, [
-            sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Warning, tone: 'red', compact: true }),
-            h('p', '清空项目库和 MyCrawler 底层库中的所有采集、线索、AI、日志数据。'),
+            sectionTitle({ title: '危险操作', subtitle: '执行前自动备份', icon: Warning, tone: 'red', compact: true }),
+            h('p', '清空项目库和 MyCrawler 底层库中的采集、私信、引流、AI 与日志数据；配置和浏览器登录状态保留。'),
             h('button', { class: 'wide-action danger-action', onClick: () => emit('clear-data') }, [h(Delete, { class: 'inline-icon' }), '清空所有数据'])
           ])
         ])
@@ -451,6 +505,7 @@ function toggleField(local: Dict, key: string, label: string, markDirty?: () => 
 function renderEnv(envValue: Dict) {
   const items = [
     ['项目库', envValue?.project_db],
+    ['数据库版本', envValue?.database_schema],
     ['MyCrawler路径', envValue?.media_crawler_path],
     ['底层SQLite', envValue?.media_crawler_db],
     ['AI配置', envValue?.ai_config]
@@ -459,7 +514,7 @@ function renderEnv(envValue: Dict) {
     h('div', { class: 'env-list' }, items.map(([label, item]: any) => h('div', { class: 'env-item' }, [
       h('span', label),
       h('strong', { class: item?.ok ? 'ok' : 'warn' }, item?.ok ? '正常' : '待处理'),
-      h('small', item?.path || item?.base_url || item?.model || '')
+      h('small', item?.path || item?.base_url || item?.model || (item?.current !== undefined ? `${item.current}/${item.latest}` : ''))
     ])))
     // 环境检查详情暂时隐藏，只保留用户需要处理的概览状态。
   ])
@@ -507,6 +562,55 @@ function renderTombstones(summary: Dict, tombstones: Dict, filters: Dict, load: 
       h('button', { disabled: page >= totalPages, onClick: () => load({ page: Math.min(totalPages, page + 1) }) }, '下一页')
     ])
   ])
+}
+
+function renderBackups(
+  value: Dict,
+  loading: boolean,
+  creating: boolean,
+  restoring: string,
+  create: () => void,
+  reload: () => void,
+  restore: (item: Dict) => void
+) {
+  const items = (value.items || []).slice(0, 5)
+  const schema = value.schema || {}
+  return h('div', { class: 'data-lifecycle-panel' }, [
+    sectionTitle({ title: '数据保护', subtitle: `数据库版本 ${schema.current || 0}/${schema.latest || 0}`, icon: DataAnalysis, tone: 'blue', compact: true }),
+    h('div', { class: 'data-lifecycle-actions' }, [
+      h('button', { class: 'secondary-action', disabled: creating, onClick: create }, creating ? '备份中...' : '立即备份'),
+      h('button', { class: 'secondary-action', disabled: loading, onClick: reload }, loading ? '刷新中...' : '刷新列表')
+    ]),
+    items.length
+      ? h('div', { class: 'backup-list' }, items.map((item: Dict) => h('article', [
+          h('div', [
+            h('strong', item.created_at || item.id),
+            h('span', `${formatFileSize(item.database_size)} · ${item.asset_count || 0} 张图片`)
+          ]),
+          h('small', backupReasonLabel(item.reason)),
+          h('button', {
+            class: 'text-icon-button',
+            disabled: Boolean(restoring),
+            onClick: () => restore(item)
+          }, restoring === String(item.id || '') ? '恢复中...' : '恢复此备份')
+        ])))
+      : h('div', { class: 'diagnostic-empty' }, loading ? '正在读取备份...' : '暂无可恢复备份')
+  ])
+}
+
+function formatFileSize(value: unknown) {
+  const bytes = Number(value || 0)
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function backupReasonLabel(value: unknown) {
+  const reason = String(value || 'manual')
+  if (reason === 'manual') return '手动备份'
+  if (reason === 'pre_clear_all_data') return '清空数据前自动备份'
+  if (reason.startsWith('pre_restore_')) return '恢复前安全备份'
+  if (reason.startsWith('pre_migration_')) return '数据库升级前自动备份'
+  return reason
 }
 
 function renderProjectQuality(quality: Dict) {

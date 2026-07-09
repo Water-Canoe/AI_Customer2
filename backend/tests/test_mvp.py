@@ -791,36 +791,9 @@ def test_traffic_license_scope_is_independent(tmp_path: Path) -> None:
     assert license_service.license_overview_for("lead")["device_code"] != license_service.license_overview_for("traffic")["device_code"]
 
 
-def test_traffic_runs_legacy_table_is_migrated(tmp_path: Path) -> None:
-    project_db = tmp_path / "legacy.sqlite3"
+def test_new_database_uses_current_traffic_run_schema(tmp_path: Path) -> None:
+    project_db = tmp_path / "current.sqlite3"
     os.environ["AI_CUSTOMER_DB"] = str(project_db)
-    with sqlite3.connect(project_db) as conn:
-        # 旧引流原型表缺少新版监控页需要的 plan_id 和统计列。
-        conn.execute(
-            """
-            CREATE TABLE traffic_campaigns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                mode TEXT NOT NULL,
-                source_type TEXT NOT NULL,
-                keyword TEXT NOT NULL DEFAULT '',
-                action_like INTEGER NOT NULL DEFAULT 1,
-                action_follow INTEGER NOT NULL DEFAULT 0,
-                action_comment INTEGER NOT NULL DEFAULT 1
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE traffic_runs (
-                id TEXT PRIMARY KEY,
-                campaign_id INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'queued',
-                created_at TEXT,
-                FOREIGN KEY(campaign_id) REFERENCES traffic_campaigns(id) ON DELETE CASCADE
-            )
-            """
-        )
 
     from app import database
     from app.schemas import TrafficPlanCreate

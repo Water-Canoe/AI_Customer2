@@ -109,11 +109,13 @@ def update_settings(values: dict[str, Any]) -> dict[str, Any]:
 
 def environment_check() -> dict[str, Any]:
     settings = get_settings()
+    schema = database.schema_version()
     media_path = Path(str(settings.get("media_crawler_path", "")).strip().strip('"').strip("'"))
     raw_db = Path(str(settings.get("media_crawler_db_path", "")).strip().strip('"').strip("'"))
     raw_db_exists = raw_db.exists()
     return {
         "project_db": {"path": str(database.get_db_path()), "ok": database.get_db_path().exists()},
+        "database_schema": {"ok": schema["current"] == schema["latest"], **schema},
         "media_crawler_path": {"path": str(media_path), "ok": media_path.exists()},
         "media_crawler_db": {"path": str(raw_db), "ok": raw_db_exists},
         "ai_config": {

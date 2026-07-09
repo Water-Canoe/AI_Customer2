@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from app import data_lifecycle, migrations
+
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE_ROOT = BACKEND_ROOT.parent
@@ -30,14 +32,22 @@ def get_douyin_cloak_profile_dir() -> Path:
     return get_data_root() / "douyin_cloak_profile"
 
 
+def get_backup_root(db_path: Path | None = None) -> Path:
+    """Return the backup folder beside the persistent business database."""
+    return (db_path or get_db_path()).parent / "backups"
+
+
 @contextmanager
 def connect(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
     """Open a SQLite connection with dict-like rows and FK checks."""
     path = db_path or get_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     try:
         yield conn
         conn.commit()
@@ -580,33 +590,20 @@ DEFAULT_SETTINGS = {
 
 
 def init_db() -> None:
-    """Create all tables and seed default settings."""
-    with connect() as conn:
-        conn.executescript(SCHEMA_SQL)
-        _ensure_column(conn, "user_accounts", "competitor_reason", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "user_accounts", "content_total_count", "INTEGER")
-        _ensure_column(conn, "crawl_jobs", "skip_content_ids", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "contents", "last_comment_crawled_at", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "lead_user_accounts", "manual_follow_status", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "analysis_jobs", "raw_output", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "analysis_jobs", "prompt_version", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "analysis_jobs", "system_prompt", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "analysis_jobs", "user_prompt", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "analysis_jobs", "model", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "analysis_jobs", "base_url", "TEXT NOT NULL DEFAULT ''")
-        # 早期引流原型已经创建过 traffic_runs，补齐新版监控页需要的批次列。
-        _ensure_column(conn, "traffic_runs", "plan_id", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "traffic_runs", "total_videos", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "traffic_runs", "browsed_count", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "traffic_runs", "action_success_count", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "traffic_runs", "skipped_count", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "traffic_runs", "failed_count", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "traffic_runs", "stop_reason", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "traffic_runs", "stop_suggestion", "TEXT NOT NULL DEFAULT ''")
-        _ensure_column(conn, "traffic_runs", "stop_requested", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "traffic_plans", "archived", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "traffic_plans", "round_video_limit", "INTEGER NOT NULL DEFAULT 5")
-        _ensure_column(conn, "traffic_runs", "archived", "INTEGER NOT NULL DEFAULT 0")
+    """Apply ordered schema migrations and seed default settings."""
+    path = get_db_path()
+    existed = path.exists() and path.stat().st_size > 0
+    with connect(path) as conn:
+        pending = migrations.pending_migrations(conn)
+        if existed and pending and migrations.has_business_data(conn):
+            data_lifecycle.create_backup(
+                conn,
+                get_backup_root(path),
+                reason=f"pre_migration_{pending[0].version}_{pending[-1].version}",
+                schema_version=migrations.current_version(conn),
+                assets_root=path.parent / "traffic_images",
+            )
+        migrations.apply_migrations(conn, SCHEMA_SQL)
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
@@ -614,10 +611,12 @@ def init_db() -> None:
             )
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
-    columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    if column not in columns:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+def schema_version() -> dict[str, int]:
+    with connect() as conn:
+        return {
+            "current": migrations.current_version(conn),
+            "latest": migrations.latest_version(),
+        }
 
 
 def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:

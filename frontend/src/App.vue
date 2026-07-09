@@ -1314,7 +1314,7 @@ async function clearAllData() {
   let value = ''
   try {
     const result = await ElMessageBox.prompt(
-      '这会清空项目业务库、任务日志、AI结果、证据链，并清空当前设置指向的 MyCrawler SQLite 所有业务表内容。数据库文件和设置项会保留。请输入“清空所有数据”确认。',
+      '系统会先自动备份，再清空项目业务库、私信批次、引流记录、AI结果、证据链和当前设置指向的 MyCrawler SQLite。配置项与浏览器登录状态保留。请输入“清空所有数据”确认。',
       '清空所有数据',
       {
         confirmButtonText: '清空',
@@ -1332,7 +1332,7 @@ async function clearAllData() {
   }
   try {
     const { data } = await api.post('/settings/clear-data', { confirm: value })
-    ElMessage.success(`已清空数据：项目表 ${data.project_tables || 0} 个，底层表 ${data.raw_tables || 0} 个`)
+    ElMessage.success(`已清空数据：项目 ${data.project?.rows || 0} 行，底层 ${data.media_crawler?.rows || 0} 行；清空前备份已保留`)
     selectedTask.value = null
     await refreshAll()
   } catch (error: any) {

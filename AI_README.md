@@ -330,6 +330,21 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 
 根目录 `tools/license-admin.html` 是一个纯静态授权管理页，可直接在浏览器打开。默认连接 `https://tfwqsfaegbdj.sealosbja.site/ai-customer`，用于按 `lead / traffic` 业务新增/保存授权码、查询授权设备、手动绑定设备、解绑设备，并支持配置管理 Token 和接口路径。当前 Sealos 文档只明确提供设备解绑接口，授权码删除/停用需要后端提供对应接口；管理页不会用本地兜底方式伪造删除结果。该页面只应由管理员自用，不应打进交付给客户的本地软件包。
 
+## 数据生命周期与数据库升级
+
+项目数据库从正式交付改造开始使用有序迁移，不再依赖启动时零散执行 `_ensure_column()`。迁移登记在 `schema_migrations`，同时写入 SQLite `user_version`；当前初始结构为版本 1，版本 2 清理由已移除 AI 编排功能遗留的 `agent_runs / agent_run_events`。后续结构变更必须新增迁移版本，不能直接修改已经发布的旧迁移。启动发现待执行迁移且旧库存在业务数据时，会先在数据库同级 `backups/<时间戳>/` 创建完整备份，再执行迁移；迁移版本不一致或校验信息异常时直接停止启动，不使用兼容兜底掩盖问题。
+
+业务库连接默认启用 SQLite WAL、`busy_timeout=30s`、外键检查和 `synchronous=NORMAL`，用于降低页面轮询、AI任务、采集导入、自动私信和引流记录并发读写时的锁冲突。备份使用 SQLite Online Backup API，不复制仍在变化的裸数据库文件；备份目录包含业务数据库、清单、SHA-256 和当时的引流图片。设置页“数据保护”可以手动创建备份、查看最近五个备份并恢复；恢复前会检查运行中任务，再自动备份当前数据，校验目标备份后恢复并重新执行数据库迁移。
+
+“清空所有数据”会清理拓客、AI、私信批次、引流计划/批次/记录/素材登记、防重复账本、日志和当前配置指向的 MyCrawler 原始表数据；设置、授权、数据库迁移记录和浏览器 Profile 保留。正式页面调用默认先创建备份，本轮初始化测试数据时使用离线管理入口明确关闭备份后执行，已经清空项目库与 MyCrawler 测试数据。引流图片实体文件不会随数据库清空批量删除，避免误删用户本地文件；清空后数据库不再引用这些文件。
+
+新增接口：
+
+- `GET /api/system/backups`：查看备份和数据库版本，不返回本机绝对路径。
+- `POST /api/system/backups`：创建业务库与引流图片备份。
+- `POST /api/system/backups/{backup_id}/restore`：输入“恢复备份”后执行安全恢复。
+- `POST /api/settings/clear-data`：支持 `create_backup` 和 `include_crawler`，正式页面默认都为 `true`。
+
 ## 本地打包
 
 Windows 测试包通过 `script/build_package.ps1` 生成。脚本会先执行 `frontend/npm run build` 生成静态文件，再使用后端虚拟环境里的 PyInstaller 把 `packaging/ai_customer_launcher.py` 打成 one-folder 包，并把 `frontend/dist` 作为 `frontend_dist` 一起放入包内。生成目录形如 `dist/AI_Customer_Test_yyyyMMdd_HHmmss/`，双击其中的 `AI_Customer_Test_yyyyMMdd_HHmmss.exe` 即可启动本地服务并自动打开浏览器。
