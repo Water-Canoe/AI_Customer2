@@ -2221,6 +2221,84 @@ def test_traffic_kuaishou_helpers_parse_feed_and_keep_dedup_platform(tmp_path: P
     assert traffic_workbench._dedup_exists({"platform": "dy", "video_id": "ks-photo-1"}, "like", "") is False
 
 
+def test_traffic_kuaishou_advance_uses_cached_video_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    class FakeKeyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+    class FakeMouse:
+        def __init__(self) -> None:
+            self.clicks: list[tuple[int, int]] = []
+
+        def click(self, x: int, y: int) -> None:
+            self.clicks.append((x, y))
+
+        def wheel(self, *_: object) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = FakeKeyboard()
+            self.mouse = FakeMouse()
+
+        def evaluate(self, *_: object) -> dict[str, int]:
+            return {"x": 1100, "y": 420}
+
+        def wait_for_timeout(self, *_: object) -> None:
+            return None
+
+    page = FakePage()
+    cache = {"_order": ["ks-photo-1"]}
+    reads = iter([{"video_id": "ks-photo-1"}, {"video_id": "ks-photo-2"}])
+    seen_caches: list[dict[str, object] | None] = []
+
+    def read_video(_: object, video_cache: dict[str, object] | None = None) -> dict[str, str]:
+        seen_caches.append(video_cache)
+        return next(reads)
+
+    monkeypatch.setattr(traffic_workbench, "_close_kuaishou_comment_panel", lambda *_: None)
+    monkeypatch.setattr(traffic_workbench, "_read_kuaishou_active_video", read_video)
+
+    assert traffic_workbench._advance_kuaishou_video(page, "ks-photo-1", cache) is True
+    assert page.mouse.clicks == [(1100, 420)]
+    assert page.keyboard.pressed == ["ArrowDown"]
+    assert seen_caches == [cache, cache]
+
+
+def test_traffic_kuaishou_action_probability_is_per_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    called: list[str] = []
+    rolls = iter([61, 1, 61])
+
+    monkeypatch.setattr(traffic_workbench.random, "randint", lambda *_: next(rolls))
+    monkeypatch.setattr(traffic_workbench, "_append_log", lambda *args: None)
+    monkeypatch.setattr(
+        traffic_workbench,
+        "_execute_kuaishou_action",
+        lambda _run_id, _page, _video, action, _label: called.append(action) or True,
+    )
+
+    done, comment_text, image_path, skipped = traffic_workbench._execute_kuaishou_actions_with_retry(
+        "run-1",
+        {"actions": ["like", "collect", "follow"]},
+        object(),
+        {"platform": "ks", "video_id": "ks-video-1"},
+        action_probability=60,
+    )
+
+    assert done == ["收藏视频"]
+    assert comment_text == ""
+    assert image_path == ""
+    assert skipped is False
+    assert called == ["collect"]
+
+
 def test_traffic_run_route_requires_traffic_license(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app

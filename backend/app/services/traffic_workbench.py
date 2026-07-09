@@ -964,17 +964,17 @@ def _run_kuaishou_with_playwright(run_id: str, plan: dict[str, Any], timeout_err
                             "probe",
                             {"url": page.url},
                         )
-                    _advance_kuaishou_video(page, "")
+                    _advance_kuaishou_video(page, "", video_cache)
                     continue
                 no_progress_count = 0
                 seen_count += 1
                 if seen_count <= WARMUP_VIDEO_SKIP_COUNT:
-                    _advance_kuaishou_video(page, video["video_id"])
+                    _advance_kuaishou_video(page, video["video_id"], video_cache)
                     continue
                 skip_reason = _kuaishou_video_skip_reason(video)
                 if skip_reason:
                     _record_video(run_id, plan, video, ["跳过"], "", "", "skipped", skip_reason)
-                    _advance_kuaishou_video(page, video["video_id"])
+                    _advance_kuaishou_video(page, video["video_id"], video_cache)
                     continue
                 watch_seconds = random.randint(min_watch, max_watch)
                 if not plan["actions"]:
@@ -984,7 +984,7 @@ def _run_kuaishou_with_playwright(run_id: str, plan: dict[str, Any], timeout_err
                 action_budget = max(0, action_budget - _real_action_count(done_actions))
                 if skipped_by_error:
                     _record_video(run_id, plan, video, ["跳过"], comment_text, image_path, "skipped", "连续动作失败，已跳过当前视频")
-                    _advance_kuaishou_video(page, video["video_id"])
+                    _advance_kuaishou_video(page, video["video_id"], video_cache)
                     continue
                 if plan["actions"] and not done_actions:
                     if seen_count >= max_seen_count:
@@ -995,7 +995,7 @@ def _run_kuaishou_with_playwright(run_id: str, plan: dict[str, Any], timeout_err
                             "advance",
                             {"seen_count": seen_count, "target_count": limit},
                         )
-                    _advance_kuaishou_video(page, video["video_id"])
+                    _advance_kuaishou_video(page, video["video_id"], video_cache)
                     continue
                 record_actions = done_actions or ["仅浏览"]
                 _record_video(run_id, plan, video, record_actions, comment_text, image_path, "browsed" if not plan["actions"] or record_actions == ["仅浏览"] else "done")
@@ -1003,7 +1003,7 @@ def _run_kuaishou_with_playwright(run_id: str, plan: dict[str, Any], timeout_err
                 if plan["actions"] and action_budget <= 0:
                     _append_log(run_id, "success", "stop", "已达到每日动作上限，任务已自动完成。", "今日真实互动动作数量已经达到设置值", "可以明天继续，或到引流设置调整每日动作上限。", {"daily_action_limit": daily_action_limit})
                     return {"message": "已达到每日动作上限，任务已自动完成。", "reason": "今日真实互动动作数量已经达到设置值", "suggestion": "可以明天继续，或到引流设置调整每日动作上限。"}
-                if handled_count < limit and not _advance_kuaishou_video(page, video["video_id"]):
+                if handled_count < limit and not _advance_kuaishou_video(page, video["video_id"], video_cache):
                     raise TrafficStop(
                         "连续 3 次没有切换到新的快手视频，任务已停止。",
                         "翻页后视频 ID 没有变化。",
@@ -1739,18 +1739,12 @@ def _kuaishou_video_skip_reason(video: dict[str, Any]) -> str:
     return ""
 
 
-def _advance_kuaishou_video(page: Any, previous_video_id: str) -> bool:
+def _advance_kuaishou_video(page: Any, previous_video_id: str, video_cache: dict[str, Any] | None = None) -> bool:
     _close_kuaishou_comment_panel(page)
     for action in ("next_button", "arrow_down", "wheel", "page_down"):
         if action == "next_button":
-            page.evaluate(
-                """
-                () => {
-                  const btn = document.querySelector('.next, .hover-tip.nextVideo');
-                  if (btn) btn.click();
-                }
-                """
-            )
+            if not _click_kuaishou_next_video(page):
+                continue
         elif action == "arrow_down":
             page.keyboard.press("ArrowDown")
         elif action == "wheel":
@@ -1758,10 +1752,32 @@ def _advance_kuaishou_video(page: Any, previous_video_id: str) -> bool:
         else:
             page.keyboard.press("PageDown")
         page.wait_for_timeout(1600)
-        next_video = _read_kuaishou_active_video(page)
+        next_video = _read_kuaishou_active_video(page, video_cache)
         if next_video["video_id"] and next_video["video_id"] != previous_video_id:
             return True
     return False
+
+
+def _click_kuaishou_next_video(page: Any) -> bool:
+    # 用真实鼠标点右侧下一条按钮，避免 DOM click 被遮挡或焦点状态吞掉。
+    point = page.evaluate(
+        """
+        () => {
+          const candidates = [...document.querySelectorAll('.next, .hover-tip.nextVideo')];
+          for (const el of candidates) {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0) {
+              return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+            }
+          }
+          return null;
+        }
+        """
+    )
+    if not point:
+        return False
+    page.mouse.click(point["x"], point["y"])
+    return True
 
 
 def _is_regular_video(video: dict[str, Any]) -> bool:
