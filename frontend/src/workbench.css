@@ -3655,8 +3655,13 @@ input[type='checkbox'] {
 .auto-message-platform-note {
   flex: 1 1 360px;
   margin: 0 0 0 auto;
-  color: #64748b;
+  padding: 8px 10px;
+  border: 1px solid #c8ff00;
+  border-radius: 8px;
+  background: #efff2f;
+  color: #12310f;
   font-size: 13px;
+  font-weight: 700;
   line-height: 1.55;
 }
 
