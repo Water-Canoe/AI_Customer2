@@ -1,11 +1,10 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$Version,
-    [Parameter(Mandatory = $true)]
-    [string]$ReleasePath,
+    [string]$Version = "",
+    [string]$ReleasePath = "",
     [string]$PrivateKeyPath = $env:AI_CUSTOMER_UPDATE_PRIVATE_KEY,
     [string]$PublicKeyPath = "",
+    [string]$SshKeyPath = "",
     [string]$ServerBaseUrl = "https://tfwqsfaegbdj.sealosbja.site/ai-customer",
     [ValidateSet("stable", "beta")]
     [string]$Channel = "stable",
@@ -16,8 +15,9 @@ param(
     [string]$MinUpdaterVersion = "1.0.0",
     [string]$Notes = "",
     [ValidateRange(0, 100)]
-    [int]$RolloutPercent = 0,
+    [int]$RolloutPercent = 10,
     [switch]$Mandatory,
+    [switch]$Upload,
     [switch]$Enable,
     [switch]$PrepareOnly
 )
@@ -57,6 +57,41 @@ function Write-Utf8NoBom([string]$Path, [string]$Content) {
     [System.IO.File]::WriteAllText($Path, $Content, $Encoding)
 }
 
+function Find-LatestRelease([string]$RootPath) {
+    if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
+        throw "Release root not found: $RootPath"
+    }
+    $Candidates = @(Get-ChildItem -LiteralPath $RootPath -Directory | Where-Object {
+        Test-Path -LiteralPath (Join-Path $_.FullName "release-manifest.json") -PathType Leaf
+    } | Sort-Object LastWriteTime -Descending)
+    if ($Candidates.Count -eq 0) {
+        throw "No completed release directory was found under $RootPath"
+    }
+    return $Candidates[0].FullName
+}
+
+function Get-SealosAdminToken([string]$KeyPath) {
+    $Existing = [string]$env:AI_CUSTOMER_UPDATE_ADMIN_TOKEN
+    if ($Existing.Length -ge 32) {
+        return $Existing
+    }
+    if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) {
+        throw "Sealos SSH key not found: $KeyPath"
+    }
+    if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
+        throw "ssh.exe is required to read the Sealos update management token"
+    }
+    $TokenLines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_UPDATE_ADMIN_TOKEN=//p' /home/devbox/project/.env")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to read the update management token through Sealos SSH"
+    }
+    $Token = ($TokenLines -join "").Trim()
+    if ($Token.Length -lt 32) {
+        throw "The Sealos update management token is missing or too short"
+    }
+    return $Token
+}
+
 function Invoke-UpdateApi(
     [string]$Method,
     [string]$Path,
@@ -93,7 +128,7 @@ function Read-Release([string]$Path, [string]$ExpectedVersion) {
     if ([int]$Manifest.format -ne 1 -or [string]$Manifest.product -ne "AI Customer Desktop") {
         throw "Release manifest format or product is invalid"
     }
-    if ([string]$Manifest.version -ne $ExpectedVersion) {
+    if ($ExpectedVersion -and [string]$Manifest.version -ne $ExpectedVersion) {
         throw "Release manifest version does not match -Version"
     }
     if (-not ([string]$Manifest.entrypoint -eq "app/AI_Customer.exe")) {
@@ -104,7 +139,7 @@ function Read-Release([string]$Path, [string]$ExpectedVersion) {
         throw "Release schema version is invalid"
     }
 
-    # Reject undeclared files before checking every declared hash.
+    # The manifest is the archive allowlist; unrelated runtime files are never uploaded.
     $Declared = @{}
     foreach ($Item in @($Manifest.files)) {
         $Relative = ([string]$Item.path).Replace('\', '/')
@@ -120,26 +155,20 @@ function Read-Release([string]$Path, [string]$ExpectedVersion) {
     if ($Declared.Count -eq 0) {
         throw "Release manifest does not contain files"
     }
-    $ReparseEntries = @(Get-ChildItem -LiteralPath $Release.Path -Recurse -Force | Where-Object {
-        ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
-    })
-    if ($ReparseEntries.Count -gt 0) {
-        throw "Release contains a reparse point: $($ReparseEntries[0].FullName)"
-    }
     $ReleasePrefix = $Release.Path.TrimEnd('\') + '\'
     $ActualFiles = @(Get-ChildItem -LiteralPath $Release.Path -Recurse -File -Force | Where-Object { $_.FullName -ne $ManifestPath })
-    if ($ActualFiles.Count -ne $Declared.Count) {
-        throw "Release contains missing or undeclared files"
-    }
     foreach ($File in $ActualFiles) {
-        if (($File.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Release contains a reparse-point file: $($File.FullName)"
-        }
         $Relative = $File.FullName.Substring($ReleasePrefix.Length).Replace('\', '/')
         if (-not $Declared.ContainsKey($Relative)) {
-            throw "Release contains undeclared file: $Relative"
+            Write-Warning "Ignoring undeclared runtime file: $Relative"
         }
     }
+    $ArchiveFiles = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $ManifestFile = Get-Item -LiteralPath $ManifestPath
+    if (($ManifestFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Release manifest cannot be a reparse point"
+    }
+    $ArchiveFiles.Add($ManifestFile) | Out-Null
     foreach ($Relative in $Declared.Keys) {
         $Item = $Declared[$Relative]
         $Source = Join-Path $Release.Path ($Relative.Replace('/', '\'))
@@ -154,20 +183,25 @@ function Read-Release([string]$Path, [string]$ExpectedVersion) {
         if ($Hash -ne ([string]$Item.sha256).ToLowerInvariant()) {
             throw "Release file hash mismatch: $Relative"
         }
+        if (($File.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Declared release file cannot be a reparse point: $Relative"
+        }
+        $ArchiveFiles.Add($File) | Out-Null
     }
     return [pscustomobject]@{
         Path = $Release.Path
         Manifest = $Manifest
         ManifestPath = $ManifestPath
         SchemaVersion = $SchemaVersion
+        ArchiveFiles = @($ArchiveFiles)
     }
 }
 
-function New-ReleaseArchive([string]$SourcePath, [string]$DestinationPath) {
+function New-ReleaseArchive([string]$SourcePath, [string]$DestinationPath, [object[]]$SourceFiles) {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $SourcePrefix = $SourcePath.TrimEnd('\') + '\'
-    $Files = @(Get-ChildItem -LiteralPath $SourcePath -Recurse -File -Force | Sort-Object FullName)
+    $Files = @($SourceFiles | Sort-Object FullName)
     $Stream = [System.IO.File]::Open(
         $DestinationPath,
         [System.IO.FileMode]::CreateNew,
@@ -203,6 +237,17 @@ function New-ReleaseArchive([string]$SourcePath, [string]$DestinationPath) {
     }
 }
 
+$IsPrepareOnly = [bool]$PrepareOnly -or (-not $Upload -and -not $Enable)
+if ($PrepareOnly -and ($Upload -or $Enable)) {
+    throw "-PrepareOnly cannot be combined with -Upload or -Enable"
+}
+if (-not $ReleasePath) {
+    $ReleasePath = Find-LatestRelease (Join-Path $ProjectRoot "dist\releases")
+}
+$Release = Read-Release $ReleasePath $Version
+if (-not $Version) {
+    $Version = [string]$Release.Manifest.version
+}
 Assert-SemVer $Version "Version"
 Assert-SemVer $MinUpdaterVersion "MinUpdaterVersion"
 if ($Channel -eq "stable" -and $Version.Contains('-')) {
@@ -217,10 +262,12 @@ if ($Mandatory -and -not $Enable) {
 if ($Notes.Length -gt 4000) {
     throw "Notes length exceeds 4000 characters"
 }
+if (-not $Notes) {
+    $Notes = "$Version 正式发布"
+}
 
-$Release = Read-Release $ReleasePath $Version
 if (-not $PrivateKeyPath) {
-    throw "Private key path is required through -PrivateKeyPath or AI_CUSTOMER_UPDATE_PRIVATE_KEY"
+    $PrivateKeyPath = Join-Path $HOME ".ssh\sealos\ai_customer_update_signing_private.pem"
 }
 $PrivateKey = Resolve-Path -LiteralPath $PrivateKeyPath
 if (-not (Test-Path -LiteralPath $PrivateKey.Path -PathType Leaf)) {
@@ -231,15 +278,18 @@ if ($PrivateKey.Path.StartsWith($ProjectPrefix, [System.StringComparison]::Ordin
     throw "Release signing private key must be stored outside the project repository"
 }
 
-if (-not $PrepareOnly) {
+if (-not $SshKeyPath) {
+    $SshKeyPath = Join-Path $HOME ".ssh\sealos\bja.sealos.run_ns-0lgzvp7r_medician-ai-back"
+}
+Write-Host "Selected release: $($Release.Path)"
+Write-Host "Selected version: $Version"
+
+if (-not $IsPrepareOnly) {
     $ServerUri = [Uri]$ServerBaseUrl
     if ($ServerUri.Scheme -ne "https") {
         throw "ServerBaseUrl must use HTTPS"
     }
-    $AdminToken = [string]$env:AI_CUSTOMER_UPDATE_ADMIN_TOKEN
-    if (-not $AdminToken -or $AdminToken.Length -lt 32) {
-        throw "AI_CUSTOMER_UPDATE_ADMIN_TOKEN is missing or too short"
-    }
+    $AdminToken = Get-SealosAdminToken $SshKeyPath
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
         throw "curl.exe is required for streaming the release upload"
     }
@@ -258,11 +308,11 @@ $SignatureOutput = Join-Path $PublishDir "update-manifest.sig"
 $ResultOutput = Join-Path $PublishDir "publish-result.json"
 
 Write-Host "Valid release verified. Creating archive..."
-New-ReleaseArchive $Release.Path $ArchivePath
+New-ReleaseArchive $Release.Path $ArchivePath @($Release.ArchiveFiles)
 $Archive = Get-Item -LiteralPath $ArchivePath
 $ArchiveHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
-if ($PrepareOnly) {
+if ($IsPrepareOnly) {
     $ObjectKey = "releases/$Version/AI_Customer_${Version}_${Platform}_${Arch}.zip"
 }
 else {
@@ -313,7 +363,7 @@ if ([Convert]::FromBase64String($Signature).Length -ne 64) {
     throw "Generated Ed25519 signature has an invalid length"
 }
 
-if ($PrepareOnly) {
+if ($IsPrepareOnly) {
     $PreparedResult = [ordered]@{
         version = $Version
         channel = $Channel
@@ -375,7 +425,7 @@ $PublishResult = [ordered]@{
     prepared_only = $false
     enabled = $Enabled
     mandatory = [bool]$Mandatory
-    rollout_percent = $RolloutPercent
+    rollout_percent = $(if ($Enabled) { $RolloutPercent } else { 0 })
 }
 Write-Utf8NoBom $ResultOutput ($PublishResult | ConvertTo-Json -Depth 5)
 Write-Host "Release published successfully:"
