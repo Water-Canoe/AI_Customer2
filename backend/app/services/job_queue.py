@@ -13,7 +13,7 @@ from app import database
 
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
 SAFE_RESUME_KINDS = {"ai_job", "ai_batch", "account_customer_intent"}
-RESOURCE_LIMITS = {"browser": 1, "ai": 1, "default": 2}
+RESOURCE_LIMITS = {"browser": 1, "ai": 1, "video": 1, "default": 2}
 HEARTBEAT_SECONDS = 3.0
 POLL_SECONDS = 0.5
 
@@ -228,6 +228,15 @@ def enqueue_single_message(
     )
 
 
+def enqueue_video_job(video_job_id: str) -> dict[str, Any]:
+    return enqueue(
+        "video_generation",
+        entity_id=str(video_job_id),
+        payload={"video_job_id": str(video_job_id)},
+        resource="video",
+    )
+
+
 def get_job(job_id: str) -> dict[str, Any]:
     with database.connect() as conn:
         row = conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()
@@ -312,6 +321,20 @@ def cancel_by_entity(kind: str, entity_id: str, reason: str = "用户取消") ->
             (kind, str(entity_id)),
         ).fetchall()
     return [request_cancel(str(row["id"]), reason) for row in rows]
+
+
+def is_entity_cancel_requested(kind: str, entity_id: str) -> bool:
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT cancel_requested
+            FROM runtime_jobs
+            WHERE kind = ? AND entity_id = ? AND status = 'running'
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (str(kind), str(entity_id)),
+        ).fetchone()
+    return bool(row and int(row["cancel_requested"] or 0))
 
 
 def cancel_jobs_for_domain_id(domain_id: str, reason: str = "用户取消") -> list[dict[str, Any]]:
@@ -405,6 +428,15 @@ def recover_interrupted_jobs() -> dict[str, int]:
         conn.execute(
             "UPDATE analysis_jobs SET status = 'pending', error = ?, updated_at = datetime('now', 'localtime') WHERE status = 'running'",
             (f"{reason}，已返回待执行队列",),
+        )
+        conn.execute(
+            """
+            UPDATE video_jobs
+            SET status = 'interrupted', current_stage = 'interrupted', error = ?,
+                finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
+            WHERE status = 'running'
+            """,
+            (f"{reason}，可在生成记录中重试",),
         )
 
         rows = conn.execute("SELECT * FROM runtime_jobs WHERE status = 'running'").fetchall()
@@ -532,7 +564,7 @@ def _run_job(job: dict[str, Any]) -> None:
 
 
 def _execute_job(job: dict[str, Any]) -> Any:
-    from app.services import account_actions, ai_service, crawler_adapter, message_workbench, traffic_workbench
+    from app.services import account_actions, ai_service, content_workbench, crawler_adapter, message_workbench, traffic_workbench
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
@@ -568,6 +600,8 @@ def _execute_job(job: dict[str, Any]) -> Any:
         return ai_service.run_ai_job(str(payload["job_id"]))
     if kind == "ai_batch":
         return ai_service.run_ai_jobs_parallel([str(value) for value in payload.get("job_ids", [])])
+    if kind == "video_generation":
+        return content_workbench.run_video_job(str(payload["video_job_id"]))
     raise ValueError(f"不支持的运行任务类型：{kind}")
 
 
@@ -597,6 +631,8 @@ def _domain_outcome(job: dict[str, Any], result: Any = None) -> dict[str, str]:
         table, entity_id, success = "message_batches", str(payload["batch_id"]), {"succeeded"}
     elif kind == "ai_job":
         table, entity_id, success = "analysis_jobs", str(payload["job_id"]), {"succeeded"}
+    elif kind == "video_generation":
+        table, entity_id, success = "video_jobs", str(payload["video_job_id"]), {"succeeded"}
     if not table:
         return {"status": "succeeded", "error": ""}
     with database.connect() as conn:
@@ -672,7 +708,7 @@ def _cancel_requested(job_id: str) -> bool:
 
 
 def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, queued: bool = False) -> None:
-    from app.services import crawler_adapter, message_workbench, traffic_workbench
+    from app.services import content_workbench, crawler_adapter, message_workbench, traffic_workbench
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
@@ -688,6 +724,8 @@ def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, que
             traffic_workbench.stop_run(str(payload["run_id"]))
         elif kind == "message_batch":
             message_workbench.cancel_auto_message_batch(str(payload["batch_id"]))
+        elif kind == "video_generation":
+            content_workbench.mark_video_job_cancelled(str(payload["video_job_id"]), reason)
         elif queued and kind in SAFE_RESUME_KINDS:
             job_ids = [str(payload["job_id"])] if kind == "ai_job" else [str(value) for value in payload.get("job_ids", [])]
             if job_ids:
@@ -729,6 +767,10 @@ def _prepare_domain_retry(job: dict[str, Any]) -> None:
             if job_ids:
                 placeholders = ",".join("?" for _ in job_ids)
                 conn.execute(f"UPDATE analysis_jobs SET status = 'pending', error = '', updated_at = datetime('now', 'localtime') WHERE id IN ({placeholders})", job_ids)
+        elif kind == "video_generation":
+            from app.services import content_workbench
+
+            content_workbench.reset_video_job_for_retry(conn, str(payload["video_job_id"]))
 
 
 def _reset_crawl_task(conn: Any, task_id: str) -> None:
@@ -786,6 +828,16 @@ def _normalize_interrupted_domain(conn: Any, job: dict[str, Any], reason: str) -
         conn.execute(
             "UPDATE message_batch_items SET status = 'failed', error = ?, finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime') WHERE batch_id = ? AND status = 'running'",
             (reason, batch_id),
+        )
+    if kind == "video_generation":
+        conn.execute(
+            """
+            UPDATE video_jobs
+            SET status = 'interrupted', current_stage = 'interrupted', error = ?,
+                finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
+            WHERE id = ? AND status = 'running'
+            """,
+            (reason, str(payload["video_job_id"])),
         )
 
 

@@ -177,9 +177,6 @@ ffmpeg_path = app.get("ffmpeg_path", "")
 if ffmpeg_path and os.path.isfile(ffmpeg_path):
     os.environ["IMAGEIO_FFMPEG_EXE"] = ffmpeg_path
 
-logger.info(f"{project_name} v{project_version}")
-
-
 def apply_runtime_config(values: dict) -> dict:
     """Apply the persisted content-workbench configuration before a video job."""
     global _cfg, log_level, project_name, project_description, project_version

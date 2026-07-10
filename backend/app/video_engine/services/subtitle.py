@@ -12,30 +12,33 @@ from loguru import logger
 from app.video_engine.config import config
 from app.video_engine.utils import utils
 
-model_size = config.whisper.get("model_size", "large-v3")
-device = config.whisper.get("device", "cpu")
-compute_type = config.whisper.get("compute_type", "int8")
 model = None
+model_key = None
 
 
 def create(audio_file, subtitle_file: str = ""):
-    global model
+    global model, model_key
     if WhisperModel is None:
         logger.warning("faster_whisper not available, skipping whisper subtitle generation")
         return ""
-    if not model:
-        model_path = f"{utils.root_dir()}/models/whisper-{model_size}"
-        model_bin_file = f"{model_path}/model.bin"
-        if not os.path.isdir(model_path) or not os.path.isfile(model_bin_file):
-            model_path = model_size
+    model_size = config.whisper.get("model_size", "large-v3")
+    device = config.whisper.get("device", "cpu")
+    compute_type = config.whisper.get("compute_type", "int8")
+    requested_key = (model_size, device, compute_type)
+    if not model or model_key != requested_key:
+        download_root = utils.storage_dir("models", create=True)
 
         logger.info(
-            f"loading model: {model_path}, device: {device}, compute_type: {compute_type}"
+            f"loading model: {model_size}, device: {device}, compute_type: {compute_type}"
         )
         try:
             model = WhisperModel(
-                model_size_or_path=model_path, device=device, compute_type=compute_type
+                model_size_or_path=model_size,
+                device=device,
+                compute_type=compute_type,
+                download_root=download_root,
             )
+            model_key = requested_key
         except Exception as e:
             logger.error(
                 f"failed to load model: {e} \n\n"

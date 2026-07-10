@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app import database
-from app.routers import ai, message, overview, runtime, system, tasks, traffic
+from app.routers import ai, content, message, overview, runtime, system, tasks, traffic
 from app.services import job_queue, profile_manager
 from app.version import APP_VERSION
 
@@ -43,6 +43,7 @@ for api_router in (
     overview.router,
     message.router,
     ai.router,
+    content.router,
     runtime.router,
 ):
     app.include_router(api_router)

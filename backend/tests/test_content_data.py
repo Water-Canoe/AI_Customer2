@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import wave
 
 import pytest
 
@@ -18,8 +19,9 @@ def test_content_migration_and_asset_dedup(tmp_path, monkeypatch: pytest.MonkeyP
     from app import database, migrations
     from app.services import content_assets
 
-    first = content_assets.import_asset_file("voice.mp3", BytesIO(b"same-audio"), "audio/mpeg")
-    second = content_assets.import_asset_file("copy.mp3", BytesIO(b"same-audio"), "audio/mpeg")
+    audio = _wav_bytes()
+    first = content_assets.import_asset_file("voice.wav", BytesIO(audio), "audio/wav")
+    second = content_assets.import_asset_file("copy.wav", BytesIO(audio), "audio/wav")
 
     assert first["id"] == second["id"]
     assert second["duplicate"] is True
@@ -52,3 +54,53 @@ def test_asset_paths_cannot_escape_managed_root(tmp_path, monkeypatch: pytest.Mo
 
     with pytest.raises(ValueError, match="超出内容资产目录"):
         content_assets.resolve_asset_path("../outside.mp4")
+
+
+def test_video_job_keeps_local_asset_order_and_can_cancel(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app import database
+    from app.services import content_assets, content_workbench
+
+    first = content_assets.import_asset_file("first.mp4", BytesIO(b"first"), "video/mp4")
+    second = content_assets.import_asset_file("second.mp4", BytesIO(b"second"), "video/mp4")
+    job = content_workbench.create_video_job(
+        {"video_subject": "测试主题", "video_source": "local"},
+        [first["id"], second["id"]],
+    )
+
+    assert [item["id"] for item in job["assets"]] == [first["id"], second["id"]]
+    with database.connect() as conn:
+        resources = conn.execute(
+            "SELECT resource FROM runtime_jobs WHERE kind = 'video_generation' AND entity_id = ?",
+            (job["id"],),
+        ).fetchone()
+    assert resources["resource"] == "video"
+    assert content_workbench.cancel_video_job(job["id"])["status"] == "cancelled"
+
+
+def test_content_settings_mask_and_preserve_secrets(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app.services import content_workbench
+
+    saved = content_workbench.update_settings(
+        {"app": {"openai_api_key": "secret", "pexels_api_keys": ["pexels-secret"]}}
+    )
+    assert saved["app"]["openai_api_key"] == content_workbench.MASKED_SECRET
+    assert saved["app"]["pexels_api_keys"] == [content_workbench.MASKED_SECRET]
+
+    content_workbench.update_settings(
+        {"app": {"openai_api_key": "", "pexels_api_keys": [content_workbench.MASKED_SECRET]}}
+    )
+    unmasked = content_workbench.get_settings(mask_secrets=False)
+    assert unmasked["app"]["openai_api_key"] == "secret"
+    assert unmasked["app"]["pexels_api_keys"] == ["pexels-secret"]
+
+
+def _wav_bytes() -> bytes:
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(8000)
+        writer.writeframes(b"\x00\x00" * 800)
+    return buffer.getvalue()

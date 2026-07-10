@@ -508,7 +508,7 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
         return ""
 
     if bgm_file:
-        song_dir = utils.song_dir()
+        song_dir = config.app.get("bgm_directory") or utils.song_dir()
         try:
             resolved_bgm_file = _resolve_bgm_file_path(song_dir, bgm_file)
         except ValueError as exc:
@@ -528,7 +528,7 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
 
     if bgm_type == "random":
         suffix = "*.mp3"
-        song_dir = utils.song_dir()
+        song_dir = config.app.get("bgm_directory") or utils.song_dir()
         files = glob.glob(os.path.join(song_dir, suffix))
         # 当背景音乐目录为空时，直接回退为“不使用 BGM”，避免 random.choice([]) 抛异常。
         if not files:
@@ -1142,7 +1142,9 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
 
     # 仅返回通过预处理校验的素材，避免低分辨率图片继续进入后续的视频合成流程。
     valid_materials = []
-    local_videos_dir = utils.storage_dir("local_videos", create=True)
+    local_videos_dir = config.app.get("local_material_directory") or utils.storage_dir(
+        "local_videos", create=True
+    )
 
     for material in materials:
         if not material.url:

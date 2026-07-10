@@ -27,6 +27,10 @@ class MemoryState(BaseState):
     def __init__(self):
         self._tasks = {}
         self._lock = threading.RLock()
+        self._listener = None
+
+    def set_listener(self, listener):
+        self._listener = listener
 
     def get_all_tasks(self, page: int, page_size: int):
         start = (page - 1) * page_size
@@ -54,6 +58,9 @@ class MemoryState(BaseState):
                 "progress": progress,
                 **kwargs,
             }
+            snapshot = copy.deepcopy(self._tasks[task_id])
+        if self._listener:
+            self._listener(snapshot)
 
     def get_task(self, task_id: str):
         with self._lock:
@@ -187,3 +194,8 @@ state = (
     if _enable_redis
     else MemoryState()
 )
+
+
+def set_progress_listener(listener) -> None:
+    if isinstance(state, MemoryState):
+        state.set_listener(listener)

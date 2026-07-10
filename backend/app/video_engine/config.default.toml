@@ -74,6 +74,12 @@ redis_db = 0
 redis_password = ""
 max_concurrent_tasks = 5
 max_queued_tasks = 100
+upload_post_enabled = false
+upload_post_api_key = ""
+upload_post_username = ""
+upload_post_platforms = ["tiktok", "instagram"]
+upload_post_auto_upload = false
+upload_post_youtube_privacy_status = "public"
 [whisper]
 model_size = "large-v3"
 device = "CPU"
@@ -89,12 +95,6 @@ api_key = ""
 model_id = "eleven_multilingual_v2"
 [ui]
 hide_log = false
-upload_post_enabled = false
-upload_post_api_key = ""
-upload_post_username = ""
-upload_post_platforms = ["tiktok", "instagram"]
-upload_post_auto_upload = false
-upload_post_youtube_privacy_status = "public"
 [chatterbox]
 base_url = "http://127.0.0.1:4123/v1"
 api_key = ""
