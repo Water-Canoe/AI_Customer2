@@ -45,6 +45,43 @@ class SettingsUpdate(BaseModel):
     values: dict[str, Any]
 
 
+class ContentAssetUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ContentVideoJobCreate(BaseModel):
+    params: dict[str, Any] = Field(default_factory=dict)
+    asset_ids: list[str] = Field(default_factory=list)
+    audio_asset_id: str = ""
+    bgm_asset_id: str = ""
+
+
+class ContentSettingsUpdate(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class ContentScriptRequest(BaseModel):
+    video_subject: str = Field(min_length=1, max_length=500)
+    video_language: str = ""
+    paragraph_number: int = Field(default=1, ge=1, le=10)
+    video_script_prompt: str = Field(default="", max_length=2000)
+    custom_system_prompt: str = Field(default="", max_length=8000)
+
+
+class ContentTermsRequest(BaseModel):
+    video_subject: str = Field(min_length=1, max_length=500)
+    video_script: str = Field(min_length=1, max_length=20000)
+    amount: int = Field(default=5, ge=1, le=20)
+    match_materials_to_script: bool = False
+
+
+class ContentSocialMetadataRequest(BaseModel):
+    video_subject: str = Field(min_length=1, max_length=500)
+    video_script: str = Field(default="", max_length=20000)
+    language: str = Field(default="auto", max_length=64)
+    platform: str = Field(default="tiktok", max_length=64)
+
+
 class LicenseUpdate(BaseModel):
     license_code: str = ""
 

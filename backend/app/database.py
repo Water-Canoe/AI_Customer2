@@ -32,6 +32,16 @@ def get_douyin_cloak_profile_dir() -> Path:
     return get_data_root() / "douyin_cloak_profile"
 
 
+def get_content_assets_root() -> Path:
+    """Return the managed customer content asset folder."""
+    return get_data_root() / "content_assets"
+
+
+def get_video_generation_root() -> Path:
+    """Return the persistent video generation workspace."""
+    return get_data_root() / "video_generation"
+
+
 def get_backup_root(db_path: Path | None = None) -> Path:
     """Return the backup folder beside the persistent business database."""
     return (db_path or get_db_path()).parent / "backups"
@@ -585,6 +595,7 @@ DEFAULT_SETTINGS = {
         ensure_ascii=False,
     ),
     "next_task_number": "1",
+    "content_video_config": "{}",
 }
 
 

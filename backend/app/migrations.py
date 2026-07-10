@@ -69,10 +69,73 @@ def _create_runtime_job_queue(conn: sqlite3.Connection, _: str) -> None:
     )
 
 
+def _create_content_workbench(conn: sqlite3.Connection, _: str) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS content_assets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            asset_type TEXT NOT NULL CHECK(asset_type IN ('video', 'image', 'audio')),
+            relative_path TEXT NOT NULL UNIQUE,
+            thumbnail_path TEXT NOT NULL DEFAULT '',
+            mime_type TEXT NOT NULL DEFAULT '',
+            file_size INTEGER NOT NULL,
+            sha256 TEXT NOT NULL UNIQUE,
+            width INTEGER,
+            height INTEGER,
+            duration REAL,
+            deleted_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS video_jobs (
+            id TEXT PRIMARY KEY,
+            runtime_job_id TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL,
+            script TEXT NOT NULL DEFAULT '',
+            params TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'queued',
+            progress INTEGER NOT NULL DEFAULT 0,
+            current_stage TEXT NOT NULL DEFAULT 'queued',
+            attempt INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            outputs TEXT NOT NULL DEFAULT '[]',
+            publish_results TEXT NOT NULL DEFAULT '[]',
+            archived INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS video_job_assets (
+            video_job_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'material' CHECK(role IN ('material', 'audio', 'bgm')),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(video_job_id, asset_id, role),
+            FOREIGN KEY(video_job_id) REFERENCES video_jobs(id) ON DELETE CASCADE,
+            FOREIGN KEY(asset_id) REFERENCES content_assets(id) ON DELETE RESTRICT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_content_assets_type_created
+        ON content_assets(asset_type, deleted_at, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_video_jobs_status_created
+        ON video_jobs(status, archived, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_video_job_assets_order
+        ON video_job_assets(video_job_id, role, sort_order);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
     Migration(3, "create_runtime_job_queue", _create_runtime_job_queue),
+    Migration(4, "create_content_workbench", _create_content_workbench),
 )
 
 
