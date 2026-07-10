@@ -63,6 +63,9 @@ export default defineComponent({
     const licenseCode = ref('')
     const keywords = ref<Dict[]>([])
     const videos = ref<Dict[]>([])
+    const sourceVideoQuery = ref('')
+    const sourceVideoPage = ref(1)
+    const sourceKeywordPage = ref(1)
     const planDraft = ref<Dict>(defaultPlan())
     const settingsDraft = ref<Dict>({})
     const textDraft = ref<Dict[]>([])
@@ -90,6 +93,14 @@ export default defineComponent({
     const visibleRuns = computed(() => runs.value.filter(run => runArchiveFilter.value === 'archived' ? run.archived : !run.archived))
     const pagedPlans = computed(() => pageSlice(visiblePlans.value, planPage.value))
     const pagedRuns = computed(() => pageSlice(visibleRuns.value, runPage.value))
+    const filteredSourceVideos = computed(() => {
+      const query = sourceVideoQuery.value.trim().toLowerCase()
+      if (!query) return videos.value
+      return videos.value.filter(item => [item.title, item.description, item.author_name, item.content_id]
+        .some(value => String(value || '').toLowerCase().includes(query)))
+    })
+    const pagedSourceVideos = computed(() => pageSlice(filteredSourceVideos.value, sourceVideoPage.value))
+    const pagedSourceKeywords = computed(() => pageSlice(keywords.value, sourceKeywordPage.value))
 
     onMounted(loadPage)
     watch(view, () => loadPage())
@@ -205,7 +216,10 @@ export default defineComponent({
         ElMessage.info('快手当前先支持随机推荐流')
         return
       }
+      if (planDraft.value.source_mode !== value) planDraft.value.source_value = ''
       planDraft.value.source_mode = value
+      sourceVideoPage.value = 1
+      sourceKeywordPage.value = 1
     }
 
     async function createPlan(startNow = false) {
@@ -440,7 +454,9 @@ export default defineComponent({
             labelInput('计划名称', planDraft.value.name, value => planDraft.value.name = value, 'field-wide', `留空自动生成：${sourceLabel(planDraft.value.source_mode)}-计划ID`),
             labelSelect('来源模式', planDraft.value.source_mode, sourceOptions, setSourceMode),
             labelInput('每轮视频上限', String(planDraft.value.round_video_limit || 5), value => planDraft.value.round_video_limit = value.trim() || 5, '', '', 'number'),
-            labelInput(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide'),
+            planDraft.value.source_mode === 'competitor_videos'
+              ? labelTextarea(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide', '可从下方多选，也可每行填写一个视频链接或ID')
+              : labelInput(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide'),
             h('label', { class: 'form-field field-full' }, [
               h('span', '动作组合'),
               // 不选择任何动作时代表纯浏览，后端仍会记录已浏览视频。
@@ -624,30 +640,85 @@ export default defineComponent({
 
     function renderSourceShortcuts() {
       if (planDraft.value.source_mode === 'collected_keyword') {
-        return h('div', { class: 'table-scroll traffic-source-shortcuts' }, [
-          h('table', { class: 'data-table resizable-table' }, [
-            h('thead', [h('tr', ['关键词', '视频数', '操作'].map(text => h('th', text)))]),
-            h('tbody', keywords.value.slice(0, 20).length ? keywords.value.slice(0, 20).map(item => h('tr', [
-              h('td', tableText(item.keyword || '-')),
-              h('td', String(item.content_count || 0)),
-              h('td', h('button', { class: 'text-icon-button reserved', onClick: () => planDraft.value.source_value = item.keyword }, '填入')),
-            ])) : [emptyTableRow(3, '暂无已采集关键词')]),
+        return h('div', { class: 'traffic-source-picker' }, [
+          h('div', { class: 'table-scroll traffic-source-shortcuts' }, [
+            h('table', { class: 'data-table resizable-table' }, [
+              h('thead', [h('tr', ['关键词', '视频数', '操作'].map(text => h('th', text)))]),
+              h('tbody', pagedSourceKeywords.value.length ? pagedSourceKeywords.value.map(item => h('tr', [
+                h('td', tableText(item.keyword || '-')),
+                h('td', String(item.content_count || 0)),
+                h('td', h('button', { class: 'text-icon-button reserved', onClick: () => planDraft.value.source_value = item.keyword }, '填入')),
+              ])) : [emptyTableRow(3, '暂无已采集关键词')]),
+            ]),
           ]),
+          renderSidePagination(keywords.value.length, sourceKeywordPage, '关键词'),
         ])
       }
       if (planDraft.value.source_mode === 'competitor_videos') {
-        return h('div', { class: 'table-scroll traffic-source-shortcuts' }, [
-          h('table', { class: 'data-table resizable-table' }, [
-            h('thead', [h('tr', ['视频', '作者', '操作'].map(text => h('th', text)))]),
-            h('tbody', videos.value.slice(0, 8).length ? videos.value.slice(0, 8).map(item => h('tr', [
-              h('td', tableText(item.title || item.description || item.content_id)),
-              h('td', tableText(item.author_name || '未知作者')),
-              h('td', h('button', { class: 'text-icon-button reserved', onClick: () => planDraft.value.source_value = item.content_url || item.content_id }, '填入')),
-            ])) : [emptyTableRow(3, '暂无竞品视频')]),
+        const selected = new Set(splitSourceValues(planDraft.value.source_value))
+        const pageAllSelected = pagedSourceVideos.value.length > 0 && pagedSourceVideos.value.every(item => sourceVideoSelected(item, selected))
+        return h('div', { class: 'traffic-source-picker' }, [
+          h('div', { class: 'traffic-list-toolbar' }, [
+            h('input', {
+              value: sourceVideoQuery.value,
+              placeholder: '搜索视频、作者或ID',
+              onInput: (event: Event) => { sourceVideoQuery.value = (event.target as HTMLInputElement).value; sourceVideoPage.value = 1 },
+            }),
+            h('span', '已选 ' + selected.size + ' / 共 ' + filteredSourceVideos.value.length + ' 条'),
+            h('button', {
+              class: 'text-icon-button',
+              disabled: !pagedSourceVideos.value.length,
+              onClick: () => setSourceVideoSelection(pagedSourceVideos.value, !pageAllSelected),
+            }, pageAllSelected ? '取消本页' : '选择本页'),
           ]),
+          h('div', { class: 'table-scroll traffic-source-shortcuts' }, [
+            h('table', { class: 'data-table resizable-table traffic-source-video-table' }, [
+              h('thead', [h('tr', ['选择', '视频', '作者', '点赞', '评论', '链接'].map(text => h('th', text)))]),
+              h('tbody', pagedSourceVideos.value.length ? pagedSourceVideos.value.map(item => h('tr', [
+                h('td', h('input', {
+                  type: 'checkbox',
+                  checked: sourceVideoSelected(item, selected),
+                  onChange: (event: Event) => toggleSourceVideo(item, (event.target as HTMLInputElement).checked),
+                })),
+                h('td', tableText(item.title || item.description || item.content_id)),
+                h('td', tableText(item.author_name || '未知作者')),
+                h('td', String(item.like_count || 0)),
+                h('td', String(item.comment_count || 0)),
+                h('td', sourceVideoUrl(item) ? h('a', { href: sourceVideoUrl(item), target: '_blank', rel: 'noreferrer' }, '打开') : '-'),
+              ])) : [emptyTableRow(6, '暂无符合条件的竞品视频')]),
+            ]),
+          ]),
+          renderSidePagination(filteredSourceVideos.value.length, sourceVideoPage, '视频'),
         ])
       }
       return null
+    }
+
+    function splitSourceValues(value: string) {
+      return String(value || '').split(/[,\r\n]+/).map(item => item.trim()).filter((item, index, rows) => item && rows.indexOf(item) === index)
+    }
+
+    function sourceVideoValue(item: Dict) {
+      return sourceVideoUrl(item) || String(item.content_id || '').trim()
+    }
+
+    function sourceVideoUrl(item: Dict) {
+      return String(item.content_url || (item.content_id ? 'https://www.douyin.com/video/' + item.content_id : '')).trim()
+    }
+
+    function sourceVideoSelected(item: Dict, selected = new Set(splitSourceValues(planDraft.value.source_value))) {
+      return selected.has(sourceVideoValue(item)) || selected.has(String(item.content_id || ''))
+    }
+
+    function toggleSourceVideo(item: Dict, checked: boolean) {
+      const values = splitSourceValues(planDraft.value.source_value)
+        .filter(value => value !== sourceVideoValue(item) && value !== String(item.content_id || ''))
+      if (checked && sourceVideoValue(item)) values.push(sourceVideoValue(item))
+      planDraft.value.source_value = values.join('\n')
+    }
+
+    function setSourceVideoSelection(rows: Dict[], checked: boolean) {
+      rows.forEach(item => toggleSourceVideo(item, checked))
     }
 
     function renderPlanTable() {
@@ -863,6 +934,13 @@ export default defineComponent({
       ])
     }
 
+    function labelTextarea(text: string, value: string, update: (value: string) => void, extraClass = '', placeholder = '') {
+      return h('label', { class: ['form-field', extraClass] }, [
+        h('span', text),
+        h('textarea', { value, rows: 3, placeholder, onInput: (event: Event) => update((event.target as HTMLTextAreaElement).value) }),
+      ])
+    }
+
     function renderTextManager() {
       return h('div', { class: 'form-field field-full traffic-copy-manager' }, [
         h('div', { class: 'traffic-copy-head' }, [
@@ -963,7 +1041,7 @@ export default defineComponent({
     function sourceValueLabel() {
       if (planDraft.value.source_mode === 'search_keyword') return '搜索关键词'
       if (planDraft.value.source_mode === 'collected_keyword') return '已采集关键词'
-      if (planDraft.value.source_mode === 'competitor_videos') return '竞品视频链接/ID'
+      if (planDraft.value.source_mode === 'competitor_videos') return '竞品视频链接/ID（每行一条）'
       return '来源参数'
     }
 

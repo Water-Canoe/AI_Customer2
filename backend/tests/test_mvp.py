@@ -1397,6 +1397,25 @@ def test_traffic_like_button_click_does_not_press_shortcut(monkeypatch: pytest.M
     assert page.keyboard.pressed == []
 
 
+def test_traffic_confirmed_action_click_has_no_fixed_settle_wait() -> None:
+    from app.services import traffic_workbench
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.waits: list[int] = []
+
+        def evaluate(self, *_: object) -> bool:
+            return True
+
+        def wait_for_timeout(self, timeout: int) -> None:
+            self.waits.append(timeout)
+
+    page = FakePage()
+
+    assert traffic_workbench._click_current_control(page, "v1", "like", require_confirm=False) is True
+    assert page.waits == []
+
+
 def test_traffic_like_requires_server_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import traffic_workbench
 
@@ -1566,7 +1585,7 @@ def test_traffic_publish_comment_falls_back_to_keyboard_when_button_has_no_respo
     assert page.keyboard.pressed == ["Control+Enter"]
 
 
-def test_traffic_publish_comment_requires_visible_text() -> None:
+def test_traffic_publish_comment_accepts_server_confirmation_without_dom_wait() -> None:
     from app.services import traffic_workbench
 
     class ResponseInfo:
@@ -1597,7 +1616,7 @@ def test_traffic_publish_comment_requires_visible_text() -> None:
             self.calls += 1
             return self.calls == 1
 
-    assert traffic_workbench._publish_comment_and_confirm(FakePage(), "不错！") is None
+    assert traffic_workbench._publish_comment_and_confirm(FakePage(), "不错！") is not None
 
 
 def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1665,7 +1684,7 @@ def test_traffic_records_filter_actions_and_image_preview(tmp_path: Path) -> Non
     from app.schemas import TrafficPlanCreate
     from app.services import traffic_workbench
 
-    auto_plan = traffic_workbench.create_plan(TrafficPlanCreate(name="", platform="dy", source_mode="collected_keyword"))
+    auto_plan = traffic_workbench.create_plan(TrafficPlanCreate(name="", platform="dy", source_mode="collected_keyword", source_value="AI客服"))
     assert auto_plan["name"] == f"已采集关键词-{auto_plan['id'][:8]}"
 
     plan = traffic_workbench.create_plan(TrafficPlanCreate(name="记录筛选", platform="dy"))
@@ -1979,9 +1998,17 @@ def test_traffic_jingxuan_page_jumps_to_project_video_for_targeted_source(tmp_pa
         conn.execute("DELETE FROM contents")
         conn.execute(
             """
-            INSERT INTO contents(platform, content_id, title, description, content_url)
-            VALUES('dy', '7123', '项目库视频', '', 'https://www.douyin.com/video/7123')
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status)
+            VALUES('dy', 'competitor-7123', '竞品作者', '竞品')
             """
+        )
+        author_id = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'competitor-7123'").fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, author_account_id, title, description, content_url)
+            VALUES('dy', '7123', ?, '项目库视频', '', 'https://www.douyin.com/video/7123')
+            """,
+            (author_id,),
         )
 
     class FakePage:
@@ -2030,8 +2057,8 @@ def test_traffic_project_video_candidate_respects_author_cooldown(tmp_path: Path
         conn.execute("DELETE FROM contents")
         conn.execute(
             """
-            INSERT INTO user_accounts(platform, platform_user_id, nickname)
-            VALUES('dy', 'author-cool', '冷却作者'), ('dy', 'author-open', '可用作者')
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status)
+            VALUES('dy', 'author-cool', '冷却作者', '竞品'), ('dy', 'author-open', '可用作者', '竞品')
             """
         )
         cool_author = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'author-cool'").fetchone()["id"]
@@ -2058,6 +2085,56 @@ def test_traffic_project_video_candidate_respects_author_cooldown(tmp_path: Path
     assert candidate is not None
     assert candidate["url"] == "https://www.douyin.com/video/open-video"
     assert traffic_workbench._random_project_video_candidate(0, {"author-cool"})["url"] == "https://www.douyin.com/video/open-video"
+
+
+def test_traffic_selected_competitor_videos_support_multiple_from_same_author(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficPlanCreate
+    from app.services import traffic_workbench
+
+    source_value = "https://www.douyin.com/video/7101\nhttps://www.douyin.com/video/7102"
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(
+        name="多视频",
+        platform="dy",
+        source_mode="competitor_videos",
+        source_value=source_value,
+    ))
+    run = traffic_workbench.create_run(plan["id"])
+    with database.connect() as conn:
+        conn.execute("DELETE FROM contents")
+        conn.execute(
+            """
+            INSERT INTO user_accounts(platform, platform_user_id, nickname, competitor_status)
+            VALUES('dy', 'competitor-multi', '竞品作者', '竞品')
+            """
+        )
+        author_id = conn.execute("SELECT id FROM user_accounts WHERE platform_user_id = 'competitor-multi'").fetchone()["id"]
+        conn.execute(
+            """
+            INSERT INTO contents(platform, content_id, author_account_id, title, content_url)
+            VALUES
+              ('dy', '7101', ?, '视频一', 'https://www.douyin.com/video/7101'),
+              ('dy', '7102', ?, '视频二', 'https://www.douyin.com/video/7102')
+            """,
+            (author_id, author_id),
+        )
+
+    first = traffic_workbench._random_project_video_candidate(24, selected_sources=source_value)
+    assert first is not None
+    first_id = traffic_workbench._source_value_content_id(first["url"])
+    with database.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO traffic_records(run_id, plan_id, platform, video_id, video_url, author_id, author_name, actions, status)
+            VALUES(?, ?, 'dy', ?, ?, 'competitor-multi', '竞品作者', '[]', 'done')
+            """,
+            (run["id"], plan["id"], first_id, first["url"]),
+        )
+
+    second = traffic_workbench._random_project_video_candidate(24, selected_sources=source_value)
+    assert second is not None
+    assert second["url"] != first["url"]
 
 
 def test_traffic_active_video_prefers_feed_api_cache() -> None:
@@ -2095,26 +2172,11 @@ def test_traffic_active_video_prefers_feed_api_cache() -> None:
     assert traffic_workbench._is_regular_video({"aweme_type": 108}) is False
 
 
-def test_traffic_project_video_candidate_filters_collected_keyword(tmp_path: Path) -> None:
-    prepare_project(tmp_path)
-    from app import database
+def test_traffic_keyword_modes_open_douyin_search() -> None:
     from app.services import traffic_workbench
 
-    with database.connect() as conn:
-        conn.execute("DELETE FROM contents")
-        conn.execute(
-            """
-            INSERT INTO contents(platform, content_id, title, description, content_url, source_keyword)
-            VALUES
-              ('dy', 'wrong-video', '其它关键词', '', 'https://www.douyin.com/video/wrong-video', '其它'),
-              ('dy', 'right-video', '目标关键词', '', 'https://www.douyin.com/video/right-video', 'AI客服')
-            """
-        )
-
-    candidate = traffic_workbench._random_project_video_candidate(0, source_keyword="AI客服")
-
-    assert candidate is not None
-    assert candidate["url"] == "https://www.douyin.com/video/right-video"
+    assert traffic_workbench._target_url({"source_mode": "search_keyword", "source_value": "AI客服"}) == "https://www.douyin.com/search/AI%E5%AE%A2%E6%9C%8D"
+    assert traffic_workbench._target_url({"source_mode": "collected_keyword", "source_value": "AI客服"}) == "https://www.douyin.com/search/AI%E5%AE%A2%E6%9C%8D"
 
 
 def test_traffic_follow_dedup_uses_author_scope(tmp_path: Path) -> None:
@@ -2245,7 +2307,7 @@ def test_traffic_kuaishou_advance_uses_cached_video_identity(monkeypatch: pytest
 
     assert traffic_workbench._advance_kuaishou_video(page, "ks-photo-1", cache) is True
     assert page.mouse.clicks == [(1100, 420)]
-    assert page.keyboard.pressed == ["ArrowDown"]
+    assert page.keyboard.pressed == []
     assert seen_caches == [cache, cache]
 
 

@@ -1033,6 +1033,23 @@ input[type='checkbox'] {
   background: #ffffff;
 }
 
+.traffic-source-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.traffic-source-picker .traffic-list-toolbar {
+  margin-bottom: 0;
+}
+
+.traffic-source-picker .traffic-list-toolbar input {
+  max-width: 320px;
+}
+
+.traffic-source-video-table {
+  min-width: 760px;
+}
+
 .traffic-side-table {
   min-width: 860px;
 }

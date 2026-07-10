@@ -40,6 +40,9 @@ TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 TRAFFIC_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 INSTALL_TIMEOUT_SECONDS = 300
 WARMUP_VIDEO_SKIP_COUNT = 3
+ACTION_RESPONSE_TIMEOUT_MS = 4_000
+VIDEO_CHANGE_TIMEOUT_MS = 1_600
+KEYWORD_SOURCE_MODES = {"search_keyword", "collected_keyword"}
 ACTION_FILTER_TERMS = {
     "like": ["like", "点赞视频"],
     "collect": ["collect", "收藏视频"],
@@ -60,6 +63,7 @@ PLATFORM_LOGIN_TARGETS = {
 }
 TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
 COMMENT_EDITOR_SELECTOR = "#videoSideCard textarea, #videoSideCard [contenteditable='true'], #videoSideBar textarea, #videoSideBar [contenteditable='true'], textarea, [contenteditable='true']"
+COMMENT_EDITOR_VISIBLE_SELECTOR = ", ".join(f"{selector.strip()}:visible" for selector in COMMENT_EDITOR_SELECTOR.split(","))
 COMMENT_CONTAINER_SELECTOR = "#videoSideCard .comment-input-inner-container, #videoSideBar .comment-input-inner-container, .comment-input-inner-container"
 
 
@@ -633,7 +637,7 @@ def source_keywords() -> list[dict[str, Any]]:
             """
             SELECT source_keyword AS keyword, COUNT(*) AS content_count
             FROM contents
-            WHERE source_keyword <> ''
+            WHERE platform = 'dy' AND source_keyword <> ''
             GROUP BY source_keyword
             ORDER BY content_count DESC, keyword
             """
@@ -641,7 +645,7 @@ def source_keywords() -> list[dict[str, Any]]:
     return database.rows_to_dicts(rows)
 
 
-def source_competitor_videos(limit: int = 100) -> list[dict[str, Any]]:
+def source_competitor_videos() -> list[dict[str, Any]]:
     with database.connect() as conn:
         rows = conn.execute(
             """
@@ -650,11 +654,11 @@ def source_competitor_videos(limit: int = 100) -> list[dict[str, Any]]:
                 c.like_count, c.comment_count, u.nickname AS author_name
             FROM contents c
             LEFT JOIN user_accounts u ON u.id = c.author_account_id
-            WHERE u.competitor_status = '竞品'
+            WHERE c.platform = 'dy'
+              AND u.competitor_status = '竞品'
+              AND (c.content_url LIKE '%douyin.com/video/%' OR c.content_url LIKE '%douyin.com/note/%' OR c.content_id <> '')
             ORDER BY c.updated_at DESC
-            LIMIT ?
-            """,
-            (limit,),
+            """
         ).fetchall()
     return database.rows_to_dicts(rows)
 
@@ -774,7 +778,8 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                 }
             handled_count = 0
             seen_count = 0
-            max_seen_count = limit * 10 + WARMUP_VIDEO_SKIP_COUNT
+            warmup_skip_count = WARMUP_VIDEO_SKIP_COUNT if plan["source_mode"] == "random_feed" else 0
+            max_seen_count = limit * 10 + warmup_skip_count
             while handled_count < limit:
                 _raise_if_stop_requested(run_id)
                 video = _read_active_video(page, video_cache)
@@ -793,7 +798,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
                     continue
                 no_progress_count = 0
                 seen_count += 1
-                if seen_count <= WARMUP_VIDEO_SKIP_COUNT:
+                if seen_count <= warmup_skip_count:
                     if not _next_video(page, run_id, plan, video["video_id"], video_cache, author_cooldown_hours, project_author_keys, silent=True):
                         no_progress_count += 1
                         if no_progress_count >= stop_after_failures:
@@ -1091,10 +1096,8 @@ def _launch_context(profile_dir: Path, headless: bool = False) -> Any:
 def _target_url(plan: dict[str, Any]) -> str:
     if plan.get("platform") == "ks":
         return KUAISHOU_RECO_URL
-    if plan["source_mode"] == "search_keyword" and plan["source_value"]:
+    if plan["source_mode"] in KEYWORD_SOURCE_MODES and plan["source_value"]:
         return f"https://www.douyin.com/search/{quote(plan['source_value'])}"
-    if plan["source_mode"] == "competitor_videos" and plan["source_value"].startswith("http"):
-        return plan["source_value"]
     return "https://www.douyin.com/?recommend=1"
 
 
@@ -1237,8 +1240,8 @@ def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, vide
             "probe",
             {"url": page.url},
         )
-    if source_mode == "search_keyword":
-        if _open_search_result_video(page, run_id, video_cache):
+    if source_mode in KEYWORD_SOURCE_MODES:
+        if _open_search_result_video(page, run_id, video_cache, project_author_keys):
             return "search"
         raise TrafficStop(
             "搜索页没有找到可点击的视频，任务已停止。",
@@ -1247,8 +1250,8 @@ def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, vide
             "probe",
             {"url": page.url, "source_value": source_value},
         )
-    if source_mode in {"competitor_videos", "collected_keyword"}:
-        project = _random_project_video_candidate(cooldown_hours, project_author_keys, source_value if source_mode == "collected_keyword" else "")
+    if source_mode == "competitor_videos":
+        project = _random_project_video_candidate(cooldown_hours, project_author_keys, source_value)
         if project:
             _remember_project_author(project_author_keys, project)
             _goto_video_candidate(page, run_id, project["url"], "已从项目库按来源队列跳转一个视频。")
@@ -1261,11 +1264,6 @@ def _navigate_to_executable_video(page: Any, run_id: str, source_mode: str, vide
             {"source_mode": source_mode, "source_value": source_value},
         )
     if "douyin.com/jingxuan" in page.url:
-        project = _random_project_video_candidate(cooldown_hours, project_author_keys, source_value if source_mode == "collected_keyword" else "")
-        if project:
-            _remember_project_author(project_author_keys, project)
-            _goto_video_candidate(page, run_id, project["url"], "已从项目库随机跳转一个视频。")
-            return "project"
         candidates = _visible_video_links(page)
         if candidates:
             _goto_video_candidate(page, run_id, random.choice(candidates[:8])["href"], "已从精选页随机跳转一个视频。")
@@ -1301,11 +1299,14 @@ def _open_random_visible_video(page: Any, run_id: str, video_cache: dict[str, An
     return False
 
 
-def _open_search_result_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None) -> bool:
+def _open_search_result_video(page: Any, run_id: str, video_cache: dict[str, Any] | None = None, seen_source_keys: set[str] | None = None) -> bool:
     for _ in range(3):
         candidates = _visible_video_candidates(page) or _visible_video_links(page)
-        for candidate in candidates[:8]:
+        candidates = [item for item in candidates if _source_candidate_key(item) not in (seen_source_keys or set())]
+        for candidate in candidates[:12]:
             if _click_video_candidate(page, run_id, candidate, "已从搜索结果点击一个视频。") and _read_active_video(page, video_cache)["video_id"]:
+                if seen_source_keys is not None:
+                    seen_source_keys.add(_source_candidate_key(candidate))
                 return True
         page.mouse.wheel(0, random.randint(600, 1200))
         page.wait_for_timeout(1000)
@@ -1354,8 +1355,17 @@ def _modal_feed_url(url: str) -> str:
 
 
 def _next_video(page: Any, run_id: str, plan: dict[str, Any], previous_video_id: str, video_cache: dict[str, Any] | None, cooldown_hours: int, project_author_keys: set[str] | None = None, silent: bool = False) -> bool:
-    if plan["source_mode"] in {"competitor_videos", "collected_keyword"}:
-        project = _random_project_video_candidate(cooldown_hours, project_author_keys, plan.get("source_value", "") if plan["source_mode"] == "collected_keyword" else "")
+    if plan["source_mode"] in KEYWORD_SOURCE_MODES:
+        search_url = f"https://www.douyin.com/search/{quote(str(plan.get('source_value') or ''))}"
+        if not _goto_with_timeout_tolerance(page, search_url, 60_000):
+            return False
+        _wait_for_douyin_ready_signal(page, run_id, 4_000)
+        if not _open_search_result_video(page, run_id, video_cache, project_author_keys):
+            return False
+        next_id = _read_active_video(page, video_cache)["video_id"]
+        return bool(next_id and next_id != previous_video_id)
+    if plan["source_mode"] == "competitor_videos":
+        project = _random_project_video_candidate(cooldown_hours, project_author_keys, str(plan.get("source_value") or ""))
         if not project:
             return False
         _remember_project_author(project_author_keys, project)
@@ -1363,6 +1373,14 @@ def _next_video(page: Any, run_id: str, plan: dict[str, Any], previous_video_id:
         next_id = _read_active_video(page, video_cache)["video_id"]
         return bool(next_id and next_id != previous_video_id)
     return _advance_video(page, previous_video_id, video_cache)
+
+
+def _source_candidate_key(candidate: dict[str, Any]) -> str:
+    url = str(candidate.get("href") or "")
+    match = re.search(r"/(?:video|note)/([^/?#]+)", url)
+    if match:
+        return match.group(1)
+    return url or f"{candidate.get('kind', '')}:{candidate.get('text', '')}:{candidate.get('x', '')}:{candidate.get('y', '')}"
 
 
 def _goto_video_candidate(page: Any, run_id: str, url: str, message: str, silent: bool = False) -> None:
@@ -1381,14 +1399,39 @@ def _random_project_video_url() -> str:
     return candidate["url"] if candidate else ""
 
 
-def _random_project_video_candidate(cooldown_hours: int, exclude_author_keys: set[str] | None = None, source_keyword: str = "") -> dict[str, str] | None:
+def _split_source_values(value: str) -> list[str]:
+    values: list[str] = []
+    for item in re.split(r"[,\r\n]+", str(value or "")):
+        item = item.strip()
+        if item and item not in values:
+            values.append(item)
+    return values
+
+
+def _source_value_content_id(value: str) -> str:
+    match = re.search(r"/(?:video|note)/([^/?#]+)", value)
+    return match.group(1) if match else (value if not value.startswith("http") else "")
+
+
+def _random_project_video_candidate(cooldown_hours: int, exclude_author_keys: set[str] | None = None, selected_sources: str = "") -> dict[str, str] | None:
     modifier = f"-{max(cooldown_hours, 0)} hours"
-    keyword = source_keyword.strip()
-    keyword_clause = "AND c.source_keyword = ?" if keyword else ""
+    selected = _split_source_values(selected_sources)
+    selected_ids = [_source_value_content_id(item) for item in selected]
+    selected_ids = [item for item in selected_ids if item]
+    selected_clause = ""
     params: list[Any] = []
-    if keyword:
-        params.append(keyword)
+    if selected:
+        url_placeholders = ",".join("?" for _ in selected)
+        id_placeholders = ",".join("?" for _ in selected_ids) or "NULL"
+        selected_clause = f"AND (c.content_url IN ({url_placeholders}) OR c.content_id IN ({id_placeholders}))"
+        params.extend(selected)
+        params.extend(selected_ids)
     params.append(modifier)
+    author_cooldown_clause = "" if selected else """
+                    OR (u.platform_user_id <> '' AND tr.author_id = u.platform_user_id)
+                    OR (u.nickname <> '' AND tr.author_name = u.nickname)
+    """
+    order_clause = "ORDER BY c.updated_at DESC" if selected else "ORDER BY RANDOM() LIMIT 20"
     with database.connect() as conn:
         rows = conn.execute(
             f"""
@@ -1398,7 +1441,8 @@ def _random_project_video_candidate(cooldown_hours: int, exclude_author_keys: se
             FROM contents c
             LEFT JOIN user_accounts u ON u.id = c.author_account_id
             WHERE c.platform = 'dy'
-              {keyword_clause}
+              AND u.competitor_status = '竞品'
+              {selected_clause}
               AND (
                 c.content_url LIKE '%douyin.com/video/%'
                 OR c.content_url LIKE '%douyin.com/note/%'
@@ -1411,20 +1455,47 @@ def _random_project_video_candidate(cooldown_hours: int, exclude_author_keys: se
                   AND (
                     (c.content_id <> '' AND tr.video_id = c.content_id)
                     OR (c.content_url <> '' AND tr.video_url = c.content_url)
-                    OR (u.platform_user_id <> '' AND tr.author_id = u.platform_user_id)
-                    OR (u.nickname <> '' AND tr.author_name = u.nickname)
+                    {author_cooldown_clause}
                   )
               )
-            ORDER BY RANDOM()
-            LIMIT 20
+            {order_clause}
             """,
             params,
         ).fetchall()
-    for row in rows:
-        candidate = _project_video_candidate_from_row(row)
-        if candidate and _project_author_key(candidate) not in (exclude_author_keys or set()):
+    candidates = [candidate for row in rows if (candidate := _project_video_candidate_from_row(row))]
+    matched = {str(row["content_url"] or "") for row in rows} | {str(row["content_id"] or "") for row in rows}
+    for value in selected:
+        content_id = _source_value_content_id(value)
+        if value in matched or content_id in matched:
+            continue
+        if _is_douyin_video_url(value):
+            candidate = {"url": value, "author_id": "", "author_name": ""}
+        elif content_id:
+            candidate = {"url": f"https://www.douyin.com/video/{content_id}", "author_id": "", "author_name": ""}
+        else:
+            continue
+        if not _project_video_recently_processed(candidate, modifier):
+            candidates.append(candidate)
+    for candidate in candidates:
+        if selected or _project_author_key(candidate) not in (exclude_author_keys or set()):
             return candidate
     return None
+
+
+def _project_video_recently_processed(candidate: dict[str, str], modifier: str) -> bool:
+    content_id = _source_value_content_id(candidate.get("url", ""))
+    with database.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM traffic_records
+            WHERE platform = 'dy'
+              AND created_at >= datetime('now', 'localtime', ?)
+              AND ((? <> '' AND video_id = ?) OR video_url = ?)
+            LIMIT 1
+            """,
+            (modifier, content_id, content_id, candidate.get("url", "")),
+        ).fetchone()
+    return row is not None
 
 
 def _project_video_candidate_from_row(row: Any) -> dict[str, str] | None:
@@ -1780,9 +1851,7 @@ def _advance_kuaishou_video(page: Any, previous_video_id: str, video_cache: dict
             page.mouse.wheel(0, 1600)
         else:
             page.keyboard.press("PageDown")
-        page.wait_for_timeout(1600)
-        next_video = _read_kuaishou_active_video(page, video_cache)
-        if next_video["video_id"] and next_video["video_id"] != previous_video_id:
+        if _wait_for_video_change(page, previous_video_id, _read_kuaishou_active_video, video_cache):
             return True
     return False
 
@@ -1937,13 +2006,13 @@ def _execute_kuaishou_comment(run_id: str, page: Any, video: dict[str, Any], tex
         _append_log(run_id, "warning", "comment", "没有找到快手评论按钮，已跳过评论。", "当前视频没有可点击的评论入口", "系统会继续处理后续视频。", {"video_id": video["video_id"]})
         return False
     page.mouse.click(point["x"], point["y"])
-    page.wait_for_timeout(1200)
     editor = page.locator(".comment-input input").last
-    if not editor.is_visible(timeout=3000):
+    try:
+        editor.wait_for(state="visible", timeout=2_000)
+    except Exception:
         _append_log(run_id, "warning", "comment", "没有找到快手评论输入框，已跳过评论。", "评论面板没有正常打开", "系统会继续处理后续视频。", {"video_id": video["video_id"]})
         return False
     editor.fill(text)
-    page.wait_for_timeout(500)
     payload = _kuaishou_response_after_click(page, "/rest/v/photo/comment/add", lambda: _click_kuaishou_comment_send(page))
     if payload is None or not _payload_status_ok(payload):
         _append_log(run_id, "warning", "comment", "快手评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应", "系统不会把未确认评论写为成功；请降低执行频率或检查账号状态。", {"video_id": video["video_id"], "text": text})
@@ -1990,8 +2059,9 @@ def _kuaishou_action_endpoint(action: str) -> str:
 
 def _kuaishou_response_after_click(page: Any, endpoint: str, click: Any) -> dict[str, Any] | None:
     try:
-        with page.expect_response(lambda response: endpoint in str(getattr(response, "url", "")), timeout=10_000) as response_info:
-            click()
+        with page.expect_response(lambda response: endpoint in str(getattr(response, "url", "")), timeout=ACTION_RESPONSE_TIMEOUT_MS) as response_info:
+            if click() is False:
+                raise RuntimeError("action control unavailable")
         payload = _response_json(response_info.value)
         payload["_request_post_data"] = _request_post_data(response_info.value)
         payload["_confirm_url"] = _response_path(response_info.value)
@@ -2026,9 +2096,8 @@ def _click_kuaishou_comment_send(page: Any) -> bool:
 
 def _close_kuaishou_comment_panel(page: Any) -> None:
     try:
-        if page.locator(".comment-input input").last.is_visible(timeout=500):
+        if page.locator(".comment-input input").last.is_visible():
             page.keyboard.press("Escape")
-            page.wait_for_timeout(500)
     except Exception:
         return
 
@@ -2132,7 +2201,7 @@ def _run_action_with_retry(run_id: str, page: Any, video: dict[str, Any], label:
                 raise
             if attempt == 0:
                 _append_log(run_id, "warning", phase, f"{label}操作超时，正在重试一次。", "页面响应慢或当前视频不支持互动", "系统会再试一次；如果仍失败，会自动下滑跳过。", {"video_id": video.get("video_id"), "error": str(exc)})
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(250)
                 continue
             _append_log(run_id, "warning", "advance", f"{label}连续 2 次失败，当前视频已跳过。", "可能是广告、页面加载异常或当前视频不支持互动", "无需手动处理，系统会继续下滑处理后续视频。", {"video_id": video.get("video_id"), "error": str(exc)})
             return False, True
@@ -2197,15 +2266,17 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
         return False
     try:
         _open_comment_panel(page, video.get("video_id", ""))
-        page.wait_for_timeout(1000)
         composer = _comment_composer(page)
-        if not composer.is_visible(timeout=3000):
+        try:
+            composer.wait_for(state="visible", timeout=2_000)
+        except Exception:
             container = page.locator(COMMENT_CONTAINER_SELECTOR).first
-            if container.is_visible(timeout=1000):
+            if container.is_visible():
                 container.click(timeout=1000)
-                page.wait_for_timeout(300)
                 composer = _comment_composer(page)
-            if not composer.is_visible(timeout=1000):
+            try:
+                composer.wait_for(state="visible", timeout=1_000)
+            except Exception:
                 _append_log(run_id, "warning", "comment", "没有找到评论输入框，已跳过评论。", "评论区没有打开或当前视频不支持评论", "系统会继续浏览后续视频。", {"video_id": video["video_id"]})
                 return False
         if text:
@@ -2223,7 +2294,9 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
                 with page.expect_file_chooser(timeout=5000) as chooser:
                     page.locator(chooser_selector).first.click(timeout=5000)
                 chooser.value.set_files(image_path)
-                page.wait_for_timeout(1500)
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and not _comment_image_ready(page):
+                    page.wait_for_timeout(100)
                 if not _comment_image_ready(page):
                     _append_log(run_id, "warning", "comment", "评论图片没有完成预览，已取消发送。", "图片上传后没有出现预览", "请到引流设置检查图片格式或换一张图片。", {"image_path": image_path})
                     return False
@@ -2232,9 +2305,9 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
                 return False
         payload = _publish_comment_and_confirm(page, text)
         if payload is None:
-            _append_log(run_id, "warning", "comment", "评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应，或评论发布后没有在评论区出现", "系统不会把未确认评论写为成功；如果频繁出现，请检查账号限制或安全验证。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
+            _append_log(run_id, "warning", "comment", "评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应", "系统不会把未确认评论写为成功；如果频繁出现，请检查账号限制或安全验证。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
             return False
-        _append_log(run_id, "success", "comment", "评论已发送。", "评论发布接口返回成功，且已完成二次确认", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path, "response": _compact_payload(payload)})
+        _append_log(run_id, "success", "comment", "评论已发送。", "评论发布接口已返回成功", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path, "response": _compact_payload(payload)})
         _insert_dedup(video, "comment", content_hash, "done")
         return True
     finally:
@@ -2244,13 +2317,13 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
 def _click_and_confirm_action_response(page: Any, video: dict[str, Any], action: str, selectors: list[str], allow_like_shortcut: bool = False) -> dict[str, Any] | None:
     video_id = str(video.get("video_id") or "")
     try:
-        with page.expect_response(lambda response: _is_action_response(response, action, video), timeout=10_000) as response_info:
+        with page.expect_response(lambda response: _is_action_response(response, action, video), timeout=ACTION_RESPONSE_TIMEOUT_MS) as response_info:
             clicked = _click_current_control(page, video_id, action, selectors, require_confirm=False)
             if not clicked and allow_like_shortcut:
                 page.keyboard.press("z")
                 clicked = True
             if not clicked:
-                return None
+                raise RuntimeError("action control unavailable")
         payload = _response_json(response_info.value)
         payload["_confirm_url"] = _response_path(response_info.value)
         return payload if _payload_status_ok(payload) else None
@@ -2339,7 +2412,7 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _comment_composer(page: Any) -> Any:
-    return page.locator(COMMENT_EDITOR_SELECTOR).first
+    return page.locator(COMMENT_EDITOR_VISIBLE_SELECTOR).first
 
 
 def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
@@ -2348,7 +2421,6 @@ def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
     page.keyboard.press("Control+A")
     page.keyboard.press("Backspace")
     page.keyboard.insert_text(text)
-    page.wait_for_timeout(500)
 
 
 def _force_set_comment_text(page: Any, text: str) -> None:
@@ -2379,11 +2451,10 @@ def _force_set_comment_text(page: Any, text: str) -> None:
         )
     except Exception:
         return None
-    page.wait_for_timeout(300)
 
 
 def _click_current_control(page: Any, video_id: str, action: str, extra_selectors: list[str] | None = None, require_confirm: bool = True) -> bool:
-    before = _current_control_snapshot(page, video_id, action)
+    before = _current_control_snapshot(page, video_id, action) if require_confirm and action != "comment" else {}
     clicked = page.evaluate(
         """
         ({ videoId, action, extraSelectors }) => {
@@ -2432,10 +2503,14 @@ def _click_current_control(page: Any, video_id: str, action: str, extra_selector
     )
     if not clicked:
         return False
-    page.wait_for_timeout(1200)
     if action == "comment" or not require_confirm:
         return True
-    return _control_changed(before, _current_control_snapshot(page, video_id, action))
+    deadline = time.monotonic() + VIDEO_CHANGE_TIMEOUT_MS / 1000
+    while time.monotonic() < deadline:
+        if _control_changed(before, _current_control_snapshot(page, video_id, action)):
+            return True
+        page.wait_for_timeout(100)
+    return False
 
 
 def _current_control_snapshot(page: Any, video_id: str, action: str) -> dict[str, str]:
@@ -2498,10 +2573,11 @@ def _close_comment_panel(page: Any) -> None:
     except Exception:
         pass
     page.keyboard.press("x")
-    page.wait_for_timeout(700)
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline and _is_comment_panel_open(page):
+        page.wait_for_timeout(50)
     if _is_comment_panel_open(page):
         _click_current_control(page, "", "comment", ['[data-e2e="feed-comment-icon"]'])
-        page.wait_for_timeout(700)
 
 
 def _is_comment_panel_open(page: Any) -> bool:
@@ -2584,17 +2660,14 @@ def _comment_image_ready(page: Any) -> bool:
 
 
 def _publish_comment_and_confirm(page: Any, text: str = "") -> dict[str, Any] | None:
-    payload = _comment_publish_response(page, lambda: _click_comment_send_button(page), 5000)
+    payload = _comment_publish_response(page, lambda: _click_comment_send_button(page), 1_500)
     if payload is None:
-        payload = _comment_publish_response(page, lambda: _press_comment_submit_key(page, "Control+Enter"), 5000)
+        payload = _comment_publish_response(page, lambda: _press_comment_submit_key(page, "Control+Enter"), 1_500)
     if payload is None:
-        payload = _comment_publish_response(page, lambda: _press_comment_submit_key(page, "Enter"), 5000)
+        payload = _comment_publish_response(page, lambda: _press_comment_submit_key(page, "Enter"), 1_500)
     if payload is None:
         return None
     if not _payload_status_ok(payload) or not _comment_publish_has_result(payload, text):
-        return None
-    page.wait_for_timeout(1000)
-    if text and not _comment_text_visible(page, text):
         return None
     return payload
 
@@ -2603,7 +2676,7 @@ def _comment_publish_response(page: Any, action: Any, timeout: int) -> dict[str,
     try:
         with page.expect_response(lambda response: "aweme/v1/web/comment/publish" in response.url, timeout=timeout) as response_info:
             if not action():
-                return None
+                raise RuntimeError("comment submit control unavailable")
         payload = _response_json(response_info.value)
         return payload
     except Exception:
@@ -2674,21 +2747,6 @@ def _payload_has_any_key(value: Any, keys: set[str]) -> bool:
     return False
 
 
-def _comment_text_visible(page: Any, text: str) -> bool:
-    try:
-        return bool(page.evaluate(
-            """
-            expected => {
-              const roots = [document.querySelector('#videoSideCard'), document.body].filter(Boolean);
-              return roots.some(root => (root.innerText || root.textContent || '').includes(expected));
-            }
-            """,
-            text,
-        ))
-    except Exception:
-        return False
-
-
 def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any] | None = None) -> bool:
     _close_comment_panel(page)
     mode = _detect_douyin_page_mode(page)
@@ -2713,10 +2771,18 @@ def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any
             links = [item for item in _visible_video_links(page) if previous_video_id not in str(item.get("href", ""))]
             if links:
                 page.goto(random.choice(links[:6])["href"], wait_until="domcontentloaded", timeout=60_000)
-        page.wait_for_timeout(1400)
-        next_id = _read_active_video(page, video_cache)["video_id"]
+        if _wait_for_video_change(page, previous_video_id, _read_active_video, video_cache):
+            return True
+    return False
+
+
+def _wait_for_video_change(page: Any, previous_video_id: str, reader: Any, video_cache: dict[str, Any] | None) -> bool:
+    deadline = time.monotonic() + VIDEO_CHANGE_TIMEOUT_MS / 1000
+    while time.monotonic() < deadline:
+        next_id = str(reader(page, video_cache).get("video_id") or "")
         if next_id and next_id != previous_video_id:
             return True
+        page.wait_for_timeout(100)
     return False
 
 
@@ -2813,11 +2879,16 @@ def _normalize_plan(payload: TrafficPlanCreate, plan_id: str = "") -> dict[str, 
     name = payload.name.strip()
     if not name or name == "随机推荐引流":
         name = _default_plan_name(payload.source_mode, plan_id)
+    source_value = payload.source_value.strip()
+    if payload.source_mode in KEYWORD_SOURCE_MODES and not source_value:
+        raise ValueError("关键词模式必须填写一个搜索关键词")
+    if payload.source_mode == "competitor_videos":
+        source_value = "\n".join(_split_source_values(source_value))
     return {
         "name": name,
         "platform": payload.platform,
         "source_mode": payload.source_mode,
-        "source_value": payload.source_value.strip(),
+        "source_value": source_value,
         "action_like": payload.action_like,
         "action_collect": payload.action_collect,
         "action_follow": payload.action_follow,
