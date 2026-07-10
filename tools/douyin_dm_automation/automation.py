@@ -12,7 +12,7 @@ DOUYIN_HOSTS = {"www.douyin.com", "douyin.com"}
 DEFAULT_PROFILE_DIR = Path(__file__).resolve().parents[2] / "data" / "douyin_cloak_profile"
 DEFAULT_WAIT_SECONDS = 300
 DM_PANEL_WAIT_SECONDS = 25
-DISCOVERY_POLL_MS = 350
+DISCOVERY_POLL_MS = 100
 SEND_READY_TIMEOUT_MS = 2500
 
 PROFILE_DM_SELECTORS = [
@@ -67,15 +67,12 @@ def normalize_message(value: str) -> str:
     return text
 
 
-async def first_visible(page: Any, selectors: list[str], timeout_ms: int = 80) -> Any | None:
+async def first_visible(page: Any, selectors: list[str]) -> Any | None:
     for selector in selectors:
         try:
-            locator = page.locator(selector)
-            count = await locator.count()
-            for index in range(count):
-                candidate = locator.nth(index)
-                if await candidate.is_visible(timeout=timeout_ms):
-                    return candidate
+            locator = page.locator(f"{selector}:visible")
+            if await locator.count():
+                return locator.last
         except Exception:
             continue
     return None
@@ -103,9 +100,9 @@ async def dismiss_easy_popups(page: Any) -> None:
         "div[role='button']:has-text('我知道了')",
     ]:
         try:
-            locator = page.locator(selector).first
-            if await locator.is_visible(timeout=80):
-                await locator.click()
+            locator = page.locator(f"{selector}:visible")
+            if await locator.count():
+                await locator.last.click(timeout=1000, force=True)
                 return
         except Exception:
             continue
@@ -113,34 +110,22 @@ async def dismiss_easy_popups(page: Any) -> None:
 
 async def click_private_message_button(page: Any, seconds: int) -> None:
     visible_entry = await wait_for_private_message_button(page, seconds)
-
-    for selector in ["button:has-text('发私信')", "button:has-text('私信')"]:
-        locator = page.locator(selector)
-        for index in range(await locator.count() - 1, -1, -1):
-            button = locator.nth(index)
-            try:
-                # ponytail: force avoids Douyin's duplicate hidden button and actionability stalls.
-                await button.click(timeout=5000, force=True)
-                return
-            except Exception:
-                continue
     try:
-        await visible_entry.click(timeout=5000, force=True)
-        return
-    except Exception:
-        pass
-    raise RuntimeError("找到了私信按钮，但点击失败。")
+        # 已筛出可见入口，直接点击，避免隐藏副本逐个消耗超时。
+        await visible_entry.click(timeout=2000, force=True)
+    except Exception as exc:
+        raise RuntimeError("找到了私信按钮，但点击失败。") from exc
 
 
 async def open_dm_panel(page: Any, seconds: int) -> None:
-    if await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=200):
+    if await first_visible(page, CHAT_INPUT_SELECTORS):
         return
 
     await click_private_message_button(page, seconds)
 
     deadline = time.monotonic() + min(seconds, DM_PANEL_WAIT_SECONDS)
     while time.monotonic() < deadline:
-        editor = await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=120)
+        editor = await first_visible(page, CHAT_INPUT_SELECTORS)
         if editor:
             return
         await page.wait_for_timeout(DISCOVERY_POLL_MS)
@@ -148,7 +133,7 @@ async def open_dm_panel(page: Any, seconds: int) -> None:
 
 
 async def type_message(page: Any, message: str) -> None:
-    editor = await first_visible(page, CHAT_INPUT_SELECTORS, timeout_ms=1200)
+    editor = await first_visible(page, CHAT_INPUT_SELECTORS)
     if not editor:
         raise RuntimeError("没有找到聊天输入框。")
 
@@ -158,7 +143,6 @@ async def type_message(page: Any, message: str) -> None:
 
     # Draft.js 需要真实输入事件；先用键盘输入，失败再用粘贴事件补一次。
     await page.keyboard.insert_text(message)
-    await page.wait_for_timeout(50)
 
     typed = await page.evaluate(
         """text => {
@@ -260,7 +244,7 @@ async def click_send(page: Any) -> None:
                 # 抖音发送控件只有 SVG 图标，真实鼠标点击才能稳定触发。
                 await page.mouse.click(point["x"], point["y"])
                 return
-        button = await first_visible(page, SEND_SELECTORS, timeout_ms=80)
+        button = await first_visible(page, SEND_SELECTORS)
         if button:
             await button.click(force=True)
             return
@@ -273,7 +257,7 @@ async def wait_until_message_sent(page: Any, message: str) -> None:
     while time.monotonic() < deadline:
         if await outgoing_message_visible(page, message):
             return
-        await page.wait_for_timeout(200)
+        await page.wait_for_timeout(100)
     if await editor_contains_message(page, message):
         raise RuntimeError("已点击发送按钮，但话术仍在输入框中，未确认发送成功。")
     raise RuntimeError("输入框已变化，但聊天记录中没有出现本人发送的消息气泡，未确认发送成功。")
@@ -292,7 +276,8 @@ async def open_douyin_context(*, profile_dir: Path = DEFAULT_PROFILE_DIR) -> Any
         timezone="Asia/Shanghai",
         viewport=None,
         humanize=True,
-        human_preset="careful",
+        # 默认预设保留人类化轨迹，但不追加 careful 的动作间空转。
+        human_preset="default",
         args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
     )
 
@@ -308,7 +293,8 @@ async def send_douyin_dm_on_page(
 ) -> dict[str, Any]:
     user_url = validate_douyin_user_url(user_url)
     message = normalize_message(message)
-    await page.goto(user_url, wait_until="domcontentloaded", timeout=60000)
+    # 收到主文档响应后立即进入控件轮询，不再等待整页 DOMContentLoaded。
+    await page.goto(user_url, wait_until="commit", timeout=60000)
     await open_dm_panel(page, login_wait_seconds)
     await type_message(page, message)
     if not dry_run:

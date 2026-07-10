@@ -41,9 +41,9 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 
 该工具只用于验证单个目标主页的自动化可行性，不内置账号池、代理池或自动重试队列；批量私信由“私信工作台”创建批次并复用同一个 CloakBrowser 上下文和页面逐个跳转客户主页，避免每个客户重复开关浏览器或新建页面。批次间隔等待每秒检查取消请求，不会因为较长间隔让停止操作长时间无响应。运行态登录目录统一为 `data/douyin_cloak_profile/`，拓客采集 CDP、引流执行和自动私信共用这个 CloakBrowser Profile。
 
-私信按钮点击逻辑先等待可见“私信/发私信”入口，再从同名按钮中选择最后一个可见按钮并使用 Playwright `force=True` 点击，避开抖音渲染的隐藏按钮副本和 actionability 等待；点击后 25 秒内没有出现聊天输入框就报错。修改该目录代码后必须重启 `uvicorn`，否则 `8025` 页面仍会调用旧模块。
+私信脚本在主文档响应开始后就进入可见控件轮询，不再等待整页 `DOMContentLoaded`；主页“私信/发私信”入口按选择器直接过滤 `:visible` 并点击最后一个可见节点，不再让隐藏按钮副本逐个消耗 5 秒超时。CloakBrowser 仍启用人类化轨迹，但改用默认速度预设，去掉 `careful` 在动作间追加的空转；点击后 25 秒内没有出现聊天输入框才报错。修改该目录代码后必须重启 `uvicorn`，否则 `8025` 页面仍会调用旧模块。
 
-抖音当前发送按钮是输入区右侧的红色圆形上箭头，不包含“发送”文本；脚本会高频短轮询发送图标，图标一旦可用就立即点击 `.messageMsgInputinputAction svg` 中最后一个可见图标的中心点，不再固定等待 2.5 秒；随后校验聊天记录里是否出现本人发送的消息气泡，最后才退回 Enter。主页私信按钮和聊天输入框同样使用短轮询，页面加载快时可直接进入下一步，登录/风控较慢时仍保留原有总超时边界。
+抖音当前发送按钮是输入区右侧的红色圆形上箭头，不包含“发送”文本；脚本会每 100ms 检查发送图标，图标一旦可用就立即点击 `.messageMsgInputinputAction svg` 中最后一个可见图标的中心点，不再固定等待 2.5 秒；输入文本后立即读回校验，不再固定等待 50ms，发送后的本人消息气泡也改为每 100ms 确认。主页私信按钮和聊天输入框使用相同短轮询，页面加载快时直接进入下一步，登录/风控较慢时仍保留原有总超时边界。
 
 ## 快手 Web 互动自动化验证工具
 
@@ -375,7 +375,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 本地打包
 
-当前产品版本定义在 `backend/app/version.py`，本轮为 `1.1.3`。Windows 发布包通过 `script/build_package.ps1 -Version 1.1.3` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。每次使用带版本和时间戳的新目录，不删除旧构建。
+当前产品版本定义在 `backend/app/version.py`，本轮为 `1.1.4`。Windows 发布包通过 `script/build_package.ps1 -Version 1.1.4` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。每次使用带版本和时间戳的新目录，不删除旧构建。
 
 发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。客户只需双击发布包根目录的 `AI_Customer.exe`：它先校验清单中声明文件的大小和 SHA-256，只复制声明的应用文件到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`，再替换稳定启动器并原子切换 `current-version.json`，最后自动启动工作台。发布包因运行而产生的数据库等额外文件会被忽略，避免阻断安装；它们也不会进入版本目录。旧版本和稳定 `data/` 都保留。`script/install_release.ps1` 与 `script/switch_installed_version.ps1` 仅作为维护人员的手动安装、回滚工具，不要求客户使用。
 
