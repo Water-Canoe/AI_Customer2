@@ -147,7 +147,7 @@ x-ai-customer-admin-token: <远端管理凭证>
 .\script\publish_release.ps1 -Enable
 ```
 
-需要指定旧发布目录、测试通道或全量比例时，才使用 `-ReleasePath`、`-Channel beta` 或 `-RolloutPercent 100`。归档以 `release-manifest.json` 为文件白名单，发布目录中未声明的运行数据库或日志会被排除。脚本不会覆盖本地或远端同版本产物。每次运行产生独立审计目录，包含 ZIP、`update-manifest.json`、`update-manifest.sig` 和不含密钥的 `publish-result.json`。`-Mandatory` 只能和 `-Enable` 一起使用。
+需要指定旧发布目录、测试通道或全量比例时，才使用 `-ReleasePath`、`-Channel beta` 或 `-RolloutPercent 100`。归档以 `release-manifest.json` 为文件白名单，发布目录中未声明的运行数据库或日志会被排除。脚本遇到同版本对象时会校验现有发布记录的大小和 SHA-256：相同则报告已发布且不重复上传，不同则拒绝覆盖。每次运行产生独立审计目录，包含 ZIP、`update-manifest.json`、`update-manifest.sig` 和不含密钥的 `publish-result.json`。`-Mandatory` 只能和 `-Enable` 一起使用。
 
 发布顺序：
 

@@ -317,18 +317,82 @@ if ($IsPrepareOnly) {
 }
 else {
     Write-Host "Requesting a short-lived upload URL..."
-    $UploadResponse = Invoke-UpdateApi "POST" "/update/admin/upload-url" ([ordered]@{
-        version = $Version
-        platform = $Platform
-        arch = $Arch
-    }) $AdminToken
-    if ([int]$UploadResponse.code -ne 200 -or -not $UploadResponse.data.objectKey -or -not $UploadResponse.data.uploadUrl) {
-        throw "Upload URL response is incomplete"
+    $SkipUpload = $false
+    $ExistingRelease = $null
+    try {
+        $UploadResponse = Invoke-UpdateApi "POST" "/update/admin/upload-url" ([ordered]@{
+            version = $Version
+            platform = $Platform
+            arch = $Arch
+        }) $AdminToken
     }
-    $ObjectKey = [string]$UploadResponse.data.objectKey
-    $UploadUrl = [string]$UploadResponse.data.uploadUrl
-    if (([Uri]$UploadUrl).Scheme -ne "https") {
-        throw "Object storage upload URL must use HTTPS"
+    catch {
+        if ($_.Exception.Message -notmatch '"reason":"PACKAGE_ALREADY_EXISTS"') {
+            throw
+        }
+        $ReleaseList = Invoke-UpdateApi "GET" "/update/admin/releases" $null $AdminToken
+        $Matches = @($ReleaseList.data | Where-Object {
+            $_.version -eq $Version -and
+            $_.platform -eq $Platform -and
+            $_.arch -eq $Arch -and
+            [long]$_.packageSize -eq [long]$Archive.Length -and
+            ([string]$_.sha256).ToLowerInvariant() -eq $ArchiveHash
+        })
+        if ($Matches.Count -eq 0) {
+            throw "An immutable package already exists for $Version, but it does not match the local archive. Publish a new version instead."
+        }
+        $ExistingRelease = @($Matches | Where-Object { $_.channel -eq $Channel } | Select-Object -First 1)[0]
+        if ($ExistingRelease) {
+            $ExistingEnabled = [bool]$ExistingRelease.enabled
+            if ($Enable -and -not $ExistingEnabled) {
+                Write-Host "The matching release is already registered. Enabling it..."
+                $StatusResponse = Invoke-UpdateApi "PUT" "/update/admin/release-status" ([ordered]@{
+                    version = $Version
+                    channel = $Channel
+                    platform = $Platform
+                    arch = $Arch
+                    enabled = $true
+                    mandatory = [bool]$Mandatory
+                    rolloutPercent = $RolloutPercent
+                    notes = $Notes
+                }) $AdminToken
+                if ([int]$StatusResponse.code -ne 200) {
+                    throw "Existing release could not be enabled"
+                }
+                $ExistingRelease = $StatusResponse.data
+                $ExistingEnabled = $true
+            }
+            $ExistingResult = [ordered]@{
+                version = $Version
+                channel = $Channel
+                object_key = [string]$ExistingRelease.objectKey
+                package_size = [long]$Archive.Length
+                sha256 = $ArchiveHash
+                release_id = [string]$ExistingRelease.releaseId
+                already_published = $true
+                enabled = $ExistingEnabled
+                mandatory = [bool]$ExistingRelease.mandatory
+                rollout_percent = [int]$ExistingRelease.rolloutPercent
+            }
+            Write-Utf8NoBom $ResultOutput ($ExistingResult | ConvertTo-Json -Depth 5)
+            Write-Host "Matching release is already published; no package was uploaded."
+            Write-Host "  Enabled: $ExistingEnabled"
+            Write-Host "  Artifacts: $PublishDir"
+            return
+        }
+        $ObjectKey = [string]$Matches[0].objectKey
+        $SkipUpload = $true
+        Write-Host "Reusing the verified package from another channel."
+    }
+    if (-not $ExistingRelease -and -not $SkipUpload) {
+        if ([int]$UploadResponse.code -ne 200 -or -not $UploadResponse.data.objectKey -or -not $UploadResponse.data.uploadUrl) {
+            throw "Upload URL response is incomplete"
+        }
+        $ObjectKey = [string]$UploadResponse.data.objectKey
+        $UploadUrl = [string]$UploadResponse.data.uploadUrl
+        if (([Uri]$UploadUrl).Scheme -ne "https") {
+            throw "Object storage upload URL must use HTTPS"
+        }
     }
 }
 
@@ -379,10 +443,12 @@ if ($IsPrepareOnly) {
     return
 }
 
-Write-Host "Uploading immutable release package..."
-& curl.exe --fail-with-body --silent --show-error --connect-timeout 30 --request PUT --upload-file $ArchivePath $UploadUrl
-if ($LASTEXITCODE -ne 0) {
-    throw "Object storage upload failed; no release metadata was registered"
+if (-not $SkipUpload) {
+    Write-Host "Uploading immutable release package..."
+    & curl.exe --fail-with-body --silent --show-error --connect-timeout 30 --request PUT --upload-file $ArchivePath $UploadUrl
+    if ($LASTEXITCODE -ne 0) {
+        throw "Object storage upload failed; no release metadata was registered"
+    }
 }
 
 Write-Host "Registering signed release metadata..."
