@@ -2,17 +2,18 @@
 
 ## 项目定位
 
-这是一个本地自用的 AI 获客系统。当前已实现“拓客工作台”和第一版“引流工作台”。拓客工作台不替代 MyCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选、私信话术和跟进状态管理；引流工作台提供计划配置、执行监控、操作记录和独立授权设置。
+这是一个本地自用的 AI 获客系统。当前已实现“拓客工作台”“引流工作台”和“内容工作台”。拓客工作台不替代 MyCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选、私信话术和跟进状态管理；引流工作台提供计划配置、执行监控、操作记录和独立授权设置；内容工作台将视频文案、素材、配音、字幕、合成和发布直接接入本地后端。
 
 数据分三层：
 
 1. MyCrawler 底层原始库：默认 `D:\Dev\Projects\MyCrawler\database\sqlite_tables.db`，只做采集保底和追溯。
 2. 项目业务库：默认 `data/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件；可用 `AI_CUSTOMER_DATA_DIR` 指定整个数据目录，或用 `AI_CUSTOMER_DB` 指定单独数据库文件。
-3. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台下的计划工作台、执行监控、操作记录和引流设置共用 `traffic_*` 业务表和 `/api/traffic/*` 接口。
+3. 内容文件：客户视频、图片和音频存入 `data/content_assets/`，视频缓存、模型和每次生成结果存入 `data/video_generation/`。业务库只保存稳定相对路径，不记录客户导入前的绝对路径。
+4. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台共用 `traffic_*` 表和 `/api/traffic/*` 接口；内容工作台共用 `content_assets / video_jobs / video_job_assets` 表和 `/api/content/*` 接口。
 
 ## 统一后台任务队列与登录会话
 
-采集、账号分析、引流、单个/批量自动私信和 AI 分析统一进入 `backend/app/services/job_queue.py`，运行记录保存在 `runtime_jobs`。队列按浏览器、AI、普通任务三类资源限流，支持列表查询、取消、重试和删除；日志页会持续展示运行队列。浏览器任务全局串行，避免采集、引流和私信同时占用登录会话；业务内部仍可复用 `browser_queue.py` 保护具体浏览器上下文。
+采集、账号分析、引流、单个/批量自动私信、AI 分析和视频生成统一进入 `backend/app/services/job_queue.py`，运行记录保存在 `runtime_jobs`。队列按浏览器、AI、视频、普通任务四类资源限流，视频资源并发固定为 1，浏览器、AI和视频互不占用额度；日志页会持续展示运行队列。浏览器任务全局串行，避免采集、引流和私信同时占用登录会话；业务内部仍可复用 `browser_queue.py` 保护具体浏览器上下文。
 
 自动竞品分析和自动线索分析使用子任务串联：采集成功后只创建后续运行记录，不在当前采集线程里直接执行 AI；账号资料采集完成后立即释放浏览器资源，再由 AI 资源队列并行分析。这样慢模型调用不会占住登录会话，脚本重启时也能分别识别采集阶段和 AI 阶段。
 
@@ -78,13 +79,13 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 ## 后端 API 结构
 
-`backend/app/main.py` 只负责 FastAPI 生命周期、中间件、业务路由装配和前端静态文件托管。共享授权校验及“自家账号”默认参数位于 `api_dependencies.py`；接口按业务域拆到 `backend/app/routers/`：`system.py`、`traffic.py`、`tasks.py`、`overview.py`、`message.py`、`ai.py`、`runtime.py`。业务计算继续放在 `services/`，路由只负责参数、授权、错误码和任务入队，新增接口时不得重新堆回 `main.py`。
+`backend/app/main.py` 只负责 FastAPI 生命周期、中间件、业务路由装配和前端静态文件托管。共享授权校验及“自家账号”默认参数位于 `api_dependencies.py`；接口按业务域拆到 `backend/app/routers/`：`system.py`、`traffic.py`、`content.py`、`tasks.py`、`overview.py`、`message.py`、`ai.py`、`runtime.py`。业务计算继续放在 `services/`，路由只负责参数、授权、错误码和任务入队，新增接口时不得重新堆回 `main.py`。
 
 `backend/tests/test_api_routes.py` 校验接口方法/路径不重复，并检查关键接口由正确业务路由拥有；其余服务和接口行为由现有后端测试覆盖。
 
 ## 前端结构
 
-前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts` 和 `TrafficWorkbenchPage.ts`。可复用控件放在 `frontend/src/components/ui/`，运行队列组件放在 `components/runtime/`，共享 API、类型和格式化工具放在 `frontend/src/shared/`。自动同步的并发保护、活跃/空闲节流、路由切换和可见性恢复已拆到 `frontend/src/composables/autoSync.ts`，避免定时器生命周期继续散落在应用壳。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
+前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts`、`TrafficWorkbenchPage.ts` 和 `ContentWorkbenchPage.ts`。内容工作台的四个路由共用同一个页面外壳，按当前路由渲染视频创作、内容资产、生成记录和内容设置。可复用控件放在 `frontend/src/components/ui/`，运行队列组件放在 `components/runtime/`，共享 API、类型和格式化工具放在 `frontend/src/shared/`。自动同步的并发保护、活跃/空闲节流、路由切换和可见性恢复已拆到 `frontend/src/composables/autoSync.ts`，避免定时器生命周期继续散落在应用壳。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
 前端构建链使用 Vite 8、Vue Test Utils 和 Vitest 4；测试文件与源码同目录使用 `*.test.ts`。当前测试覆盖共享格式化、自动同步调度和运行队列的加载/取消交互，`npm audit` 为 0 个已知漏洞。
 
@@ -340,6 +341,39 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 抖音引流启动和视频跳转不再无条件等待固定 3-4 秒：页面会每 200ms 检查活跃视频、视频链接、登录提示或安全验证，目标信号出现后立即继续；点赞、收藏、关注点击后直接等待真实接口响应，不再固定停顿 1.2 秒，普通动作失败确认上限由 10 秒缩短为 4 秒；评论成功路径移除了打开面板、填入文案、发布后二次扫描和关闭面板中的固定等待，只有控件或接口迟迟未出现时才消耗超时。观看时长仍由引流设置的最小/最大停留秒数控制，属于平台安全节奏。
 
 参考实现和探测依据见 `docs/traffic_workbench_rebuild_research.md`；根目录保留只读探测脚本 `script/douyin_probe.cjs`，用于在不点赞、不关注、不评论的前提下验证抖音页面结构。
+
+## 内容工作台与视频引擎
+
+内容工作台基于本地 `GitItem/MoneyPrinterTurbo` 的固定提交 `649d4a970e253188e1098534ea4976708b3aef9c` 移植。核心代码位于 `backend/app/video_engine/`，保留原始 MIT `LICENSE`、配置模型、视频服务、全部AI/TTS供应商、TwelveLabs、Upload-Post和9个字体资源；不启动上游 Streamlit、FastAPI、Docker或Redis服务，也不复制上游29首授权来源不明确的音乐。`GitItem/` 只是本机参考仓库，已加入 `.gitignore`，不进入本项目提交或发布包。
+
+左侧“内容工作台”包含四页：
+
+- “视频创作”填写主题、文案、素材词、素材来源、画面比例、音色和字幕参数；高级区保留拼接、转场、时长、数量、语速、音量、字幕字体/颜色/描边和提示词。选择“内容资产”时可以多选视频/图片并拖动排序。
+- “内容资产”批量导入视频、图片和音频，按SHA-256去重，支持预览、筛选、重命名和单条删除。运行中视频任务引用的资产不能删除；删除只处理该记录明确指向的原文件和缩略图，不批量删除目录。
+- “生成记录”展示阶段、进度、错误、尝试次数、成品预览、取消、重试、归档和发布结果。重试写入新的 `attempt-N` 目录，不覆盖旧结果；归档只隐藏记录，不删除成品目录。
+- “内容设置”独立保存视频AI、TTS、素材源、Whisper、TwelveLabs、代理、TLS和Upload-Post设置，不读取拓客工作台AI配置。密钥读取时统一显示 `********`，提交空值或遮罩值时保留原密钥。
+
+完整生成阶段由 `backend/app/services/content_workbench.py` 调用移植引擎执行：文案、素材词、本地/在线素材、TTS、自定义配音、字幕、Whisper、转场、合成、社交元数据和Upload-Post。视频任务进入 `runtime_jobs` 的 `video_generation` 类型和独立 `video` 资源，并发固定为1。取消在阶段边界检查；FFmpeg已经开始编码时会完成当前阶段再停止。视频生成成功但Upload-Post失败时，视频任务仍保持成功，发布错误单独写入 `publish_results`。
+
+内容文件目录固定为：
+
+- `data/content_assets/originals`：托管的客户原始视频、图片和音频。
+- `data/content_assets/thumbnails`：图片/视频缩略图。
+- `data/video_generation/cache_videos`：图片转视频和在线素材缓存，不在原始资产旁写派生文件。
+- `data/video_generation/models`：按需下载的Whisper模型；默认模型为 `large-v3`，发布包不预装。
+- `data/video_generation/tasks/<job-id>/attempt-N`：单次生成脚本、音频、字幕、中间视频和最终视频。
+
+背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
+
+内容接口：
+
+- `/api/content/assets`：资产导入、列表、详情、重命名、单条删除、原文件预览和缩略图。
+- `/api/content/video-jobs`：创建、列表、详情、取消、重试、归档、成品预览和手动发布。
+- `/api/content/scripts`、`/api/content/terms`、`/api/content/social-metadata`：独立视频AI生成能力。
+- `/api/content/voices`、`/api/content/settings`、`/api/content/environment-check`：音色、完整独立配置和环境检查。
+
+`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。当前全后端回归为338通过、8项联网测试跳过，前端为8项测试通过并完成生产构建。
+
 ## 授权服务
 
 Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试地址为 `https://tfwqsfaegbdj.sealosbja.site`，接口详情见根目录 `sealos接口文档.md`。V1 只做授权码和绑定设备数限制，不做同时在线状态、心跳或强制下线。
@@ -362,7 +396,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 数据生命周期与数据库升级
 
-项目数据库从正式交付改造开始使用有序迁移，不再依赖启动时零散执行 `_ensure_column()`。迁移登记在 `schema_migrations`，同时写入 SQLite `user_version`；当前初始结构为版本 1，版本 2 清理由已移除 AI 编排功能遗留的 `agent_runs / agent_run_events`，版本 3 创建持久化运行任务队列 `runtime_jobs`。后续结构变更必须新增迁移版本，不能直接修改已经发布的旧迁移。启动发现待执行迁移且旧库存在业务数据时，会先在数据库同级 `backups/<时间戳>/` 创建完整备份，再执行迁移；迁移版本不一致或校验信息异常时直接停止启动，不使用兼容兜底掩盖问题。
+项目数据库从正式交付改造开始使用有序迁移，不再依赖启动时零散执行 `_ensure_column()`。迁移登记在 `schema_migrations`，同时写入 SQLite `user_version`；当前初始结构为版本 1，版本 2 清理由已移除 AI 编排功能遗留的 `agent_runs / agent_run_events`，版本 3 创建持久化运行任务队列 `runtime_jobs`，版本 4 创建 `content_assets / video_jobs / video_job_assets` 内容工作台表。后续结构变更必须新增迁移版本，不能直接修改已经发布的旧迁移。启动发现待执行迁移且旧库存在业务数据时，会先在数据库同级 `backups/<时间戳>/` 创建完整备份，再执行迁移；迁移版本不一致或校验信息异常时直接停止启动，不使用兼容兜底掩盖问题。
 
 业务库连接默认启用 SQLite WAL、`busy_timeout=30s`、外键检查和 `synchronous=NORMAL`，用于降低页面轮询、AI任务、采集导入、自动私信和引流记录并发读写时的锁冲突。备份使用 SQLite Online Backup API，不复制仍在变化的裸数据库文件；备份目录包含业务数据库、清单、SHA-256 和当时的引流图片。设置页“数据保护”可以手动创建备份、查看最近五个备份并恢复；恢复前会检查运行中任务，再自动备份当前数据，校验目标备份后恢复并重新执行数据库迁移。
 
@@ -377,13 +411,13 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 本地打包
 
-当前产品版本定义在 `backend/app/version.py`，本轮为 `1.1.6`。Windows 发布包通过 `script/build_package.ps1 -Version 1.1.6` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。每次使用带版本和时间戳的新目录，不删除旧构建。
+当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.0`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.0` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、MIT LICENSE和全部字体。每次使用带版本和时间戳的新目录，不删除旧构建。
 
 发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。客户只需双击发布包根目录的 `AI_Customer.exe`：它先校验清单中声明文件的大小和 SHA-256，只复制声明的应用文件到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`，再替换稳定启动器并原子切换 `current-version.json`，最后自动启动工作台。发布包因运行而产生的数据库等额外文件会被忽略，避免阻断安装；它们也不会进入版本目录。旧版本和稳定 `data/` 都保留。`script/install_release.ps1` 与 `script/switch_installed_version.ps1` 仅作为维护人员的手动安装、回滚工具，不要求客户使用。
 
-版本应用的业务库、备份、引流图片和浏览器登录状态始终放在安装根目录的 `data/`，不会写进 `versions/`。启动器会把安装根目录下预置的采集组件路径注入后端，并在每次数据库初始化时更新内部路径设置，因此从旧版本升级后不会继续使用旧版本目录；客户设置页不再提供路径编辑入口。
+版本应用的业务库、备份、引流图片、内容资产、Whisper模型、视频生成结果和浏览器登录状态始终放在安装根目录的 `data/`，不会写进 `versions/`。启动器会把安装根目录下预置的采集组件路径注入后端，并在每次数据库初始化时更新内部路径设置，因此从旧版本升级后不会继续使用旧版本目录；客户设置页不再提供路径编辑入口。
 
-远端发布控制面和对象存储接口已经具备，但当前桌面端尚未实现检查、下载、Ed25519 验签和自动切换版本。现阶段不能仅向对象存储上传 ZIP 就宣称客户端可自动更新；还需在本地后端接入更新检查、下载缓存与安装状态，并扩展稳定启动器执行新版本启动验证。数据库 schema 变化时，旧程序不能直接读取更高版本数据库，自动回滚必须同时处理迁移前备份恢复。
+稳定启动器已经实现授权身份读取、远端更新检查、限时下载、Ed25519验签、大小/SHA-256校验、清单白名单解压和版本切换。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把ZIP手工放入对象存储。数据库schema升级前仍会按迁移规则备份；如果需要回到无法读取新schema的旧程序，必须同时恢复对应迁移前备份。
 
 公共 `GET /api/settings` 会屏蔽采集路径、采集库路径、授权服务地址和 AI API Key，只返回 `ai_api_key_configured`；提交空 API Key 表示保留原值。`PUT /api/settings` 使用显式白名单，不能写入任意内部设置。环境检查只返回“采集组件/采集存储正常或待处理”和业务质量，不返回绝对路径、原始表名或列名。授权端点集中在 `product_config.py` 并做轻量字符串隐藏，可降低直接 strings 扫描得到地址的概率，但这不是密码学安全边界。
 
@@ -394,5 +428,8 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - MyCrawler 仓库许可证声明为非商业学习使用，本项目按本地自用验证处理。
 - 首版只覆盖文档要求的平台：抖音、小红书、快手。
 - 自动测试默认使用模拟 MyCrawler SQLite，不会触发真实采集。
+- 视频在线素材、AI、TTS、TwelveLabs和Upload-Post依赖用户自己的网络与供应商配置；收费供应商在自动测试中只使用模拟请求，不消耗真实额度。当前开发机Edge TTS实测3次均在30秒超时，系统已返回明确错误且未切换供应商；本地视频、图片、自定义配音和WAV背景音乐的6秒成片已真实生成成功。
+- Whisper默认模型为 `large-v3`，不进入发布包；用户在内容设置选择Whisper后首次任务会下载到稳定 `data/video_generation/models`，下载失败会保留具体错误。
+- 移植的9个字体按当前产品方案随包分发，商业授权风险为已知接受项；后续正式商业发行仍应由发行方保留字体授权凭证。
 - 如果真实采集失败，应先看“任务与日志”的失败诊断，不会使用假数据兜底。
 - 快手网页版和小红书网页版暂不提供稳定私信入口，因此自动私信只覆盖抖音；快手和小红书仍支持竞品发现、账号分析、找客户、客户意向分析和手动跟进。后续平台规则优化后，会统一补充对应平台私信能力。

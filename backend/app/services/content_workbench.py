@@ -429,6 +429,10 @@ def mark_video_job_interrupted(video_job_id: str, reason: str) -> None:
     _finish_video_job(video_job_id, "interrupted", reason)
 
 
+def mark_video_job_failed(video_job_id: str, reason: str) -> None:
+    _finish_video_job(video_job_id, "failed", reason)
+
+
 def _apply_runtime_settings() -> dict[str, Any]:
     from app.video_engine.config import config
     from app.video_engine.services import upload_post

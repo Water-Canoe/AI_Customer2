@@ -554,6 +554,7 @@ def _run_job(job: dict[str, Any]) -> None:
         final_status = "cancelled" if _cancel_requested(job_id) or outcome["status"] == "cancelled" else "succeeded"
         _finish_job(job_id, final_status, result=result)
     except Exception as exc:
+        _mark_video_domain_failed(job, str(exc))
         _finish_job(job_id, "failed", error=str(exc))
     finally:
         if str(job["resource"]) == "browser":
@@ -603,6 +604,15 @@ def _execute_job(job: dict[str, Any]) -> Any:
     if kind == "video_generation":
         return content_workbench.run_video_job(str(payload["video_job_id"]))
     raise ValueError(f"不支持的运行任务类型：{kind}")
+
+
+def _mark_video_domain_failed(job: dict[str, Any], error: str) -> None:
+    if str(job.get("kind") or "") != "video_generation":
+        return
+    from app.services import content_workbench
+
+    payload = dict(job.get("payload") or {})
+    content_workbench.mark_video_job_failed(str(payload.get("video_job_id") or ""), error)
 
 
 def _domain_outcome(job: dict[str, Any], result: Any = None) -> dict[str, str]:

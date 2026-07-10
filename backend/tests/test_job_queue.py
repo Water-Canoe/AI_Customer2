@@ -80,6 +80,33 @@ def test_cancelling_queued_runtime_job_updates_domain_status(tmp_path: Path, mon
         assert conn.execute("SELECT status FROM crawl_jobs WHERE id = 'crawl-cancel'").fetchone()[0] == "cancelled"
 
 
+def test_video_import_failure_updates_business_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_queue(tmp_path, monkeypatch)
+    from app import database
+    from app.services import job_queue
+
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO video_jobs(id, subject, params, status, current_stage) VALUES('video-import-fail', '打包导入失败', '{}', 'queued', 'queued')"
+        )
+    # 模拟PyInstaller缺少运行元数据，错误发生在视频服务更新业务状态之前。
+    def fail_before_engine(_job: dict[str, object]) -> None:
+        raise RuntimeError("缺少视频运行元数据")
+
+    monkeypatch.setattr(job_queue, "_execute_job", fail_before_engine)
+    runtime_job = job_queue.enqueue_video_job("video-import-fail")
+
+    job_queue.start()
+    try:
+        wait_for_job(str(runtime_job["id"]), {"failed"})
+    finally:
+        job_queue.shutdown(1)
+
+    with database.connect() as conn:
+        row = conn.execute("SELECT status, current_stage, error FROM video_jobs WHERE id = 'video-import-fail'").fetchone()
+    assert tuple(row) == ("failed", "failed", "缺少视频运行元数据")
+
+
 def test_runtime_recovery_releases_browser_jobs_and_resumes_ai(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_queue(tmp_path, monkeypatch)
     from app import database

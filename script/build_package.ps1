@@ -81,6 +81,21 @@ finally {
     --paths $BackendDir `
     --paths $ProjectRoot `
     --add-data "$FrontendDir\dist;frontend_dist" `
+    --add-data "$BackendDir\app\video_engine\resource;app/video_engine/resource" `
+    --add-data "$BackendDir\app\video_engine\config.default.toml;app/video_engine" `
+    --add-data "$BackendDir\app\video_engine\LICENSE;app/video_engine" `
+    --collect-all moviepy `
+    --copy-metadata imageio `
+    --collect-all imageio_ffmpeg `
+    --collect-all edge_tts `
+    --collect-all faster_whisper `
+    --collect-all ctranslate2 `
+    --collect-all openai `
+    --collect-all google.generativeai `
+    --collect-all dashscope `
+    --collect-all azure.cognitiveservices.speech `
+    --collect-all twelvelabs `
+    --collect-all pydub `
     $AppLauncher
 if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
 

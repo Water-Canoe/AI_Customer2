@@ -73,7 +73,7 @@ fps = 30
 # 这里给视频素材多留一个很小的安全余量，避免音频末尾因为帧舍入出现黑屏、
 # 卡顿或最后一小段旁白没有画面的情况。
 _VIDEO_DURATION_SAFETY_MARGIN = 0.1
-_BGM_EXTENSIONS = (".mp3",)
+_BGM_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg")
 _DEFAULT_VIDEO_CODEC = "libx264"
 _SUPPORTED_VIDEO_CODECS = (
     "libx264",
@@ -1216,9 +1216,17 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
                 # This is useful when you want to add other elements to the video.
                 final_clip = CompositeVideoClip([zoom_clip])
 
-                # Output the video to a file.
-                video_file = f"{material_source_path}.mp4"
-                final_clip.write_videofile(video_file, fps=30, logger=None)
+                # 图片转码属于运行缓存，不能在客户原始资产目录旁生成派生文件。
+                cache_dir = config.app.get("material_directory") or utils.storage_dir(
+                    "cache_videos", create=True
+                )
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_key = utils.md5(
+                    f"{material_source_path}:{os.path.getmtime(material_source_path)}:{clip_duration}"
+                )
+                video_file = os.path.join(cache_dir, f"image-{cache_key}.mp4")
+                if not os.path.isfile(video_file):
+                    final_clip.write_videofile(video_file, fps=30, logger=None)
                 close_clip(clip)
                 close_clip(final_clip)
                 material.url = video_file

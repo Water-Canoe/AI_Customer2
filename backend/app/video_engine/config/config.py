@@ -165,7 +165,7 @@ project_version = _cfg.get("project_version", "1.3.1")
 reload_debug = False
 
 app["redis_host"] = os.getenv(
-    "MPT_APP_REDIS_HOST",
+    "AI_CUSTOMER_VIDEO_REDIS_HOST",
     os.getenv("REDIS_HOST", app.get("redis_host", "localhost")),
 )
 
