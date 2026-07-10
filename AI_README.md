@@ -352,7 +352,7 @@ Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，
 
 根目录 `tools/license-admin.html` 是一个纯静态授权管理页，可直接在浏览器打开。默认连接 `https://tfwqsfaegbdj.sealosbja.site/ai-customer`，用于按 `lead / traffic` 业务新增/保存授权码、查询授权设备、手动绑定设备、解绑设备，并支持配置管理 Token 和接口路径。当前 Sealos 文档只明确提供设备解绑接口，授权码删除/停用需要后端提供对应接口；管理页不会用本地兜底方式伪造删除结果。该页面只应由管理员自用，不应打进交付给客户的本地软件包。
 
-Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并设置启用/强制更新/灰度比例。客户端检查更新时必须提交已有授权码和 active 设备，服务器只返回限时下载地址，不向客户端暴露对象存储密钥。发布签名固定为 Ed25519，签名覆盖原始 `manifestText`，安装包大小与 SHA-256 位于签名清单内。详细请求格式见根目录 `sealos接口文档.md`。
+Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并设置启用/强制更新/灰度比例。客户完成授权后，每次通过稳定启动器打开程序都会静默检查更新；只有已有 active 设备才会得到限时下载地址，客户端会先验证 Ed25519 签名、再校验 ZIP 的大小和 SHA-256，最后只复制清单声明的程序文件并启动新版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时保持当前版本正常启动。详细请求格式见根目录 `sealos接口文档.md`。
 
 发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本会自动选择最新完成的发布目录，从清单读取版本，使用本机仓库外正式私钥，并在需要远端发布时通过已有 SSH 私钥读取 Sealos 管理 Token。无参数运行只做本地校验、压缩、签名和验签；`-Upload` 上传并登记但保持禁用；`-Enable` 自动上传、登记并按默认 10% 灰度启用。归档严格以 `release-manifest.json` 为文件白名单，发布目录里运行程序产生的未声明数据库或日志只会提示并排除，不会进入更新包。同版本对象已存在时，脚本会查询发布登记：若版本、大小和 SHA-256 一致则报告“已发布”且不重复上传；不一致则拒绝覆盖并要求递增版本号。高级场景才需要覆盖发布目录、版本、通道、密钥路径或灰度比例。所有产物写入唯一的 `output/release_publish_<版本>_<时间>/`，不会覆盖旧产物。
 
@@ -375,7 +375,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 本地打包
 
-当前产品版本定义在 `backend/app/version.py`，本轮为 `1.1.1`。Windows 发布包通过 `script/build_package.ps1 -Version 1.1.1` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。每次使用带版本和时间戳的新目录，不删除旧构建。
+当前产品版本定义在 `backend/app/version.py`，本轮为 `1.1.2`。Windows 发布包通过 `script/build_package.ps1 -Version 1.1.2` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。每次使用带版本和时间戳的新目录，不删除旧构建。
 
 发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。客户只需双击发布包根目录的 `AI_Customer.exe`：它先校验清单中声明文件的大小和 SHA-256，只复制声明的应用文件到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`，再替换稳定启动器并原子切换 `current-version.json`，最后自动启动工作台。发布包因运行而产生的数据库等额外文件会被忽略，避免阻断安装；它们也不会进入版本目录。旧版本和稳定 `data/` 都保留。`script/install_release.ps1` 与 `script/switch_installed_version.ps1` 仅作为维护人员的手动安装、回滚工具，不要求客户使用。
 
