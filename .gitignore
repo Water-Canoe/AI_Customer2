@@ -56,6 +56,7 @@ lark_whiteboard_preview_*.png
 
 # External crawler dependency kept outside source control
 MyCrawler/
+GitItem/
 
 # OS metadata
 .DS_Store
