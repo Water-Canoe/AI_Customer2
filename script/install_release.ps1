@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Resolve and validate the release manifest before changing the installation.
+# Verify the declared files; extra runtime files in a copied release are intentionally ignored.
 $Release = Resolve-Path -LiteralPath $ReleasePath
 $ManifestPath = Join-Path $Release "release-manifest.json"
 if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
@@ -14,31 +14,14 @@ if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
 }
 $Manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding utf8 | ConvertFrom-Json
 $Version = [string]$Manifest.version
-if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
-    throw "Release version is invalid"
+if ($Manifest.format -ne 1 -or $Manifest.product -ne "AI Customer Desktop" -or $Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+    throw "Release manifest is invalid"
 }
 
-# Reject undeclared files before verifying size and SHA-256 for every declared file.
 $DeclaredPaths = @{}
 foreach ($Item in $Manifest.files) {
-    $DeclaredPaths[([string]$Item.path).Replace('\', '/')] = $true
-}
-$ReleasePrefix = $Release.Path.TrimEnd('\') + '\'
-$ActualFiles = Get-ChildItem -LiteralPath $Release -Recurse -File | Where-Object { $_.FullName -ne $ManifestPath }
-if ($ActualFiles.Count -ne $Manifest.files.Count) {
-    throw "Release contains missing or undeclared files"
-}
-foreach ($File in $ActualFiles) {
-    $Relative = $File.FullName.Substring($ReleasePrefix.Length).Replace('\', '/')
-    if (-not $DeclaredPaths.ContainsKey($Relative)) {
-        throw "Release contains undeclared file: $Relative"
-    }
-}
-
-# Verify size and SHA-256 for every declared file.
-foreach ($Item in $Manifest.files) {
-    $Relative = [string]$Item.path
-    if ([System.IO.Path]::IsPathRooted($Relative) -or $Relative.Split('/') -contains '..') {
+    $Relative = ([string]$Item.path).Replace('\', '/')
+    if (-not $Relative -or [System.IO.Path]::IsPathRooted($Relative) -or $Relative.Split('/') -contains '..' -or $DeclaredPaths.ContainsKey($Relative)) {
         throw "Unsafe release path: $Relative"
     }
     $Source = Join-Path $Release ($Relative.Replace('/', '\'))
@@ -53,19 +36,38 @@ foreach ($Item in $Manifest.files) {
     if ($Hash -ne ([string]$Item.sha256).ToLowerInvariant()) {
         throw "Release file hash mismatch: $Relative"
     }
+    $DeclaredPaths[$Relative] = $Source
+}
+if (-not $DeclaredPaths.ContainsKey("AI_Customer.exe") -or -not $DeclaredPaths.ContainsKey("app/AI_Customer.exe")) {
+    throw "Release is missing the launcher or application"
 }
 
-# Create stable data and immutable version folders without deleting older releases.
+# Copy only the immutable app payload into a new version folder.
 $VersionsRoot = Join-Path $InstallRoot "versions"
 $TargetVersion = Join-Path $VersionsRoot $Version
 if (Test-Path -LiteralPath $TargetVersion) {
     throw "Version $Version is already installed; switch to it or build a new version"
 }
 New-Item -ItemType Directory -Path $InstallRoot, $VersionsRoot, (Join-Path $InstallRoot "data") -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $Release "app") -Destination $TargetVersion -Recurse
+$StagingVersion = Join-Path $VersionsRoot "$Version.staging-$PID"
+if (Test-Path -LiteralPath $StagingVersion) {
+    throw "An unfinished installation folder already exists; close the app and try again"
+}
+foreach ($Relative in $DeclaredPaths.Keys) {
+    if (-not $Relative.StartsWith("app/")) { continue }
+    $Destination = Join-Path $StagingVersion ($Relative.Substring(4).Replace('/', '\'))
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
+    Copy-Item -LiteralPath $DeclaredPaths[$Relative] -Destination $Destination
+}
+if (-not (Test-Path -LiteralPath (Join-Path $StagingVersion "AI_Customer.exe") -PathType Leaf)) {
+    throw "Release is missing the application executable"
+}
+Move-Item -LiteralPath $StagingVersion -Destination $TargetVersion
 
-# Replace only the single stable launcher, then atomically switch the current version file.
-Copy-Item -LiteralPath (Join-Path $Release "AI_Customer.exe") -Destination (Join-Path $InstallRoot "AI_Customer.exe") -Force
+# Replace one stable launcher and then atomically switch the version pointer.
+$TemporaryLauncher = Join-Path $InstallRoot "AI_Customer.next.exe"
+Copy-Item -LiteralPath $DeclaredPaths["AI_Customer.exe"] -Destination $TemporaryLauncher -Force
+Move-Item -LiteralPath $TemporaryLauncher -Destination (Join-Path $InstallRoot "AI_Customer.exe") -Force
 $Current = [ordered]@{
     version = $Version
     switched_at = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")

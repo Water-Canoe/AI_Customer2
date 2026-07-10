@@ -126,7 +126,6 @@ $Manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $Relea
 
 Write-Host "Release created:"
 Write-Host "  $ReleaseDir"
-Write-Host "Install or update with:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ReleaseDir\install-release.ps1`" -ReleasePath `"$ReleaseDir`""
+Write-Host "Customer use: double-click AI_Customer.exe in this release folder."
 Write-Host "Prepare or publish remotely with:"
 Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ProjectRoot\script\publish_release.ps1`" -ReleasePath `"$ReleaseDir`""
