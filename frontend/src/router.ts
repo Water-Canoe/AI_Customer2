@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import AiPage from './pages/AiPage'
+import ContentWorkbenchPage from './pages/ContentWorkbenchPage'
 import LogsPage from './pages/LogsPage'
 import MessageWorkbenchPage from './pages/MessageWorkbenchPage'
 import OverviewPage from './pages/OverviewPage'
@@ -79,6 +80,30 @@ export const routes = [
     name: 'traffic-settings',
     component: TrafficWorkbenchPage,
     meta: { title: '引流设置', subtitle: '授权、登录态、文案图片和限额统一配置。', hint: '启动前先检查授权' },
+  },
+  {
+    path: '/content-create',
+    name: 'content-create',
+    component: ContentWorkbenchPage,
+    meta: { title: '视频创作', subtitle: '组合本地内容资产、AI文案、配音和字幕，生成可发布视频。', hint: '选择素材后创建视频任务' },
+  },
+  {
+    path: '/content-assets',
+    name: 'content-assets',
+    component: ContentWorkbenchPage,
+    meta: { title: '内容资产', subtitle: '统一管理客户自己的视频、图片和音频素材。', hint: '导入一次即可在多个视频中复用' },
+  },
+  {
+    path: '/content-records',
+    name: 'content-records',
+    component: ContentWorkbenchPage,
+    meta: { title: '生成记录', subtitle: '查看视频生成进度、结果、重试和发布状态。', hint: '生成和发布分别记录结果' },
+  },
+  {
+    path: '/content-settings',
+    name: 'content-settings',
+    component: ContentWorkbenchPage,
+    meta: { title: '内容设置', subtitle: '独立配置视频AI、语音、素材源、Whisper和自动发布。', hint: '不会读取拓客AI设置' },
   },
 ]
 

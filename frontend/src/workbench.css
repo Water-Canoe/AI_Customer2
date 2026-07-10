@@ -4424,6 +4424,340 @@ input[type='checkbox'] {
   }
 }
 
+/* 内容工作台 */
+.content-card-split {
+  min-height: 0;
+}
+
+.content-pane,
+.content-create-side,
+.content-record-list,
+.content-env-pane {
+  overflow: auto;
+}
+
+.content-video-form,
+.content-settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.content-ai-actions,
+.content-create-actions,
+.content-job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.content-create-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.content-material-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.content-material-option {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  text-align: left;
+}
+
+.content-material-option:hover,
+.content-material-option.selected {
+  border-color: var(--workbench-primary);
+  background: var(--workbench-primary-soft);
+}
+
+.content-material-option img,
+.content-material-option .content-asset-placeholder {
+  width: 100%;
+  height: 72px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.content-material-option span,
+.content-material-order-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-material-order {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.content-material-order-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 7px;
+  background: #f8fafc;
+  cursor: move;
+}
+
+.content-material-order-item strong {
+  color: var(--workbench-primary);
+}
+
+.content-material-order-item small {
+  color: var(--workbench-muted);
+}
+
+.content-assets-page {
+  overflow: auto;
+}
+
+.content-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+
+.content-asset-card {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--workbench-border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(15, 55, 49, 0.06);
+}
+
+.content-asset-preview {
+  display: grid;
+  height: 160px;
+  place-items: center;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+.content-asset-preview img,
+.content-asset-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.content-asset-preview audio {
+  width: calc(100% - 24px);
+}
+
+.content-asset-info {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 12px 12px 6px;
+}
+
+.content-asset-info strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-asset-info span,
+.content-asset-info small {
+  color: var(--workbench-muted);
+}
+
+.content-asset-card > .task-card-actions {
+  padding: 8px 12px 12px;
+}
+
+.content-job-list {
+  display: grid;
+  gap: 10px;
+}
+
+.content-job-card {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 9px;
+  background: #fff;
+  color: #334155;
+  text-align: left;
+}
+
+.content-job-card:hover,
+.content-job-card.selected {
+  border-color: var(--workbench-primary);
+  background: var(--workbench-primary-soft);
+}
+
+.content-job-head,
+.content-job-stage,
+.content-env-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.content-job-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-job-card small,
+.content-job-error {
+  color: var(--workbench-muted);
+}
+
+.content-job-error {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-job-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.content-job-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--workbench-primary);
+  transition: width .2s ease;
+}
+
+.status-pill {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-running,
+.status-queued {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-succeeded {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.status-failed,
+.status-interrupted,
+.status-cancelled {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.content-job-detail-body,
+.content-publish-results,
+.content-env-list {
+  display: grid;
+  gap: 14px;
+}
+
+.content-job-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.content-job-stage,
+.content-publish-results,
+.content-disk-info {
+  padding: 12px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.content-output-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.content-output-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 8px;
+}
+
+.content-output-card video {
+  width: 100%;
+  max-height: 430px;
+  border-radius: 6px;
+  background: #0f172a;
+}
+
+.content-job-pagination {
+  margin-top: 12px;
+}
+
+.content-env-row {
+  padding: 10px;
+  border-left: 3px solid #f59e0b;
+  border-radius: 6px;
+  background: #fffbeb;
+}
+
+.content-env-row.ok {
+  border-left-color: #16a34a;
+  background: #f0fdf4;
+}
+
+.content-env-row span,
+.content-disk-info {
+  color: var(--workbench-muted);
+  font-size: 12px;
+}
+
+.content-asset-placeholder {
+  color: #94a3b8;
+  font-size: 34px;
+}
+
+@media (max-width: 900px) {
+  .content-video-form,
+  .content-settings-grid,
+  .content-job-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .content-asset-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Front design v1: enterprise workbench visual system. */
 :root {
   --workbench-bg: #f3f6f5;

@@ -5,10 +5,10 @@
         <div class="brand-mark">AI</div>
         <div>
           <strong>AI获客系统</strong>
-          <span>拓客 · 引流 · 跟进</span>
+          <span>拓客 · 引流 · 内容 · 跟进</span>
         </div>
       </div>
-      <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench']" class="nav" @select="goToView">
+      <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench', 'content-workbench']" class="nav" @select="goToView">
         <el-sub-menu index="lead-workbench">
           <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
           <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
@@ -25,6 +25,13 @@
           <el-menu-item index="traffic-monitor"><el-icon><Tickets /></el-icon><span>执行监控</span></el-menu-item>
           <el-menu-item index="traffic-records"><el-icon><Grid /></el-icon><span>操作记录</span></el-menu-item>
           <el-menu-item index="traffic-settings"><el-icon><Setting /></el-icon><span>引流设置</span></el-menu-item>
+        </el-sub-menu>
+        <el-sub-menu index="content-workbench">
+          <template #title><el-icon><VideoPlay /></el-icon><span>内容工作台</span></template>
+          <el-menu-item index="content-create"><el-icon><MagicStick /></el-icon><span>视频创作</span></el-menu-item>
+          <el-menu-item index="content-assets"><el-icon><Collection /></el-icon><span>内容资产</span></el-menu-item>
+          <el-menu-item index="content-records"><el-icon><Tickets /></el-icon><span>生成记录</span></el-menu-item>
+          <el-menu-item index="content-settings"><el-icon><Setting /></el-icon><span>内容设置</span></el-menu-item>
         </el-sub-menu>
       </el-menu>
     </el-aside>
@@ -67,6 +74,7 @@
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
+  Collection,
   Grid,
   MagicStick,
   Message,
@@ -77,6 +85,7 @@ import {
   Setting,
   Share,
   Tickets,
+  VideoPlay,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -117,6 +126,10 @@ const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
 const trafficRuns = ref<Dict[]>([])
 const trafficEnv = ref<Dict>({})
 const trafficRefreshSeq = ref(0)
+const contentAssets = ref<Dict[]>([])
+const contentJobs = ref<Dict[]>([])
+const contentEnv = ref<Dict>({})
+const contentRefreshSeq = ref(0)
 const tombstoneSummary = ref<Dict>({})
 const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
@@ -124,16 +137,19 @@ let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
-const topbarKicker = computed(() => isTrafficView.value ? '引流工作台' : '拓客工作台')
+const isContentView = computed(() => activeView.value.startsWith('content-'))
+const topbarKicker = computed(() => isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
-const topbarEnvOk = computed(() => isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)
+const topbarEnvOk = computed(() => isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value))
 const topbarEnvLabel = computed(() => {
+  if (isContentView.value) return topbarEnvOk.value ? '视频环境正常' : '需要检查视频环境'
   if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
   return topbarEnvOk.value ? '环境就绪' : '需要检查环境'
 })
 const topbarPrimaryAction = computed(() => {
+  if (isContentView.value) return '创作视频'
   return isTrafficView.value ? '新建计划' : '新建任务'
 })
 const hasActiveAsyncWork = computed(() => {
@@ -141,12 +157,24 @@ const hasActiveAsyncWork = computed(() => {
     || aiJobs.value.some(job => isActiveStatus(job.status))
     || isActiveStatus(messageBatches.value?.active?.status)
     || trafficRuns.value.some(run => isActiveStatus(run.status))
+    || contentJobs.value.some(job => ['queued', 'running'].includes(String(job.status || '')))
 })
 const autoSync = createAutoSyncController({
   sync: syncCurrentView,
   interval: () => hasActiveAsyncWork.value ? 3000 : 12000,
 })
 const dashboardInsights = computed(() => {
+  if (isContentView.value) {
+    const activeCount = contentJobs.value.filter(job => ['queued', 'running'].includes(String(job.status || ''))).length
+    const completedCount = contentJobs.value.filter(job => String(job.status || '') === 'succeeded').length
+    const failedCount = contentJobs.value.filter(job => String(job.status || '') === 'failed').length
+    return [
+      { label: '内容资产', value: compactCount(contentAssets.value.length), tone: 'green' },
+      { label: '生成中', value: compactCount(activeCount), tone: 'blue' },
+      { label: '已完成', value: compactCount(completedCount), tone: 'green' },
+      { label: '失败', value: compactCount(failedCount), tone: 'red' },
+    ]
+  }
   if (isTrafficView.value) {
     const activeRunCount = trafficRuns.value.filter(run => isActiveStatus(run.status)).length
     const successCount = trafficRuns.value.reduce((total, run) => total + Number(run.action_success_count || 0), 0)
@@ -209,6 +237,7 @@ const routeProps = computed(() => {
     }
   }
   if (activeView.value.startsWith('traffic-')) return { refreshSeq: trafficRefreshSeq.value }
+  if (activeView.value.startsWith('content-')) return { refreshSeq: contentRefreshSeq.value }
   return {
     settings: settings.value,
     settingsSaveRevision: settingsSaveRevision.value,
@@ -290,6 +319,7 @@ const routeListeners = computed(() => {
     }
   }
   if (activeView.value.startsWith('traffic-')) return {}
+  if (activeView.value.startsWith('content-')) return {}
   return {
     save: saveSettings,
     'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
@@ -304,6 +334,12 @@ function goToView(view: string) {
 }
 
 async function refreshAll() {
+  if (isContentView.value) {
+    await loadContentShell()
+    contentRefreshSeq.value += 1
+    autoSync.markSynced()
+    return
+  }
   if (isTrafficView.value) {
     await loadTrafficShell()
     trafficRefreshSeq.value += 1
@@ -316,7 +352,18 @@ async function refreshAll() {
 }
 
 function createFromTopbar() {
-  router.push(isTrafficView.value ? '/traffic-plans' : '/tasks')
+  router.push(isContentView.value ? '/content-create' : (isTrafficView.value ? '/traffic-plans' : '/tasks'))
+}
+
+async function loadContentShell() {
+  const [assetsResult, jobsResult, envResult] = await Promise.allSettled([
+    api.get('/content/assets'),
+    api.get('/content/video-jobs', { params: { page: 1, page_size: 100 } }),
+    api.get('/content/environment-check'),
+  ])
+  if (assetsResult.status === 'fulfilled') contentAssets.value = assetsResult.value.data
+  if (jobsResult.status === 'fulfilled') contentJobs.value = jobsResult.value.data.items || []
+  if (envResult.status === 'fulfilled') contentEnv.value = envResult.value.data
 }
 
 async function loadTasks() {
@@ -464,6 +511,7 @@ async function syncCurrentView(_reason: AutoSyncReason) {
   loaders.set('tasks', loadTasks)
   loaders.set('ai', loadAiJobs)
   if (isTrafficView.value) loaders.set('traffic-shell', loadTrafficShell)
+  if (isContentView.value) loaders.set('content-shell', loadContentShell)
 
   if (activeView.value === 'logs') loaders.set('selected-task', refreshSelectedTask)
   if (activeView.value === 'overview') loaders.set('overview', loadOverview)
