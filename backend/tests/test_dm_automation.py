@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 
@@ -84,3 +85,23 @@ def test_send_page_starts_work_after_navigation_commit(monkeypatch: pytest.Monke
     asyncio.run(automation.send_douyin_dm_on_page(page, "https://www.douyin.com/user/abc", "你好", dry_run=True))
 
     assert page.goto_options == {"wait_until": "commit", "timeout": 60000}
+
+
+def test_message_workbench_loads_dm_module_from_backend_cwd() -> None:
+    backend_root = WORKSPACE_ROOT / "backend"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from app.services.message_workbench import _load_douyin_dm_module; print(_load_douyin_dm_module().__name__)",
+        ],
+        cwd=backend_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "tools.douyin_dm_automation.automation"

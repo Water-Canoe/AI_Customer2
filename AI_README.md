@@ -29,6 +29,8 @@
 
 `tools/douyin_dm_automation/` 是一个单用户抖音私信自动化验证目录，同时被“私信工作台”的自动私信按钮和 AI 一键私信批次复用。它复用 `backend/.venv` 中的 `playwright`、`cloakbrowser`、`fastapi` 和 `uvicorn`，通过 CloakBrowser 的 Playwright 兼容持久化浏览器打开最大化窗口并访问抖音用户主页，等待人工登录，点击“私信/发私信”，向 Draft.js 聊天输入框写入话术，并可选择实际点击“发送”。设置页打开“自动私信只填内容不发送”后，工作台只填入话术并按“自动私信等待秒数”保留窗口给人工确认，超时后关闭窗口且不会自动写入已私信状态。前端页面由 `server.py` 提供，访问 `http://127.0.0.1:8025/` 即可填写用户主页 URL 和话术。
 
+开发后端通常从 `backend/` 目录启动，私信工作台加载组件时会把项目根目录加入模块搜索路径，确保根目录下的 `tools.douyin_dm_automation` 可被找到；Windows 打包脚本同时把项目根目录交给 PyInstaller 分析，使该组件进入发布包。加载失败时会返回真实缺失模块，而不是笼统提示重新安装。
+
 运行命令：
 
 ```powershell
@@ -375,7 +377,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 本地打包
 
-当前产品版本定义在 `backend/app/version.py`，本轮为 `1.1.4`。Windows 发布包通过 `script/build_package.ps1 -Version 1.1.4` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。每次使用带版本和时间戳的新目录，不删除旧构建。
+当前产品版本定义在 `backend/app/version.py`，本轮为 `1.1.5`。Windows 发布包通过 `script/build_package.ps1 -Version 1.1.5` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。每次使用带版本和时间戳的新目录，不删除旧构建。
 
 发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。客户只需双击发布包根目录的 `AI_Customer.exe`：它先校验清单中声明文件的大小和 SHA-256，只复制声明的应用文件到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`，再替换稳定启动器并原子切换 `current-version.json`，最后自动启动工作台。发布包因运行而产生的数据库等额外文件会被忽略，避免阻断安装；它们也不会进入版本目录。旧版本和稳定 `data/` 都保留。`script/install_release.ps1` 与 `script/switch_installed_version.ps1` 仅作为维护人员的手动安装、回滚工具，不要求客户使用。
 

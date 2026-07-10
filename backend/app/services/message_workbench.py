@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import sys
 import time
 from datetime import datetime
 from math import ceil
@@ -491,10 +492,14 @@ def _load_douyin_dm_sender() -> Any:
 
 
 def _load_douyin_dm_module() -> Any:
+    workspace_root = str(database.WORKSPACE_ROOT)
+    if workspace_root not in sys.path:
+        # 开发服务通常从 backend 启动，需要显式暴露根目录下的 tools 包。
+        sys.path.insert(0, workspace_root)
     try:
         from tools.douyin_dm_automation import automation
     except ImportError as exc:
-        raise ValueError("自动私信组件不可用，请重新安装当前版本") from exc
+        raise ValueError(f"自动私信组件加载失败：{exc}") from exc
     return automation
 
 

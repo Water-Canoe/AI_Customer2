@@ -79,6 +79,7 @@ finally {
     --workpath (Join-Path $BuildWork "app") `
     --specpath $BuildSpec `
     --paths $BackendDir `
+    --paths $ProjectRoot `
     --add-data "$FrontendDir\dist;frontend_dist" `
     $AppLauncher
 if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
