@@ -45,15 +45,16 @@ def test_click_send_uses_ready_icon_without_fixed_delay() -> None:
     assert page.waits == []
 
 
-def test_private_message_button_clicks_discovered_visible_entry_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_private_message_button_clicks_only_exact_dm_target(monkeypatch: pytest.MonkeyPatch) -> None:
     from tools.douyin_dm_automation import automation
 
     class Entry:
         def __init__(self) -> None:
-            self.clicks: list[tuple[int, bool]] = []
+            self.scripts: list[str] = []
 
-        async def click(self, *, timeout: int, force: bool) -> None:
-            self.clicks.append((timeout, force))
+        async def evaluate(self, script: str) -> bool:
+            self.scripts.append(script)
+            return True
 
     entry = Entry()
 
@@ -63,7 +64,10 @@ def test_private_message_button_clicks_discovered_visible_entry_once(monkeypatch
     monkeypatch.setattr(automation, "wait_for_private_message_button", discover)
     asyncio.run(automation.click_private_message_button(object(), 25))
 
-    assert entry.clicks == [(2000, True)]
+    assert len(entry.scripts) == 1
+    assert "['私信', '发私信'].includes(label)" in entry.scripts[0]
+    assert "target.click()" in entry.scripts[0]
+    assert all(":text-is(" in selector and ":has-text(" not in selector for selector in automation.PROFILE_DM_SELECTORS)
 
 
 def test_send_page_starts_work_after_navigation_commit(monkeypatch: pytest.MonkeyPatch) -> None:

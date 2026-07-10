@@ -16,14 +16,14 @@ DISCOVERY_POLL_MS = 100
 SEND_READY_TIMEOUT_MS = 2500
 
 PROFILE_DM_SELECTORS = [
-    "button:has-text('发私信')",
-    "button:has-text('私信')",
-    "div[role='button']:has-text('发私信')",
-    "div[role='button']:has-text('私信')",
-    "span:has-text('发私信')",
-    "span:has-text('私信')",
-    "a:has-text('发私信')",
-    "a:has-text('私信')",
+    "button:text-is('发私信')",
+    "button:text-is('私信')",
+    "[role='button']:text-is('发私信')",
+    "[role='button']:text-is('私信')",
+    "a:text-is('发私信')",
+    "a:text-is('私信')",
+    "span:text-is('发私信')",
+    "span:text-is('私信')",
 ]
 
 CHAT_INPUT_SELECTORS = [
@@ -111,8 +111,17 @@ async def dismiss_easy_popups(page: Any) -> None:
 async def click_private_message_button(page: Any, seconds: int) -> None:
     visible_entry = await wait_for_private_message_button(page, seconds)
     try:
-        # 已筛出可见入口，直接点击，避免隐藏副本逐个消耗超时。
-        await visible_entry.click(timeout=2000, force=True)
+        clicked = await visible_entry.evaluate(
+            """el => {
+                const target = el.closest('button, [role="button"], a') || el;
+                const label = (target.innerText || target.textContent || '').replace(/\s+/g, ' ').trim();
+                if (!['私信', '发私信'].includes(label)) return false;
+                target.click();
+                return true;
+            }"""
+        )
+        if not clicked:
+            raise RuntimeError("私信入口文本不匹配")
     except Exception as exc:
         raise RuntimeError("找到了私信按钮，但点击失败。") from exc
 
@@ -275,6 +284,7 @@ async def open_douyin_context(*, profile_dir: Path = DEFAULT_PROFILE_DIR) -> Any
         locale="zh-CN",
         timezone="Asia/Shanghai",
         viewport=None,
+        accept_downloads=False,
         humanize=True,
         # 默认预设保留人类化轨迹，但不追加 careful 的动作间空转。
         human_preset="default",
