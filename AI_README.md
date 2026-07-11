@@ -378,6 +378,8 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
 
+发布引擎初始化时固定设置 `PLAYWRIGHT_BROWSERS_PATH=0`，扫码登录和发布使用项目预装的Patchright Chromium，不读取用户全局 `ms-playwright` 缓存。
+
 内容接口：
 
 - `/api/content/assets`：资产导入、列表、详情、重命名、单条删除、原文件预览和缩略图。

@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
+import os
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.publish_engine import service
 from app.publish_engine.uploader.base_video import BaseVideoUploader
+
+
+def test_publish_engine_uses_bundled_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    import app.publish_engine as publish_engine
+
+    importlib.reload(publish_engine)
+    assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == "0"
 
 
 class _FakeUploader:
@@ -19,6 +30,17 @@ class _FakeUploader:
         await BaseVideoUploader.begin_submit(self)
         if self.fail_after_submit:
             raise RuntimeError("结果未确认")
+
+
+def test_douyin_login_waiter_remains_active_before_scan(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.publish_engine.uploader.douyin_uploader import main
+
+    page = MagicMock(url="https://creator.douyin.com/")
+    page.get_by_text.return_value.locator.return_value.first.count = AsyncMock(return_value=0)
+    monkeypatch.setattr(main, "_is_douyin_login_completed", AsyncMock(return_value=False))
+    monkeypatch.setattr(main.asyncio, "sleep", AsyncMock())
+    result = asyncio.run(main._wait_for_douyin_login(page, "account.json", {}, max_checks=1))
+    assert result["status"] == "timeout"
 
 
 def test_publish_marks_uncertain_result_for_manual_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
