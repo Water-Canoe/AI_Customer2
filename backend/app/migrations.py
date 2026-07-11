@@ -131,11 +131,36 @@ def _create_content_workbench(conn: sqlite3.Connection, _: str) -> None:
     )
 
 
+def _create_voice_profiles(conn: sqlite3.Connection, _: str) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS voice_profiles (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            reference_asset_id TEXT NOT NULL,
+            prompt_text TEXT NOT NULL DEFAULT '',
+            style_prompt TEXT NOT NULL DEFAULT '',
+            consent_confirmed INTEGER NOT NULL DEFAULT 0,
+            consent_confirmed_at TEXT,
+            deleted_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY(reference_asset_id) REFERENCES content_assets(id) ON DELETE RESTRICT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_voice_profiles_provider_created
+        ON voice_profiles(provider, deleted_at, created_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
     Migration(3, "create_runtime_job_queue", _create_runtime_job_queue),
     Migration(4, "create_content_workbench", _create_content_workbench),
+    Migration(5, "create_voice_profiles", _create_voice_profiles),
 )
 
 

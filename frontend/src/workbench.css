@@ -4773,6 +4773,54 @@ input[type='checkbox'] {
   overflow: auto;
 }
 
+.content-voice-library {
+  margin: 16px 16px 0;
+  padding: 14px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 10px;
+  background: #faf9ff;
+}
+
+.content-voice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.content-voice-card {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e5e0f7;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.content-voice-card audio {
+  width: 100%;
+}
+
+.content-voice-info {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.content-voice-info strong,
+.content-voice-info span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-voice-info span,
+.content-voice-info small,
+.content-voice-empty {
+  color: var(--workbench-muted);
+}
+
 .content-asset-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));

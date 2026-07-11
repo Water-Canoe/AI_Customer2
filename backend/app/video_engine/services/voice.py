@@ -256,6 +256,10 @@ def is_chatterbox_voice(voice_name: str) -> bool:
     return (voice_name or "").startswith("chatterbox:")
 
 
+def is_cloned_voice(voice_name: str) -> bool:
+    return (voice_name or "").startswith("voxcpm2:")
+
+
 def is_no_voice(voice_name: str | None) -> bool:
     """
     判断用户是否明确选择了“无配音”模式。
@@ -375,6 +379,25 @@ def tts(
 
     if is_azure_v2_voice(voice_name):
         return azure_tts_v2(text, voice_name, voice_file)
+    elif is_cloned_voice(voice_name):
+        profile_id = voice_name.split(":", 1)[1].strip()
+        if not profile_id:
+            raise ValueError("克隆音色标识无效")
+        from app.services import voice_synthesis
+
+        voice_synthesis.synthesize_profile(
+            profile_id,
+            text,
+            voice_file,
+            voice_rate=voice_rate,
+            voice_volume=voice_volume,
+        )
+        duration_seconds = get_audio_duration(voice_file)
+        return populate_legacy_submaker_with_full_text(
+            ensure_legacy_submaker_fields(SubMaker()),
+            text,
+            duration_seconds,
+        )
     elif is_siliconflow_voice(voice_name):
         # 从voice_name中提取模型和声音
         # 格式: siliconflow:model:voice-Gender

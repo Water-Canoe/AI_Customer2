@@ -23,6 +23,10 @@ if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller is missing from backend/.venv. Install it explicitly before packaging."
 }
+& $Python -c "import torch, voxcpm; assert torch.cuda.is_available()"
+if ($LASTEXITCODE -ne 0) {
+    throw "VoxCPM2 CUDA runtime is missing. Run script/install_voxcpm.ps1 before packaging."
+}
 
 # Read the product version from source unless the caller supplied one.
 if (-not $Version) {
@@ -96,6 +100,14 @@ finally {
     --collect-all azure.cognitiveservices.speech `
     --collect-all twelvelabs `
     --collect-all pydub `
+    --collect-all voxcpm `
+    --collect-all torch `
+    --collect-all torchaudio `
+    --collect-all torchcodec `
+    --collect-all transformers `
+    --collect-all safetensors `
+    --collect-all soundfile `
+    --copy-metadata voxcpm `
     $AppLauncher
 if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
 

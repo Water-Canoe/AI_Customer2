@@ -394,6 +394,10 @@ def list_voices(provider: str = "edge") -> list[str]:
         return voice.get_elevenlabs_voices(str(config.elevenlabs.get("api_key") or ""))
     if provider == "chatterbox":
         return voice.get_chatterbox_voices()
+    if provider == "voxcpm2":
+        from app.services import voice_profiles
+
+        return [f"voxcpm2:{item['id']}" for item in voice_profiles.list_profiles("voxcpm2")]
     voices = voice.get_all_azure_voices(filter_locals=None)
     if provider == "azure-v2":
         return [item for item in voices if "V2" in item]
@@ -424,6 +428,8 @@ def environment_check() -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(root)
     model_root = database.get_video_generation_root() / "models"
+    from app.services import voice_synthesis
+
     return {
         "ok": all(dependencies.values()) and ffmpeg_ok and bool(fonts),
         "dependencies": dependencies,
@@ -434,6 +440,7 @@ def environment_check() -> dict[str, Any]:
             "downloaded": model_root.exists() and any(model_root.iterdir()),
             "path": str(model_root),
         },
+        "voice_models": {"voxcpm2": voice_synthesis.model_status()},
         "disk": {"free": usage.free, "total": usage.total},
     }
 

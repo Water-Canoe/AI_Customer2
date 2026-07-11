@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
+from types import SimpleNamespace
 import wave
 
 import pytest
@@ -26,7 +28,7 @@ def test_content_migration_and_asset_dedup(tmp_path, monkeypatch: pytest.MonkeyP
     assert first["id"] == second["id"]
     assert second["duplicate"] is True
     with database.connect() as conn:
-        assert migrations.current_version(conn) == 4
+        assert migrations.current_version(conn) == 5
         assert conn.execute("SELECT COUNT(*) FROM content_assets").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM video_jobs").fetchone()[0] == 0
 
@@ -121,6 +123,70 @@ def test_video_output_upload_status_can_be_updated(tmp_path, monkeypatch: pytest
 
     updated = content_workbench.update_video_output_status("upload-job", "final.mp4", "uploaded")
     assert updated["outputs"][0]["upload_status"] == "uploaded"
+
+
+def test_voice_profile_crud_and_asset_protection(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app.services import content_assets, voice_profiles
+
+    asset = content_assets.import_asset_file("reference.wav", BytesIO(_wav_bytes()), "audio/wav")
+    with pytest.raises(ValueError, match="使用授权"):
+        voice_profiles.create_profile({"name": "老板音色", "reference_asset_id": asset["id"]})
+
+    profile = voice_profiles.create_profile({
+        "name": "老板音色",
+        "provider": "voxcpm2",
+        "reference_asset_id": asset["id"],
+        "prompt_text": "这是一段参考声音",
+        "consent_confirmed": True,
+    })
+    assert profile["reference_asset"]["id"] == asset["id"]
+    assert voice_profiles.update_profile(profile["id"], {"name": "品牌音色"})["name"] == "品牌音色"
+    with pytest.raises(RuntimeError, match="克隆音色"):
+        content_assets.delete_asset(asset["id"])
+    assert voice_profiles.delete_profile(profile["id"])["deleted"] is True
+
+
+def test_voxcpm2_adapter_uses_reference_and_prompt(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import voice_synthesis
+
+    calls: dict[str, object] = {}
+
+    class FakeModel:
+        tts_model = SimpleNamespace(sample_rate=16000)
+
+        def generate(self, **kwargs):
+            import numpy as np
+
+            calls.update(kwargs)
+            return np.zeros(1600, dtype=np.float32)
+
+    def fake_run(command, **_kwargs):
+        Path(command[-1]).write_bytes(b"fake-mp3")
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(voice_synthesis, "_load_voxcpm2", lambda: FakeModel())
+    monkeypatch.setattr(voice_synthesis.subprocess, "run", fake_run)
+    monkeypatch.setattr(voice_synthesis.utils, "get_ffmpeg_binary", lambda: "ffmpeg")
+    reference = tmp_path / "reference.wav"
+    reference.write_bytes(_wav_bytes())
+    output = tmp_path / "voice.mp3"
+
+    voice_synthesis._synthesize_voxcpm2(
+        {"prompt_text": "参考文字", "style_prompt": "温和（自然）"},
+        "生成文字",
+        reference,
+        output,
+        1.0,
+        1.0,
+    )
+
+    assert calls["reference_wav_path"] == str(reference)
+    assert calls["prompt_wav_path"] == str(reference)
+    assert calls["prompt_text"] == "参考文字"
+    assert calls["text"] == "(温和自然)生成文字"
+    assert output.is_file()
+    assert not output.with_suffix(".voxcpm.wav").exists()
 
 
 def _wav_bytes() -> bytes:

@@ -12,8 +12,10 @@ from app.schemas import (
     ContentVideoJobCreate,
     ContentVideoJobUpdate,
     ContentVideoOutputUpdate,
+    ContentVoiceProfileCreate,
+    ContentVoiceProfileUpdate,
 )
-from app.services import content_assets, content_workbench
+from app.services import content_assets, content_workbench, voice_profiles
 
 
 router = APIRouter(prefix="/api/content", tags=["content"])
@@ -215,6 +217,37 @@ def list_voices(provider: str = "edge") -> list[str]:
         return content_workbench.list_voices(provider)
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/voice-profiles")
+def list_voice_profiles(provider: str = "") -> list[dict[str, object]]:
+    return voice_profiles.list_profiles(provider)
+
+
+@router.post("/voice-profiles")
+def create_voice_profile(payload: ContentVoiceProfileCreate) -> dict[str, object]:
+    try:
+        return voice_profiles.create_profile(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/voice-profiles/{profile_id}")
+def update_voice_profile(profile_id: str, payload: ContentVoiceProfileUpdate) -> dict[str, object]:
+    try:
+        return voice_profiles.update_profile(profile_id, payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/voice-profiles/{profile_id}")
+def delete_voice_profile(profile_id: str) -> dict[str, object]:
+    try:
+        return voice_profiles.delete_profile(profile_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/settings")

@@ -42,6 +42,11 @@ def get_video_generation_root() -> Path:
     return get_data_root() / "video_generation"
 
 
+def get_voice_models_root() -> Path:
+    """Return the shared model folder used by video and future avatar features."""
+    return get_data_root() / "voice_models"
+
+
 def get_backup_root(db_path: Path | None = None) -> Path:
     """Return the backup folder beside the persistent business database."""
     return (db_path or get_db_path()).parent / "backups"

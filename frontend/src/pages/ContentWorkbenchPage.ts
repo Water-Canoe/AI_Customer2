@@ -177,6 +177,7 @@ export default defineComponent({
     const router = useRouter()
     const view = computed(() => String(route.name || 'content-create'))
     const assets = ref<Dict[]>([])
+    const voiceProfiles = ref<Dict[]>([])
     const jobs = ref<Dict>({ items: [], total: 0, page: 1, page_size: 100 })
     const selectedJob = ref<Dict | null>(null)
     const settings = ref<Dict>({})
@@ -218,8 +219,8 @@ export default defineComponent({
     watch(() => props.refreshSeq, () => void loadPage())
 
     async function loadPage() {
-      if (view.value === 'content-create') await Promise.all([loadAssets(), loadJobs(false), loadVoices()])
-      else if (view.value === 'content-assets') await loadAssets()
+      if (view.value === 'content-create') await Promise.all([loadAssets(), loadVoiceProfiles(), loadJobs(false), loadVoices()])
+      else if (view.value === 'content-assets') await Promise.all([loadAssets(), loadVoiceProfiles()])
       else if (view.value === 'content-records') await loadJobs(true)
       else await Promise.all([loadSettings(), loadEnvironment()])
     }
@@ -228,6 +229,11 @@ export default defineComponent({
       const { data } = await api.get('/content/assets', { params: { asset_type: assetFilter.value.type, search: assetFilter.value.search } })
       assets.value = data
       selectedAssetIds.value = selectedAssetIds.value.filter(id => data.some((item: Dict) => item.id === id))
+    }
+
+    async function loadVoiceProfiles() {
+      const { data } = await api.get('/content/voice-profiles')
+      voiceProfiles.value = data
     }
 
     async function loadJobs(selectFirst = false) {
@@ -256,6 +262,7 @@ export default defineComponent({
         const { data } = await api.get('/content/voices', { params: { provider: voiceProvider.value } })
         voices.value = data
         if (data.length && !data.includes(videoDraft.value.voice_name)) videoDraft.value.voice_name = data[0]
+        if (!data.length && voiceProvider.value === 'voxcpm2') videoDraft.value.voice_name = ''
       } catch (error: any) {
         voices.value = []
         ElMessage.error(error?.response?.data?.detail || '音色列表加载失败')
@@ -306,6 +313,51 @@ export default defineComponent({
       }
     }
 
+    async function createVoiceProfile(asset: Dict) {
+      try {
+        // 参考文字可选：填写时走VoxCPM2高保真模式，留空仍可普通克隆。
+        const name = await ElMessageBox.prompt('输入音色名称', '创建克隆音色', { inputValue: String(asset.name || '').replace(/\.[^.]+$/, '') })
+        const transcript = await ElMessageBox.prompt('输入参考音频中的准确文字；不填写则使用普通克隆模式', '参考音频文字', { inputValue: '' })
+        await ElMessageBox.confirm('我确认已获得该声音的使用授权，并同意仅用于合法的AI合成内容。', '声音授权确认', { confirmButtonText: '确认并创建', type: 'warning' })
+        await api.post('/content/voice-profiles', {
+          name: name.value,
+          provider: 'voxcpm2',
+          reference_asset_id: asset.id,
+          prompt_text: transcript.value || '',
+          style_prompt: '',
+          consent_confirmed: true,
+        })
+        ElMessage.success('克隆音色已创建')
+        await loadVoiceProfiles()
+      } catch (error: any) {
+        if (isUserCancel(error)) return
+        ElMessage.error(error?.response?.data?.detail || '克隆音色创建失败')
+      }
+    }
+
+    async function renameVoiceProfile(profile: Dict) {
+      try {
+        const result = await ElMessageBox.prompt('输入新的音色名称', '重命名音色', { inputValue: String(profile.name || '') })
+        await api.patch(`/content/voice-profiles/${profile.id}`, { name: result.value })
+        await loadVoiceProfiles()
+      } catch (error: any) {
+        if (isUserCancel(error)) return
+        ElMessage.error(error?.response?.data?.detail || '音色修改失败')
+      }
+    }
+
+    async function deleteVoiceProfile(profile: Dict) {
+      try {
+        await ElMessageBox.confirm(`确认删除音色“${profile.name}”？参考音频资产会继续保留。`, '删除克隆音色', { type: 'warning' })
+        await api.delete(`/content/voice-profiles/${profile.id}`)
+        await loadVoiceProfiles()
+        if (videoDraft.value.voice_name === `voxcpm2:${profile.id}`) videoDraft.value.voice_name = ''
+      } catch (error: any) {
+        if (isUserCancel(error)) return
+        ElMessage.error(error?.response?.data?.detail || '音色删除失败')
+      }
+    }
+
     async function generateScript() {
       if (!String(videoDraft.value.video_subject || '').trim()) return ElMessage.warning('请先填写视频主题')
       loading.value = true
@@ -349,6 +401,7 @@ export default defineComponent({
       const draft = JSON.parse(JSON.stringify(videoDraft.value))
       if (!String(draft.video_subject || '').trim()) return ElMessage.warning('请填写视频主题')
       if (draft.video_source === 'local' && !selectedAssetIds.value.length) return ElMessage.warning('本地素材模式至少选择一项内容资产')
+      if (voiceProvider.value === 'voxcpm2' && !audioAssetId.value && !String(draft.voice_name || '').trim()) return ElMessage.warning('请先选择一个克隆音色')
       draft.video_transition_mode = draft.video_transition_mode || null
       loading.value = true
       try {
@@ -501,9 +554,9 @@ export default defineComponent({
             ]),
             formTextarea('素材关键词', videoDraft.value.video_terms, value => videoDraft.value.video_terms = value, 'field-full'),
             videoDraft.value.video_source === 'local' ? renderMaterialSelector() : null,
-            formSelect('音色供应商', voiceProvider.value, [['edge', 'Edge TTS'], ['azure-v2', 'Azure Speech'], ['siliconflow', '硅基流动'], ['gemini', 'Gemini TTS'], ['mimo', 'MiMo TTS'], ['elevenlabs', 'ElevenLabs'], ['chatterbox', 'Chatterbox']], value => { voiceProvider.value = value; void loadVoices() }),
-            voices.value.length
-              ? formSelect('配音音色', videoDraft.value.voice_name, voices.value.map(value => [value, voiceLabel(value)]), value => videoDraft.value.voice_name = value)
+            formSelect('音色供应商', voiceProvider.value, [['edge', 'Edge TTS'], ['voxcpm2', 'VoxCPM2 音色克隆'], ['azure-v2', 'Azure Speech'], ['siliconflow', '硅基流动'], ['gemini', 'Gemini TTS'], ['mimo', 'MiMo TTS'], ['elevenlabs', 'ElevenLabs'], ['chatterbox', 'Chatterbox']], value => { voiceProvider.value = value; void loadVoices() }),
+            voices.value.length || voiceProvider.value === 'voxcpm2'
+              ? formSelect('配音音色', videoDraft.value.voice_name, voices.value.length ? voices.value.map(value => [value, voiceOptionLabel(value)]) : [['', '请先在内容资产中创建克隆音色']], value => videoDraft.value.voice_name = value)
               : formInput('配音音色', videoDraft.value.voice_name, value => videoDraft.value.voice_name = value),
             formSelect('自定义配音', audioAssetId.value, [['', '使用TTS'], ...audioAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => audioAssetId.value = value),
             formSelect('背景音乐', bgmAssetId.value, [['', '不使用背景音乐'], ...audioAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => bgmAssetId.value = value),
@@ -588,6 +641,7 @@ export default defineComponent({
             ]),
           ]),
         ]),
+        renderVoiceProfiles(),
         assets.value.length
           ? h('div', { class: 'content-asset-grid' }, assets.value.map(renderAssetCard))
           : emptyState({ title: '暂无内容资产', description: '导入客户自己的视频、图片或音频', icon: Collection, tone: 'amber' }),
@@ -603,10 +657,37 @@ export default defineComponent({
           h('small', asset.duration ? `${Number(asset.duration).toFixed(1)}秒` : asset.width ? `${asset.width}×${asset.height}` : '等待使用时校验'),
         ]),
         h('div', { class: 'task-card-actions' }, [
+          asset.asset_type === 'audio' ? h('button', { class: 'primary-soft', onClick: () => createVoiceProfile(asset) }, '创建音色') : null,
           h('button', { class: 'text-icon-button', onClick: () => renameAsset(asset) }, '重命名'),
           h('button', { class: 'text-icon-button danger', onClick: () => deleteAsset(asset) }, [h(Delete, { class: 'inline-icon' }), '删除']),
         ]),
       ])
+    }
+
+    function renderVoiceProfiles() {
+      return h('section', { class: 'content-voice-library' }, [
+        sectionTitle({ title: '克隆音色', subtitle: `${voiceProfiles.value.length} 个可复用音色`, icon: MagicStick, tone: 'purple', compact: true }),
+        voiceProfiles.value.length
+          ? h('div', { class: 'content-voice-grid' }, voiceProfiles.value.map(profile => h('article', { class: 'content-voice-card' }, [
+              h('audio', { src: profile.reference_asset?.preview_url, controls: true, preload: 'metadata' }),
+              h('div', { class: 'content-voice-info' }, [
+                h('strong', String(profile.name || '未命名音色')),
+                h('span', `VoxCPM2 · ${profile.reference_asset?.name || '参考音频'}`),
+                h('small', profile.prompt_text ? '高保真克隆' : '普通克隆'),
+              ]),
+              h('div', { class: 'task-card-actions' }, [
+                h('button', { class: 'text-icon-button', onClick: () => renameVoiceProfile(profile) }, '重命名'),
+                h('button', { class: 'text-icon-button danger', onClick: () => deleteVoiceProfile(profile) }, '删除'),
+              ]),
+            ])))
+          : h('p', { class: 'content-voice-empty' }, '从下方音频资产创建克隆音色，视频和后续数字人可以共用。'),
+      ])
+    }
+
+    function voiceOptionLabel(value: string) {
+      if (!value.startsWith('voxcpm2:')) return voiceLabel(value)
+      const profile = voiceProfiles.value.find(item => `voxcpm2:${item.id}` === value)
+      return profile ? String(profile.name) : 'VoxCPM2 克隆音色'
     }
 
     function renderRecordsPage() {
@@ -731,6 +812,7 @@ export default defineComponent({
         environmentRow('FFmpeg', environment.value.ffmpeg?.ok, environment.value.ffmpeg?.path || '未找到'),
         environmentRow('字幕字体', environment.value.fonts?.ok, `${environment.value.fonts?.count || 0} 个`),
         environmentRow('Whisper模型', environment.value.whisper?.downloaded, environment.value.whisper?.downloaded ? '已下载' : '首次使用时自动下载'),
+        environmentRow('VoxCPM2', environment.value.voice_models?.voxcpm2?.installed && environment.value.voice_models?.voxcpm2?.downloaded, environment.value.voice_models?.voxcpm2?.downloaded ? '模型已就绪' : '依赖或模型未安装'),
         ...Object.entries(deps).map(([name, ok]) => environmentRow(name, Boolean(ok), ok ? '已安装' : '缺失')),
         h('div', { class: 'content-disk-info' }, `可用磁盘：${formatBytes(environment.value.disk?.free || 0)}`),
       ])

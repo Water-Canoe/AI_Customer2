@@ -65,6 +65,21 @@ class ContentVideoOutputUpdate(BaseModel):
     upload_status: Literal["not_uploaded", "uploaded"]
 
 
+class ContentVoiceProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    provider: str = Field(default="voxcpm2", min_length=1, max_length=50)
+    reference_asset_id: str = Field(min_length=1, max_length=100)
+    prompt_text: str = Field(default="", max_length=2000)
+    style_prompt: str = Field(default="", max_length=500)
+    consent_confirmed: bool
+
+
+class ContentVoiceProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    prompt_text: str | None = Field(default=None, max_length=2000)
+    style_prompt: str | None = Field(default=None, max_length=500)
+
+
 class ContentSettingsUpdate(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 

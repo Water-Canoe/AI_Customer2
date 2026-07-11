@@ -181,6 +181,12 @@ def delete_asset(asset_id: str) -> dict[str, Any]:
         ).fetchone()
         if active:
             raise RuntimeError("运行中的视频任务正在使用该资产")
+        voice_profile = conn.execute(
+            "SELECT 1 FROM voice_profiles WHERE reference_asset_id = ? AND deleted_at IS NULL LIMIT 1",
+            (str(asset_id),),
+        ).fetchone()
+        if voice_profile:
+            raise RuntimeError("该音频正在被克隆音色使用，请先删除对应音色")
         conn.execute(
             """
             UPDATE content_assets
