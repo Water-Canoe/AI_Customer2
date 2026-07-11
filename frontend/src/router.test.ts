@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import ContentWorkbenchPage, { assetMatchesSegment } from './pages/ContentWorkbenchPage'
+import ContentWorkbenchPage, { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
 import { routes } from './router'
 
 
@@ -21,5 +21,13 @@ describe('内容工作台路由', () => {
   it('背景音乐列表不会混入克隆参考音频', () => {
     expect(assetMatchesSegment({ asset_type: 'audio', purpose: 'background_music' }, 'background_music')).toBe(true)
     expect(assetMatchesSegment({ asset_type: 'audio', purpose: 'voice_reference' }, 'background_music')).toBe(false)
+  })
+
+  it('本地素材可以按类型筛选并分页', () => {
+    const assets = Array.from({ length: 10 }, (_, index) => ({ id: String(index), asset_type: index < 3 ? 'video' : 'image' }))
+
+    expect(filterMaterialAssets(assets, 'video')).toHaveLength(3)
+    expect(filterMaterialAssets(assets, 'image')).toHaveLength(7)
+    expect(paginateMaterialAssets(assets, 2, 8).map(asset => asset.id)).toEqual(['8', '9'])
   })
 })

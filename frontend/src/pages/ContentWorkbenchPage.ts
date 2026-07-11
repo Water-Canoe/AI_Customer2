@@ -19,6 +19,7 @@ import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 
 const MASKED_SECRET = '********'
+const MATERIAL_PAGE_SIZE = 8
 const ASSET_SEGMENTS = [
   ['all', '全部'],
   ['video', '视频'],
@@ -194,6 +195,8 @@ export default defineComponent({
     const selectedAssetIds = ref<string[]>([])
     const audioAssetId = ref('')
     const bgmAssetId = ref('')
+    const materialKind = ref('all')
+    const materialPage = ref(1)
     const assetFilter = ref({ search: '' })
     const assetSegment = ref('all')
     const recordSearch = ref('')
@@ -217,6 +220,9 @@ export default defineComponent({
     let mediaChunks: Blob[] = []
 
     const materialAssets = computed(() => assets.value.filter(item => ['video', 'image'].includes(String(item.asset_type))))
+    const filteredMaterialAssets = computed(() => filterMaterialAssets(materialAssets.value, materialKind.value))
+    const materialPageCount = computed(() => Math.max(1, Math.ceil(filteredMaterialAssets.value.length / MATERIAL_PAGE_SIZE)))
+    const pagedMaterialAssets = computed(() => paginateMaterialAssets(filteredMaterialAssets.value, materialPage.value, MATERIAL_PAGE_SIZE))
     const audioAssets = computed(() => assets.value.filter(item => String(item.asset_type) === 'audio'))
     const backgroundMusicAssets = computed(() => assets.value.filter(item => assetMatchesSegment(item, 'background_music')))
     const visibleAssets = computed(() => assets.value.filter(asset => assetMatchesSegment(asset, assetSegment.value)))
@@ -257,6 +263,7 @@ export default defineComponent({
       const { data } = await api.get('/content/assets', { params: { search: assetFilter.value.search } })
       assets.value = data
       selectedAssetIds.value = selectedAssetIds.value.filter(id => data.some((item: Dict) => item.id === id))
+      materialPage.value = Math.min(materialPage.value, materialPageCount.value)
     }
 
     async function loadVoiceProfiles() {
@@ -465,8 +472,12 @@ export default defineComponent({
     async function renameVoiceProfile(profile: Dict) {
       try {
         const result = await ElMessageBox.prompt('输入新的音色名称', '重命名音色', { inputValue: String(profile.name || '') })
+        const sharedReference = voiceProfiles.value.some(item => item.id !== profile.id && item.reference_asset_id === profile.reference_asset_id)
         await api.patch(`/content/voice-profiles/${profile.id}`, { name: result.value })
-        await loadVoiceProfiles()
+        if (!sharedReference && profile.reference_asset?.id) {
+          await api.patch(`/content/assets/${profile.reference_asset.id}`, { name: fileNameWithExtension(result.value, profile.reference_asset.name) })
+        }
+        await Promise.all([loadAssets(), loadVoiceProfiles()])
       } catch (error: any) {
         if (isUserCancel(error)) return
         ElMessage.error(error?.response?.data?.detail || '音色修改失败')
@@ -475,9 +486,11 @@ export default defineComponent({
 
     async function deleteVoiceProfile(profile: Dict) {
       try {
-        await ElMessageBox.confirm(`确认删除音色“${profile.name}”？参考音频资产会继续保留。`, '删除克隆音色', { type: 'warning' })
+        const sharedReference = voiceProfiles.value.some(item => item.id !== profile.id && item.reference_asset_id === profile.reference_asset_id)
+        await ElMessageBox.confirm(`确认删除音色“${profile.name}”？${sharedReference ? '其参考录音仍被其他音色使用，将继续保留。' : '关联的参考录音也会一并删除。'}`, '删除克隆音色', { type: 'warning' })
         await api.delete(`/content/voice-profiles/${profile.id}`)
-        await loadVoiceProfiles()
+        if (!sharedReference && profile.reference_asset?.id) await api.delete(`/content/assets/${profile.reference_asset.id}`)
+        await Promise.all([loadAssets(), loadVoiceProfiles()])
         if (videoDraft.value.voice_name === `voxcpm2:${profile.id}`) videoDraft.value.voice_name = ''
       } catch (error: any) {
         if (isUserCancel(error)) return
@@ -681,7 +694,7 @@ export default defineComponent({
             ]),
             formTextarea('素材关键词', videoDraft.value.video_terms, value => videoDraft.value.video_terms = value, 'field-full'),
             videoDraft.value.video_source === 'local' ? renderMaterialSelector() : null,
-            formSelect('音色供应商', voiceProvider.value, [['edge', 'Edge TTS'], ['voxcpm2', 'VoxCPM2 音色克隆'], ['azure-v2', 'Azure Speech'], ['siliconflow', '硅基流动'], ['gemini', 'Gemini TTS'], ['mimo', 'MiMo TTS'], ['elevenlabs', 'ElevenLabs'], ['chatterbox', 'Chatterbox']], value => { voiceProvider.value = value; void loadVoices() }),
+            formSelect('音色供应商', voiceProvider.value, [['edge', 'Edge TTS'], ['voxcpm2', '音色克隆'], ['azure-v2', 'Azure Speech'], ['siliconflow', '硅基流动'], ['gemini', 'Gemini TTS'], ['mimo', 'MiMo TTS'], ['elevenlabs', 'ElevenLabs'], ['chatterbox', 'Chatterbox']], value => { voiceProvider.value = value; void loadVoices() }),
             voices.value.length || voiceProvider.value === 'voxcpm2'
               ? formSelect('配音音色', videoDraft.value.voice_name, voices.value.length ? voices.value.map(value => [value, voiceOptionLabel(value)]) : [['', '请先在内容资产中创建克隆音色']], value => videoDraft.value.voice_name = value)
               : formInput('配音音色', videoDraft.value.voice_name, value => videoDraft.value.voice_name = value),
@@ -704,12 +717,26 @@ export default defineComponent({
     function renderMaterialSelector() {
       return h('div', { class: 'form-field field-full' }, [
         h('span', `本地素材（已选 ${selectedAssetIds.value.length} 项）`),
+        h('div', { class: 'content-material-toolbar' }, [
+          h('div', { class: 'content-material-tabs', role: 'tablist', 'aria-label': '本地素材类型' }, ([['all', '全部'], ['video', '视频'], ['image', '图片']] as Array<[string, string]>).map(([value, label]) => h('button', {
+            role: 'tab',
+            'aria-selected': materialKind.value === value,
+            class: materialKind.value === value ? 'active' : '',
+            onClick: () => { materialKind.value = value; materialPage.value = 1 },
+          }, `${label} ${filterMaterialAssets(materialAssets.value, value).length}`))),
+          h('small', `第 ${materialPage.value} / ${materialPageCount.value} 页`),
+        ]),
         materialAssets.value.length
-          ? h('div', { class: 'content-material-picker' }, materialAssets.value.map(asset => h('button', {
+          ? h('div', { class: 'content-material-picker' }, pagedMaterialAssets.value.map(asset => h('button', {
               class: ['content-material-option', selectedAssetIds.value.includes(String(asset.id)) ? 'selected' : ''],
               onClick: () => toggleMaterial(String(asset.id)),
-            }, [renderAssetThumb(asset), h('span', String(asset.name || '未命名'))])))
+            }, [renderAssetThumb(asset), h('div', { class: 'content-material-option-copy' }, [h('span', String(asset.name || '未命名')), h('small', asset.asset_type === 'video' ? '视频' : '图片')])])))
           : emptyState({ title: '还没有视频或图片资产', description: '请先到内容资产页面导入', icon: Collection }),
+        filteredMaterialAssets.value.length > MATERIAL_PAGE_SIZE ? h('div', { class: 'content-material-pagination' }, [
+          h('button', { disabled: materialPage.value <= 1, onClick: () => materialPage.value -= 1 }, '上一页'),
+          h('span', `${materialPage.value} / ${materialPageCount.value}`),
+          h('button', { disabled: materialPage.value >= materialPageCount.value, onClick: () => materialPage.value += 1 }, '下一页'),
+        ]) : null,
         selectedMaterials.value.length ? h('div', { class: 'content-material-order' }, selectedMaterials.value.map((asset, index) => h('div', {
           class: 'content-material-order-item',
           draggable: true,
@@ -770,7 +797,7 @@ export default defineComponent({
         }, [h('span', label), h('small', String(assets.value.filter(asset => assetMatchesSegment(asset, value)).length))]))),
         assetSegment.value === 'voice_reference' ? renderVoiceRecorder() : null,
         assetSegment.value === 'voice_reference' ? renderVoiceProfiles() : null,
-        visibleAssets.value.length
+        assetSegment.value === 'voice_reference' ? null : visibleAssets.value.length
           ? h('div', { class: 'content-asset-grid' }, visibleAssets.value.map(renderAssetCard))
           : emptyState({ title: `暂无${assetSegmentLabel(assetSegment.value)}资产`, description: '点击右上角按钮导入，克隆音频也可以直接录制', icon: Collection, tone: 'amber' }),
       ])
@@ -832,29 +859,47 @@ export default defineComponent({
     }
 
     function renderVoiceProfiles() {
+      const linkedAssetIds = new Set(voiceProfiles.value.map(profile => profile.reference_asset_id))
+      const pendingAssets = assets.value.filter(asset => assetMatchesSegment(asset, 'voice_reference') && !linkedAssetIds.has(asset.id))
+      const cards = [
+        ...voiceProfiles.value.map(profile => h('article', { class: 'content-voice-card' }, [
+          h('audio', { src: profile.reference_asset?.preview_url, controls: true, preload: 'metadata' }),
+          h('div', { class: 'content-voice-info' }, [
+            h('strong', String(profile.name || '未命名音色')),
+            h('span', `参考音频 · ${profile.reference_asset?.name || '未命名录音'}`),
+            h('small', profile.prompt_text ? '高保真克隆' : '普通克隆'),
+          ]),
+          h('div', { class: 'task-card-actions' }, [
+            h('button', { class: 'text-icon-button', onClick: () => renameVoiceProfile(profile) }, '重命名'),
+            h('button', { class: 'text-icon-button danger', onClick: () => deleteVoiceProfile(profile) }, '删除'),
+          ]),
+        ])),
+        ...pendingAssets.map(asset => h('article', { class: 'content-voice-card pending' }, [
+          h('audio', { src: asset.preview_url, controls: true, preload: 'metadata' }),
+          h('div', { class: 'content-voice-info' }, [
+            h('strong', String(asset.name || '未命名录音')),
+            h('span', '参考音频 · 尚未创建音色'),
+            h('small', '完成创建后即可用于视频配音'),
+          ]),
+          h('div', { class: 'task-card-actions' }, [
+            h('button', { class: 'primary-soft', onClick: () => createVoiceProfile(asset) }, '创建音色'),
+            h('button', { class: 'text-icon-button', onClick: () => renameAsset(asset) }, '重命名'),
+            h('button', { class: 'text-icon-button danger', onClick: () => deleteAsset(asset) }, '删除'),
+          ]),
+        ])),
+      ]
       return h('section', { class: 'content-voice-library' }, [
         sectionTitle({ title: '克隆音色', subtitle: `${voiceProfiles.value.length} 个可复用音色`, icon: MagicStick, tone: 'purple', compact: true }),
-        voiceProfiles.value.length
-          ? h('div', { class: 'content-voice-grid' }, voiceProfiles.value.map(profile => h('article', { class: 'content-voice-card' }, [
-              h('audio', { src: profile.reference_asset?.preview_url, controls: true, preload: 'metadata' }),
-              h('div', { class: 'content-voice-info' }, [
-                h('strong', String(profile.name || '未命名音色')),
-                h('span', `VoxCPM2 · ${profile.reference_asset?.name || '参考音频'}`),
-                h('small', profile.prompt_text ? '高保真克隆' : '普通克隆'),
-              ]),
-              h('div', { class: 'task-card-actions' }, [
-                h('button', { class: 'text-icon-button', onClick: () => renameVoiceProfile(profile) }, '重命名'),
-                h('button', { class: 'text-icon-button danger', onClick: () => deleteVoiceProfile(profile) }, '删除'),
-              ]),
-            ])))
-          : h('p', { class: 'content-voice-empty' }, '从下方音频资产创建克隆音色，视频和后续数字人可以共用。'),
+        cards.length
+          ? h('div', { class: 'content-voice-grid' }, cards)
+          : h('p', { class: 'content-voice-empty' }, '使用上方录音功能，或导入一段参考音频后创建克隆音色。'),
       ])
     }
 
     function voiceOptionLabel(value: string) {
       if (!value.startsWith('voxcpm2:')) return voiceLabel(value)
       const profile = voiceProfiles.value.find(item => `voxcpm2:${item.id}` === value)
-      return profile ? String(profile.name) : 'VoxCPM2 克隆音色'
+      return profile ? String(profile.name) : '克隆音色'
     }
 
     function renderRecordsPage() {
@@ -892,14 +937,16 @@ export default defineComponent({
           h('span', `${output.name || '生成视频'} · 第${job.attempt || 1}次生成`),
           h('time', `生成于 ${job.finished_at || job.created_at || '-'}`),
         ]),
-        h('div', { class: 'content-generated-actions' }, [
-          h('select', {
+        h('div', { class: 'content-generated-publish' }, [
+          h('label', [h('span', '上传状态'), h('select', {
             value: output.upload_status || 'not_uploaded',
             onChange: (event: Event) => updateOutputStatus(job, output, (event.target as HTMLSelectElement).value),
-          }, [h('option', { value: 'not_uploaded' }, '未上传'), h('option', { value: 'uploaded' }, '已上传')]),
-          h('button', { class: 'primary-soft', onClick: () => uploadOutput(job, output) }, '上传'),
-          h('a', { class: 'primary-soft', href: output.url, download: output.name }, '下载'),
-          h('button', { class: 'text-icon-button', onClick: () => renameJob(job) }, '编辑'),
+          }, [h('option', { value: 'not_uploaded' }, '未上传'), h('option', { value: 'uploaded' }, '已上传')])]),
+          h('button', { class: 'primary-soft', onClick: () => uploadOutput(job, output) }, '立即上传'),
+        ]),
+        h('div', { class: 'content-generated-actions' }, [
+          h('a', { class: 'text-icon-button', href: output.url, download: output.name }, '下载'),
+          h('button', { class: 'text-icon-button', onClick: () => renameJob(job) }, '重命名'),
           h('button', { class: 'text-icon-button danger', onClick: () => archiveJob(String(job.id)) }, '删除'),
         ]),
       ])
@@ -1063,6 +1110,20 @@ export function assetMatchesSegment(asset: Dict, segment: string) {
   if (segment === 'video' || segment === 'image') return asset.asset_type === segment
   if (segment === 'voice_reference') return asset.asset_type === 'audio' && asset.purpose === 'voice_reference'
   return asset.asset_type === 'audio' && asset.purpose === 'background_music'
+}
+
+export function filterMaterialAssets(assets: Dict[], kind: string) {
+  return kind === 'all' ? assets : assets.filter(asset => asset.asset_type === kind)
+}
+
+export function paginateMaterialAssets(assets: Dict[], page: number, pageSize: number) {
+  const start = (Math.max(1, page) - 1) * pageSize
+  return assets.slice(start, start + pageSize)
+}
+
+function fileNameWithExtension(name: string, originalName: string) {
+  const extension = String(originalName || '').match(/\.[^.]+$/)?.[0] || ''
+  return `${String(name || '').replace(/\.[^.]+$/, '')}${extension}`
 }
 
 function assetCategoryLabel(asset: Dict) {
