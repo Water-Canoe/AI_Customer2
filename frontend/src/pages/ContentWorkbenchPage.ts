@@ -19,6 +19,13 @@ import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 
 const MASKED_SECRET = '********'
+const ASSET_SEGMENTS = [
+  ['all', '全部'],
+  ['video', '视频'],
+  ['image', '图片'],
+  ['background_music', '背景音乐'],
+  ['voice_reference', '克隆音频'],
+] as const
 
 const defaultVideoDraft = () => ({
   video_subject: '',
@@ -187,17 +194,31 @@ export default defineComponent({
     const selectedAssetIds = ref<string[]>([])
     const audioAssetId = ref('')
     const bgmAssetId = ref('')
-    const assetFilter = ref({ type: '', search: '' })
+    const assetFilter = ref({ search: '' })
+    const assetSegment = ref('all')
     const recordSearch = ref('')
     const voiceProvider = ref('edge')
     const voices = ref<string[]>([])
     const loading = ref(false)
     const uploading = ref(false)
     const draggedAssetId = ref('')
+    const voiceReferenceScript = ref('')
+    const voiceRecordingName = ref('我的克隆音色')
+    const voiceRecordingSeconds = ref(0)
+    const voiceRecording = ref(false)
+    const voiceRecordingBlob = ref<Blob | null>(null)
+    const voiceRecordingUrl = ref('')
+    const voiceScriptLoading = ref(false)
+    const voiceRecordingSaving = ref(false)
     let refreshTimer = 0
+    let voiceRecordingTimer = 0
+    let mediaRecorder: MediaRecorder | null = null
+    let mediaStream: MediaStream | null = null
+    let mediaChunks: Blob[] = []
 
     const materialAssets = computed(() => assets.value.filter(item => ['video', 'image'].includes(String(item.asset_type))))
     const audioAssets = computed(() => assets.value.filter(item => String(item.asset_type) === 'audio'))
+    const visibleAssets = computed(() => assets.value.filter(asset => assetMatchesSegment(asset, assetSegment.value)))
     const selectedMaterials = computed(() => selectedAssetIds.value
       .map(id => materialAssets.value.find(item => item.id === id))
       .filter(Boolean) as Dict[])
@@ -214,7 +235,13 @@ export default defineComponent({
         if (activeJobs.value.length && ['content-create', 'content-records'].includes(view.value)) void loadJobs(false)
       }, 3000)
     })
-    onUnmounted(() => window.clearInterval(refreshTimer))
+    onUnmounted(() => {
+      window.clearInterval(refreshTimer)
+      window.clearInterval(voiceRecordingTimer)
+      if (mediaRecorder?.state === 'recording') mediaRecorder.stop()
+      mediaStream?.getTracks().forEach(track => track.stop())
+      if (voiceRecordingUrl.value) URL.revokeObjectURL(voiceRecordingUrl.value)
+    })
     watch(view, () => void loadPage())
     watch(() => props.refreshSeq, () => void loadPage())
 
@@ -226,7 +253,7 @@ export default defineComponent({
     }
 
     async function loadAssets() {
-      const { data } = await api.get('/content/assets', { params: { asset_type: assetFilter.value.type, search: assetFilter.value.search } })
+      const { data } = await api.get('/content/assets', { params: { search: assetFilter.value.search } })
       assets.value = data
       selectedAssetIds.value = selectedAssetIds.value.filter(id => data.some((item: Dict) => item.id === id))
     }
@@ -277,7 +304,8 @@ export default defineComponent({
       try {
         const form = new FormData()
         files.forEach(file => form.append('files', file))
-        const { data } = await api.post('/content/assets/import', form)
+        const purpose = ['background_music', 'voice_reference'].includes(assetSegment.value) ? assetSegment.value : ''
+        const { data } = await api.post('/content/assets/import', form, { params: { purpose } })
         const duplicates = data.filter((item: Dict) => item.duplicate).length
         ElMessage.success(`已导入 ${data.length - duplicates} 项${duplicates ? `，跳过 ${duplicates} 项重复文件` : ''}`)
         await loadAssets()
@@ -303,13 +331,111 @@ export default defineComponent({
 
     async function deleteAsset(asset: Dict) {
       try {
-        await ElMessageBox.confirm(`确认删除“${asset.name}”？正在使用的资产不会被删除。`, '删除内容资产', { type: 'warning' })
+        const linkedProfiles = voiceProfiles.value.filter(profile => profile.reference_asset_id === asset.id)
+        const message = linkedProfiles.length
+          ? `确认删除“${asset.name}”？关联的 ${linkedProfiles.length} 个克隆音色也会一并删除。`
+          : `确认删除“${asset.name}”？正在使用的资产不会被删除。`
+        await ElMessageBox.confirm(message, '删除内容资产', { type: 'warning' })
+        for (const profile of linkedProfiles) await api.delete(`/content/voice-profiles/${profile.id}`)
         await api.delete(`/content/assets/${asset.id}`)
         ElMessage.success('资产已删除')
-        await loadAssets()
+        await Promise.all([loadAssets(), loadVoiceProfiles()])
       } catch (error: any) {
         if (isUserCancel(error)) return
         ElMessage.error(error?.response?.data?.detail || '资产删除失败')
+      }
+    }
+
+    async function generateVoiceReferenceScript() {
+      voiceScriptLoading.value = true
+      try {
+        const { data } = await api.post('/content/voice-reference-script')
+        voiceReferenceScript.value = String(data.script || '')
+        ElMessage.success('朗读文案已生成，请按原文自然朗读')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '朗读文案生成失败')
+      } finally {
+        voiceScriptLoading.value = false
+      }
+    }
+
+    async function startVoiceRecording() {
+      if (!voiceReferenceScript.value.trim()) return ElMessage.warning('请先生成或填写朗读文案')
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') return ElMessage.error('当前浏览器不支持麦克风录音')
+      try {
+        clearVoiceRecording()
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(type => MediaRecorder.isTypeSupported(type)) || ''
+        mediaRecorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream)
+        mediaChunks = []
+        mediaRecorder.ondataavailable = event => { if (event.data.size) mediaChunks.push(event.data) }
+        mediaRecorder.onstop = () => {
+          const type = mediaRecorder?.mimeType || mimeType || 'audio/webm'
+          voiceRecordingBlob.value = new Blob(mediaChunks, { type })
+          voiceRecordingUrl.value = URL.createObjectURL(voiceRecordingBlob.value)
+          mediaStream?.getTracks().forEach(track => track.stop())
+          mediaStream = null
+          mediaRecorder = null
+        }
+        mediaRecorder.start(250)
+        voiceRecording.value = true
+        voiceRecordingSeconds.value = 0
+        voiceRecordingTimer = window.setInterval(() => {
+          voiceRecordingSeconds.value += 1
+          if (voiceRecordingSeconds.value >= 120) stopVoiceRecording()
+        }, 1000)
+      } catch (error: any) {
+        mediaStream?.getTracks().forEach(track => track.stop())
+        mediaStream = null
+        ElMessage.error(error?.name === 'NotAllowedError' ? '未获得麦克风权限，请在浏览器中允许录音' : '麦克风启动失败')
+      }
+    }
+
+    function stopVoiceRecording() {
+      window.clearInterval(voiceRecordingTimer)
+      voiceRecording.value = false
+      if (mediaRecorder?.state === 'recording') mediaRecorder.stop()
+    }
+
+    function clearVoiceRecording() {
+      if (voiceRecordingUrl.value) URL.revokeObjectURL(voiceRecordingUrl.value)
+      voiceRecordingUrl.value = ''
+      voiceRecordingBlob.value = null
+      voiceRecordingSeconds.value = 0
+    }
+
+    async function saveVoiceRecording() {
+      const blob = voiceRecordingBlob.value
+      const name = voiceRecordingName.value.trim()
+      const script = voiceReferenceScript.value.trim()
+      if (!blob) return ElMessage.warning('请先完成录音')
+      if (!name) return ElMessage.warning('请填写录音名称')
+      if (!script) return ElMessage.warning('朗读文案不能为空')
+      try {
+        await ElMessageBox.confirm('我确认录音是本人声音或已获得声音使用授权，并同意用于AI声音克隆。', '声音授权确认', { confirmButtonText: '确认并保存', type: 'warning' })
+        voiceRecordingSaving.value = true
+        const extension = recordingExtension(blob.type)
+        const filename = `${name.replace(/[\\/:*?"<>|]/g, '-').replace(/\.[^.]+$/, '')}.${extension}`
+        const form = new FormData()
+        form.append('files', new File([blob], filename, { type: blob.type || 'audio/webm' }))
+        const { data } = await api.post('/content/assets/import', form, { params: { purpose: 'voice_reference' } })
+        const asset = data[0]
+        await api.post('/content/voice-profiles', {
+          name,
+          provider: 'voxcpm2',
+          reference_asset_id: asset.id,
+          prompt_text: script,
+          style_prompt: '',
+          consent_confirmed: true,
+        })
+        clearVoiceRecording()
+        await Promise.all([loadAssets(), loadVoiceProfiles()])
+        ElMessage.success('录音和克隆音色已保存')
+      } catch (error: any) {
+        if (isUserCancel(error)) return
+        ElMessage.error(error?.response?.data?.detail || '录音保存失败')
+      } finally {
+        voiceRecordingSaving.value = false
       }
     }
 
@@ -328,7 +454,7 @@ export default defineComponent({
           consent_confirmed: true,
         })
         ElMessage.success('克隆音色已创建')
-        await loadVoiceProfiles()
+        await Promise.all([loadAssets(), loadVoiceProfiles()])
       } catch (error: any) {
         if (isUserCancel(error)) return
         ElMessage.error(error?.response?.data?.detail || '克隆音色创建失败')
@@ -627,24 +753,25 @@ export default defineComponent({
           sectionTitle({ title: '内容资产', subtitle: `${assets.value.length} 项客户自有素材`, icon: Collection, tone: 'amber' }),
           h('div', { class: 'table-filters content-asset-filters' }, [
             h('input', { placeholder: '搜索资产名称', value: assetFilter.value.search, onInput: (event: Event) => assetFilter.value.search = (event.target as HTMLInputElement).value }),
-            h('select', { value: assetFilter.value.type, onChange: (event: Event) => assetFilter.value.type = (event.target as HTMLSelectElement).value }, [
-              h('option', { value: '' }, '全部类型'),
-              h('option', { value: 'video' }, '视频'),
-              h('option', { value: 'image' }, '图片'),
-              h('option', { value: 'audio' }, '音频'),
-            ]),
-            h('button', { class: 'filter-button', onClick: loadAssets }, '筛选'),
+            h('button', { class: 'filter-button', onClick: loadAssets }, '搜索'),
             h('label', { class: ['primary-action content-asset-upload', uploading.value ? 'disabled' : ''] }, [
               h(Plus, { class: 'inline-icon' }),
-              uploading.value ? '导入中...' : '导入内容资产',
-              h('input', { type: 'file', multiple: true, accept: 'video/*,image/*,audio/*', disabled: uploading.value, onChange: uploadAssets, hidden: true }),
+              uploading.value ? '导入中...' : assetImportLabel(assetSegment.value),
+              h('input', { type: 'file', multiple: true, accept: assetAccept(assetSegment.value), disabled: uploading.value, onChange: uploadAssets, hidden: true }),
             ]),
           ]),
         ]),
-        renderVoiceProfiles(),
-        assets.value.length
-          ? h('div', { class: 'content-asset-grid' }, assets.value.map(renderAssetCard))
-          : emptyState({ title: '暂无内容资产', description: '导入客户自己的视频、图片或音频', icon: Collection, tone: 'amber' }),
+        h('div', { class: 'content-asset-segments', role: 'tablist', 'aria-label': '内容资产分类' }, ASSET_SEGMENTS.map(([value, label]) => h('button', {
+          role: 'tab',
+          'aria-selected': assetSegment.value === value,
+          class: assetSegment.value === value ? 'active' : '',
+          onClick: () => assetSegment.value = value,
+        }, [h('span', label), h('small', String(assets.value.filter(asset => assetMatchesSegment(asset, value)).length))]))),
+        assetSegment.value === 'voice_reference' ? renderVoiceRecorder() : null,
+        assetSegment.value === 'voice_reference' ? renderVoiceProfiles() : null,
+        visibleAssets.value.length
+          ? h('div', { class: 'content-asset-grid' }, visibleAssets.value.map(renderAssetCard))
+          : emptyState({ title: `暂无${assetSegmentLabel(assetSegment.value)}资产`, description: '点击右上角按钮导入，克隆音频也可以直接录制', icon: Collection, tone: 'amber' }),
       ])
     }
 
@@ -653,14 +780,53 @@ export default defineComponent({
         h('div', { class: 'content-asset-preview' }, [renderAssetPreview(asset)]),
         h('div', { class: 'content-asset-info' }, [
           h('strong', { title: asset.name }, String(asset.name || '未命名')),
-          h('span', `${assetTypeLabel(asset.asset_type)} · ${formatBytes(asset.file_size)}`),
+          h('span', `${assetCategoryLabel(asset)} · ${formatBytes(asset.file_size)}`),
           h('small', asset.duration ? `${Number(asset.duration).toFixed(1)}秒` : asset.width ? `${asset.width}×${asset.height}` : '等待使用时校验'),
         ]),
         h('div', { class: 'task-card-actions' }, [
-          asset.asset_type === 'audio' ? h('button', { class: 'primary-soft', onClick: () => createVoiceProfile(asset) }, '创建音色') : null,
+          asset.asset_type === 'audio' && !voiceProfiles.value.some(profile => profile.reference_asset_id === asset.id)
+            ? h('button', { class: 'primary-soft', onClick: () => createVoiceProfile(asset) }, '创建音色')
+            : null,
           h('button', { class: 'text-icon-button', onClick: () => renameAsset(asset) }, '重命名'),
           h('button', { class: 'text-icon-button danger', onClick: () => deleteAsset(asset) }, [h(Delete, { class: 'inline-icon' }), '删除']),
         ]),
+      ])
+    }
+
+    function renderVoiceRecorder() {
+      return h('section', { class: 'content-voice-recorder' }, [
+        h('div', { class: 'content-recorder-head' }, [
+          h('div', [h('strong', '录制克隆音频'), h('p', '建议在安静环境中自然朗读20–40秒，尽量与文案保持一致。')]),
+          h('button', { class: 'secondary-action', disabled: voiceScriptLoading.value || voiceRecording.value, onClick: generateVoiceReferenceScript }, voiceScriptLoading.value ? '生成中...' : 'AI生成朗读文案'),
+        ]),
+        h('label', { class: 'content-recorder-script' }, [
+          h('span', '朗读文案'),
+          h('textarea', {
+            rows: 4,
+            value: voiceReferenceScript.value,
+            disabled: voiceRecording.value,
+            placeholder: '点击“AI生成朗读文案”，也可以自行修改后再录音。',
+            onInput: (event: Event) => voiceReferenceScript.value = (event.target as HTMLTextAreaElement).value,
+          }),
+        ]),
+        h('div', { class: 'content-recorder-controls' }, [
+          h('label', { class: 'content-recorder-name' }, [
+            h('span', '录音名称'),
+            h('input', { value: voiceRecordingName.value, disabled: voiceRecording.value, onInput: (event: Event) => voiceRecordingName.value = (event.target as HTMLInputElement).value }),
+          ]),
+          h('div', { class: ['content-recording-status', voiceRecording.value ? 'recording' : ''] }, [
+            h('i'),
+            h('span', voiceRecording.value ? `录音中 ${formatDuration(voiceRecordingSeconds.value)}` : voiceRecordingBlob.value ? `录音完成 ${formatDuration(voiceRecordingSeconds.value)}` : '等待录音'),
+          ]),
+          voiceRecording.value
+            ? h('button', { class: 'danger-soft', onClick: stopVoiceRecording }, '停止录音')
+            : h('button', { class: 'primary-action', disabled: voiceRecordingSaving.value, onClick: startVoiceRecording }, voiceRecordingBlob.value ? '重新录音' : '开始录音'),
+        ]),
+        voiceRecordingUrl.value ? h('div', { class: 'content-recording-preview' }, [
+          h('audio', { src: voiceRecordingUrl.value, controls: true }),
+          h('button', { class: 'text-icon-button danger', disabled: voiceRecordingSaving.value, onClick: clearVoiceRecording }, '放弃录音'),
+          h('button', { class: 'primary-action', disabled: voiceRecordingSaving.value, onClick: saveVoiceRecording }, voiceRecordingSaving.value ? '保存中...' : '保存并创建音色'),
+        ]) : null,
       ])
     }
 
@@ -891,8 +1057,41 @@ function setPath(target: Dict, path: string, value: unknown) {
   current[parts[parts.length - 1]] = value
 }
 
-function assetTypeLabel(value: unknown) {
-  return ({ video: '视频', image: '图片', audio: '音频' } as Record<string, string>)[String(value || '')] || '文件'
+function assetMatchesSegment(asset: Dict, segment: string) {
+  if (segment === 'all') return true
+  if (segment === 'video' || segment === 'image') return asset.asset_type === segment
+  if (segment === 'voice_reference') return asset.asset_type === 'audio' && asset.purpose === 'voice_reference'
+  return asset.asset_type === 'audio' && asset.purpose !== 'voice_reference'
+}
+
+function assetCategoryLabel(asset: Dict) {
+  if (asset.asset_type === 'audio') return asset.purpose === 'voice_reference' ? '克隆音频' : '背景音乐'
+  return asset.asset_type === 'video' ? '视频' : asset.asset_type === 'image' ? '图片' : '文件'
+}
+
+function assetSegmentLabel(segment: string) {
+  return ASSET_SEGMENTS.find(([value]) => value === segment)?.[1] || '内容'
+}
+
+function assetImportLabel(segment: string) {
+  return segment === 'all' ? '导入内容资产' : `导入${assetSegmentLabel(segment)}`
+}
+
+function assetAccept(segment: string) {
+  if (segment === 'video') return 'video/*'
+  if (segment === 'image') return 'image/*'
+  if (['background_music', 'voice_reference'].includes(segment)) return 'audio/*'
+  return 'video/*,image/*,audio/*'
+}
+
+function recordingExtension(mimeType: string) {
+  if (mimeType.includes('mp4')) return 'm4a'
+  if (mimeType.includes('ogg')) return 'ogg'
+  return 'webm'
+}
+
+function formatDuration(seconds: number) {
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 
 function statusLabel(value: unknown) {

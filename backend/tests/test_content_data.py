@@ -23,12 +23,13 @@ def test_content_migration_and_asset_dedup(tmp_path, monkeypatch: pytest.MonkeyP
 
     audio = _wav_bytes()
     first = content_assets.import_asset_file("voice.wav", BytesIO(audio), "audio/wav")
-    second = content_assets.import_asset_file("copy.wav", BytesIO(audio), "audio/wav")
+    second = content_assets.import_asset_file("copy.wav", BytesIO(audio), "audio/wav", "voice_reference")
 
     assert first["id"] == second["id"]
     assert second["duplicate"] is True
+    assert second["purpose"] == "voice_reference"
     with database.connect() as conn:
-        assert migrations.current_version(conn) == 5
+        assert migrations.current_version(conn) == 6
         assert conn.execute("SELECT COUNT(*) FROM content_assets").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM video_jobs").fetchone()[0] == 0
 
@@ -48,6 +49,23 @@ def test_asset_delete_is_blocked_while_video_job_is_active(tmp_path, monkeypatch
 
     with pytest.raises(RuntimeError, match="运行中的视频任务"):
         content_assets.delete_asset(asset["id"])
+
+
+def test_browser_webm_recording_is_imported_as_voice_audio(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app.services import content_assets
+
+    monkeypatch.setattr(content_assets, "_read_metadata", lambda *_: {"width": None, "height": None, "duration": None, "thumbnail_path": ""})
+
+    asset = content_assets.import_asset_file(
+        "现场录音.webm",
+        BytesIO(b"browser-recording"),
+        "audio/webm;codecs=opus",
+        "voice_reference",
+    )
+
+    assert asset["asset_type"] == "audio"
+    assert asset["purpose"] == "voice_reference"
 
 
 def test_asset_paths_cannot_escape_managed_root(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,6 +159,7 @@ def test_voice_profile_crud_and_asset_protection(tmp_path, monkeypatch: pytest.M
         "consent_confirmed": True,
     })
     assert profile["reference_asset"]["id"] == asset["id"]
+    assert profile["reference_asset"]["purpose"] == "voice_reference"
     assert voice_profiles.update_profile(profile["id"], {"name": "品牌音色"})["name"] == "品牌音色"
     with pytest.raises(RuntimeError, match="克隆音色"):
         content_assets.delete_asset(asset["id"])
@@ -168,7 +187,7 @@ def test_voxcpm2_adapter_uses_reference_and_prompt(tmp_path, monkeypatch: pytest
     monkeypatch.setattr(voice_synthesis, "_load_voxcpm2", lambda: FakeModel())
     monkeypatch.setattr(voice_synthesis.subprocess, "run", fake_run)
     monkeypatch.setattr(voice_synthesis.utils, "get_ffmpeg_binary", lambda: "ffmpeg")
-    reference = tmp_path / "reference.wav"
+    reference = tmp_path / "reference.webm"
     reference.write_bytes(_wav_bytes())
     output = tmp_path / "voice.mp3"
 
@@ -181,12 +200,35 @@ def test_voxcpm2_adapter_uses_reference_and_prompt(tmp_path, monkeypatch: pytest
         1.0,
     )
 
-    assert calls["reference_wav_path"] == str(reference)
-    assert calls["prompt_wav_path"] == str(reference)
+    prepared_reference = output.with_suffix(".reference.wav")
+    assert calls["reference_wav_path"] == str(prepared_reference)
+    assert calls["prompt_wav_path"] == str(prepared_reference)
     assert calls["prompt_text"] == "参考文字"
     assert calls["text"] == "(温和自然)生成文字"
     assert output.is_file()
+    assert not prepared_reference.exists()
     assert not output.with_suffix(".voxcpm.wav").exists()
+
+
+def test_voice_reference_script_uses_existing_video_ai(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app.services import content_workbench
+    from app.video_engine.services import llm
+
+    captured: dict[str, object] = {}
+
+    def fake_generate_script(**kwargs):
+        captured.update(kwargs)
+        return "今天天气很好，请用自然的语气读完这段文字。"
+
+    monkeypatch.setattr(content_workbench, "_apply_runtime_settings", lambda: None)
+    monkeypatch.setattr(llm, "generate_script", fake_generate_script)
+
+    result = content_workbench.generate_voice_reference_script()
+
+    assert result["script"].startswith("今天天气")
+    assert "声音克隆" in str(captured["video_subject"])
+    assert "80到120" in str(captured["video_script_prompt"])
 
 
 def _wav_bytes() -> bytes:

@@ -349,7 +349,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 左侧“内容工作台”包含四页：
 
 - “视频创作”填写主题、文案、素材词、素材来源、画面比例、音色和字幕参数；高级区保留拼接、转场、时长、数量、语速、音量、字幕字体/颜色/描边和提示词。选择“内容资产”时可以多选视频/图片并拖动排序；“清空”会恢复默认参数并清除文案、素材、配音和背景音乐选择。
-- “内容资产”批量导入视频、图片和音频，按SHA-256去重，支持完整比例预览、筛选、重命名和单条删除。音频资产可以创建VoxCPM2克隆音色，参考文字为空时使用普通克隆，填写准确文字时使用高保真克隆；创建前必须确认已获得声音授权。运行中视频任务引用或克隆音色使用的资产不能删除；删除只处理该记录明确指向的原文件和缩略图，不批量删除目录。
+- “内容资产”批量导入视频、图片和音频，按SHA-256去重，支持完整比例预览、搜索、重命名和单条删除。页面通过分段控制器切换全部、视频、图片、背景音乐和克隆音频，底层文件仍统一托管在 `originals`，仅使用数据库用途字段分类。克隆音频分区支持浏览器麦克风直接录音：内容AI生成80至120字朗读文案，用户可修改后录制、试听、命名并保存，系统同时创建VoxCPM2音色；Chrome录制的WebM会在推理前转换为16kHz单声道WAV。导入的音频也可以手动创建音色，参考文字为空时使用普通克隆，填写准确文字时使用高保真克隆；创建前必须确认已获得声音授权。删除录音时页面会先删除其关联音色，再单独删除该资产文件；运行中视频任务引用的资产仍禁止删除。
 - “生成记录”左侧统一展示全部成品预览，可按主题或文件名搜索；每个成品显示生成时间、上传状态和单条上传按钮，上传状态也可手动改为“未上传/已上传”。右侧以“缩略预览 + 主题/阶段/进度”的紧凑卡片展示任务。页面支持从“视频创作”新增、查询、修改主题和删除记录；删除采用安全归档，只隐藏记录并保留成品文件。取消、重试和发布仍在记录卡片中操作，重试写入新的 `attempt-N` 目录，不覆盖旧结果。
 - “内容设置”独立保存视频AI、TTS、素材源、Whisper、TwelveLabs、代理、TLS和Upload-Post设置，不读取拓客工作台AI配置。密钥读取时统一显示 `********`，提交空值或遮罩值时保留原密钥。
 
@@ -377,10 +377,11 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/assets`：资产导入、列表、详情、重命名、单条删除、原文件预览和缩略图。
 - `/api/content/video-jobs`：创建、列表、详情、修改主题/成品上传状态、取消、重试、归档、成品预览和单条或整批手动发布。
 - `/api/content/voice-profiles`：克隆音色列表、创建、修改和删除；音色记录引用托管音频资产并保存授权确认。
+- `/api/content/voice-reference-script`：使用内容工作台独立AI配置生成声音克隆朗读文案；未配置供应商时明确返回错误，不使用固定文案兜底。
 - `/api/content/scripts`、`/api/content/terms`、`/api/content/social-metadata`：独立视频AI生成能力。
 - `/api/content/voices`、`/api/content/settings`、`/api/content/environment-check`：音色、完整独立配置和环境检查。
 
-`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。当前全后端回归为342通过、8项联网测试跳过，前端为8项测试通过并完成生产构建。
+`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。内容数据测试另外覆盖音频用途迁移、浏览器WebM录音导入、AI朗读文案和VoxCPM参考格式转换。当前全后端回归为344通过、8项联网测试跳过，前端为8项测试通过并完成生产构建。
 
 ## 授权服务
 
@@ -404,7 +405,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 数据生命周期与数据库升级
 
-项目数据库从正式交付改造开始使用有序迁移，不再依赖启动时零散执行 `_ensure_column()`。迁移登记在 `schema_migrations`，同时写入 SQLite `user_version`；当前初始结构为版本 1，版本 2 清理由已移除 AI 编排功能遗留的 `agent_runs / agent_run_events`，版本 3 创建持久化运行任务队列 `runtime_jobs`，版本 4 创建 `content_assets / video_jobs / video_job_assets` 内容工作台表，版本 5 创建跨视频和数字人复用的 `voice_profiles` 音色档案表。后续结构变更必须新增迁移版本，不能直接修改已经发布的旧迁移。启动发现待执行迁移且旧库存在业务数据时，会先在数据库同级 `backups/<时间戳>/` 创建完整备份，再执行迁移；迁移版本不一致或校验信息异常时直接停止启动，不使用兼容兜底掩盖问题。
+项目数据库从正式交付改造开始使用有序迁移，不再依赖启动时零散执行 `_ensure_column()`。迁移登记在 `schema_migrations`，同时写入 SQLite `user_version`；当前初始结构为版本 1，版本 2 清理由已移除 AI 编排功能遗留的 `agent_runs / agent_run_events`，版本 3 创建持久化运行任务队列 `runtime_jobs`，版本 4 创建 `content_assets / video_jobs / video_job_assets` 内容工作台表，版本 5 创建跨视频和数字人复用的 `voice_profiles` 音色档案表，版本 6 为音频资产增加 `background_music / voice_reference` 用途分类并回填旧数据。后续结构变更必须新增迁移版本，不能直接修改已经发布的旧迁移。启动发现待执行迁移且旧库存在业务数据时，会先在数据库同级 `backups/<时间戳>/` 创建完整备份，再执行迁移；迁移版本不一致或校验信息异常时直接停止启动，不使用兼容兜底掩盖问题。
 
 业务库连接默认启用 SQLite WAL、`busy_timeout=30s`、外键检查和 `synchronous=NORMAL`，用于降低页面轮询、AI任务、采集导入、自动私信和引流记录并发读写时的锁冲突。备份使用 SQLite Online Backup API，不复制仍在变化的裸数据库文件；备份目录包含业务数据库、清单、SHA-256 和当时的引流图片。设置页“数据保护”可以手动创建备份、查看最近五个备份并恢复；恢复前会检查运行中任务，再自动备份当前数据，校验目标备份后恢复并重新执行数据库迁移。
 

@@ -85,15 +85,20 @@ def _synthesize_voxcpm2(
     style = str(profile.get("style_prompt") or "").translate(str.maketrans("", "", "()（）")).strip()
     target_text = f"({style}){text}" if style else text
     prompt_text = str(profile.get("prompt_text") or "").strip()
-    model = _load_voxcpm2()
-    # VoxCPM推理不是线程安全的，视频和未来数字人任务共用同一把模型锁。
-    with _model_lock:
-        wav = model.generate(
-            text=target_text,
-            reference_wav_path=str(reference),
-            prompt_wav_path=str(reference) if prompt_text else None,
-            prompt_text=prompt_text or None,
-        )
+    prepared_reference, remove_reference = _prepare_reference_audio(reference, output)
+    try:
+        model = _load_voxcpm2()
+        # VoxCPM推理不是线程安全的，视频和未来数字人任务共用同一把模型锁。
+        with _model_lock:
+            wav = model.generate(
+                text=target_text,
+                reference_wav_path=str(prepared_reference),
+                prompt_wav_path=str(prepared_reference) if prompt_text else None,
+                prompt_text=prompt_text or None,
+            )
+    finally:
+        if remove_reference:
+            prepared_reference.unlink(missing_ok=True)
     temp_wav = output.with_suffix(".voxcpm.wav")
     try:
         _write_pcm_wav(temp_wav, wav, int(model.tts_model.sample_rate))
@@ -107,6 +112,21 @@ def _synthesize_voxcpm2(
             raise RuntimeError(f"VoxCPM2音频转换失败：{(result.stderr or result.stdout or '').strip()}")
     finally:
         temp_wav.unlink(missing_ok=True)
+
+
+def _prepare_reference_audio(reference: Path, output: Path) -> tuple[Path, bool]:
+    if reference.suffix.lower() != ".webm":
+        return reference, False
+    prepared = output.with_suffix(".reference.wav")
+    command = [
+        utils.get_ffmpeg_binary(), "-y", "-i", str(reference),
+        "-ar", "16000", "-ac", "1", str(prepared),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 or not prepared.is_file() or prepared.stat().st_size <= 0:
+        prepared.unlink(missing_ok=True)
+        raise RuntimeError(f"录音格式转换失败：{(result.stderr or result.stdout or '').strip()}")
+    return prepared, True
 
 
 def _write_pcm_wav(path: Path, samples: Any, sample_rate: int) -> None:

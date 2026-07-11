@@ -155,12 +155,34 @@ def _create_voice_profiles(conn: sqlite3.Connection, _: str) -> None:
     )
 
 
+def _classify_audio_assets(conn: sqlite3.Connection, _: str) -> None:
+    conn.executescript(
+        """
+        ALTER TABLE content_assets ADD COLUMN purpose TEXT NOT NULL DEFAULT ''
+        CHECK(purpose IN ('', 'background_music', 'voice_reference'));
+
+        UPDATE content_assets
+        SET purpose = 'voice_reference'
+        WHERE asset_type = 'audio'
+          AND id IN (SELECT reference_asset_id FROM voice_profiles);
+
+        UPDATE content_assets
+        SET purpose = 'background_music'
+        WHERE asset_type = 'audio' AND purpose = '';
+
+        CREATE INDEX IF NOT EXISTS idx_content_assets_purpose_created
+        ON content_assets(purpose, deleted_at, created_at DESC);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
     Migration(3, "create_runtime_job_queue", _create_runtime_job_queue),
     Migration(4, "create_content_workbench", _create_content_workbench),
     Migration(5, "create_voice_profiles", _create_voice_profiles),
+    Migration(6, "classify_audio_assets", _classify_audio_assets),
 )
 
 

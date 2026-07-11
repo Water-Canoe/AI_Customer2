@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/content", tags=["content"])
 
 
 @router.post("/assets/import")
-async def import_assets(files: list[UploadFile] = File(...)) -> list[dict[str, object]]:
+async def import_assets(files: list[UploadFile] = File(...), purpose: str = "") -> list[dict[str, object]]:
     results = []
     for file in files:
         try:
@@ -32,6 +32,7 @@ async def import_assets(files: list[UploadFile] = File(...)) -> list[dict[str, o
                     str(file.filename or ""),
                     file.file,
                     str(file.content_type or ""),
+                    purpose,
                 )
             )
         except (RuntimeError, ValueError) as exc:
@@ -42,9 +43,9 @@ async def import_assets(files: list[UploadFile] = File(...)) -> list[dict[str, o
 
 
 @router.get("/assets")
-def list_assets(asset_type: str = "", search: str = "") -> list[dict[str, object]]:
+def list_assets(asset_type: str = "", search: str = "", purpose: str = "") -> list[dict[str, object]]:
     try:
-        return content_assets.list_assets(asset_type, search)
+        return content_assets.list_assets(asset_type, search, purpose)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -207,6 +208,14 @@ def generate_terms(payload: ContentTermsRequest) -> dict[str, object]:
 def generate_social_metadata(payload: ContentSocialMetadataRequest) -> dict[str, object]:
     try:
         return content_workbench.generate_social_metadata(payload.model_dump())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/voice-reference-script")
+def generate_voice_reference_script() -> dict[str, object]:
+    try:
+        return content_workbench.generate_voice_reference_script()
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

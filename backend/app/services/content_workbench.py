@@ -379,6 +379,17 @@ def generate_social_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def generate_voice_reference_script() -> dict[str, Any]:
+    result = generate_script({
+        "video_subject": "声音克隆标准朗读样本",
+        "video_language": "zh-CN",
+        "paragraph_number": 1,
+        "video_script_prompt": "生成80到120个汉字，语气自然，包含陈述、疑问和感叹语气，并覆盖常见声母、韵母与停顿。只返回需要朗读的正文。",
+        "custom_system_prompt": "你是声音克隆参考文案生成器。只输出一段适合普通人连续朗读的中文正文，不要标题、序号、解释、括号或特殊符号。",
+    })
+    return {"script": str(result["video_script"]).strip()}
+
+
 def list_voices(provider: str = "edge") -> list[str]:
     _apply_runtime_settings()
     from app.video_engine.config import config

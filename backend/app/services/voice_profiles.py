@@ -48,6 +48,10 @@ def create_profile(payload: dict[str, Any]) -> dict[str, Any]:
     profile_id = uuid.uuid4().hex
     with database.connect() as conn:
         conn.execute(
+            "UPDATE content_assets SET purpose = 'voice_reference', updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (str(asset["id"]),),
+        )
+        conn.execute(
             """
             INSERT INTO voice_profiles(
                 id, name, provider, reference_asset_id, prompt_text, style_prompt,

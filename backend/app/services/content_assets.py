@@ -16,6 +16,7 @@ ASSET_EXTENSIONS = {
     "image": {".jpg", ".jpeg", ".png", ".bmp", ".webp"},
     "audio": {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"},
 }
+AUDIO_PURPOSES = {"", "background_music", "voice_reference"}
 
 
 def ensure_asset_dirs() -> dict[str, Path]:
@@ -27,12 +28,26 @@ def ensure_asset_dirs() -> dict[str, Path]:
     return {"root": root, "originals": originals, "thumbnails": thumbnails}
 
 
-def import_asset_file(filename: str, source: BinaryIO, content_type: str = "") -> dict[str, Any]:
+def import_asset_file(
+    filename: str,
+    source: BinaryIO,
+    content_type: str = "",
+    purpose: str = "",
+) -> dict[str, Any]:
     safe_name = Path(str(filename or "")).name.strip()
     suffix = Path(safe_name).suffix.lower()
     asset_type = _asset_type_for_suffix(suffix)
+    if suffix == ".webm" and str(content_type or "").lower().startswith("audio/"):
+        asset_type = "audio"
     if not safe_name or not asset_type:
         raise ValueError("仅支持常见的视频、图片和音频文件")
+    clean_purpose = str(purpose or "").strip()
+    if clean_purpose not in AUDIO_PURPOSES:
+        raise ValueError("未知音频用途")
+    if asset_type != "audio":
+        clean_purpose = ""
+    elif not clean_purpose:
+        clean_purpose = "background_music"
 
     dirs = ensure_asset_dirs()
     temp_path = dirs["originals"] / f".{uuid.uuid4().hex}.upload"
@@ -57,6 +72,12 @@ def import_asset_file(filename: str, source: BinaryIO, content_type: str = "") -
                 (sha256,),
             ).fetchone()
             if duplicate and duplicate["deleted_at"] is None:
+                if asset_type == "audio" and duplicate["purpose"] != clean_purpose:
+                    conn.execute(
+                        "UPDATE content_assets SET purpose = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+                        (clean_purpose, str(duplicate["id"])),
+                    )
+                    duplicate = conn.execute("SELECT * FROM content_assets WHERE id = ?", (str(duplicate["id"]),)).fetchone()
                 temp_path.unlink(missing_ok=True)
                 result = _format_asset(duplicate)
                 result["duplicate"] = True
@@ -75,7 +96,7 @@ def import_asset_file(filename: str, source: BinaryIO, content_type: str = "") -
                     """
                     UPDATE content_assets
                     SET name = ?, asset_type = ?, mime_type = ?, file_size = ?,
-                        thumbnail_path = ?, width = ?, height = ?, duration = ?,
+                        thumbnail_path = ?, width = ?, height = ?, duration = ?, purpose = ?,
                         deleted_at = NULL, updated_at = datetime('now', 'localtime')
                     WHERE id = ?
                     """,
@@ -88,6 +109,7 @@ def import_asset_file(filename: str, source: BinaryIO, content_type: str = "") -
                         metadata["width"],
                         metadata["height"],
                         metadata["duration"],
+                        clean_purpose,
                         asset_id,
                     ),
                 )
@@ -96,8 +118,8 @@ def import_asset_file(filename: str, source: BinaryIO, content_type: str = "") -
                     """
                     INSERT INTO content_assets(
                         id, name, asset_type, relative_path, thumbnail_path,
-                        mime_type, file_size, sha256, width, height, duration
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        mime_type, file_size, sha256, width, height, duration, purpose
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         asset_id,
@@ -111,6 +133,7 @@ def import_asset_file(filename: str, source: BinaryIO, content_type: str = "") -
                         metadata["width"],
                         metadata["height"],
                         metadata["duration"],
+                        clean_purpose,
                     ),
                 )
         return get_asset(asset_id)
@@ -119,7 +142,7 @@ def import_asset_file(filename: str, source: BinaryIO, content_type: str = "") -
         raise
 
 
-def list_assets(asset_type: str = "", search: str = "") -> list[dict[str, Any]]:
+def list_assets(asset_type: str = "", search: str = "", purpose: str = "") -> list[dict[str, Any]]:
     conditions = ["deleted_at IS NULL"]
     params: list[Any] = []
     clean_type = str(asset_type or "").strip()
@@ -128,6 +151,12 @@ def list_assets(asset_type: str = "", search: str = "") -> list[dict[str, Any]]:
             raise ValueError("未知资产类型")
         conditions.append("asset_type = ?")
         params.append(clean_type)
+    clean_purpose = str(purpose or "").strip()
+    if clean_purpose:
+        if clean_purpose not in AUDIO_PURPOSES:
+            raise ValueError("未知音频用途")
+        conditions.append("purpose = ?")
+        params.append(clean_purpose)
     clean_search = str(search or "").strip()
     if clean_search:
         conditions.append("name LIKE ?")
