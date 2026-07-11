@@ -418,6 +418,10 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - `POST /api/system/backups/{backup_id}/restore`：输入“恢复备份”后执行安全恢复。
 - `POST /api/settings/clear-data`：支持 `create_backup` 和 `include_crawler`，正式页面默认都为 `true`。
 
+## 后续优化清单
+
+- 内容资产智能镜头匹配：每项视频/图片资产只调用一次 TwelveLabs Marengo/Pegasus 完成向量化和内容描述，把结果持久化到本地业务库；后续视频生成按文案分段在本地计算相似度并选择镜头，避免每次生成重复调用收费接口。实施时需要补充资产分析状态、向量/描述字段、失败重试、增量索引和费用提示。下次评审“当前项目还有什么值得优化或修改的功能”时应主动提出此项。
+
 ## 本地打包
 
 当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.0`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.0` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、VoxCPM2运行库、视频引擎配置、上游许可证和全部字体。每次使用带版本和时间戳的新目录，不删除旧构建。
