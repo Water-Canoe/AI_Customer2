@@ -31,6 +31,7 @@
           <el-menu-item index="content-create"><el-icon><MagicStick /></el-icon><span>视频创作</span></el-menu-item>
           <el-menu-item index="content-assets"><el-icon><Collection /></el-icon><span>内容资产</span></el-menu-item>
           <el-menu-item index="content-records"><el-icon><Tickets /></el-icon><span>生成记录</span></el-menu-item>
+          <el-menu-item index="content-publish"><el-icon><Promotion /></el-icon><span>发布中心</span></el-menu-item>
           <el-menu-item index="content-settings"><el-icon><Setting /></el-icon><span>内容设置</span></el-menu-item>
         </el-sub-menu>
       </el-menu>

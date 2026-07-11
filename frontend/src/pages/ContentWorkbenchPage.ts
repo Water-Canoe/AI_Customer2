@@ -159,16 +159,10 @@ const settingGroups: Array<{ title: string, fields: SettingField[] }> = [
     ],
   },
   {
-    title: 'TwelveLabs与自动发布',
+    title: 'TwelveLabs与代理',
     fields: [
       { path: 'app.twelvelabs_api_keys', label: 'TwelveLabs API Keys', type: 'list' },
       { path: 'app.twelvelabs_rerank_terms', label: '启用素材词语义重排', type: 'boolean' },
-      { path: 'app.upload_post_enabled', label: '启用Upload-Post', type: 'boolean' },
-      { path: 'app.upload_post_api_key', label: 'Upload-Post API Key', type: 'password' },
-      { path: 'app.upload_post_username', label: 'Upload-Post用户名' },
-      { path: 'app.upload_post_platforms', label: '发布平台', type: 'list' },
-      { path: 'app.upload_post_auto_upload', label: '生成后自动发布', type: 'boolean' },
-      { path: 'app.upload_post_youtube_privacy_status', label: 'YouTube可见性', options: [['public', '公开'], ['unlisted', '不公开列出'], ['private', '私密']] },
       { path: 'proxy.http', label: 'HTTP代理' },
       { path: 'proxy.https', label: 'HTTPS代理' },
     ],
@@ -187,12 +181,16 @@ export default defineComponent({
     const assets = ref<Dict[]>([])
     const voiceProfiles = ref<Dict[]>([])
     const jobs = ref<Dict>({ items: [], total: 0, page: 1, page_size: 100 })
+    const publishAccounts = ref<Dict[]>([])
+    const publishTasks = ref<Dict[]>([])
     const selectedJob = ref<Dict | null>(null)
     const settings = ref<Dict>({})
     const settingsDraft = ref<Dict>({})
     const environment = ref<Dict>({})
     const videoDraft = ref<Dict>(defaultVideoDraft())
     const selectedAssetIds = ref<string[]>([])
+    const selectedPublishAssetIds = ref<string[]>([])
+    const autoPublish = ref<Dict>({ enabled: false, account_ids: [], output_scope: 'first', publish_strategy: 'immediate', scheduled_at: '' })
     const audioAssetId = ref('')
     const bgmAssetId = ref('')
     const materialKind = ref('all')
@@ -240,6 +238,7 @@ export default defineComponent({
       void loadPage()
       refreshTimer = window.setInterval(() => {
         if (activeJobs.value.length && ['content-create', 'content-records'].includes(view.value)) void loadJobs(false)
+        if (view.value === 'content-records') void loadPublishTasks()
       }, 3000)
     })
     onUnmounted(() => {
@@ -253,9 +252,9 @@ export default defineComponent({
     watch(() => props.refreshSeq, () => void loadPage())
 
     async function loadPage() {
-      if (view.value === 'content-create') await Promise.all([loadAssets(), loadVoiceProfiles(), loadJobs(false), loadVoices()])
-      else if (view.value === 'content-assets') await Promise.all([loadAssets(), loadVoiceProfiles()])
-      else if (view.value === 'content-records') await loadJobs(true)
+      if (view.value === 'content-create') await Promise.all([loadAssets(), loadVoiceProfiles(), loadJobs(false), loadVoices(), loadPublishAccounts()])
+      else if (view.value === 'content-assets') await Promise.all([loadAssets(), loadVoiceProfiles(), loadPublishAccounts()])
+      else if (view.value === 'content-records') await Promise.all([loadJobs(true), loadPublishTasks()])
       else await Promise.all([loadSettings(), loadEnvironment()])
     }
 
@@ -263,6 +262,7 @@ export default defineComponent({
       const { data } = await api.get('/content/assets', { params: { search: assetFilter.value.search } })
       assets.value = data
       selectedAssetIds.value = selectedAssetIds.value.filter(id => data.some((item: Dict) => item.id === id))
+      selectedPublishAssetIds.value = selectedPublishAssetIds.value.filter(id => data.some((item: Dict) => item.id === id))
       materialPage.value = Math.min(materialPage.value, materialPageCount.value)
     }
 
@@ -279,6 +279,17 @@ export default defineComponent({
         if (found) selectedJob.value = found
       }
       if (selectFirst && !selectedJob.value && data.items.length) selectedJob.value = data.items[0]
+    }
+
+    async function loadPublishAccounts() {
+      const { data } = await api.get('/content/publish-accounts')
+      publishAccounts.value = data
+      if (!autoPublish.value.account_ids.length) autoPublish.value.account_ids = data.filter((item: Dict) => item.is_default && item.enabled && item.status === 'ready').map((item: Dict) => item.id)
+    }
+
+    async function loadPublishTasks() {
+      const { data } = await api.get('/content/publish-tasks', { params: { page: 1, page_size: 100 } })
+      publishTasks.value = data.items || []
     }
 
     async function loadSettings() {
@@ -542,6 +553,7 @@ export default defineComponent({
       if (!String(draft.video_subject || '').trim()) return ElMessage.warning('请填写视频主题')
       if (draft.video_source === 'local' && !selectedAssetIds.value.length) return ElMessage.warning('本地素材模式至少选择一项内容资产')
       if (voiceProvider.value === 'voxcpm2' && !audioAssetId.value && !String(draft.voice_name || '').trim()) return ElMessage.warning('请先选择一个克隆音色')
+      if (autoPublish.value.enabled && !autoPublish.value.account_ids.length) return ElMessage.warning('自动发布至少选择一个已登录账号')
       draft.video_transition_mode = draft.video_transition_mode || null
       loading.value = true
       try {
@@ -550,6 +562,7 @@ export default defineComponent({
           asset_ids: selectedAssetIds.value,
           audio_asset_id: audioAssetId.value,
           bgm_asset_id: bgmAssetId.value,
+          publish: autoPublish.value,
         })
         ElMessage.success('视频任务已加入生成队列')
         selectedJob.value = data
@@ -566,6 +579,7 @@ export default defineComponent({
       selectedAssetIds.value = []
       audioAssetId.value = ''
       bgmAssetId.value = ''
+      autoPublish.value = { enabled: false, account_ids: [], output_scope: 'first', publish_strategy: 'immediate', scheduled_at: '' }
       voiceProvider.value = 'edge'
       void loadVoices()
       ElMessage.success('视频创作内容已清空')
@@ -620,11 +634,12 @@ export default defineComponent({
 
     async function publishJob(id: string) {
       try {
-        const { data } = await api.post(`/content/video-jobs/${id}/publish`)
-        const failed = (data.results || []).filter((item: Dict) => !item.success).length
-        if (failed) ElMessage.warning(`发布完成，${failed} 项失败`)
-        else ElMessage.success('视频发布成功')
-        await loadJobs(false)
+        const job = (jobs.value.items || []).find((item: Dict) => String(item.id) === id)
+        const output = job?.outputs?.[0]
+        if (!job || !output) return ElMessage.warning('该任务还没有可发布的视频成品')
+        await api.post('/content/publish-tasks/one-click', { source: { type: 'video_output', video_job_id: job.id, output_name: output.name } })
+        ElMessage.success('发布任务已加入队列')
+        await Promise.all([loadJobs(false), loadPublishTasks()])
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '视频发布失败')
       }
@@ -632,14 +647,30 @@ export default defineComponent({
 
     async function uploadOutput(job: Dict, output: Dict) {
       try {
-        const { data } = await api.post(`/content/video-jobs/${job.id}/publish`, null, { params: { output_name: output.name } })
-        const failed = (data.results || []).some((item: Dict) => !item.success)
-        if (failed) ElMessage.warning('视频上传失败，请查看发布配置或服务返回信息')
-        else ElMessage.success('视频上传成功')
-        await loadJobs(false)
+        await api.post('/content/publish-tasks/one-click', { source: { type: 'video_output', video_job_id: job.id, output_name: output.name } })
+        ElMessage.success('发布任务已加入队列')
+        await Promise.all([loadJobs(false), loadPublishTasks()])
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '视频上传失败')
       }
+    }
+
+    function openPublishSettings(job: Dict, output: Dict) {
+      void router.push({ path: '/content-publish', query: { video_job_id: String(job.id), output_name: String(output.name) } })
+    }
+
+    async function publishAsset(asset: Dict) {
+      try {
+        await api.post('/content/publish-tasks/one-click', { source: { type: 'assets', asset_ids: [asset.id] } })
+        ElMessage.success('发布任务已加入队列')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '一键发布失败')
+      }
+    }
+
+    function openAssetPublishSettings(assetIds: string[]) {
+      if (!assetIds.length) return ElMessage.warning('请先选择图片')
+      void router.push({ path: '/content-publish', query: { asset_ids: assetIds.join(',') } })
     }
 
     async function updateOutputStatus(job: Dict, output: Dict, uploadStatus: string) {
@@ -700,6 +731,7 @@ export default defineComponent({
               : formInput('配音音色', videoDraft.value.voice_name, value => videoDraft.value.voice_name = value),
             formSelect('自定义配音', audioAssetId.value, [['', '使用TTS'], ...audioAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => audioAssetId.value = value),
             formSelect('背景音乐', bgmAssetId.value, [['', '不使用背景音乐'], ...backgroundMusicAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => bgmAssetId.value = value),
+            renderAutoPublishOptions(),
             renderAdvancedVideoOptions(),
           ]),
           h('div', { class: 'task-card-actions content-create-actions' }, [
@@ -775,6 +807,27 @@ export default defineComponent({
       ])
     }
 
+    function renderAutoPublishOptions() {
+      const readyAccounts = publishAccounts.value.filter(item => item.enabled && item.status === 'ready')
+      return h('section', { class: 'field-full content-auto-publish' }, [
+        h('div', { class: 'content-auto-publish-head' }, [
+          h('strong', '生成后自动发布'),
+          formToggle('为本次任务启用', Boolean(autoPublish.value.enabled), value => autoPublish.value.enabled = value),
+        ]),
+        autoPublish.value.enabled ? h('div', { class: 'content-auto-publish-body' }, [
+          readyAccounts.length ? h('div', { class: 'publish-account-options' }, readyAccounts.map(account => h('label', [
+            h('input', { type: 'checkbox', checked: autoPublish.value.account_ids.includes(account.id), onChange: (event: Event) => autoPublish.value.account_ids = togglePublishId(autoPublish.value.account_ids, String(account.id), (event.target as HTMLInputElement).checked) }),
+            `${publishPlatformLabel(account.platform)} · ${account.name}`,
+          ]))) : h('button', { class: 'secondary-action', onClick: () => router.push('/content-publish') }, '先配置发布账号'),
+          formSelect('发布成品', autoPublish.value.output_scope, [['first', '仅首个成品'], ['all', '全部成品']], value => autoPublish.value.output_scope = value),
+          formSelect('发布方式', autoPublish.value.publish_strategy, [['immediate', '立即发布'], ['scheduled', '定时发布']], value => autoPublish.value.publish_strategy = value),
+          autoPublish.value.publish_strategy === 'scheduled'
+            ? formInput('发布时间', autoPublish.value.scheduled_at, value => autoPublish.value.scheduled_at = value, '', 'datetime-local')
+            : null,
+        ]) : null,
+      ])
+    }
+
     function renderAssetsPage() {
       return h('section', { class: 'pane table-workspace content-assets-page' }, [
         h('div', { class: 'table-library-bar' }, [
@@ -782,6 +835,7 @@ export default defineComponent({
           h('div', { class: 'table-filters content-asset-filters' }, [
             h('input', { placeholder: '搜索资产名称', value: assetFilter.value.search, onInput: (event: Event) => assetFilter.value.search = (event.target as HTMLInputElement).value }),
             h('button', { class: 'filter-button', onClick: loadAssets }, '搜索'),
+            selectedPublishAssetIds.value.length ? h('button', { class: 'secondary-action', onClick: () => openAssetPublishSettings(selectedPublishAssetIds.value) }, `发布图文（${selectedPublishAssetIds.value.length}）`) : null,
             h('label', { class: ['primary-action content-asset-upload', uploading.value ? 'disabled' : ''] }, [
               h(Plus, { class: 'inline-icon' }),
               uploading.value ? '导入中...' : assetImportLabel(assetSegment.value),
@@ -805,6 +859,7 @@ export default defineComponent({
 
     function renderAssetCard(asset: Dict) {
       return h('article', { class: 'content-asset-card' }, [
+        asset.asset_type === 'image' ? h('label', { class: 'content-asset-publish-select' }, [h('input', { type: 'checkbox', checked: selectedPublishAssetIds.value.includes(String(asset.id)), onChange: (event: Event) => selectedPublishAssetIds.value = togglePublishId(selectedPublishAssetIds.value, String(asset.id), (event.target as HTMLInputElement).checked) }), '选择发布']) : null,
         h('div', { class: 'content-asset-preview' }, [renderAssetPreview(asset)]),
         h('div', { class: 'content-asset-info' }, [
           h('strong', { title: asset.name }, String(asset.name || '未命名')),
@@ -812,6 +867,8 @@ export default defineComponent({
           h('small', asset.duration ? `${Number(asset.duration).toFixed(1)}秒` : asset.width ? `${asset.width}×${asset.height}` : '等待使用时校验'),
         ]),
         h('div', { class: 'task-card-actions' }, [
+          asset.asset_type === 'video' ? h('button', { class: 'primary-soft', onClick: () => publishAsset(asset) }, '一键发布') : null,
+          asset.asset_type === 'image' ? h('button', { class: 'primary-soft', onClick: () => openAssetPublishSettings([String(asset.id)]) }, '发布设置') : null,
           asset.asset_type === 'audio' && !voiceProfiles.value.some(profile => profile.reference_asset_id === asset.id)
             ? h('button', { class: 'primary-soft', onClick: () => createVoiceProfile(asset) }, '创建音色')
             : null,
@@ -930,19 +987,24 @@ export default defineComponent({
     function renderGeneratedCard(item: Dict) {
       const job = item.job as Dict
       const output = item.output as Dict
+      const outputTasks = publishTasks.value.filter(task => task.video_job_id === job.id && task.output_name === output.name)
       return h('article', { class: 'content-generated-card' }, [
         h('video', { src: output.url, controls: true, preload: 'metadata' }),
         h('div', { class: 'content-generated-info' }, [
           h('strong', { title: job.subject }, String(job.subject || '未命名视频')),
           h('span', `${output.name || '生成视频'} · 第${job.attempt || 1}次生成`),
           h('time', `生成于 ${job.finished_at || job.created_at || '-'}`),
+          outputTasks.length ? h('div', { class: 'content-publish-badges' }, outputTasks.map(task => h('span', { class: `status-pill status-${task.status}` }, `${publishPlatformLabel(task.platform)} ${publishTaskStatusLabel(task.status)}`))) : h('small', '尚未发布'),
         ]),
         h('div', { class: 'content-generated-publish' }, [
-          h('label', [h('span', '上传状态'), h('select', {
+          h('label', [h('span', '人工标记'), h('select', {
             value: output.upload_status || 'not_uploaded',
             onChange: (event: Event) => updateOutputStatus(job, output, (event.target as HTMLSelectElement).value),
           }, [h('option', { value: 'not_uploaded' }, '未上传'), h('option', { value: 'uploaded' }, '已上传')])]),
-          h('button', { class: 'primary-soft', onClick: () => uploadOutput(job, output) }, '立即上传'),
+          h('div', { class: 'content-publish-split' }, [
+            h('button', { class: 'primary-soft', onClick: () => uploadOutput(job, output) }, '一键发布'),
+            h('button', { class: 'text-icon-button', onClick: () => openPublishSettings(job, output) }, '发布设置'),
+          ]),
         ]),
         h('div', { class: 'content-generated-actions' }, [
           h('a', { class: 'text-icon-button', href: output.url, download: output.name }, '下载'),
@@ -1162,6 +1224,18 @@ function statusLabel(value: unknown) {
 
 function stageLabel(value: unknown) {
   return ({ queued: '等待执行', preparing: '准备环境', script: '生成文案', terms: '生成素材词', audio: '生成配音', subtitle: '生成字幕', materials: '准备素材', rendering: '合成视频', completed: '生成完成', failed: '生成失败', cancelled: '已取消', interrupted: '已中断' } as Record<string, string>)[String(value || '')] || String(value || '-')
+}
+
+function publishPlatformLabel(value: unknown) {
+  return ({ dy: '抖音', ks: '快手', xhs: '小红书' } as Record<string, string>)[String(value || '')] || String(value || '')
+}
+
+function publishTaskStatusLabel(value: unknown) {
+  return ({ waiting_media: '等待成品', queued: '待发布', running: '发布中', succeeded: '已发布', failed: '失败', review_required: '待确认', cancelled: '已取消' } as Record<string, string>)[String(value || '')] || String(value || '')
+}
+
+function togglePublishId(values: string[], id: string, checked: boolean) {
+  return checked ? [...new Set([...values, id])] : values.filter(value => value !== id)
 }
 
 function voiceLabel(value: string) {

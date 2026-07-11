@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import AiPage from './pages/AiPage'
 import ContentWorkbenchPage from './pages/ContentWorkbenchPage'
+import PublishCenterPage from './pages/PublishCenterPage'
 import LogsPage from './pages/LogsPage'
 import MessageWorkbenchPage from './pages/MessageWorkbenchPage'
 import OverviewPage from './pages/OverviewPage'
@@ -98,6 +99,12 @@ export const routes = [
     name: 'content-records',
     component: ContentWorkbenchPage,
     meta: { title: '生成记录', subtitle: '查看视频生成进度、结果、重试和发布状态。', hint: '生成和发布分别记录结果' },
+  },
+  {
+    path: '/content-publish',
+    name: 'content-publish',
+    component: PublishCenterPage,
+    meta: { title: '发布中心', subtitle: '管理平台账号，把视频和图文一键发布到抖音、快手和小红书。', hint: '先扫码登录并设置默认账号' },
   },
   {
     path: '/content-settings',
