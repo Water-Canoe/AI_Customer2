@@ -38,7 +38,7 @@ if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
 
 # Use unique build and release folders so the script never deletes an older package.
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$BuildRoot = Join-Path $ProjectRoot "output\package_build_${Version}_$Stamp"
+$BuildRoot = Join-Path $ProjectRoot "output\b_${Version}_$Stamp"
 $BuildDist = Join-Path $BuildRoot "dist"
 $BuildWork = Join-Path $BuildRoot "work"
 $BuildSpec = Join-Path $BuildRoot "spec"
@@ -78,16 +78,22 @@ finally {
     --name "AI_Customer" `
     --onedir `
     --optimize 2 `
-    --contents-directory "runtime" `
+    --contents-directory "r" `
     --distpath $BuildDist `
     --workpath (Join-Path $BuildWork "app") `
     --specpath $BuildSpec `
     --paths $BackendDir `
     --paths $ProjectRoot `
+    --additional-hooks-dir (Join-Path $ProjectRoot "packaging\hooks") `
     --add-data "$FrontendDir\dist;frontend_dist" `
     --add-data "$BackendDir\app\video_engine\resource;app/video_engine/resource" `
     --add-data "$BackendDir\app\video_engine\config.default.toml;app/video_engine" `
     --add-data "$BackendDir\app\video_engine\LICENSE;app/video_engine" `
+    --add-data "$BackendDir\app\publish_engine\utils\stealth.min.js;app/publish_engine/utils" `
+    --add-data "$BackendDir\app\publish_engine\LICENSE;app/publish_engine" `
+    --collect-all cv2 `
+    --collect-all qrcode `
+    --collect-all segno `
     --collect-all moviepy `
     --copy-metadata imageio `
     --collect-all imageio_ffmpeg `
@@ -123,16 +129,27 @@ if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
     $StableLauncher
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 
-# Assemble the immutable release payload.
-Copy-Item -LiteralPath (Join-Path $BuildDist "AI_Customer") -Destination (Join-Path $ReleaseDir "app") -Recurse
+# Assemble the immutable release payload. Robocopy supports Chromium's deep paths on Windows.
+$AppSource = Join-Path $BuildDist "AI_Customer"
+$AppDestination = Join-Path $ReleaseDir "app"
+$BrowserRoot = Join-Path $AppSource "r\patchright\driver\package\.local-browsers"
+$HeadlessShellDirs = @(Get-ChildItem -LiteralPath $BrowserRoot -Directory -Filter "chromium_headless_shell-*" -ErrorAction SilentlyContinue)
+$RobocopyArgs = @($AppSource, $AppDestination, "/E", "/R:2", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS")
+if ($HeadlessShellDirs.Count -gt 0) {
+    $RobocopyArgs += "/XD"
+    $RobocopyArgs += $HeadlessShellDirs.FullName
+}
+& robocopy @RobocopyArgs | Out-Null
+if ($LASTEXITCODE -gt 7) { throw "Application payload copy failed with robocopy exit code $LASTEXITCODE" }
 Copy-Item -LiteralPath (Join-Path $BuildDist "AI_Customer_Launcher.exe") -Destination (Join-Path $ReleaseDir "AI_Customer.exe")
 Copy-Item -LiteralPath $Readme -Destination (Join-Path $ReleaseDir "README.txt")
 Copy-Item -LiteralPath $Installer -Destination (Join-Path $ReleaseDir "install-release.ps1")
 Copy-Item -LiteralPath $Switcher -Destination (Join-Path $ReleaseDir "switch-version.ps1")
 
 # Record every release file hash before writing the manifest itself.
-$ReleasePrefix = $ReleaseDir.TrimEnd('\') + '\'
-$Files = Get-ChildItem -LiteralPath $ReleaseDir -Recurse -File | ForEach-Object {
+$ReleaseScanRoot = if ($IsWindows -or $env:OS -eq "Windows_NT") { "\\?\$ReleaseDir" } else { $ReleaseDir }
+$ReleasePrefix = $ReleaseScanRoot.TrimEnd('\') + '\'
+$Files = Get-ChildItem -LiteralPath $ReleaseScanRoot -Recurse -File | ForEach-Object {
     $RelativePath = $_.FullName.Substring($ReleasePrefix.Length).Replace('\', '/')
     [ordered]@{
         path = $RelativePath

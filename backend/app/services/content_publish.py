@@ -408,9 +408,13 @@ def run_account_check(account_id: str) -> dict[str, Any]:
 
     account = get_account(account_id)
     set_account_state(account_id, "checking")
-    valid = bool(engine.run(engine.check_account(account["platform"], account_auth_path(account_id))))
-    set_account_state(account_id, "ready" if valid else "expired", error="" if valid else "登录已失效", checked=True)
-    return {"account_id": account_id, "valid": valid}
+    try:
+        valid = bool(engine.run(engine.check_account(account["platform"], account_auth_path(account_id))))
+        set_account_state(account_id, "ready" if valid else "expired", error="" if valid else "登录已失效", checked=True)
+        return {"account_id": account_id, "valid": valid}
+    except Exception as exc:
+        set_account_state(account_id, "error", error=str(exc), checked=True)
+        raise
 
 
 def run_publish_task(task_id: str) -> dict[str, Any]:

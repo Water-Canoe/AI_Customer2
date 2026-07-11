@@ -323,37 +323,6 @@ def archive_video_job(video_job_id: str) -> dict[str, Any]:
     return {"id": video_job_id, "archived": True}
 
 
-def publish_video_job(video_job_id: str, output_name: str = "") -> dict[str, Any]:
-    from app.video_engine.config import config
-    from app.video_engine.services import upload_post
-
-    job = get_video_job(video_job_id, include_archived=True)
-    if str(job["status"]) != "succeeded":
-        raise ValueError("只有生成成功的视频可以发布")
-    config.apply_runtime_config(_runtime_settings())
-    service = upload_post.upload_post_service.refresh()
-    if not service.is_configured():
-        raise ValueError("请先在内容设置中配置并启用Upload-Post")
-    outputs = [output for output in job["outputs"] if not output_name or str(output.get("name") or "") == output_name]
-    if not outputs:
-        raise ValueError("视频成品不存在")
-    results = []
-    for output in outputs:
-        path = resolve_video_output(str(output.get("relative_path") or ""))
-        result = upload_post.cross_post_video(str(path), str(job["subject"]))
-        result["output_name"] = str(output.get("name") or "")
-        results.append(result)
-    with database.connect() as conn:
-        conn.execute(
-            "UPDATE video_jobs SET publish_results = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
-            (json.dumps((job["publish_results"] if output_name else []) + results, ensure_ascii=False), video_job_id),
-        )
-    for result in results:
-        if result.get("success"):
-            update_video_output_status(video_job_id, str(result["output_name"]), "uploaded")
-    return {"id": video_job_id, "results": results}
-
-
 def generate_script(payload: dict[str, Any]) -> dict[str, Any]:
     _apply_runtime_settings()
     from app.video_engine.services import llm
@@ -446,6 +415,10 @@ def environment_check() -> dict[str, Any]:
         "azure.cognitiveservices.speech",
         "litellm",
         "twelvelabs",
+        "patchright",
+        "cv2",
+        "qrcode",
+        "segno",
     ]
     dependencies = {name: bool(importlib.util.find_spec(name)) for name in dependency_names}
     from app.video_engine.utils import utils
@@ -459,8 +432,17 @@ def environment_check() -> dict[str, Any]:
     model_root = database.get_video_generation_root() / "models"
     from app.services import voice_synthesis
 
+    patchright_spec = importlib.util.find_spec("patchright")
+    patchright_root = Path(patchright_spec.origin).parent if patchright_spec and patchright_spec.origin else None
+    browser_candidates = []
+    if patchright_root:
+        browser_candidates.extend((patchright_root / "driver" / "package" / ".local-browsers").glob("**/chrome.exe"))
+        browser_candidates.extend((patchright_root / ".local-browsers").glob("**/chrome.exe"))
+    publish_browser = next((path for path in browser_candidates if path.is_file()), None)
+    publish_ok = all(dependencies.get(name, False) for name in ("patchright", "cv2", "qrcode", "segno")) and bool(publish_browser)
+
     return {
-        "ok": all(dependencies.values()) and ffmpeg_ok and bool(fonts),
+        "ok": all(dependencies.values()) and ffmpeg_ok and bool(fonts) and publish_ok,
         "dependencies": dependencies,
         "ffmpeg": {"ok": ffmpeg_ok, "path": str(ffmpeg)},
         "fonts": {"ok": bool(fonts), "count": len(fonts)},
@@ -470,6 +452,7 @@ def environment_check() -> dict[str, Any]:
             "path": str(model_root),
         },
         "voice_models": {"voxcpm2": voice_synthesis.model_status()},
+        "social_publish": {"ok": publish_ok, "browser_path": str(publish_browser or "")},
         "disk": {"free": usage.free, "total": usage.total},
     }
 

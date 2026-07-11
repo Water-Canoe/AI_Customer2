@@ -9,7 +9,7 @@
 1. MyCrawler 底层原始库：默认 `D:\Dev\Projects\MyCrawler\database\sqlite_tables.db`，只做采集保底和追溯。
 2. 项目业务库：默认 `data/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件；可用 `AI_CUSTOMER_DATA_DIR` 指定整个数据目录，或用 `AI_CUSTOMER_DB` 指定单独数据库文件。
 3. 内容文件：客户视频、图片和音频存入 `data/content_assets/`，视频缓存、模型和每次生成结果存入 `data/video_generation/`。业务库只保存稳定相对路径，不记录客户导入前的绝对路径。
-4. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台共用 `traffic_*` 表和 `/api/traffic/*` 接口；内容工作台共用 `content_assets / video_jobs / video_job_assets` 表和 `/api/content/*` 接口。
+4. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台共用 `traffic_*` 表和 `/api/traffic/*` 接口；内容工作台共用 `content_assets / video_jobs / video_job_assets / publish_accounts / publish_tasks / publish_task_assets` 表和 `/api/content/*` 接口。
 
 ## 统一后台任务队列与登录会话
 
@@ -346,14 +346,15 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 内容工作台基于本地 `GitItem/MoneyPrinterTurbo` 的固定提交 `649d4a970e253188e1098534ea4976708b3aef9c` 移植。核心代码位于 `backend/app/video_engine/`，保留原始 MIT `LICENSE`、配置模型、视频服务、全部AI/TTS供应商、TwelveLabs、Upload-Post和9个字体资源；不启动上游 Streamlit、FastAPI、Docker或Redis服务，也不复制上游29首授权来源不明确的音乐。`GitItem/` 只是本机参考仓库，已加入 `.gitignore`，不进入本项目提交或发布包。
 
-左侧“内容工作台”包含四页：
+左侧“内容工作台”包含五页：
 
 - “视频创作”填写主题、文案、素材词、素材来源、画面比例、音色和字幕参数；高级区保留拼接、转场、时长、数量、语速、音量、字幕字体/颜色/描边和提示词。本地素材选择器按“全部/视频/图片”区分并每页展示8项，多页选择结果继续保留并支持拖动排序。面向普通用户的供应商名称只显示“音色克隆”，不暴露VoxCPM2实现名称。背景音乐下拉框只读取 `background_music` 资产，克隆参考音频不会混入，后端创建任务时也会再次校验用途；“清空”会恢复默认参数并清除文案、素材、配音和背景音乐选择。
 - “内容资产”批量导入视频、图片和音频，按SHA-256去重，支持完整比例预览、搜索、重命名和单条删除。页面通过分段控制器切换全部、视频、图片、背景音乐和克隆音频，底层文件仍统一托管在 `originals`，仅使用数据库用途字段分类。克隆音频分区支持浏览器麦克风直接录音：内容AI生成80至120字朗读文案，用户可修改后录制、试听、命名并保存，系统同时创建克隆音色；Chrome录制的WebM会在推理前转换为16kHz单声道WAV。克隆音频只在紫色音色区展示一次；已创建音色的重命名和删除会同步处理其独占参考录音，尚未创建音色的导入录音也在同一区块完成管理。创建前必须确认已获得声音授权，运行中视频任务引用的资产仍禁止删除。
-- “生成记录”左侧统一展示全部成品预览，可按主题或文件名搜索；每个成品显示生成时间、上传状态和单条上传按钮，上传状态也可手动改为“未上传/已上传”。右侧以“缩略预览 + 主题/阶段/进度”的紧凑卡片展示任务。页面支持从“视频创作”新增、查询、修改主题和删除记录；删除采用安全归档，只隐藏记录并保留成品文件。取消、重试和发布仍在记录卡片中操作，重试写入新的 `attempt-N` 目录，不覆盖旧结果。
-- “内容设置”独立保存视频AI、TTS、素材源、Whisper、TwelveLabs、代理、TLS和Upload-Post设置，不读取拓客工作台AI配置。密钥读取时统一显示 `********`，提交空值或遮罩值时保留原密钥。
+- “生成记录”左侧统一展示全部成品预览，可按主题或文件名搜索；每个成品显示生成时间、真实平台发布汇总状态和人工标记。主按钮“一键发布”会立即向全部有效默认账号建立任务，下拉“发布设置”进入平台、账号、文案、封面和定时配置。右侧以“缩略预览 + 主题/阶段/进度”的紧凑卡片展示生成任务；重试写入新的 `attempt-N` 目录，不覆盖旧结果。
+- “发布中心”以分段页管理发布任务和平台账号。账号支持抖音、快手、小红书扫码登录、状态校验、多默认账号、停用和软删除；任务支持视频、多图图文、立即/平台定时发布、独立取消、人工重试和不确定结果确认。
+- “内容设置”独立保存视频AI、TTS、素材源、Whisper、TwelveLabs、代理和TLS设置，不读取拓客工作台AI配置。Upload-Post配置已从前端移除；密钥读取时统一显示 `********`，提交空值或遮罩值时保留原密钥。
 
-完整生成阶段由 `backend/app/services/content_workbench.py` 调用移植引擎执行：文案、素材词、本地/在线素材、TTS、自定义配音、字幕、Whisper、转场、合成、社交元数据和Upload-Post。视频任务进入 `runtime_jobs` 的 `video_generation` 类型和独立 `video` 资源，并发固定为1。取消在阶段边界检查；FFmpeg已经开始编码时会完成当前阶段再停止。视频生成成功但Upload-Post失败时，视频任务仍保持成功，发布错误单独写入 `publish_results`。
+完整生成阶段由 `backend/app/services/content_workbench.py` 调用移植引擎执行：文案、素材词、本地/在线素材、TTS、自定义配音、字幕、Whisper、转场、合成和社交元数据。视频任务进入 `runtime_jobs` 的 `video_generation` 类型和独立 `video` 资源，并发固定为1。取消在阶段边界检查；FFmpeg已经开始编码时会完成当前阶段再停止。“生成后自动发布”默认关闭；开启后先创建 `waiting_media` 任务，生成成功才绑定成品入队，生成失败则取消对应发布任务。Upload-Post Python服务和原测试仍保留，但前端、生成流程和HTTP路由都不再调用它。
 
 内容文件目录固定为：
 
@@ -363,12 +364,16 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `data/video_generation/models`：按需下载的Whisper模型；默认模型为 `large-v3`，发布包不预装。
 - `data/video_generation/tasks/<job-id>/attempt-N`：单次生成脚本、音频、字幕、中间视频和最终视频。
 - `data/voice_models/VoxCPM2`：视频与后续数字人共用的VoxCPM2模型缓存，不随程序更新删除。
+- `data/social_publish/accounts`：平台登录状态文件，数据库和API只保存/返回账号业务信息，不返回Cookie内容或路径。
+- `data/social_publish/qrcode`：扫码登录二维码；`data/social_publish/tasks/<task-id>` 保存当次失败截图和诊断文件。
+
+国内发布引擎基于 `dreammis/social-auto-upload` 固定提交 `0d3f93e8ac6ad9089b4a356bd2ede717c6248aca` 移植，仅引入抖音、快手、小红书视频和多图图文发布器，不启动上游Web、CLI、数据库或额外服务。代码位于 `backend/app/publish_engine/`，保留MIT许可说明和固定来源提交。登录与发布共用 `browser` 资源，并发始终为1，优先级为登录 > 发布 > 普通浏览器任务。一次多平台操作按“每个账号一条任务”拆分，单平台失败不影响其他平台。只有捕获明确成功提示才记为 `succeeded`；点击发布后无法确认结果则记为 `review_required`，不自动重试，避免重复发布。定时发布使用平台自身能力，时间已过期时明确失败，不降级为立即发布。
 
 克隆音色采用独立的 `voice_profiles` 业务实体，不隶属于视频任务。通用入口 `backend/app/services/voice_synthesis.py::synthesize_profile()` 只接收音色ID、文字、输出路径、语速和音量；视频引擎通过 `voxcpm2:<profile-id>` 调用，后续数字人模块直接复用同一入口，不重复实现声音克隆。VoxCPM2使用官方 `voxcpm==2.0.3` Python API，Windows禁用容易产生Triton兼容问题的 `torch.compile`，模型在首次进程调用时加载并缓存。
 
 开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。正式打包前 `script/build_package.ps1` 会检查VoxCPM和CUDA是否可用，并收集VoxCPM、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。
 
-版本 `1.2.0` 的正式发布目录为 `dist/releases/AI_Customer_1.2.0_20260711_114613`，共21498个文件、约5.28GiB。已从该发布包独立启动后端并执行一次完整本地素材任务：发布包成功加载VoxCPM2、完成克隆配音，最终输出1080×1920的H.264/AAC视频；这项验收不是仅在开发环境中执行的模块导入测试。模型权重仍保存在稳定 `data/voice_models/VoxCPM2`，不重复塞入每个版本目录。
+版本 `1.2.0` 的当前正式发布目录为 `dist/releases/AI_Customer_1.2.0_20260711_190154`，清单登记22056个文件，schema为7。启动器已对整个清单重新计算SHA-256并验证通过；发布包后端已独立启动，`/api/health` 和内置Chromium环境检查均通过。重复的Patchright headless-shell不进入发布包，三个平台发布器统一使用内置完整Chromium，避免Windows超长路径导致安装失败。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；模型权重仍保存在稳定 `data/voice_models/VoxCPM2`，不重复塞入每个版本目录。
 
 背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
 
@@ -380,8 +385,11 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/voice-reference-script`：使用内容工作台独立AI配置生成声音克隆朗读文案；未配置供应商时明确返回错误，不使用固定文案兜底。
 - `/api/content/scripts`、`/api/content/terms`、`/api/content/social-metadata`：独立视频AI生成能力。
 - `/api/content/voices`、`/api/content/settings`、`/api/content/environment-check`：音色、完整独立配置和环境检查。
+- `/api/content/publish-accounts`：发布账号列表、新增、修改和软删除；`/{id}/login`、`/{id}/check`、`/{id}/qrcode` 负责扫码登录、有效性检查和二维码展示。
+- `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
-`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。内容数据测试另外覆盖音频用途迁移、浏览器WebM录音导入、AI朗读文案、VoxCPM参考格式转换和背景音乐用途校验。当前全后端回归为345通过、8项联网测试跳过，前端为10项测试通过并完成生产构建。
+`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
+本轮完整后端回归为350项通过、8项联网测试跳过；前端为4个测试文件、10项测试通过，并完成类型检查和生产构建。
 
 ## 授权服务
 
@@ -418,6 +426,8 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - `POST /api/system/backups/{backup_id}/restore`：输入“恢复备份”后执行安全恢复。
 - `POST /api/settings/clear-data`：支持 `create_backup` 和 `include_crawler`，正式页面默认都为 `true`。
 
+当前最新迁移为版本 7，新增 `publish_accounts / publish_tasks / publish_task_assets` 国内发布账号和任务表。
+
 ## 后续优化清单
 
 - 内容资产智能镜头匹配：每项视频/图片资产只调用一次 TwelveLabs Marengo/Pegasus 完成向量化和内容描述，把结果持久化到本地业务库；后续视频生成按文案分段在本地计算相似度并选择镜头，避免每次生成重复调用收费接口。实施时需要补充资产分析状态、向量/描述字段、失败重试、增量索引和费用提示。下次评审“当前项目还有什么值得优化或修改的功能”时应主动提出此项。
@@ -436,12 +446,15 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 发布包不包含 AI_Customer 的 Python/Vue 源文件，优化字节码和内部配置收口只能增加静态分析成本，不能让本地客户端绝对不可逆向。真正的授权与设备限制仍由远端服务执行；AI Key 也不通过 API 回传。当前发布包不自动包含约 1GB 的采集组件和其上游源码，正式分发前需由发布方按许可边界决定是否预置。
 
+打包脚本显式收集Patchright、OpenCV、QR编码库、内置Chromium、发布引擎脚本和许可说明。Patchright Chromium在打包前使用 `PLAYWRIGHT_BROWSERS_PATH=0` 安装到Python包内，客户端无需另装Python或浏览器。环境检查同时验证四项发布依赖和内置Chromium路径。
+
 ## 已知限制
 
+- 抖音、快手和小红书发布依赖平台当前创作者页面、账号权限和风控策略；平台改版后可能需要更新选择器。自动测试只使用模拟页面，真实扫码和发布验收必须由获得授权的测试账号完成。
 - MyCrawler 仓库许可证声明为非商业学习使用，本项目按本地自用验证处理。
 - 首版只覆盖文档要求的平台：抖音、小红书、快手。
 - 自动测试默认使用模拟 MyCrawler SQLite，不会触发真实采集。
-- 视频在线素材、AI、TTS、TwelveLabs和Upload-Post依赖用户自己的网络与供应商配置；收费供应商在自动测试中只使用模拟请求，不消耗真实额度。当前开发机Edge TTS实测3次均在30秒超时，系统已返回明确错误且未切换供应商；本地视频、图片、自定义配音和WAV背景音乐的6秒成片已真实生成成功。
+- 视频在线素材、AI、TTS和TwelveLabs依赖用户自己的网络与供应商配置；收费供应商在自动测试中只使用模拟请求，不消耗真实额度。当前开发机Edge TTS实测3次均在30秒超时，系统已返回明确错误且未切换供应商；本地视频、图片、自定义配音和WAV背景音乐的6秒成片已真实生成成功。
 - Whisper默认模型为 `large-v3`，不进入发布包；用户在内容设置选择Whisper后首次任务会下载到稳定 `data/video_generation/models`，下载失败会保留具体错误。
 - 移植的9个字体按当前产品方案随包分发，商业授权风险为已知接受项；后续正式商业发行仍应由发行方保留字体授权凭证。
 - 如果真实采集失败，应先看“任务与日志”的失败诊断，不会使用假数据兜底。
