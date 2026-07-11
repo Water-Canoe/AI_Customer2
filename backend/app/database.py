@@ -42,6 +42,11 @@ def get_video_generation_root() -> Path:
     return get_data_root() / "video_generation"
 
 
+def get_social_publish_root() -> Path:
+    """Return the persistent social publishing workspace."""
+    return get_data_root() / "social_publish"
+
+
 def get_voice_models_root() -> Path:
     """Return the shared model folder used by video and future avatar features."""
     return get_data_root() / "voice_models"

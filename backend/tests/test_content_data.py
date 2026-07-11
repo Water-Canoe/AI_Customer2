@@ -29,7 +29,7 @@ def test_content_migration_and_asset_dedup(tmp_path, monkeypatch: pytest.MonkeyP
     assert second["duplicate"] is True
     assert second["purpose"] == "voice_reference"
     with database.connect() as conn:
-        assert migrations.current_version(conn) == 6
+        assert migrations.current_version(conn) == 7
         assert conn.execute("SELECT COUNT(*) FROM content_assets").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM video_jobs").fetchone()[0] == 0
 

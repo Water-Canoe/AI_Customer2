@@ -210,6 +210,18 @@ def delete_asset(asset_id: str) -> dict[str, Any]:
         ).fetchone()
         if active:
             raise RuntimeError("运行中的视频任务正在使用该资产")
+        publish_task = conn.execute(
+            """
+            SELECT 1
+            FROM publish_task_assets link
+            JOIN publish_tasks task ON task.id = link.task_id
+            WHERE link.asset_id = ? AND task.status IN ('waiting_media', 'queued', 'running')
+            LIMIT 1
+            """,
+            (str(asset_id),),
+        ).fetchone()
+        if publish_task:
+            raise RuntimeError("待发布或运行中的发布任务正在使用该资产")
         voice_profile = conn.execute(
             "SELECT 1 FROM voice_profiles WHERE reference_asset_id = ? AND deleted_at IS NULL LIMIT 1",
             (str(asset_id),),

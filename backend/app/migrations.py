@@ -176,6 +176,88 @@ def _classify_audio_assets(conn: sqlite3.Connection, _: str) -> None:
     )
 
 
+def _create_content_publish(conn: sqlite3.Connection, _: str) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS publish_accounts (
+            id TEXT PRIMARY KEY,
+            platform TEXT NOT NULL CHECK(platform IN ('dy', 'ks', 'xhs')),
+            name TEXT NOT NULL,
+            auth_relative_path TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'login_required'
+                CHECK(status IN ('login_required', 'checking', 'ready', 'expired', 'error')),
+            is_default INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_checked_at TEXT,
+            last_error TEXT NOT NULL DEFAULT '',
+            qrcode_relative_path TEXT NOT NULL DEFAULT '',
+            deleted_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_accounts_active_name
+        ON publish_accounts(platform, name) WHERE deleted_at IS NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_publish_accounts_status
+        ON publish_accounts(enabled, status, platform, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS publish_tasks (
+            id TEXT PRIMARY KEY,
+            batch_id TEXT NOT NULL,
+            runtime_job_id TEXT NOT NULL DEFAULT '',
+            account_id TEXT NOT NULL,
+            source_type TEXT NOT NULL CHECK(source_type IN ('video_output', 'asset_video', 'asset_images')),
+            content_type TEXT NOT NULL CHECK(content_type IN ('video', 'note')),
+            video_job_id TEXT,
+            output_index INTEGER NOT NULL DEFAULT 0,
+            output_name TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            tags TEXT NOT NULL DEFAULT '[]',
+            publish_strategy TEXT NOT NULL DEFAULT 'immediate'
+                CHECK(publish_strategy IN ('immediate', 'scheduled')),
+            scheduled_at TEXT,
+            platform_options TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'queued'
+                CHECK(status IN ('waiting_media', 'queued', 'running', 'succeeded', 'failed', 'review_required', 'cancelled')),
+            current_stage TEXT NOT NULL DEFAULT 'queued',
+            progress INTEGER NOT NULL DEFAULT 0,
+            attempt INTEGER NOT NULL DEFAULT 0,
+            result TEXT NOT NULL DEFAULT '{}',
+            error TEXT NOT NULL DEFAULT '',
+            started_at TEXT,
+            finished_at TEXT,
+            published_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY(account_id) REFERENCES publish_accounts(id) ON DELETE RESTRICT,
+            FOREIGN KEY(video_job_id) REFERENCES video_jobs(id) ON DELETE RESTRICT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_publish_tasks_status_created
+        ON publish_tasks(status, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_publish_tasks_video_output
+        ON publish_tasks(video_job_id, output_name, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS publish_task_assets (
+            task_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'media'
+                CHECK(role IN ('media', 'cover', 'portrait_cover', 'landscape_cover')),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(task_id, asset_id, role),
+            FOREIGN KEY(task_id) REFERENCES publish_tasks(id) ON DELETE CASCADE,
+            FOREIGN KEY(asset_id) REFERENCES content_assets(id) ON DELETE RESTRICT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_publish_task_assets_order
+        ON publish_task_assets(task_id, role, sort_order);
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
@@ -183,6 +265,7 @@ MIGRATIONS = (
     Migration(4, "create_content_workbench", _create_content_workbench),
     Migration(5, "create_voice_profiles", _create_voice_profiles),
     Migration(6, "classify_audio_assets", _classify_audio_assets),
+    Migration(7, "create_content_publish", _create_content_publish),
 )
 
 

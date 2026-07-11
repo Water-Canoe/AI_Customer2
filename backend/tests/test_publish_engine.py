@@ -38,3 +38,50 @@ def test_publish_marks_uncertain_result_for_manual_review(tmp_path: Path, monkey
                 media_paths=[tmp_path / "video.mp4"],
             )
         )
+
+
+def test_publish_accounts_and_tasks_do_not_expose_cookie_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_CUSTOMER_DB", str(tmp_path / "ai_customer.sqlite3"))
+    from app import database
+    from app.services import content_publish
+
+    database.init_db()
+    account = content_publish.create_account("dy", "主账号")
+    assert "auth_relative_path" not in account
+    content_publish.set_account_state(account["id"], "ready", checked=True)
+    content_publish.update_account(account["id"], {"is_default": True})
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO video_jobs(id, subject, script, status, outputs) VALUES('job-publish', '测试主题', '测试正文', 'succeeded', ?)",
+            ('[{"name":"final.mp4","relative_path":"tasks/job-publish/attempt-1/final.mp4"}]',),
+        )
+
+    tasks = content_publish.create_video_output_tasks(video_job_id="job-publish", output_name="final.mp4")
+    assert len(tasks) == 1
+    assert tasks[0]["platform"] == "dy"
+    assert tasks[0]["title"] == "测试主题"
+
+
+def test_publish_asset_order_and_delete_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_CUSTOMER_DB", str(tmp_path / "ai_customer.sqlite3"))
+    from io import BytesIO
+    from app import database
+    from app.services import content_assets, content_publish
+
+    database.init_db()
+    monkeypatch.setattr(content_assets, "_read_metadata", lambda *_: {"width": 1, "height": 1, "duration": None, "thumbnail_path": ""})
+    first = content_assets.import_asset_file("1.png", BytesIO(b"1"), "image/png")
+    second = content_assets.import_asset_file("2.png", BytesIO(b"2"), "image/png")
+    account = content_publish.create_account("xhs", "图文账号")
+    content_publish.set_account_state(account["id"], "ready")
+    tasks = content_publish.create_asset_tasks(
+        asset_ids=[second["id"], first["id"]],
+        account_ids=[account["id"]],
+        title="图文测试",
+    )
+
+    assert [asset["id"] for asset in tasks[0]["assets"]] == [second["id"], first["id"]]
+    with pytest.raises(RuntimeError, match="发布任务"):
+        content_assets.delete_asset(first["id"])
