@@ -1,23 +1,34 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.publish_engine import service
+from app.publish_engine.browser import launch_publish_context
 from app.publish_engine.uploader.base_video import BaseVideoUploader
 
 
-def test_publish_engine_uses_bundled_chromium(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
-    import app.publish_engine as publish_engine
+def test_publish_engine_uses_cloakbrowser(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cloakbrowser
 
-    importlib.reload(publish_engine)
-    assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == "0"
+    context = MagicMock()
+    context.add_init_script = AsyncMock()
+    launcher = AsyncMock(return_value=context)
+    monkeypatch.setattr(cloakbrowser, "launch_context_async", launcher)
+
+    result = asyncio.run(launch_publish_context(headless=False, account_file="account.json"))
+
+    assert result is context
+    launcher.assert_awaited_once_with(
+        headless=False,
+        viewport=None,
+        locale="zh-CN",
+        args=["--start-maximized"],
+        storage_state="account.json",
+    )
 
 
 class _FakeUploader:

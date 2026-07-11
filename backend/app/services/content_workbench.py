@@ -415,7 +415,7 @@ def environment_check() -> dict[str, Any]:
         "azure.cognitiveservices.speech",
         "litellm",
         "twelvelabs",
-        "patchright",
+        "cloakbrowser",
         "cv2",
         "qrcode",
         "segno",
@@ -432,14 +432,14 @@ def environment_check() -> dict[str, Any]:
     model_root = database.get_video_generation_root() / "models"
     from app.services import voice_synthesis
 
-    patchright_spec = importlib.util.find_spec("patchright")
-    patchright_root = Path(patchright_spec.origin).parent if patchright_spec and patchright_spec.origin else None
-    browser_candidates = []
-    if patchright_root:
-        browser_candidates.extend((patchright_root / "driver" / "package" / ".local-browsers").glob("**/chrome.exe"))
-        browser_candidates.extend((patchright_root / ".local-browsers").glob("**/chrome.exe"))
-    publish_browser = next((path for path in browser_candidates if path.is_file()), None)
-    publish_ok = all(dependencies.get(name, False) for name in ("patchright", "cv2", "qrcode", "segno")) and bool(publish_browser)
+    publish_browser = ""
+    try:
+        from cloakbrowser import binary_info
+
+        publish_browser = str(binary_info().get("binary_path") or "")
+    except Exception:
+        pass
+    publish_ok = all(dependencies.get(name, False) for name in ("cloakbrowser", "cv2", "qrcode", "segno")) and Path(publish_browser).is_file()
 
     return {
         "ok": all(dependencies.values()) and ffmpeg_ok and bool(fonts) and publish_ok,
@@ -452,7 +452,7 @@ def environment_check() -> dict[str, Any]:
             "path": str(model_root),
         },
         "voice_models": {"voxcpm2": voice_synthesis.model_status()},
-        "social_publish": {"ok": publish_ok, "browser_path": str(publish_browser or "")},
+        "social_publish": {"ok": publish_ok, "browser_path": publish_browser},
         "disk": {"free": usage.free, "total": usage.total},
     }
 

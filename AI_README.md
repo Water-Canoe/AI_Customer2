@@ -374,11 +374,11 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。正式打包前 `script/build_package.ps1` 会检查VoxCPM和CUDA是否可用，并收集VoxCPM、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。
 
-版本 `1.2.0` 的当前正式发布目录为 `dist/releases/AI_Customer_1.2.0_20260711_190154`，清单登记22056个文件，schema为7。启动器已对整个清单重新计算SHA-256并验证通过；发布包后端已独立启动，`/api/health` 和内置Chromium环境检查均通过。重复的Patchright headless-shell不进入发布包，三个平台发布器统一使用内置完整Chromium，避免Windows超长路径导致安装失败。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；模型权重仍保存在稳定 `data/voice_models/VoxCPM2`，不重复塞入每个版本目录。
+版本 `1.2.0` 的既有正式发布目录为 `dist/releases/AI_Customer_1.2.0_20260711_190154`，schema为7。该历史包仍使用Patchright Chromium；当前源码已经切换为CloakBrowser，必须重新生成发布包后才能交付本次浏览器统一改造。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；模型权重仍保存在稳定 `data/voice_models/VoxCPM2`，不重复塞入每个版本目录。
 
 背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
 
-发布引擎初始化时固定设置 `PLAYWRIGHT_BROWSERS_PATH=0`，扫码登录和发布使用项目预装的Patchright Chromium，不读取用户全局 `ms-playwright` 缓存。
+扫码登录、账号检查、视频发布和图文发布统一通过 `backend/app/publish_engine/browser.py` 启动CloakBrowser，继续使用账号独立的 `storage_state` 文件，不再启动Patchright或Playwright自带Chromium。登录使用可见最大化窗口，正式发布默认无头；浏览器上下文关闭时由CloakBrowser一并清理底层Playwright进程。
 
 内容接口：
 
@@ -392,7 +392,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
 `backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
-本轮完整后端回归为350项通过、8项联网测试跳过；前端为4个测试文件、10项测试通过，并完成类型检查和生产构建。
+本轮完整后端回归为352项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布。前端为4个测试文件、10项测试通过，并完成类型检查和生产构建。
 
 ## 授权服务
 
@@ -449,7 +449,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 发布包不包含 AI_Customer 的 Python/Vue 源文件，优化字节码和内部配置收口只能增加静态分析成本，不能让本地客户端绝对不可逆向。真正的授权与设备限制仍由远端服务执行；AI Key 也不通过 API 回传。当前发布包不自动包含约 1GB 的采集组件和其上游源码，正式分发前需由发布方按许可边界决定是否预置。
 
-打包脚本显式收集Patchright、OpenCV、QR编码库、内置Chromium、发布引擎脚本和许可说明。Patchright Chromium在打包前使用 `PLAYWRIGHT_BROWSERS_PATH=0` 安装到Python包内，客户端无需另装Python或浏览器。环境检查同时验证四项发布依赖和内置Chromium路径。
+打包脚本显式收集CloakBrowser、Playwright、OpenCV、QR编码库、发布引擎脚本和许可说明，并把开发环境已安装的CloakBrowser专用内核复制到应用目录。稳定启动器通过 `CLOAKBROWSER_BINARY_PATH` 指向该内核，客户无需另装Python或浏览器。环境检查验证CloakBrowser、二维码依赖和专用内核路径。
 
 ## 已知限制
 

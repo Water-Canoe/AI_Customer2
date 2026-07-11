@@ -96,16 +96,21 @@ def test_packaged_launcher_keeps_data_outside_version_dir(tmp_path: Path, monkey
 
     version_dir = tmp_path / "versions" / "1.0.1"
     version_dir.mkdir(parents=True)
+    cloakbrowser_binary = version_dir / "r" / "cloakbrowser_browser" / "chrome.exe"
+    cloakbrowser_binary.parent.mkdir(parents=True)
+    cloakbrowser_binary.touch()
     (tmp_path / "MyCrawler").mkdir()
     monkeypatch.delenv("AI_CUSTOMER_DATA_DIR", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_DB", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", raising=False)
+    monkeypatch.delenv("CLOAKBROWSER_BINARY_PATH", raising=False)
 
     launcher.configure_environment(version_dir)
 
     assert os.environ["AI_CUSTOMER_DATA_DIR"] == str(tmp_path / "data")
     assert os.environ["AI_CUSTOMER_DB"] == str(tmp_path / "data" / "ai_customer.sqlite3")
     assert os.environ["AI_CUSTOMER_MEDIA_CRAWLER_PATH"] == str(tmp_path / "MyCrawler")
+    assert os.environ["CLOAKBROWSER_BINARY_PATH"] == str(cloakbrowser_binary)
 
 
 def create_raw_db(raw_db: Path) -> None:

@@ -31,6 +31,7 @@ def configure_environment(base_dir: Path) -> None:
     data_dir = Path(os.environ.get("AI_CUSTOMER_DATA_DIR", str(root_dir / "data")))
     frontend_dist = base_dir / "frontend_dist"
     media_crawler_dir = root_dir / "MyCrawler"
+    cloakbrowser_binary = base_dir / "r" / "cloakbrowser_browser" / "chrome.exe"
 
     data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -41,6 +42,8 @@ def configure_environment(base_dir: Path) -> None:
     if media_crawler_dir.exists():
         os.environ.setdefault("AI_CUSTOMER_MEDIA_CRAWLER_PATH", str(media_crawler_dir))
         os.environ.setdefault("AI_CUSTOMER_MEDIA_CRAWLER_DB", str(media_crawler_dir / "database" / "sqlite_tables.db"))
+    if cloakbrowser_binary.is_file():
+        os.environ.setdefault("CLOAKBROWSER_BINARY_PATH", str(cloakbrowser_binary))
 
 
 def choose_port(default: int = 8000) -> int:

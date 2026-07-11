@@ -27,6 +27,11 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "VoxCPM2 CUDA runtime is missing. Run script/install_voxcpm.ps1 before packaging."
 }
+$CloakBrowserPath = (& $Python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())").Trim()
+if (-not (Test-Path -LiteralPath $CloakBrowserPath -PathType Leaf)) {
+    throw "CloakBrowser binary is missing. Run backend/.venv/Scripts/python.exe -m cloakbrowser install before packaging."
+}
+$CloakBrowserDir = Split-Path -Parent $CloakBrowserPath
 
 # Read the product version from source unless the caller supplied one.
 if (-not $Version) {
@@ -94,6 +99,7 @@ finally {
     --collect-all cv2 `
     --collect-all qrcode `
     --collect-all segno `
+    --collect-all cloakbrowser `
     --collect-all moviepy `
     --copy-metadata imageio `
     --collect-all imageio_ffmpeg `
@@ -129,16 +135,13 @@ if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
     $StableLauncher
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 
-# Assemble the immutable release payload. Robocopy supports Chromium's deep paths on Windows.
+# Assemble the immutable release payload.
 $AppSource = Join-Path $BuildDist "AI_Customer"
 $AppDestination = Join-Path $ReleaseDir "app"
-$BrowserRoot = Join-Path $AppSource "r\patchright\driver\package\.local-browsers"
-$HeadlessShellDirs = @(Get-ChildItem -LiteralPath $BrowserRoot -Directory -Filter "chromium_headless_shell-*" -ErrorAction SilentlyContinue)
+$BundledCloakBrowser = Join-Path $AppSource "r\cloakbrowser_browser"
+& robocopy $CloakBrowserDir $BundledCloakBrowser "/E" "/R:2" "/W:1" "/NFL" "/NDL" "/NJH" "/NJS" "/NC" "/NS" | Out-Null
+if ($LASTEXITCODE -gt 7) { throw "CloakBrowser payload copy failed with robocopy exit code $LASTEXITCODE" }
 $RobocopyArgs = @($AppSource, $AppDestination, "/E", "/R:2", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS")
-if ($HeadlessShellDirs.Count -gt 0) {
-    $RobocopyArgs += "/XD"
-    $RobocopyArgs += $HeadlessShellDirs.FullName
-}
 & robocopy @RobocopyArgs | Out-Null
 if ($LASTEXITCODE -gt 7) { throw "Application payload copy failed with robocopy exit code $LASTEXITCODE" }
 Copy-Item -LiteralPath (Join-Path $BuildDist "AI_Customer_Launcher.exe") -Destination (Join-Path $ReleaseDir "AI_Customer.exe")
