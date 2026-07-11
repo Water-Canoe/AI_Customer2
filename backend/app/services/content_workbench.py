@@ -241,6 +241,24 @@ def update_video_job(video_job_id: str, subject: str) -> dict[str, Any]:
     return get_video_job(video_job_id, include_archived=True)
 
 
+def update_video_output_status(video_job_id: str, output_name: str, upload_status: str) -> dict[str, Any]:
+    job = get_video_job(video_job_id, include_archived=True)
+    matched = False
+    for output in job["outputs"]:
+        if str(output.get("name") or "") == output_name:
+            output["upload_status"] = upload_status
+            matched = True
+            break
+    if not matched:
+        raise ValueError("视频成品不存在")
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE video_jobs SET outputs = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (json.dumps(job["outputs"], ensure_ascii=False), video_job_id),
+        )
+    return get_video_job(video_job_id, include_archived=True)
+
+
 def cancel_video_job(video_job_id: str) -> dict[str, Any]:
     get_video_job(video_job_id, include_archived=True)
     from app.services import job_queue
@@ -287,7 +305,7 @@ def archive_video_job(video_job_id: str) -> dict[str, Any]:
     return {"id": video_job_id, "archived": True}
 
 
-def publish_video_job(video_job_id: str) -> dict[str, Any]:
+def publish_video_job(video_job_id: str, output_name: str = "") -> dict[str, Any]:
     from app.video_engine.config import config
     from app.video_engine.services import upload_post
 
@@ -298,15 +316,23 @@ def publish_video_job(video_job_id: str) -> dict[str, Any]:
     service = upload_post.upload_post_service.refresh()
     if not service.is_configured():
         raise ValueError("请先在内容设置中配置并启用Upload-Post")
+    outputs = [output for output in job["outputs"] if not output_name or str(output.get("name") or "") == output_name]
+    if not outputs:
+        raise ValueError("视频成品不存在")
     results = []
-    for output in job["outputs"]:
+    for output in outputs:
         path = resolve_video_output(str(output.get("relative_path") or ""))
-        results.append(upload_post.cross_post_video(str(path), str(job["subject"])))
+        result = upload_post.cross_post_video(str(path), str(job["subject"]))
+        result["output_name"] = str(output.get("name") or "")
+        results.append(result)
     with database.connect() as conn:
         conn.execute(
             "UPDATE video_jobs SET publish_results = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
-            (json.dumps(results, ensure_ascii=False), video_job_id),
+            (json.dumps((job["publish_results"] if output_name else []) + results, ensure_ascii=False), video_job_id),
         )
+    for result in results:
+        if result.get("success"):
+            update_video_output_status(video_job_id, str(result["output_name"]), "uploaded")
     return {"id": video_job_id, "results": results}
 
 
@@ -500,6 +526,7 @@ def _format_output(video_job_id: str, file_path: str) -> dict[str, Any]:
         "relative_path": relative,
         "size": path.stat().st_size,
         "url": f"/api/content/video-jobs/{video_job_id}/files/{path.name}",
+        "upload_status": "not_uploaded",
     }
 
 

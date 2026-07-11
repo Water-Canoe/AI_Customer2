@@ -60,6 +60,11 @@ class ContentVideoJobUpdate(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
 
 
+class ContentVideoOutputUpdate(BaseModel):
+    output_name: str = Field(min_length=1, max_length=255)
+    upload_status: Literal["not_uploaded", "uploaded"]
+
+
 class ContentSettingsUpdate(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 

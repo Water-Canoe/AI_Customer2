@@ -108,6 +108,21 @@ def test_video_job_subject_can_be_renamed(tmp_path, monkeypatch: pytest.MonkeyPa
     assert renamed["subject"] == "新主题"
 
 
+def test_video_output_upload_status_can_be_updated(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app import database
+    from app.services import content_workbench
+
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO video_jobs(id, subject, status, outputs) VALUES('upload-job', '主题', 'succeeded', ?)",
+            ('[{"name":"final.mp4","upload_status":"not_uploaded"}]',),
+        )
+
+    updated = content_workbench.update_video_output_status("upload-job", "final.mp4", "uploaded")
+    assert updated["outputs"][0]["upload_status"] == "uploaded"
+
+
 def _wav_bytes() -> bytes:
     buffer = BytesIO()
     with wave.open(buffer, "wb") as writer:

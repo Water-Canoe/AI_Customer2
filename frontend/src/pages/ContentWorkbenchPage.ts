@@ -240,11 +240,6 @@ export default defineComponent({
       if (selectFirst && !selectedJob.value && data.items.length) selectedJob.value = data.items[0]
     }
 
-    async function selectJob(id: string) {
-      const { data } = await api.get(`/content/video-jobs/${id}`)
-      selectedJob.value = data
-    }
-
     async function loadSettings() {
       const { data } = await api.get('/content/settings')
       settings.value = data
@@ -373,6 +368,16 @@ export default defineComponent({
       }
     }
 
+    function clearVideoForm() {
+      videoDraft.value = defaultVideoDraft()
+      selectedAssetIds.value = []
+      audioAssetId.value = ''
+      bgmAssetId.value = ''
+      voiceProvider.value = 'edge'
+      void loadVoices()
+      ElMessage.success('视频创作内容已清空')
+    }
+
     async function cancelJob(id: string) {
       try {
         await api.post(`/content/video-jobs/${id}/cancel`)
@@ -426,9 +431,30 @@ export default defineComponent({
         const failed = (data.results || []).filter((item: Dict) => !item.success).length
         if (failed) ElMessage.warning(`发布完成，${failed} 项失败`)
         else ElMessage.success('视频发布成功')
-        await selectJob(id)
+        await loadJobs(false)
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '视频发布失败')
+      }
+    }
+
+    async function uploadOutput(job: Dict, output: Dict) {
+      try {
+        const { data } = await api.post(`/content/video-jobs/${job.id}/publish`, null, { params: { output_name: output.name } })
+        const failed = (data.results || []).some((item: Dict) => !item.success)
+        if (failed) ElMessage.warning('视频上传失败，请查看发布配置或服务返回信息')
+        else ElMessage.success('视频上传成功')
+        await loadJobs(false)
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '视频上传失败')
+      }
+    }
+
+    async function updateOutputStatus(job: Dict, output: Dict, uploadStatus: string) {
+      try {
+        await api.patch(`/content/video-jobs/${job.id}/output-status`, { output_name: output.name, upload_status: uploadStatus })
+        await loadJobs(false)
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '上传状态修改失败')
       }
     }
 
@@ -484,6 +510,7 @@ export default defineComponent({
             renderAdvancedVideoOptions(),
           ]),
           h('div', { class: 'task-card-actions content-create-actions' }, [
+            h('button', { class: 'secondary-action', disabled: loading.value, onClick: clearVideoForm }, '清空'),
             h('button', { class: 'primary-action', disabled: loading.value, onClick: createVideo }, loading.value ? '提交中...' : '开始生成视频'),
           ]),
         ]),
@@ -615,8 +642,14 @@ export default defineComponent({
         h('div', { class: 'content-generated-info' }, [
           h('strong', { title: job.subject }, String(job.subject || '未命名视频')),
           h('span', `${output.name || '生成视频'} · 第${job.attempt || 1}次生成`),
+          h('time', `生成于 ${job.finished_at || job.created_at || '-'}`),
         ]),
         h('div', { class: 'content-generated-actions' }, [
+          h('select', {
+            value: output.upload_status || 'not_uploaded',
+            onChange: (event: Event) => updateOutputStatus(job, output, (event.target as HTMLSelectElement).value),
+          }, [h('option', { value: 'not_uploaded' }, '未上传'), h('option', { value: 'uploaded' }, '已上传')]),
+          h('button', { class: 'primary-soft', onClick: () => uploadOutput(job, output) }, '上传'),
           h('a', { class: 'primary-soft', href: output.url, download: output.name }, '下载'),
           h('button', { class: 'text-icon-button', onClick: () => renameJob(job) }, '编辑'),
           h('button', { class: 'text-icon-button danger', onClick: () => archiveJob(String(job.id)) }, '删除'),

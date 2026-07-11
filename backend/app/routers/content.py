@@ -11,6 +11,7 @@ from app.schemas import (
     ContentTermsRequest,
     ContentVideoJobCreate,
     ContentVideoJobUpdate,
+    ContentVideoOutputUpdate,
 )
 from app.services import content_assets, content_workbench
 
@@ -128,6 +129,14 @@ def update_video_job(video_job_id: str, payload: ContentVideoJobUpdate) -> dict[
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.patch("/video-jobs/{video_job_id}/output-status")
+def update_video_output_status(video_job_id: str, payload: ContentVideoOutputUpdate) -> dict[str, object]:
+    try:
+        return content_workbench.update_video_output_status(video_job_id, payload.output_name, payload.upload_status)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/video-jobs/{video_job_id}/cancel")
 def cancel_video_job(video_job_id: str) -> dict[str, object]:
     try:
@@ -153,9 +162,9 @@ def archive_video_job(video_job_id: str) -> dict[str, object]:
 
 
 @router.post("/video-jobs/{video_job_id}/publish")
-def publish_video_job(video_job_id: str) -> dict[str, object]:
+def publish_video_job(video_job_id: str, output_name: str = "") -> dict[str, object]:
     try:
-        return content_workbench.publish_video_job(video_job_id)
+        return content_workbench.publish_video_job(video_job_id, output_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

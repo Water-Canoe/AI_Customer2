@@ -348,9 +348,9 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 左侧“内容工作台”包含四页：
 
-- “视频创作”填写主题、文案、素材词、素材来源、画面比例、音色和字幕参数；高级区保留拼接、转场、时长、数量、语速、音量、字幕字体/颜色/描边和提示词。选择“内容资产”时可以多选视频/图片并拖动排序。
-- “内容资产”批量导入视频、图片和音频，按SHA-256去重，支持预览、筛选、重命名和单条删除。运行中视频任务引用的资产不能删除；删除只处理该记录明确指向的原文件和缩略图，不批量删除目录。
-- “生成记录”左侧统一展示全部成品预览，可按主题或文件名搜索；右侧以“缩略预览 + 主题/阶段/进度”的紧凑卡片展示任务。页面支持从“视频创作”新增、查询、修改主题和删除记录；删除采用安全归档，只隐藏记录并保留成品文件。取消、重试和发布仍在记录卡片中操作，重试写入新的 `attempt-N` 目录，不覆盖旧结果。
+- “视频创作”填写主题、文案、素材词、素材来源、画面比例、音色和字幕参数；高级区保留拼接、转场、时长、数量、语速、音量、字幕字体/颜色/描边和提示词。选择“内容资产”时可以多选视频/图片并拖动排序；“清空”会恢复默认参数并清除文案、素材、配音和背景音乐选择。
+- “内容资产”批量导入视频、图片和音频，按SHA-256去重，支持完整比例预览、筛选、重命名和单条删除。运行中视频任务引用的资产不能删除；删除只处理该记录明确指向的原文件和缩略图，不批量删除目录。
+- “生成记录”左侧统一展示全部成品预览，可按主题或文件名搜索；每个成品显示生成时间、上传状态和单条上传按钮，上传状态也可手动改为“未上传/已上传”。右侧以“缩略预览 + 主题/阶段/进度”的紧凑卡片展示任务。页面支持从“视频创作”新增、查询、修改主题和删除记录；删除采用安全归档，只隐藏记录并保留成品文件。取消、重试和发布仍在记录卡片中操作，重试写入新的 `attempt-N` 目录，不覆盖旧结果。
 - “内容设置”独立保存视频AI、TTS、素材源、Whisper、TwelveLabs、代理、TLS和Upload-Post设置，不读取拓客工作台AI配置。密钥读取时统一显示 `********`，提交空值或遮罩值时保留原密钥。
 
 完整生成阶段由 `backend/app/services/content_workbench.py` 调用移植引擎执行：文案、素材词、本地/在线素材、TTS、自定义配音、字幕、Whisper、转场、合成、社交元数据和Upload-Post。视频任务进入 `runtime_jobs` 的 `video_generation` 类型和独立 `video` 资源，并发固定为1。取消在阶段边界检查；FFmpeg已经开始编码时会完成当前阶段再停止。视频生成成功但Upload-Post失败时，视频任务仍保持成功，发布错误单独写入 `publish_results`。
@@ -368,11 +368,11 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 内容接口：
 
 - `/api/content/assets`：资产导入、列表、详情、重命名、单条删除、原文件预览和缩略图。
-- `/api/content/video-jobs`：创建、列表、详情、修改主题、取消、重试、归档、成品预览和手动发布。
+- `/api/content/video-jobs`：创建、列表、详情、修改主题/成品上传状态、取消、重试、归档、成品预览和单条或整批手动发布。
 - `/api/content/scripts`、`/api/content/terms`、`/api/content/social-metadata`：独立视频AI生成能力。
 - `/api/content/voices`、`/api/content/settings`、`/api/content/environment-check`：音色、完整独立配置和环境检查。
 
-`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。当前全后端回归为339通过、8项联网测试跳过，前端为8项测试通过并完成生产构建。
+`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。当前全后端回归为340通过、8项联网测试跳过，前端为8项测试通过并完成生产构建。
 
 ## 授权服务
 
