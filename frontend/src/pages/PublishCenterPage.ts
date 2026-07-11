@@ -247,8 +247,11 @@ export default defineComponent({
 
     return () => h('div', { class: 'publish-center-page' }, [
       h('div', { class: 'content-asset-segments publish-center-segments' }, [['tasks', '发布任务'], ['accounts', '平台账号']].map(([value, label]) => h('button', { class: segment.value === value ? 'active' : '', onClick: () => segment.value = value as 'tasks' | 'accounts' }, label))),
-      renderComposer(),
-      segment.value === 'accounts' ? renderAccounts() : renderTasks(),
+      segment.value === 'accounts'
+        ? renderAccounts()
+        : composer.value.open
+          ? h('div', { class: 'publish-center-workspace' }, [renderComposer(), renderTasks()])
+          : renderTasks(),
     ])
   },
 })

@@ -4729,15 +4729,37 @@ input[type='checkbox'] {
 
 .publish-center-page {
   display: grid;
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
   align-content: start;
   gap: 14px;
-  overflow-y: auto;
+  overflow: visible;
 }
 
 .main.view-content-publish {
   max-height: calc(100vh - var(--workbench-topbar-height));
+  overflow-y: auto;
+}
+
+.publish-center-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(420px, .95fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.publish-center-page .publish-center-pane,
+.publish-center-page .publish-composer {
+  min-height: auto;
+  overflow: visible;
+}
+
+.publish-center-workspace .publish-stat-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.publish-center-workspace .publish-task-card {
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .publish-center-segments {
@@ -4957,6 +4979,13 @@ input[type='checkbox'] {
 @media (max-width: 1100px) {
   .main.view-content-publish {
     max-height: none;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 1180px) {
+  .publish-center-workspace {
+    grid-template-columns: 1fr;
   }
 }
 
