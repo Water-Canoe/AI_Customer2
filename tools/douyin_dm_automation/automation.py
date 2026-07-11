@@ -13,6 +13,9 @@ DEFAULT_PROFILE_DIR = Path(__file__).resolve().parents[2] / "data" / "douyin_clo
 DEFAULT_WAIT_SECONDS = 300
 DM_PANEL_WAIT_SECONDS = 25
 DISCOVERY_POLL_MS = 100
+DM_CLICK_RESULT_WAIT_SECONDS = 4
+DM_CLICK_MAX_ATTEMPTS = 3
+DM_CLICK_TIMEOUT_MS = 5000
 SEND_READY_TIMEOUT_MS = 2500
 
 PROFILE_DM_SELECTORS = [
@@ -111,17 +114,17 @@ async def dismiss_easy_popups(page: Any) -> None:
 async def click_private_message_button(page: Any, seconds: int) -> None:
     visible_entry = await wait_for_private_message_button(page, seconds)
     try:
-        clicked = await visible_entry.evaluate(
-            """el => {
+        label = await visible_entry.evaluate(
+            r"""el => {
                 const target = el.closest('button, [role="button"], a') || el;
-                const label = (target.innerText || target.textContent || '').replace(/\s+/g, ' ').trim();
-                if (!['私信', '发私信'].includes(label)) return false;
-                target.click();
-                return true;
+                return (target.innerText || target.textContent || '').replace(/\s+/g, ' ').trim();
             }"""
         )
-        if not clicked:
+        if label not in {"私信", "发私信"}:
             raise RuntimeError("私信入口文本不匹配")
+        # Locator 点击会在页面重排后重新定位，并等待元素位置稳定再发送真实鼠标事件。
+        await visible_entry.scroll_into_view_if_needed(timeout=DM_CLICK_TIMEOUT_MS)
+        await visible_entry.click(timeout=DM_CLICK_TIMEOUT_MS)
     except Exception as exc:
         raise RuntimeError("找到了私信按钮，但点击失败。") from exc
 
@@ -130,15 +133,46 @@ async def open_dm_panel(page: Any, seconds: int) -> None:
     if await first_visible(page, CHAT_INPUT_SELECTORS):
         return
 
-    await click_private_message_button(page, seconds)
-
+    # 首次发现仍保留登录等待；点击阶段使用短等待并在无结果时重新定位按钮。
+    await wait_for_private_message_button(page, seconds)
     deadline = time.monotonic() + min(seconds, DM_PANEL_WAIT_SECONDS)
+    initial_url = str(getattr(page, "url", ""))
+    attempts = 0
+    last_click_error = ""
+    allow_retry = True
     while time.monotonic() < deadline:
         editor = await first_visible(page, CHAT_INPUT_SELECTORS)
         if editor:
             return
+
+        button = await first_visible(page, PROFILE_DM_SELECTORS) if allow_retry else None
+        if button is not None and attempts < DM_CLICK_MAX_ATTEMPTS:
+            attempts += 1
+            try:
+                await click_private_message_button(page, 1)
+                last_click_error = ""
+            except RuntimeError as exc:
+                last_click_error = str(exc)
+
+            result_deadline = min(deadline, time.monotonic() + DM_CLICK_RESULT_WAIT_SECONDS)
+            while time.monotonic() < result_deadline:
+                editor = await first_visible(page, CHAT_INPUT_SELECTORS)
+                if editor:
+                    return
+                await page.wait_for_timeout(DISCOVERY_POLL_MS)
+
+            current_url = str(getattr(page, "url", ""))
+            allow_retry = current_url == initial_url
+            if allow_retry:
+                await dismiss_easy_popups(page)
+            continue
+
         await page.wait_for_timeout(DISCOVERY_POLL_MS)
-    raise RuntimeError("已点击私信按钮，但没有找到聊天输入框。")
+
+    detail = f"；最后一次点击错误：{last_click_error}" if last_click_error else ""
+    raise RuntimeError(
+        f"私信入口已重新定位并尝试点击 {attempts} 次，但没有找到聊天输入框{detail}。"
+    )
 
 
 async def type_message(page: Any, message: str) -> None:
