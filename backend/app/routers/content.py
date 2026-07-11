@@ -5,6 +5,11 @@ from fastapi.responses import FileResponse
 
 from app.schemas import (
     ContentAssetUpdate,
+    ContentPublishAccountCreate,
+    ContentPublishAccountUpdate,
+    ContentPublishOneClick,
+    ContentPublishResultUpdate,
+    ContentPublishTaskCreate,
     ContentScriptRequest,
     ContentSettingsUpdate,
     ContentSocialMetadataRequest,
@@ -15,7 +20,7 @@ from app.schemas import (
     ContentVoiceProfileCreate,
     ContentVoiceProfileUpdate,
 )
-from app.services import content_assets, content_workbench, voice_profiles
+from app.services import content_assets, content_publish, content_workbench, job_queue, voice_profiles
 
 
 router = APIRouter(prefix="/api/content", tags=["content"])
@@ -94,6 +99,145 @@ def preview_asset_thumbnail(asset_id: str) -> FileResponse:
     return FileResponse(path, media_type="image/jpeg")
 
 
+@router.get("/publish-accounts")
+def list_publish_accounts() -> list[dict[str, object]]:
+    return content_publish.list_accounts()
+
+
+@router.post("/publish-accounts")
+def create_publish_account(payload: ContentPublishAccountCreate) -> dict[str, object]:
+    try:
+        return content_publish.create_account(payload.platform, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/publish-accounts/{account_id}")
+def update_publish_account(account_id: str, payload: ContentPublishAccountUpdate) -> dict[str, object]:
+    try:
+        return content_publish.update_account(account_id, payload.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/publish-accounts/{account_id}")
+def delete_publish_account(account_id: str) -> dict[str, object]:
+    try:
+        return content_publish.delete_account(account_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/publish-accounts/{account_id}/login")
+def login_publish_account(account_id: str) -> dict[str, object]:
+    try:
+        content_publish.get_account(account_id)
+        return job_queue.enqueue_publish_account_job(account_id, "login")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/publish-accounts/{account_id}/check")
+def check_publish_account(account_id: str) -> dict[str, object]:
+    try:
+        content_publish.get_account(account_id)
+        return job_queue.enqueue_publish_account_job(account_id, "check")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/publish-accounts/{account_id}/qrcode")
+def publish_account_qrcode(account_id: str) -> FileResponse:
+    try:
+        return FileResponse(content_publish.account_qrcode_path(account_id), media_type="image/png")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/publish-tasks/one-click")
+def one_click_publish(payload: ContentPublishOneClick) -> list[dict[str, object]]:
+    try:
+        source = payload.source
+        if source.type == "video_output":
+            tasks = content_publish.create_video_output_tasks(
+                video_job_id=source.video_job_id,
+                output_name=source.output_name,
+            )
+        else:
+            if len(source.asset_ids) != 1:
+                raise ValueError("一键发布内容资产时请选择一个视频；多图片图文请使用发布设置")
+            asset = content_assets.get_asset(source.asset_ids[0])
+            tasks = content_publish.create_asset_tasks(
+                asset_ids=source.asset_ids,
+                account_ids=None,
+                title=str(asset["name"]),
+            )
+        return content_publish.enqueue_tasks(tasks)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/publish-tasks")
+def create_publish_tasks(payload: ContentPublishTaskCreate) -> list[dict[str, object]]:
+    try:
+        values = payload.model_dump()
+        source = values.pop("source")
+        if source["type"] == "video_output":
+            tasks = content_publish.create_video_output_tasks(
+                video_job_id=source["video_job_id"],
+                output_name=source["output_name"],
+                **values,
+            )
+        else:
+            tasks = content_publish.create_asset_tasks(asset_ids=source["asset_ids"], **values)
+        return content_publish.enqueue_tasks(tasks)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/publish-tasks")
+def list_publish_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+    status: str = "",
+) -> dict[str, object]:
+    return content_publish.list_tasks(page, page_size, status)
+
+
+@router.get("/publish-tasks/{task_id}")
+def get_publish_task(task_id: str) -> dict[str, object]:
+    try:
+        return content_publish.get_task(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/publish-tasks/{task_id}/cancel")
+def cancel_publish_task(task_id: str) -> dict[str, object]:
+    try:
+        return content_publish.cancel_task(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/publish-tasks/{task_id}/retry")
+def retry_publish_task(task_id: str) -> dict[str, object]:
+    try:
+        return content_publish.retry_task(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/publish-tasks/{task_id}/mark-result")
+def mark_publish_task(task_id: str, payload: ContentPublishResultUpdate) -> dict[str, object]:
+    try:
+        return content_publish.mark_task_result(task_id, payload.status, payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/video-jobs")
 def create_video_job(payload: ContentVideoJobCreate) -> dict[str, object]:
     try:
@@ -102,6 +246,7 @@ def create_video_job(payload: ContentVideoJobCreate) -> dict[str, object]:
             payload.asset_ids,
             payload.audio_asset_id,
             payload.bgm_asset_id,
+            payload.publish,
         )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -162,14 +307,6 @@ def archive_video_job(video_job_id: str) -> dict[str, object]:
         return content_workbench.archive_video_job(video_job_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.post("/video-jobs/{video_job_id}/publish")
-def publish_video_job(video_job_id: str, output_name: str = "") -> dict[str, object]:
-    try:
-        return content_workbench.publish_video_job(video_job_id, output_name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/video-jobs/{video_job_id}/files/{filename}")

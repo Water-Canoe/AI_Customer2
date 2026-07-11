@@ -237,6 +237,29 @@ def enqueue_video_job(video_job_id: str) -> dict[str, Any]:
     )
 
 
+def enqueue_publish_account_job(account_id: str, action: str) -> dict[str, Any]:
+    if action not in {"login", "check"}:
+        raise ValueError("发布账号任务只支持登录或检查")
+    return enqueue(
+        f"publish_account_{action}",
+        entity_id=str(account_id),
+        payload={"account_id": str(account_id)},
+        resource="browser",
+        priority=100,
+    )
+
+
+def enqueue_publish_task(task_id: str) -> dict[str, Any]:
+    return enqueue(
+        "content_publish",
+        entity_id=str(task_id),
+        payload={"publish_task_id": str(task_id)},
+        resource="browser",
+        priority=50,
+        max_attempts=100,
+    )
+
+
 def get_job(job_id: str) -> dict[str, Any]:
     with database.connect() as conn:
         row = conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()
@@ -565,7 +588,7 @@ def _run_job(job: dict[str, Any]) -> None:
 
 
 def _execute_job(job: dict[str, Any]) -> Any:
-    from app.services import account_actions, ai_service, content_workbench, crawler_adapter, message_workbench, traffic_workbench
+    from app.services import account_actions, ai_service, content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
@@ -603,16 +626,27 @@ def _execute_job(job: dict[str, Any]) -> Any:
         return ai_service.run_ai_jobs_parallel([str(value) for value in payload.get("job_ids", [])])
     if kind == "video_generation":
         return content_workbench.run_video_job(str(payload["video_job_id"]))
+    if kind == "publish_account_login":
+        return content_publish.run_account_login(str(payload["account_id"]))
+    if kind == "publish_account_check":
+        return content_publish.run_account_check(str(payload["account_id"]))
+    if kind == "content_publish":
+        return content_publish.run_publish_task(str(payload["publish_task_id"]))
     raise ValueError(f"不支持的运行任务类型：{kind}")
 
 
 def _mark_video_domain_failed(job: dict[str, Any], error: str) -> None:
-    if str(job.get("kind") or "") != "video_generation":
-        return
-    from app.services import content_workbench
+    kind = str(job.get("kind") or "")
+    from app.services import content_publish, content_workbench
 
     payload = dict(job.get("payload") or {})
-    content_workbench.mark_video_job_failed(str(payload.get("video_job_id") or ""), error)
+    if kind == "video_generation":
+        content_workbench.mark_video_job_failed(str(payload.get("video_job_id") or ""), error)
+    elif kind == "content_publish":
+        task_id = str(payload.get("publish_task_id") or "")
+        task = content_publish.get_task(task_id)
+        if task["status"] not in content_publish.TERMINAL_TASK_STATUSES:
+            content_publish.update_task_state(task_id, "failed", error=error)
 
 
 def _domain_outcome(job: dict[str, Any], result: Any = None) -> dict[str, str]:
@@ -643,6 +677,8 @@ def _domain_outcome(job: dict[str, Any], result: Any = None) -> dict[str, str]:
         table, entity_id, success = "analysis_jobs", str(payload["job_id"]), {"succeeded"}
     elif kind == "video_generation":
         table, entity_id, success = "video_jobs", str(payload["video_job_id"]), {"succeeded"}
+    elif kind == "content_publish":
+        table, entity_id, success = "publish_tasks", str(payload["publish_task_id"]), {"succeeded"}
     if not table:
         return {"status": "succeeded", "error": ""}
     with database.connect() as conn:
@@ -718,7 +754,7 @@ def _cancel_requested(job_id: str) -> bool:
 
 
 def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, queued: bool = False) -> None:
-    from app.services import content_workbench, crawler_adapter, message_workbench, traffic_workbench
+    from app.services import content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
@@ -736,6 +772,8 @@ def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, que
             message_workbench.cancel_auto_message_batch(str(payload["batch_id"]))
         elif kind == "video_generation":
             content_workbench.mark_video_job_cancelled(str(payload["video_job_id"]), reason)
+        elif kind == "content_publish" and queued:
+            content_publish.update_task_state(str(payload["publish_task_id"]), "cancelled", error=reason)
         elif queued and kind in SAFE_RESUME_KINDS:
             job_ids = [str(payload["job_id"])] if kind == "ai_job" else [str(value) for value in payload.get("job_ids", [])]
             if job_ids:
@@ -781,6 +819,11 @@ def _prepare_domain_retry(job: dict[str, Any]) -> None:
             from app.services import content_workbench
 
             content_workbench.reset_video_job_for_retry(conn, str(payload["video_job_id"]))
+        elif kind == "content_publish":
+            conn.execute(
+                "UPDATE publish_tasks SET status = 'queued', current_stage = 'queued', progress = 0, error = '', result = '{}', started_at = NULL, finished_at = NULL, published_at = NULL, updated_at = datetime('now', 'localtime') WHERE id = ?",
+                (str(payload["publish_task_id"]),),
+            )
 
 
 def _reset_crawl_task(conn: Any, task_id: str) -> None:
@@ -848,6 +891,22 @@ def _normalize_interrupted_domain(conn: Any, job: dict[str, Any], reason: str) -
             WHERE id = ? AND status = 'running'
             """,
             (reason, str(payload["video_job_id"])),
+        )
+    if kind == "content_publish":
+        conn.execute(
+            """
+            UPDATE publish_tasks
+            SET status = CASE WHEN current_stage = 'publishing' THEN 'review_required' ELSE 'failed' END,
+                current_stage = CASE WHEN current_stage = 'publishing' THEN 'review_required' ELSE 'failed' END,
+                error = ?, finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
+            WHERE id = ? AND status = 'running'
+            """,
+            (reason, str(payload["publish_task_id"])),
+        )
+    if kind in {"publish_account_login", "publish_account_check"}:
+        conn.execute(
+            "UPDATE publish_accounts SET status = 'error', last_error = ?, updated_at = datetime('now', 'localtime') WHERE id = ? AND status = 'checking'",
+            (reason, str(payload["account_id"])),
         )
 
 

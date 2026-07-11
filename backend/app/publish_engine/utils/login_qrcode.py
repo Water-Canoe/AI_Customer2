@@ -7,11 +7,13 @@ import sys
 import cv2
 import segno
 
+from app.publish_engine.conf import RUNTIME_DIR
+
 
 def build_login_qrcode_path(account_file: str, suffix: str = "login_qrcode") -> Path:
     account_path = Path(account_file)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return account_path.with_name(f"{account_path.stem}_{suffix}_{timestamp}.png")
+    return RUNTIME_DIR / "qrcode" / f"{account_path.stem}_{suffix}_{timestamp}.png"
 
 
 def save_data_url_image(data_url: str, output_path: Path) -> Path:

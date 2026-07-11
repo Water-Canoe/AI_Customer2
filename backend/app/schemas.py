@@ -54,6 +54,7 @@ class ContentVideoJobCreate(BaseModel):
     asset_ids: list[str] = Field(default_factory=list)
     audio_asset_id: str = ""
     bgm_asset_id: str = ""
+    publish: dict[str, Any] = Field(default_factory=dict)
 
 
 class ContentVideoJobUpdate(BaseModel):
@@ -63,6 +64,44 @@ class ContentVideoJobUpdate(BaseModel):
 class ContentVideoOutputUpdate(BaseModel):
     output_name: str = Field(min_length=1, max_length=255)
     upload_status: Literal["not_uploaded", "uploaded"]
+
+
+class ContentPublishAccountCreate(BaseModel):
+    platform: Literal["dy", "ks", "xhs"]
+    name: str = Field(min_length=1, max_length=100)
+
+
+class ContentPublishAccountUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    enabled: bool | None = None
+    is_default: bool | None = None
+
+
+class ContentPublishSource(BaseModel):
+    type: Literal["video_output", "assets"]
+    video_job_id: str = ""
+    output_name: str = ""
+    asset_ids: list[str] = Field(default_factory=list)
+
+
+class ContentPublishTaskCreate(BaseModel):
+    source: ContentPublishSource
+    account_ids: list[str] = Field(default_factory=list)
+    title: str = Field(min_length=1, max_length=500)
+    description: str = Field(default="", max_length=20000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    publish_strategy: Literal["immediate", "scheduled"] = "immediate"
+    scheduled_at: str = ""
+    platform_overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class ContentPublishOneClick(BaseModel):
+    source: ContentPublishSource
+
+
+class ContentPublishResultUpdate(BaseModel):
+    status: Literal["succeeded", "failed"]
+    note: str = Field(default="", max_length=1000)
 
 
 class ContentVoiceProfileCreate(BaseModel):

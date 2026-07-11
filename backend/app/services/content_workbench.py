@@ -56,8 +56,10 @@ def create_video_job(
     asset_ids: list[str],
     audio_asset_id: str = "",
     bgm_asset_id: str = "",
+    publish: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     from app.video_engine.models.schema import TaskVideoRequest
+    from app.services import content_publish
 
     payload = deepcopy(params or {})
     material_assets = [_require_asset(asset_id, {"video", "image"}) for asset_id in asset_ids]
@@ -87,6 +89,9 @@ def create_video_job(
         validated = TaskVideoRequest(**payload)
     except ValidationError as exc:
         raise ValueError(_validation_message(exc)) from exc
+
+    publish_plan = publish or {}
+    content_publish.validate_auto_publish(publish_plan)
 
     job_id = uuid.uuid4().hex
     serialized = validated.model_dump(mode="json", warnings=False)
@@ -119,6 +124,16 @@ def create_video_job(
                 (job_id, str(bgm_asset["id"])),
             )
 
+    if bool(publish_plan.get("enabled")):
+        content_publish.create_waiting_video_tasks(
+            job_id,
+            [str(value) for value in publish_plan.get("account_ids", [])],
+            int(serialized.get("video_count") or 1),
+            str(publish_plan.get("output_scope") or "first"),
+            str(publish_plan.get("publish_strategy") or "immediate"),
+            str(publish_plan.get("scheduled_at") or ""),
+        )
+
     from app.services import job_queue
 
     runtime_job = job_queue.enqueue_video_job(job_id)
@@ -133,7 +148,8 @@ def create_video_job(
 def run_video_job(video_job_id: str) -> dict[str, Any]:
     from app.services import job_queue
     from app.video_engine.config import config
-    from app.video_engine.services import state, task, upload_post
+    from app.video_engine.services import state, task
+    from app.services import content_publish
     from app.video_engine.models.schema import TaskVideoRequest
 
     job = get_video_job(video_job_id, include_archived=True)
@@ -141,7 +157,6 @@ def run_video_job(video_job_id: str) -> dict[str, Any]:
     engine_task_id = f"{video_job_id}/attempt-{attempt}"
     settings = _runtime_settings()
     config.apply_runtime_config(settings)
-    upload_post.upload_post_service.refresh()
     params = TaskVideoRequest(**job["params"])
 
     with database.connect() as conn:
@@ -176,7 +191,7 @@ def run_video_job(video_job_id: str) -> dict[str, Any]:
         if not result or not result.get("videos"):
             raise RuntimeError("视频生成未产生有效成品，请查看任务错误后重试")
         outputs = [_format_output(video_job_id, path) for path in result.get("videos", [])]
-        publish_results = result.get("cross_post_results") or []
+        publish_results = []
         with database.connect() as conn:
             conn.execute(
                 """
@@ -193,6 +208,7 @@ def run_video_job(video_job_id: str) -> dict[str, Any]:
                     video_job_id,
                 ),
             )
+        content_publish.enqueue_tasks(content_publish.bind_waiting_video_tasks(video_job_id, outputs))
         return get_video_job(video_job_id, include_archived=True)
     except VideoJobCancelled as exc:
         _finish_video_job(video_job_id, "cancelled", str(exc))
@@ -494,11 +510,9 @@ def mark_video_job_failed(video_job_id: str, reason: str) -> None:
 
 def _apply_runtime_settings() -> dict[str, Any]:
     from app.video_engine.config import config
-    from app.video_engine.services import upload_post
 
     values = _runtime_settings()
     config.apply_runtime_config(values)
-    upload_post.upload_post_service.refresh()
     return values
 
 
@@ -561,6 +575,8 @@ def _require_asset(asset_id: str, allowed_types: set[str]) -> dict[str, Any]:
 
 
 def _finish_video_job(video_job_id: str, status: str, error: str) -> None:
+    from app.services import content_publish
+
     with database.connect() as conn:
         conn.execute(
             """
@@ -571,6 +587,8 @@ def _finish_video_job(video_job_id: str, status: str, error: str) -> None:
             """,
             (status, status, str(error or ""), video_job_id),
         )
+    if status in {"failed", "cancelled", "interrupted"}:
+        content_publish.fail_waiting_video_tasks(video_job_id, error or "视频未生成")
 
 
 def _reset_video_job(video_job_id: str) -> None:

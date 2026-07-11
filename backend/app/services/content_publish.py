@@ -17,6 +17,15 @@ TERMINAL_TASK_STATUSES = {"succeeded", "failed", "review_required", "cancelled"}
 ACCOUNT_STATUSES = {"login_required", "checking", "ready", "expired", "error"}
 
 
+def validate_auto_publish(plan: dict[str, Any]) -> None:
+    if not bool(plan.get("enabled")):
+        return
+    _selected_accounts([str(value) for value in plan.get("account_ids", [])])
+    if str(plan.get("output_scope") or "first") not in {"first", "all"}:
+        raise ValueError("自动发布成品范围只支持首个或全部")
+    _strategy(str(plan.get("publish_strategy") or "immediate"), str(plan.get("scheduled_at") or ""))
+
+
 def create_account(platform: str, name: str) -> dict[str, Any]:
     platform = str(platform or "").strip().lower()
     name = str(name or "").strip()
@@ -232,7 +241,7 @@ def bind_waiting_video_tasks(video_job_id: str, outputs: list[dict[str, Any]]) -
     bound: list[str] = []
     with database.connect() as conn:
         rows = conn.execute(
-            "SELECT id, output_index FROM publish_tasks WHERE video_job_id = ? AND status = 'waiting_media' ORDER BY created_at, id",
+            "SELECT id, output_index FROM publish_tasks WHERE video_job_id = ? AND status = 'waiting_media' ORDER BY account_id, output_index, id",
             (video_job_id,),
         ).fetchall()
         for row in rows:
@@ -346,6 +355,17 @@ def account_auth_path(account_id: str) -> Path:
     return resolve_runtime_path(_auth_relative_path(account_id))
 
 
+def account_qrcode_path(account_id: str) -> Path:
+    with database.connect() as conn:
+        row = conn.execute("SELECT qrcode_relative_path FROM publish_accounts WHERE id = ?", (account_id,)).fetchone()
+    if not row or not row["qrcode_relative_path"]:
+        raise ValueError("登录二维码尚未生成")
+    path = resolve_runtime_path(str(row["qrcode_relative_path"]))
+    if not path.is_file():
+        raise ValueError("登录二维码不存在或已失效")
+    return path
+
+
 def task_media_paths(task: dict[str, Any]) -> list[Path]:
     if task["source_type"] == "video_output":
         from app.services import content_workbench
@@ -359,6 +379,149 @@ def task_media_paths(task: dict[str, Any]) -> list[Path]:
         content_assets.resolve_asset_path(str(asset["relative_path"]))
         for asset in task.get("assets", []) if asset["role"] == "media"
     ]
+
+
+def run_account_login(account_id: str) -> dict[str, Any]:
+    from app.publish_engine import service as engine
+
+    account = get_account(account_id)
+    set_account_state(account_id, "checking")
+
+    def qrcode_callback(payload: dict[str, Any]) -> None:
+        image_path = Path(str(payload.get("image_path") or ""))
+        relative = image_path.resolve().relative_to(database.get_data_root().resolve()).as_posix() if image_path.is_file() else ""
+        set_account_state(account_id, "checking", qrcode_relative_path=relative)
+
+    try:
+        result = engine.run(engine.login_account(account["platform"], account_auth_path(account_id), qrcode_callback))
+        if not bool(result.get("success")):
+            raise RuntimeError(str(result.get("message") or "扫码登录失败"))
+        set_account_state(account_id, "ready", checked=True)
+        return {"account_id": account_id, "success": True}
+    except Exception as exc:
+        set_account_state(account_id, "error", error=str(exc), checked=True)
+        raise
+
+
+def run_account_check(account_id: str) -> dict[str, Any]:
+    from app.publish_engine import service as engine
+
+    account = get_account(account_id)
+    set_account_state(account_id, "checking")
+    valid = bool(engine.run(engine.check_account(account["platform"], account_auth_path(account_id))))
+    set_account_state(account_id, "ready" if valid else "expired", error="" if valid else "登录已失效", checked=True)
+    return {"account_id": account_id, "valid": valid}
+
+
+def run_publish_task(task_id: str) -> dict[str, Any]:
+    from app.publish_engine import service as engine
+    from app.services import job_queue
+
+    task = get_task(task_id)
+    account = get_account(str(task["account_id"]))
+    if account["status"] != "ready" or not account["enabled"]:
+        update_task_state(task_id, "failed", error="发布账号未登录或已停用")
+        raise RuntimeError("发布账号未登录或已停用")
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE publish_tasks SET attempt = attempt + 1, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (task_id,),
+        )
+    update_task_state(task_id, "running", stage="preparing", progress=5)
+    progress = {"preparing": 10, "uploading": 45, "publishing": 85, "completed": 100}
+
+    def stage_callback(stage: str) -> None:
+        update_task_state(task_id, "running", stage=stage, progress=progress.get(stage, 10))
+
+    try:
+        scheduled = datetime.fromisoformat(task["scheduled_at"]) if task.get("scheduled_at") else 0
+        result = engine.run(
+            engine.publish(
+                platform=account["platform"],
+                content_type=task["content_type"],
+                account_file=account_auth_path(str(account["id"])),
+                title=task["title"],
+                description=task["description"],
+                tags=task["tags"],
+                media_paths=task_media_paths(task),
+                publish_strategy=task["publish_strategy"],
+                publish_date=scheduled,
+                options=task["platform_options"],
+                stage_callback=stage_callback,
+                cancel_check=lambda: job_queue.is_entity_cancel_requested("content_publish", task_id),
+            )
+        )
+        update_task_state(task_id, "succeeded", stage="completed", progress=100, result=result)
+        return result
+    except engine.PublishCancelled as exc:
+        update_task_state(task_id, "cancelled", error=str(exc))
+        return {"cancelled": True}
+    except engine.PublishReviewRequired as exc:
+        update_task_state(task_id, "review_required", stage="review_required", progress=90, error=str(exc))
+        raise
+    except Exception as exc:
+        update_task_state(task_id, "failed", error=str(exc))
+        raise
+
+
+def cancel_task(task_id: str) -> dict[str, Any]:
+    from app.services import job_queue
+
+    task = get_task(task_id)
+    if task["status"] not in ACTIVE_TASK_STATUSES:
+        raise ValueError("该发布任务当前不能取消")
+    jobs = job_queue.cancel_by_entity("content_publish", task_id)
+    if not jobs and task["status"] == "waiting_media":
+        return update_task_state(task_id, "cancelled", error="用户取消")
+    return get_task(task_id)
+
+
+def retry_task(task_id: str) -> dict[str, Any]:
+    from app.services import job_queue
+
+    task = get_task(task_id)
+    if task["status"] not in TERMINAL_TASK_STATUSES:
+        raise ValueError("只有已结束的发布任务可以重试")
+    with database.connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM runtime_jobs WHERE kind = 'content_publish' AND entity_id = ? ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    update_task_state(task_id, "queued", stage="queued", progress=0)
+    runtime = job_queue.retry_job(str(row["id"])) if row else job_queue.enqueue_publish_task(task_id)
+    _set_runtime_job(task_id, str(runtime["id"]))
+    return get_task(task_id)
+
+
+def mark_task_result(task_id: str, status: str, note: str = "") -> dict[str, Any]:
+    if status not in {"succeeded", "failed"}:
+        raise ValueError("人工确认结果只支持已发布或失败")
+    task = get_task(task_id)
+    if task["status"] not in TERMINAL_TASK_STATUSES:
+        raise ValueError("运行中的任务不能人工修改结果")
+    return update_task_state(task_id, status, error="" if status == "succeeded" else note, result={"manual": True, "note": note})
+
+
+def enqueue_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from app.services import job_queue
+
+    result = []
+    for task in tasks:
+        if task["status"] != "queued":
+            result.append(task)
+            continue
+        runtime = job_queue.enqueue_publish_task(str(task["id"]))
+        _set_runtime_job(str(task["id"]), str(runtime["id"]))
+        result.append(get_task(str(task["id"])))
+    return result
+
+
+def _set_runtime_job(task_id: str, runtime_job_id: str) -> None:
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE publish_tasks SET runtime_job_id = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (runtime_job_id, task_id),
+        )
 
 
 def _insert_tasks(

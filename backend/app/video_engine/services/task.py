@@ -440,7 +440,7 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
 
     # 7. Cross-post to social platforms (if enabled)
     cross_post_results = []
-    if upload_post.upload_post_service.is_configured() and upload_post.upload_post_service.auto_upload:
+    if False and upload_post.upload_post_service.is_configured() and upload_post.upload_post_service.auto_upload:
         platforms = upload_post.upload_post_service.platforms
         logger.info(f"\n\n## cross-posting videos to {', '.join(platforms)}")
 

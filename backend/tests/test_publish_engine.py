@@ -85,3 +85,49 @@ def test_publish_asset_order_and_delete_guard(tmp_path: Path, monkeypatch: pytes
     assert [asset["id"] for asset in tasks[0]["assets"]] == [second["id"], first["id"]]
     with pytest.raises(RuntimeError, match="发布任务"):
         content_assets.delete_asset(first["id"])
+
+
+def test_publish_tasks_use_serial_browser_queue_and_old_http_route_is_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_CUSTOMER_DB", str(tmp_path / "ai_customer.sqlite3"))
+    from app import database
+    from app.main import app
+    from app.services import content_publish
+
+    database.init_db()
+    account = content_publish.create_account("ks", "默认快手")
+    content_publish.set_account_state(account["id"], "ready")
+    content_publish.update_account(account["id"], {"is_default": True})
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO video_jobs(id, subject, script, status, outputs) VALUES('queue-video', '队列测试', '', 'succeeded', ?)",
+            ('[{"name":"final.mp4","relative_path":"tasks/queue-video/attempt-1/final.mp4"}]',),
+        )
+    tasks = content_publish.create_video_output_tasks(video_job_id="queue-video", output_name="final.mp4")
+    queued = content_publish.enqueue_tasks(tasks)
+
+    with database.connect() as conn:
+        runtime = conn.execute("SELECT kind, resource, priority, max_attempts FROM runtime_jobs WHERE id = ?", (queued[0]["runtime_job_id"],)).fetchone()
+    assert dict(runtime) == {"kind": "content_publish", "resource": "browser", "priority": 50, "max_attempts": 100}
+    assert not any(getattr(route, "path", "") == "/api/content/video-jobs/{video_job_id}/publish" for route in app.routes)
+
+
+def test_auto_publish_waits_for_generated_output_then_queues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_CUSTOMER_DB", str(tmp_path / "ai_customer.sqlite3"))
+    from app import database
+    from app.services import content_publish
+
+    database.init_db()
+    account = content_publish.create_account("xhs", "自动发布账号")
+    content_publish.set_account_state(account["id"], "ready")
+    with database.connect() as conn:
+        conn.execute("INSERT INTO video_jobs(id, subject, script, status) VALUES('auto-video', '自动发布', '正文', 'queued')")
+    waiting = content_publish.create_waiting_video_tasks("auto-video", [account["id"]], 2, "all", "immediate", "")
+    assert [task["status"] for task in waiting] == ["waiting_media", "waiting_media"]
+
+    bound = content_publish.bind_waiting_video_tasks(
+        "auto-video",
+        [{"name": "one.mp4"}, {"name": "two.mp4"}],
+    )
+    assert [task["output_name"] for task in bound] == ["one.mp4", "two.mp4"]
