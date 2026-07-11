@@ -4424,6 +4424,242 @@ input[type='checkbox'] {
   }
 }
 
+/* 内容工作台布局修正 */
+.content-advanced-settings {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.content-advanced-settings .content-advanced-grid,
+.content-settings-pane .content-settings-grid {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.content-advanced-grid .form-field,
+.content-settings-grid .form-field {
+  min-width: 0;
+  align-content: start;
+}
+
+.content-advanced-grid input,
+.content-advanced-grid select,
+.content-settings-grid input,
+.content-settings-grid select {
+  width: 100%;
+  height: 40px;
+  min-height: 40px;
+  box-sizing: border-box;
+}
+
+.content-advanced-grid textarea,
+.content-settings-grid textarea {
+  width: 100%;
+  height: 84px;
+  min-height: 84px;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.content-advanced-grid input[type="color"] {
+  padding: 5px 8px;
+}
+
+.content-advanced-grid .toggles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.content-settings-pane .settings-fold {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.content-assets-page .content-asset-filters {
+  flex: 1 1 680px;
+  max-width: none;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.content-assets-page .content-asset-upload {
+  display: inline-flex;
+  width: auto;
+  height: 36px;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.content-record-gallery,
+.content-record-list {
+  min-width: 0;
+}
+
+.content-record-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.content-record-toolbar input {
+  width: 220px;
+  height: 36px;
+  min-height: 36px;
+}
+
+.content-record-toolbar .primary-action {
+  display: inline-flex;
+  height: 36px;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.content-generated-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+}
+
+.content-generated-card {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--workbench-border);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(15, 55, 49, 0.07);
+}
+
+.content-generated-card > video {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  background: #0f172a;
+}
+
+.content-generated-info {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 11px 12px 6px;
+}
+
+.content-generated-info strong,
+.content-generated-info span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-generated-info span {
+  color: var(--workbench-muted);
+  font-size: 12px;
+}
+
+.content-generated-actions,
+.content-job-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px 11px;
+}
+
+.content-generated-actions .primary-soft {
+  text-decoration: none;
+}
+
+.content-job-list .content-job-card {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.content-job-main {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 11px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.content-job-preview {
+  display: grid;
+  height: 78px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: #0f172a;
+}
+
+.content-job-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.content-job-placeholder {
+  width: 28px;
+  height: 28px;
+  color: #94a3b8;
+}
+
+.content-job-copy {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 7px;
+}
+
+.content-job-card-actions {
+  padding-top: 7px;
+  border-top: 1px solid #edf2f0;
+  background: #fbfdfc;
+}
+
+@media (max-width: 900px) {
+  .content-advanced-settings .content-advanced-grid,
+  .content-settings-pane .content-settings-grid,
+  .content-advanced-grid .toggles {
+    grid-template-columns: 1fr;
+  }
+
+  .content-record-toolbar {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .content-record-toolbar input {
+    width: 100%;
+  }
+}
+
 /* 内容工作台 */
 .content-card-split {
   min-height: 0;

@@ -1,9 +1,8 @@
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Collection,
-  DataLine,
   Delete,
   MagicStick,
   Plus,
@@ -16,7 +15,7 @@ import {
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
-import { emptyState, metricTile, sectionTitle } from '../components/ui/Workbench'
+import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 
 const MASKED_SECRET = '********'
@@ -175,9 +174,10 @@ export default defineComponent({
   },
   setup(props) {
     const route = useRoute()
+    const router = useRouter()
     const view = computed(() => String(route.name || 'content-create'))
     const assets = ref<Dict[]>([])
-    const jobs = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20 })
+    const jobs = ref<Dict>({ items: [], total: 0, page: 1, page_size: 100 })
     const selectedJob = ref<Dict | null>(null)
     const settings = ref<Dict>({})
     const settingsDraft = ref<Dict>({})
@@ -187,6 +187,7 @@ export default defineComponent({
     const audioAssetId = ref('')
     const bgmAssetId = ref('')
     const assetFilter = ref({ type: '', search: '' })
+    const recordSearch = ref('')
     const voiceProvider = ref('edge')
     const voices = ref<string[]>([])
     const loading = ref(false)
@@ -200,6 +201,11 @@ export default defineComponent({
       .map(id => materialAssets.value.find(item => item.id === id))
       .filter(Boolean) as Dict[])
     const activeJobs = computed(() => (jobs.value.items || []).filter((job: Dict) => ['queued', 'running'].includes(String(job.status))))
+    const generatedItems = computed(() => {
+      const query = recordSearch.value.trim().toLowerCase()
+      return (jobs.value.items || []).flatMap((job: Dict) => (job.outputs || []).map((output: Dict) => ({ job, output })))
+        .filter(({ job, output }: Dict) => !query || `${job.subject || ''} ${output.name || ''}`.toLowerCase().includes(query))
+    })
 
     onMounted(() => {
       void loadPage()
@@ -389,12 +395,28 @@ export default defineComponent({
 
     async function archiveJob(id: string) {
       try {
+        const job = (jobs.value.items || []).find((item: Dict) => String(item.id) === id)
+        await ElMessageBox.confirm(`确认删除“${job?.subject || '该生成记录'}”？记录会从页面隐藏，成品文件继续保留。`, '删除生成记录', { type: 'warning' })
         await api.delete(`/content/video-jobs/${id}`)
-        ElMessage.success('生成记录已归档，成品文件继续保留')
+        ElMessage.success('生成记录已删除')
         if (selectedJob.value?.id === id) selectedJob.value = null
         await loadJobs(true)
       } catch (error: any) {
+        if (isUserCancel(error)) return
         ElMessage.error(error?.response?.data?.detail || '归档失败')
+      }
+    }
+
+    async function renameJob(job: Dict) {
+      try {
+        const result = await ElMessageBox.prompt('输入新的主题名称', '编辑生成内容', { inputValue: String(job.subject || '') })
+        const { data } = await api.patch(`/content/video-jobs/${job.id}`, { subject: result.value })
+        selectedJob.value = data
+        ElMessage.success('主题名称已更新')
+        await loadJobs(false)
+      } catch (error: any) {
+        if (isUserCancel(error)) return
+        ElMessage.error(error?.response?.data?.detail || '主题修改失败')
       }
     }
 
@@ -492,9 +514,9 @@ export default defineComponent({
     }
 
     function renderAdvancedVideoOptions() {
-      return h('details', { class: 'settings-fold field-full' }, [
+      return h('details', { class: 'settings-fold field-full content-advanced-settings' }, [
         h('summary', [h('strong', '高级视频参数'), h('span', '转场、速度、字幕和样式')]),
-        h('div', { class: 'settings-fold-body form-grid' }, [
+        h('div', { class: 'settings-fold-body form-grid content-advanced-grid' }, [
           formSelect('拼接方式', videoDraft.value.video_concat_mode, [['sequential', '按顺序'], ['random', '随机']], value => videoDraft.value.video_concat_mode = value),
           formSelect('转场效果', videoDraft.value.video_transition_mode, [['', '无'], ['Shuffle', '随机'], ['FadeIn', '淡入'], ['FadeOut', '淡出'], ['SlideIn', '滑入'], ['SlideOut', '滑出']], value => videoDraft.value.video_transition_mode = value),
           formNumber('单段秒数', videoDraft.value.video_clip_duration, value => videoDraft.value.video_clip_duration = value, 1, 30),
@@ -523,7 +545,7 @@ export default defineComponent({
       return h('section', { class: 'pane table-workspace content-assets-page' }, [
         h('div', { class: 'table-library-bar' }, [
           sectionTitle({ title: '内容资产', subtitle: `${assets.value.length} 项客户自有素材`, icon: Collection, tone: 'amber' }),
-          h('div', { class: 'table-filters' }, [
+          h('div', { class: 'table-filters content-asset-filters' }, [
             h('input', { placeholder: '搜索资产名称', value: assetFilter.value.search, onInput: (event: Event) => assetFilter.value.search = (event.target as HTMLInputElement).value }),
             h('select', { value: assetFilter.value.type, onChange: (event: Event) => assetFilter.value.type = (event.target as HTMLSelectElement).value }, [
               h('option', { value: '' }, '全部类型'),
@@ -532,7 +554,7 @@ export default defineComponent({
               h('option', { value: 'audio' }, '音频'),
             ]),
             h('button', { class: 'filter-button', onClick: loadAssets }, '筛选'),
-            h('label', { class: ['primary-action', uploading.value ? 'disabled' : ''] }, [
+            h('label', { class: ['primary-action content-asset-upload', uploading.value ? 'disabled' : ''] }, [
               h(Plus, { class: 'inline-icon' }),
               uploading.value ? '导入中...' : '导入内容资产',
               h('input', { type: 'file', multiple: true, accept: 'video/*,image/*,audio/*', disabled: uploading.value, onChange: uploadAssets, hidden: true }),
@@ -562,9 +584,20 @@ export default defineComponent({
 
     function renderRecordsPage() {
       return h(SplitPane, { class: 'content-card-split', storageKey: 'content-records', side: 'right', defaultSideWidth: 480, minSideWidth: 380 }, {
-        default: () => h('section', { class: 'pane content-pane content-record-detail' }, [
-          sectionTitle({ title: '生成详情', subtitle: selectedJob.value?.subject || '选择右侧记录', icon: VideoPlay, tone: 'purple' }),
-          selectedJob.value ? renderJobDetail(selectedJob.value) : emptyState({ title: '请选择生成记录', description: '查看进度、错误和生成视频', icon: VideoPlay }),
+        default: () => h('section', { class: 'pane content-pane content-record-gallery' }, [
+          sectionTitle({
+            title: '生成内容',
+            subtitle: `${generatedItems.value.length} 个视频成品`,
+            icon: VideoPlay,
+            tone: 'purple',
+            aside: h('div', { class: 'content-record-toolbar' }, [
+              h('input', { placeholder: '搜索主题或文件名', value: recordSearch.value, onInput: (event: Event) => recordSearch.value = (event.target as HTMLInputElement).value }),
+              h('button', { class: 'primary-action', onClick: () => router.push('/content-create') }, [h(Plus, { class: 'inline-icon' }), '新增视频']),
+            ]),
+          }),
+          generatedItems.value.length
+            ? h('div', { class: 'content-generated-grid' }, generatedItems.value.map(renderGeneratedCard))
+            : emptyState({ title: '暂无生成内容', description: '生成成功的视频会统一展示在这里', icon: VideoPlay }),
         ]),
         side: () => h('aside', { class: 'pane side-pane content-record-list' }, [
           sectionTitle({ title: '生成记录', subtitle: `共 ${jobs.value.total || 0} 条`, icon: Tickets, tone: 'blue', aside: h('button', { class: 'icon-refresh', onClick: () => loadJobs(true) }, [h(Refresh)]) }),
@@ -574,45 +607,52 @@ export default defineComponent({
       })
     }
 
+    function renderGeneratedCard(item: Dict) {
+      const job = item.job as Dict
+      const output = item.output as Dict
+      return h('article', { class: 'content-generated-card' }, [
+        h('video', { src: output.url, controls: true, preload: 'metadata' }),
+        h('div', { class: 'content-generated-info' }, [
+          h('strong', { title: job.subject }, String(job.subject || '未命名视频')),
+          h('span', `${output.name || '生成视频'} · 第${job.attempt || 1}次生成`),
+        ]),
+        h('div', { class: 'content-generated-actions' }, [
+          h('a', { class: 'primary-soft', href: output.url, download: output.name }, '下载'),
+          h('button', { class: 'text-icon-button', onClick: () => renameJob(job) }, '编辑'),
+          h('button', { class: 'text-icon-button danger', onClick: () => archiveJob(String(job.id)) }, '删除'),
+        ]),
+      ])
+    }
+
     function renderJobList(rows: Dict[]) {
       if (!rows.length) return emptyState({ title: '暂无视频任务', description: '在视频创作页面创建第一条任务', icon: Tickets })
-      return h('div', { class: 'content-job-list' }, rows.map(job => h('button', {
+      return h('div', { class: 'content-job-list' }, rows.map(job => h('article', {
         class: ['content-job-card', selectedJob.value?.id === job.id ? 'selected' : ''],
-        onClick: () => selectJob(String(job.id)),
       }, [
-        h('div', { class: 'content-job-head' }, [h('strong', String(job.subject || '未命名视频')), h('span', { class: `status-pill status-${job.status}` }, statusLabel(job.status))]),
-        h('small', `${stageLabel(job.current_stage)} · ${job.progress || 0}% · 第${job.attempt || 0}次`),
-        h('div', { class: 'content-job-progress' }, [h('span', { style: { width: `${Number(job.progress || 0)}%` } })]),
-        job.error ? h('p', { class: 'content-job-error' }, String(job.error)) : null,
+        h('button', { class: 'content-job-main', onClick: () => selectedJob.value = job }, [
+          h('div', { class: 'content-job-preview' }, [
+            job.outputs?.[0]?.url
+              ? h('video', { src: job.outputs[0].url, muted: true, preload: 'metadata' })
+              : h(VideoPlay, { class: 'content-job-placeholder' }),
+          ]),
+          h('div', { class: 'content-job-copy' }, [
+            h('div', { class: 'content-job-head' }, [h('strong', String(job.subject || '未命名视频')), h('span', { class: `status-pill status-${job.status}` }, statusLabel(job.status))]),
+            h('small', `${stageLabel(job.current_stage)} · ${job.progress || 0}% · 第${job.attempt || 0}次`),
+            h('div', { class: 'content-job-progress' }, [h('span', { style: { width: `${Number(job.progress || 0)}%` } })]),
+            job.error ? h('p', { class: 'content-job-error' }, String(job.error)) : null,
+          ]),
+        ]),
+        renderJobActions(job),
       ])))
     }
 
-    function renderJobDetail(job: Dict) {
-      return h('div', { class: 'content-job-detail-body' }, [
-        h('div', { class: 'content-job-metrics' }, [
-          metricTile({ label: '状态', value: statusLabel(job.status), icon: DataLine, tone: statusTone(job.status) }),
-          metricTile({ label: '进度', value: `${job.progress || 0}%`, icon: VideoPlay, tone: 'blue' }),
-          metricTile({ label: '尝试', value: job.attempt || 0, icon: Refresh, tone: 'amber' }),
-        ]),
-        h('div', { class: 'content-job-stage' }, [h('strong', stageLabel(job.current_stage)), h('span', `${job.progress || 0}%`)]),
-        job.error ? h('div', { class: 'bulk-preview-warning' }, [h('li', String(job.error))]) : null,
-        (job.outputs || []).length
-          ? h('div', { class: 'content-output-grid' }, job.outputs.map((output: Dict) => h('article', { class: 'content-output-card' }, [
-              h('video', { src: output.url, controls: true, preload: 'metadata' }),
-              h('strong', String(output.name || '生成视频')),
-              h('a', { class: 'primary-soft', href: output.url, download: output.name }, '下载视频'),
-            ])))
-          : emptyState({ title: '尚未生成成品', description: ['queued', 'running'].includes(String(job.status)) ? '任务完成后会在这里显示视频' : '可查看错误后重试', icon: VideoPlay }),
-        (job.publish_results || []).length ? h('div', { class: 'content-publish-results' }, [
-          sectionTitle({ title: '发布结果', subtitle: `${job.publish_results.length} 项`, icon: DataLine, tone: 'green', compact: true }),
-          ...job.publish_results.map((item: Dict) => h('p', { class: item.success ? 'success-text' : 'danger-text' }, item.success ? `发布成功：${item.request_id || '-'}` : `发布失败：${item.error || item.message || '-'}`)),
-        ]) : null,
-        h('div', { class: 'task-card-actions content-job-actions' }, [
-          ['queued', 'running'].includes(String(job.status)) ? h('button', { class: 'danger-soft', onClick: () => cancelJob(String(job.id)) }, '取消任务') : null,
-          ['failed', 'cancelled', 'interrupted'].includes(String(job.status)) ? h('button', { class: 'primary-action', onClick: () => retryJob(String(job.id)) }, '重新生成') : null,
-          job.status === 'succeeded' ? h('button', { class: 'primary-action', onClick: () => publishJob(String(job.id)) }, '发布视频') : null,
-          !['queued', 'running'].includes(String(job.status)) ? h('button', { class: 'secondary-action', onClick: () => archiveJob(String(job.id)) }, '归档记录') : null,
-        ]),
+    function renderJobActions(job: Dict) {
+      return h('div', { class: 'content-job-card-actions' }, [
+        h('button', { class: 'text-icon-button', onClick: () => renameJob(job) }, '编辑'),
+        ['queued', 'running'].includes(String(job.status)) ? h('button', { class: 'danger-soft', onClick: () => cancelJob(String(job.id)) }, '取消') : null,
+        ['failed', 'cancelled', 'interrupted'].includes(String(job.status)) ? h('button', { class: 'primary-soft', onClick: () => retryJob(String(job.id)) }, '重试') : null,
+        job.status === 'succeeded' ? h('button', { class: 'primary-soft', onClick: () => publishJob(String(job.id)) }, '发布') : null,
+        !['queued', 'running'].includes(String(job.status)) ? h('button', { class: 'text-icon-button danger', onClick: () => archiveJob(String(job.id)) }, '删除') : null,
       ])
     }
 
@@ -746,14 +786,6 @@ function statusLabel(value: unknown) {
 
 function stageLabel(value: unknown) {
   return ({ queued: '等待执行', preparing: '准备环境', script: '生成文案', terms: '生成素材词', audio: '生成配音', subtitle: '生成字幕', materials: '准备素材', rendering: '合成视频', completed: '生成完成', failed: '生成失败', cancelled: '已取消', interrupted: '已中断' } as Record<string, string>)[String(value || '')] || String(value || '-')
-}
-
-function statusTone(value: unknown): 'green' | 'red' | 'blue' | 'amber' | 'gray' {
-  if (value === 'succeeded') return 'green'
-  if (value === 'failed') return 'red'
-  if (value === 'running') return 'blue'
-  if (value === 'queued') return 'amber'
-  return 'gray'
 }
 
 function voiceLabel(value: string) {

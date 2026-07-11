@@ -96,6 +96,18 @@ def test_content_settings_mask_and_preserve_secrets(tmp_path, monkeypatch: pytes
     assert unmasked["app"]["pexels_api_keys"] == ["pexels-secret"]
 
 
+def test_video_job_subject_can_be_renamed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app import database
+    from app.services import content_workbench
+
+    with database.connect() as conn:
+        conn.execute("INSERT INTO video_jobs(id, subject, status) VALUES('rename-job', '旧主题', 'succeeded')")
+
+    renamed = content_workbench.update_video_job("rename-job", "  新主题  ")
+    assert renamed["subject"] == "新主题"
+
+
 def _wav_bytes() -> bytes:
     buffer = BytesIO()
     with wave.open(buffer, "wb") as writer:

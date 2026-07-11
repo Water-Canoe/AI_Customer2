@@ -56,6 +56,10 @@ class ContentVideoJobCreate(BaseModel):
     bgm_asset_id: str = ""
 
 
+class ContentVideoJobUpdate(BaseModel):
+    subject: str = Field(min_length=1, max_length=500)
+
+
 class ContentSettingsUpdate(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
 

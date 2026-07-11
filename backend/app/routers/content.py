@@ -10,6 +10,7 @@ from app.schemas import (
     ContentSocialMetadataRequest,
     ContentTermsRequest,
     ContentVideoJobCreate,
+    ContentVideoJobUpdate,
 )
 from app.services import content_assets, content_workbench
 
@@ -115,6 +116,14 @@ def list_video_jobs(
 def get_video_job(video_job_id: str) -> dict[str, object]:
     try:
         return content_workbench.get_video_job(video_job_id, include_archived=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.patch("/video-jobs/{video_job_id}")
+def update_video_job(video_job_id: str, payload: ContentVideoJobUpdate) -> dict[str, object]:
+    try:
+        return content_workbench.update_video_job(video_job_id, payload.subject)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

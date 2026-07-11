@@ -228,6 +228,19 @@ def get_video_job(video_job_id: str, *, include_archived: bool = False) -> dict[
     return _format_video_job(row)
 
 
+def update_video_job(video_job_id: str, subject: str) -> dict[str, Any]:
+    clean_subject = str(subject or "").strip()
+    if not clean_subject:
+        raise ValueError("视频主题不能为空")
+    get_video_job(video_job_id, include_archived=True)
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE video_jobs SET subject = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (clean_subject, video_job_id),
+        )
+    return get_video_job(video_job_id, include_archived=True)
+
+
 def cancel_video_job(video_job_id: str) -> dict[str, Any]:
     get_video_job(video_job_id, include_archived=True)
     from app.services import job_queue
