@@ -4729,7 +4729,15 @@ input[type='checkbox'] {
 
 .publish-center-page {
   display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: start;
   gap: 14px;
+  overflow-y: auto;
+}
+
+.main.view-content-publish {
+  max-height: calc(100vh - var(--workbench-topbar-height));
 }
 
 .publish-center-segments {
@@ -4771,7 +4779,19 @@ input[type='checkbox'] {
 }
 
 .publish-account-create input {
+  min-width: 220px;
   flex: 1;
+}
+
+.publish-account-create select {
+  width: 150px;
+  flex: 0 0 150px;
+}
+
+.publish-account-create .primary-action,
+.publish-refresh {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .publish-account-grid {
@@ -4882,6 +4902,7 @@ input[type='checkbox'] {
 
 .content-auto-publish {
   display: grid;
+  align-self: start;
   gap: 10px;
   padding: 14px;
   border: 1px solid #d9d1ff;
@@ -4930,6 +4951,12 @@ input[type='checkbox'] {
   .publish-task-card {
     align-items: flex-start;
     flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 1100px) {
+  .main.view-content-publish {
+    max-height: none;
   }
 }
 
