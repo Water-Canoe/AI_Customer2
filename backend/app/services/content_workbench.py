@@ -75,6 +75,8 @@ def create_video_job(
 
     audio_asset = _require_asset(audio_asset_id, {"audio"}) if audio_asset_id else None
     bgm_asset = _require_asset(bgm_asset_id, {"audio"}) if bgm_asset_id else None
+    if bgm_asset and bgm_asset.get("purpose") != "background_music":
+        raise ValueError("背景音乐只能选择背景音乐分区中的音频")
     if audio_asset:
         payload["custom_audio_file"] = str(content_assets.resolve_asset_path(audio_asset["relative_path"]))
     if bgm_asset:

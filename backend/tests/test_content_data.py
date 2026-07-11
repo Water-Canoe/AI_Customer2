@@ -98,6 +98,26 @@ def test_video_job_keeps_local_asset_order_and_can_cancel(tmp_path, monkeypatch:
     assert content_workbench.cancel_video_job(job["id"])["status"] == "cancelled"
 
 
+def test_video_job_rejects_voice_reference_as_background_music(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app.services import content_assets, content_workbench
+
+    monkeypatch.setattr(content_assets, "_read_metadata", lambda *_: {"width": None, "height": None, "duration": None, "thumbnail_path": ""})
+    reference = content_assets.import_asset_file(
+        "clone.mp3",
+        BytesIO(b"voice-reference"),
+        "audio/mpeg",
+        "voice_reference",
+    )
+
+    with pytest.raises(ValueError, match="背景音乐分区"):
+        content_workbench.create_video_job(
+            {"video_subject": "测试", "video_source": "pexels"},
+            [],
+            bgm_asset_id=reference["id"],
+        )
+
+
 def test_content_settings_mask_and_preserve_secrets(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_content_db(tmp_path, monkeypatch)
     from app.services import content_workbench

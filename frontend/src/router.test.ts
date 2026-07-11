@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import ContentWorkbenchPage from './pages/ContentWorkbenchPage'
+import ContentWorkbenchPage, { assetMatchesSegment } from './pages/ContentWorkbenchPage'
 import { routes } from './router'
 
 
@@ -16,5 +16,10 @@ describe('内容工作台路由', () => {
     ])
     expect(contentRoutes.every(route => route.component === ContentWorkbenchPage)).toBe(true)
     expect(contentRoutes.map(route => route.meta?.title)).toEqual(['视频创作', '内容资产', '生成记录', '内容设置'])
+  })
+
+  it('背景音乐列表不会混入克隆参考音频', () => {
+    expect(assetMatchesSegment({ asset_type: 'audio', purpose: 'background_music' }, 'background_music')).toBe(true)
+    expect(assetMatchesSegment({ asset_type: 'audio', purpose: 'voice_reference' }, 'background_music')).toBe(false)
   })
 })

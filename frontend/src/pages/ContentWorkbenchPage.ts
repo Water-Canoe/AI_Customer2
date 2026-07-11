@@ -218,6 +218,7 @@ export default defineComponent({
 
     const materialAssets = computed(() => assets.value.filter(item => ['video', 'image'].includes(String(item.asset_type))))
     const audioAssets = computed(() => assets.value.filter(item => String(item.asset_type) === 'audio'))
+    const backgroundMusicAssets = computed(() => assets.value.filter(item => assetMatchesSegment(item, 'background_music')))
     const visibleAssets = computed(() => assets.value.filter(asset => assetMatchesSegment(asset, assetSegment.value)))
     const selectedMaterials = computed(() => selectedAssetIds.value
       .map(id => materialAssets.value.find(item => item.id === id))
@@ -685,7 +686,7 @@ export default defineComponent({
               ? formSelect('配音音色', videoDraft.value.voice_name, voices.value.length ? voices.value.map(value => [value, voiceOptionLabel(value)]) : [['', '请先在内容资产中创建克隆音色']], value => videoDraft.value.voice_name = value)
               : formInput('配音音色', videoDraft.value.voice_name, value => videoDraft.value.voice_name = value),
             formSelect('自定义配音', audioAssetId.value, [['', '使用TTS'], ...audioAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => audioAssetId.value = value),
-            formSelect('背景音乐', bgmAssetId.value, [['', '不使用背景音乐'], ...audioAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => bgmAssetId.value = value),
+            formSelect('背景音乐', bgmAssetId.value, [['', '不使用背景音乐'], ...backgroundMusicAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => bgmAssetId.value = value),
             renderAdvancedVideoOptions(),
           ]),
           h('div', { class: 'task-card-actions content-create-actions' }, [
@@ -1057,11 +1058,11 @@ function setPath(target: Dict, path: string, value: unknown) {
   current[parts[parts.length - 1]] = value
 }
 
-function assetMatchesSegment(asset: Dict, segment: string) {
+export function assetMatchesSegment(asset: Dict, segment: string) {
   if (segment === 'all') return true
   if (segment === 'video' || segment === 'image') return asset.asset_type === segment
   if (segment === 'voice_reference') return asset.asset_type === 'audio' && asset.purpose === 'voice_reference'
-  return asset.asset_type === 'audio' && asset.purpose !== 'voice_reference'
+  return asset.asset_type === 'audio' && asset.purpose === 'background_music'
 }
 
 function assetCategoryLabel(asset: Dict) {
