@@ -62,7 +62,7 @@ PLATFORM_LOGIN_TARGETS = {
     "ks": {"label": "快手", "url": "https://www.kuaishou.com/"},
 }
 TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
-COMMENT_EDITOR_SELECTOR = "#videoSideCard textarea, #videoSideCard [contenteditable='true'], #videoSideBar textarea, #videoSideBar [contenteditable='true'], textarea, [contenteditable='true']"
+COMMENT_EDITOR_SELECTOR = "#videoSideCard .comment-input-inner-container textarea, #videoSideCard .comment-input-inner-container [contenteditable='true'], #videoSideBar .comment-input-inner-container textarea, #videoSideBar .comment-input-inner-container [contenteditable='true']"
 COMMENT_EDITOR_VISIBLE_SELECTOR = ", ".join(f"{selector.strip()}:visible" for selector in COMMENT_EDITOR_SELECTOR.split(","))
 COMMENT_CONTAINER_SELECTOR = "#videoSideCard .comment-input-inner-container, #videoSideBar .comment-input-inner-container, .comment-input-inner-container"
 
@@ -1372,7 +1372,15 @@ def _next_video(page: Any, run_id: str, plan: dict[str, Any], previous_video_id:
         _goto_video_candidate(page, run_id, project["url"], "已按作者冷却随机切换到项目库另一个视频。", silent)
         next_id = _read_active_video(page, video_cache)["video_id"]
         return bool(next_id and next_id != previous_video_id)
-    return _advance_video(page, previous_video_id, video_cache)
+    if _advance_video(page, previous_video_id, video_cache):
+        return True
+    # 推荐流翻页偶尔会卡在已加载视频末尾，重新进入首页比直接终止整批任务更稳。
+    if plan["source_mode"] == "random_feed" and _goto_with_timeout_tolerance(page, "https://www.douyin.com/?recommend=1", 60_000):
+        _wait_for_douyin_ready_signal(page, run_id, 4_000)
+        if _open_random_visible_video(page, run_id, video_cache):
+            next_id = str(_read_active_video(page, video_cache).get("video_id") or "")
+            return bool(next_id and next_id != previous_video_id)
+    return False
 
 
 def _source_candidate_key(candidate: dict[str, Any]) -> str:
@@ -2266,19 +2274,10 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
         return False
     try:
         _open_comment_panel(page, video.get("video_id", ""))
-        composer = _comment_composer(page)
-        try:
-            composer.wait_for(state="visible", timeout=2_000)
-        except Exception:
-            container = page.locator(COMMENT_CONTAINER_SELECTOR).first
-            if container.is_visible():
-                container.click(timeout=1000)
-                composer = _comment_composer(page)
-            try:
-                composer.wait_for(state="visible", timeout=1_000)
-            except Exception:
-                _append_log(run_id, "warning", "comment", "没有找到评论输入框，已跳过评论。", "评论区没有打开或当前视频不支持评论", "系统会继续浏览后续视频。", {"video_id": video["video_id"]})
-                return False
+        composer = _activate_comment_composer(page)
+        if composer is None:
+            _append_log(run_id, "warning", "comment", "没有找到评论输入框，已跳过评论。", "评论区没有打开或当前视频不支持评论", "系统会继续浏览后续视频。", {"video_id": video["video_id"]})
+            return False
         if text:
             _fill_comment_text(page, composer, text)
             actual_text = _current_comment_text(page, composer)
@@ -2289,11 +2288,9 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
                 _append_log(run_id, "warning", "comment", "评论文案没有完整写入，已取消发送。", "输入框内容和文案库内容不一致", "系统不会发送半截文案；请稍后重试或降低执行频率。", {"expected": text, "actual": actual_text})
                 return False
         if image_path:
-            chooser_selector = ".commentInput-right-ct > div > span:nth-child(2)"
             if Path(image_path).exists():
-                with page.expect_file_chooser(timeout=5000) as chooser:
-                    page.locator(chooser_selector).first.click(timeout=5000)
-                chooser.value.set_files(image_path)
+                uploader = page.locator('.comment-input-inner-container input[type="file"]').first
+                uploader.set_input_files(image_path, timeout=2_000)
                 deadline = time.monotonic() + 3
                 while time.monotonic() < deadline and not _comment_image_ready(page):
                     page.wait_for_timeout(100)
@@ -2364,7 +2361,6 @@ def _follow_selectors() -> list[str]:
         '[data-e2e="feed-follow-icon"] span',
         '[data-e2e="feed-follow-icon"] svg',
         '[data-e2e="feed-follow-icon"]',
-        'button',
     ]
 
 
@@ -2415,6 +2411,21 @@ def _comment_composer(page: Any) -> Any:
     return page.locator(COMMENT_EDITOR_VISIBLE_SELECTOR).first
 
 
+def _activate_comment_composer(page: Any) -> Any | None:
+    composer = _comment_composer(page)
+    if composer.is_visible():
+        return composer
+    container = page.locator(COMMENT_CONTAINER_SELECTOR).first
+    try:
+        container.wait_for(state="visible", timeout=1_200)
+        container.click(timeout=1_200)
+        composer = _comment_composer(page)
+        composer.wait_for(state="visible", timeout=1_200)
+        return composer
+    except Exception:
+        return None
+
+
 def _fill_comment_text(page: Any, composer: Any, text: str) -> None:
     composer.click(timeout=5000)
     # ponytail: 中文评论用整条插入，避免逐字键入时焦点丢失只留下末尾字符。
@@ -2431,8 +2442,8 @@ def _force_set_comment_text(page: Any, text: str) -> None:
               const active = document.activeElement;
               const editor = active?.matches?.('textarea, [contenteditable="true"]')
                 ? active
-                : active?.closest?.('[contenteditable="true"]')
-                  || document.querySelector('#videoSideCard textarea, #videoSideCard [contenteditable="true"], #videoSideBar textarea, #videoSideBar [contenteditable="true"], textarea, [contenteditable="true"]');
+                : active?.closest?.('.comment-input-inner-container [contenteditable="true"]')
+                  || document.querySelector('#videoSideCard .comment-input-inner-container textarea, #videoSideCard .comment-input-inner-container [contenteditable="true"], #videoSideBar .comment-input-inner-container textarea, #videoSideBar .comment-input-inner-container [contenteditable="true"]');
               if (!editor) return false;
               editor.focus();
               if ('value' in editor) {
@@ -2455,7 +2466,7 @@ def _force_set_comment_text(page: Any, text: str) -> None:
 
 def _click_current_control(page: Any, video_id: str, action: str, extra_selectors: list[str] | None = None, require_confirm: bool = True) -> bool:
     before = _current_control_snapshot(page, video_id, action) if require_confirm and action != "comment" else {}
-    clicked = page.evaluate(
+    handle = page.evaluate_handle(
         """
         ({ videoId, action, extraSelectors }) => {
           const actionSelectors = {
@@ -2489,20 +2500,25 @@ def _click_current_control(page: Any, video_id: str, action: str, extra_selector
                 }
                 const target = clickable(el);
                 if (target) {
-                  // ponytail: 抖音随机流关注是头像下方红色加号，通常没有“关注”文字。
-                  target.click();
-                  return true;
+                  return target;
                 }
               }
             }
           }
-          return false;
+          return null;
         }
         """,
         {"videoId": str(video_id or ""), "action": action, "extraSelectors": extra_selectors or []},
     )
-    if not clicked:
+    target = handle.as_element()
+    if target is None:
+        handle.dispose()
         return False
+    try:
+        # ElementHandle.click 会重新等待元素稳定，避免页面位移后点到旧坐标。
+        target.click(timeout=2_000)
+    finally:
+        handle.dispose()
     if action == "comment" or not require_confirm:
         return True
     deadline = time.monotonic() + VIDEO_CHANGE_TIMEOUT_MS / 1000
@@ -2585,9 +2601,7 @@ def _is_comment_panel_open(page: Any) -> bool:
         return bool(page.evaluate(
             """
             () => {
-              const side = document.querySelector('#videoSideCard');
-              if (side && side.clientWidth > 0) return true;
-              return Array.from(document.querySelectorAll('textarea, [contenteditable="true"], .comment-input-inner-container'))
+              return Array.from(document.querySelectorAll('#videoSideCard .comment-input-inner-container, #videoSideBar .comment-input-inner-container'))
                 .some(el => {
                   const rect = el.getBoundingClientRect();
                   const style = window.getComputedStyle(el);
@@ -2619,7 +2633,7 @@ def _current_comment_text(page: Any, composer: Any) -> str:
               };
               const pick = node => (node && ('value' in node ? node.value : (node.innerText || node.textContent || ''))) || '';
               const activeEditor = editorOf(document.activeElement);
-              const scoped = Array.from(document.querySelectorAll('#videoSideCard textarea, #videoSideCard [contenteditable="true"], #videoSideBar textarea, #videoSideBar [contenteditable="true"], textarea, [contenteditable="true"]')).find(visible);
+              const scoped = Array.from(document.querySelectorAll('#videoSideCard .comment-input-inner-container textarea, #videoSideCard .comment-input-inner-container [contenteditable="true"], #videoSideBar .comment-input-inner-container textarea, #videoSideBar .comment-input-inner-container [contenteditable="true"]')).find(visible);
               return pick(activeEditor) || pick(editorOf(el)) || pick(scoped);
             }
             """
@@ -2647,24 +2661,22 @@ def _comment_image_ready(page: Any) -> bool:
     try:
         return bool(page.evaluate(
             """
-            () => Array.from(document.querySelectorAll('img, [style*="background-image"]'))
+            () => Array.from(document.querySelectorAll('.comment-input-inner-container img, .comment-input-inner-container [style*="background-image"]'))
               .some(el => {
                 const rect = el.getBoundingClientRect();
-                const text = (el.closest('[class*="comment"]')?.innerText || '').replace(/\\s+/g, ' ');
-                return rect.width > 16 && rect.height > 16 && rect.top < innerHeight && !/头像/.test(text);
+                return rect.width > 16 && rect.height > 16 && rect.top < innerHeight;
               })
             """
         ))
     except Exception:
-        return True
+        return False
 
 
 def _publish_comment_and_confirm(page: Any, text: str = "") -> dict[str, Any] | None:
-    payload = _comment_publish_response(page, lambda: _click_comment_send_button(page), 1_500)
-    if payload is None:
-        payload = _comment_publish_response(page, lambda: _press_comment_submit_key(page, "Control+Enter"), 1_500)
-    if payload is None:
-        payload = _comment_publish_response(page, lambda: _press_comment_submit_key(page, "Enter"), 1_500)
+    send_point = _comment_send_button_point(page)
+    submit = (lambda: _click_comment_send_button(page, send_point)) if send_point else (lambda: _press_comment_submit_key(page, "Control+Enter"))
+    # 每条评论只提交一次，避免响应较慢时再按回车造成重复评论。
+    payload = _comment_publish_response(page, submit, 2_500)
     if payload is None:
         return None
     if not _payload_status_ok(payload) or not _comment_publish_has_result(payload, text):
@@ -2688,11 +2700,10 @@ def _press_comment_submit_key(page: Any, key: str) -> bool:
     return True
 
 
-def _click_comment_send_button(page: Any) -> bool:
-    return bool(page.evaluate(
+def _comment_send_button_point(page: Any) -> dict[str, float] | None:
+    point = page.evaluate(
         """
         () => {
-          const roots = [document.querySelector('#videoSideCard'), document.querySelector('#videoSideBar'), document].filter(Boolean);
           const visible = el => {
             if (!el) return false;
             const rect = el.getBoundingClientRect();
@@ -2704,25 +2715,31 @@ def _click_comment_send_button(page: Any) -> bool:
             || /disabled|disable/.test(String(el?.className || '').toLowerCase());
           const textOf = el => (el?.innerText || el?.textContent || el?.getAttribute?.('aria-label') || '').replace(/\\s+/g, '');
           const clickableOf = el => el?.closest?.('button, [role="button"]') || el;
-          for (const root of roots) {
-            for (const el of Array.from(root.querySelectorAll('button, [role="button"], span, div'))) {
+          const containers = Array.from(document.querySelectorAll('.comment-input-inner-container')).filter(visible);
+          for (const container of containers) {
+            const iconSend = Array.from(container.querySelectorAll('.commentInput-right-ct > div > span'))
+              .find(el => el.querySelector('path[fill="#FE2C55"], path[fill="#fe2c55"]'));
+            const candidates = [iconSend, ...Array.from(container.querySelectorAll('button, [role="button"], span'))].filter(Boolean);
+            for (const el of candidates) {
               const text = textOf(el);
-              if (!/^(发布|发送|发布评论|发送评论)$/.test(text)) continue;
+              if (el !== iconSend && !/^(发布|发送|发布评论|发送评论)$/.test(text)) continue;
               const target = clickableOf(el);
               if (!visible(target) || disabled(target)) continue;
-              // ponytail: 点击真正的 button/role=button，避免点到里面的 span 后没有提交。
               target.scrollIntoView({block: 'center', inline: 'center'});
-              target.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}));
-              target.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
-              target.dispatchEvent(new MouseEvent('mouseup', {bubbles: true}));
-              target.click();
-              return true;
+              const rect = target.getBoundingClientRect();
+              return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
             }
           }
-          return false;
+          return null;
         }
         """
-    ))
+    )
+    return dict(point) if point else None
+
+
+def _click_comment_send_button(page: Any, point: dict[str, float]) -> bool:
+    page.mouse.click(point["x"], point["y"])
+    return True
 
 
 def _comment_publish_has_result(payload: dict[str, Any], text: str) -> bool:
@@ -2750,7 +2767,7 @@ def _payload_has_any_key(value: Any, keys: set[str]) -> bool:
 def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any] | None = None) -> bool:
     _close_comment_panel(page)
     mode = _detect_douyin_page_mode(page)
-    actions = ("detail_next", "arrow_down", "wheel", "page_down", "visible_link") if mode == "video_detail" else ("arrow_down", "wheel", "page_down")
+    actions = ("detail_next", "arrow_down", "wheel", "page_down", "visible_link") if mode in {"video_detail", "jingxuan_modal_feed"} else ("arrow_down", "wheel", "page_down")
     for action in actions:
         if action == "arrow_down":
             page.keyboard.press("ArrowDown")
@@ -2759,14 +2776,10 @@ def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any
         elif action == "page_down":
             page.keyboard.press("PageDown")
         elif action == "detail_next":
-            page.evaluate(
-                """
-                () => {
-                  const btn = document.querySelector('[data-e2e="video-switch-next-arrow"]');
-                  if (btn) btn.click();
-                }
-                """
-            )
+            button = page.locator('[data-e2e="video-switch-next-arrow"]:visible').first
+            if not button.is_visible():
+                continue
+            button.click(timeout=1_500)
         else:
             links = [item for item in _visible_video_links(page) if previous_video_id not in str(item.get("href", ""))]
             if links:

@@ -1165,6 +1165,53 @@ def test_traffic_comment_text_match_ignores_dom_noise() -> None:
     assert traffic_workbench._comment_text_matches("不！", "不错！") is False
 
 
+def test_traffic_comment_activates_placeholder_without_waiting_for_editor_timeout() -> None:
+    from app.services import traffic_workbench
+
+    class FakeComposer:
+        def __init__(self) -> None:
+            self.visible = False
+            self.waits: list[int] = []
+
+        def is_visible(self) -> bool:
+            return self.visible
+
+        def wait_for(self, *, state: str, timeout: int) -> None:
+            assert state == "visible"
+            self.waits.append(timeout)
+            self.visible = True
+
+    class FakeContainer:
+        def __init__(self, composer: FakeComposer) -> None:
+            self.composer = composer
+            self.waits: list[int] = []
+            self.clicks: list[int] = []
+
+        def wait_for(self, *, state: str, timeout: int) -> None:
+            assert state == "visible"
+            self.waits.append(timeout)
+
+        def click(self, *, timeout: int) -> None:
+            self.clicks.append(timeout)
+
+    class LocatorResult:
+        def __init__(self, first: object) -> None:
+            self.first = first
+
+    composer = FakeComposer()
+    container = FakeContainer(composer)
+
+    class FakePage:
+        def locator(self, selector: str) -> LocatorResult:
+            target = container if selector == traffic_workbench.COMMENT_CONTAINER_SELECTOR else composer
+            return LocatorResult(target)
+
+    assert traffic_workbench._activate_comment_composer(FakePage()) is composer
+    assert container.waits == [1_200]
+    assert container.clicks == [1_200]
+    assert composer.waits == [1_200]
+
+
 def test_traffic_goto_timeout_is_tolerated(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.services import traffic_workbench
@@ -1408,17 +1455,38 @@ def test_traffic_confirmed_action_click_has_no_fixed_settle_wait() -> None:
     class FakePage:
         def __init__(self) -> None:
             self.waits: list[int] = []
+            self.handle = FakeHandle()
 
-        def evaluate(self, *_: object) -> bool:
-            return True
+        def evaluate_handle(self, *_: object) -> "FakeHandle":
+            return self.handle
 
         def wait_for_timeout(self, timeout: int) -> None:
             self.waits.append(timeout)
+
+    class FakeElement:
+        def __init__(self) -> None:
+            self.timeouts: list[int] = []
+
+        def click(self, timeout: int) -> None:
+            self.timeouts.append(timeout)
+
+    class FakeHandle:
+        def __init__(self) -> None:
+            self.element = FakeElement()
+            self.disposed = False
+
+        def as_element(self) -> FakeElement:
+            return self.element
+
+        def dispose(self) -> None:
+            self.disposed = True
 
     page = FakePage()
 
     assert traffic_workbench._click_current_control(page, "v1", "like", require_confirm=False) is True
     assert page.waits == []
+    assert page.handle.element.timeouts == [2_000]
+    assert page.handle.disposed is True
 
 
 def test_traffic_like_requires_server_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1526,6 +1594,7 @@ def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
         def __init__(self) -> None:
             self.keyboard = Keyboard()
             self.clicked_send = False
+            self.mouse = type("Mouse", (), {"click": lambda _self, _x, _y: setattr(self, "clicked_send", True)})()
 
         def expect_response(self, *_: object, **__: object) -> ResponseInfo:
             return ResponseInfo()
@@ -1533,9 +1602,8 @@ def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
         def wait_for_timeout(self, _: int) -> None:
             return None
 
-        def evaluate(self, *_: object) -> bool:
-            self.clicked_send = True
-            return True
+        def evaluate(self, *_: object) -> dict[str, float]:
+            return {"x": 10, "y": 20}
 
     page = FakePage()
 
@@ -1544,22 +1612,16 @@ def test_traffic_publish_comment_clicks_send_button_before_enter() -> None:
     assert page.keyboard.pressed == []
 
 
-def test_traffic_publish_comment_falls_back_to_keyboard_when_button_has_no_response() -> None:
+def test_traffic_publish_comment_uses_keyboard_when_send_button_is_unavailable() -> None:
     from app.services import traffic_workbench
 
     class ResponseInfo:
         value = type("Response", (), {"json": lambda self: {"status_code": 0, "comment": {"cid": "c1", "text": "不错！"}}})()
 
-        def __init__(self, page: "FakePage") -> None:
-            self.page = page
-
         def __enter__(self) -> "ResponseInfo":
-            self.page.attempts += 1
             return self
 
         def __exit__(self, *_: object) -> None:
-            if self.page.attempts == 1:
-                raise TimeoutError("button click did not publish")
             return None
 
     class Keyboard:
@@ -1572,22 +1634,65 @@ def test_traffic_publish_comment_falls_back_to_keyboard_when_button_has_no_respo
     class FakePage:
         def __init__(self) -> None:
             self.keyboard = Keyboard()
-            self.attempts = 0
 
         def expect_response(self, *_: object, **__: object) -> ResponseInfo:
-            return ResponseInfo(self)
+            return ResponseInfo()
 
         def wait_for_timeout(self, _: int) -> None:
             return None
 
-        def evaluate(self, *_: object) -> bool:
-            return True
+        def evaluate(self, *_: object) -> None:
+            return None
 
     page = FakePage()
 
     assert traffic_workbench._publish_comment_and_confirm(page, "不错！") is not None
-    assert page.attempts == 2
     assert page.keyboard.pressed == ["Control+Enter"]
+
+
+def test_traffic_publish_comment_does_not_submit_twice_after_slow_response() -> None:
+    from app.services import traffic_workbench
+
+    class Keyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+    class Mouse:
+        def __init__(self) -> None:
+            self.clicks = 0
+
+        def click(self, *_: object) -> None:
+            self.clicks += 1
+
+    class ResponseInfo:
+        def __enter__(self) -> "ResponseInfo":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            raise TimeoutError("slow response")
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = Keyboard()
+            self.mouse = Mouse()
+            self.attempts = 0
+
+        def evaluate(self, *_: object) -> dict[str, float]:
+            return {"x": 10, "y": 20}
+
+        def expect_response(self, *_: object, **__: object) -> object:
+            self.attempts += 1
+            return ResponseInfo()
+
+    page = FakePage()
+
+    assert traffic_workbench._publish_comment_and_confirm(page, "不错！") is None
+    assert page.attempts == 1
+    assert page.mouse.clicks == 1
+    assert page.keyboard.pressed == []
 
 
 def test_traffic_publish_comment_accepts_server_confirmation_without_dom_wait() -> None:
@@ -1609,7 +1714,7 @@ def test_traffic_publish_comment_accepts_server_confirmation_without_dom_wait() 
     class FakePage:
         def __init__(self) -> None:
             self.keyboard = Keyboard()
-            self.calls = 0
+            self.mouse = type("Mouse", (), {"click": lambda *_: None})()
 
         def expect_response(self, *_: object, **__: object) -> ResponseInfo:
             return ResponseInfo()
@@ -1617,9 +1722,8 @@ def test_traffic_publish_comment_accepts_server_confirmation_without_dom_wait() 
         def wait_for_timeout(self, _: int) -> None:
             return None
 
-        def evaluate(self, *_: object) -> bool:
-            self.calls += 1
-            return self.calls == 1
+        def evaluate(self, *_: object) -> dict[str, float]:
+            return {"x": 10, "y": 20}
 
     assert traffic_workbench._publish_comment_and_confirm(FakePage(), "不错！") is not None
 
@@ -1638,11 +1742,24 @@ def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.
         def wheel(self, *_: object) -> None:
             return None
 
+    class Locator:
+        first = None
+
+        def __init__(self) -> None:
+            self.first = self
+
+        def is_visible(self) -> bool:
+            return True
+
+        def click(self, *, timeout: int) -> None:
+            assert timeout == 1_500
+
     class FakePage:
         def __init__(self) -> None:
             self.keyboard = Keyboard()
             self.mouse = Mouse()
             self.blurred = False
+            self.next_button = Locator()
 
         def evaluate(self, script: str, *_: object) -> None:
             if "activeElement" in script:
@@ -1650,6 +1767,9 @@ def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.
 
         def wait_for_timeout(self, _: int) -> None:
             return None
+
+        def locator(self, _: str) -> Locator:
+            return self.next_button
 
     reads = iter([{"video_id": "new-video"}])
     states = iter([True, False])
@@ -1661,7 +1781,26 @@ def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.
 
     assert traffic_workbench._advance_video(page, "old-video") is True
     assert page.blurred is True
-    assert page.keyboard.pressed == ["x", "ArrowDown"]
+    assert page.keyboard.pressed == ["x"]
+
+
+def test_traffic_random_feed_recovers_when_loaded_feed_cannot_advance(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    monkeypatch.setattr(traffic_workbench, "_advance_video", lambda *_: False)
+    monkeypatch.setattr(traffic_workbench, "_goto_with_timeout_tolerance", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_wait_for_douyin_ready_signal", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_open_random_visible_video", lambda *_: True)
+    monkeypatch.setattr(traffic_workbench, "_read_active_video", lambda *_: {"video_id": "new-video"})
+
+    assert traffic_workbench._next_video(
+        object(),
+        "run-1",
+        {"source_mode": "random_feed"},
+        "old-video",
+        {},
+        24,
+    ) is True
 
 
 def test_traffic_material_image_upload_has_preview(tmp_path: Path) -> None:
