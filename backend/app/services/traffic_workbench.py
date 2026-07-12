@@ -2776,10 +2776,22 @@ def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any
         elif action == "page_down":
             page.keyboard.press("PageDown")
         elif action == "detail_next":
-            button = page.locator('[data-e2e="video-switch-next-arrow"]:visible').first
-            if not button.is_visible():
+            point = page.evaluate(
+                """
+                () => {
+                  for (const button of document.querySelectorAll('[data-e2e="video-switch-next-arrow"]')) {
+                    const rect = button.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= innerHeight) {
+                      return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+                    }
+                  }
+                  return null;
+                }
+                """
+            )
+            if not point:
                 continue
-            button.click(timeout=1_500)
+            page.mouse.click(point["x"], point["y"])
         else:
             links = [item for item in _visible_video_links(page) if previous_video_id not in str(item.get("href", ""))]
             if links:

@@ -1739,37 +1739,31 @@ def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.
             self.pressed.append(key)
 
     class Mouse:
+        def __init__(self) -> None:
+            self.clicks: list[tuple[int, int]] = []
+
+        def click(self, x: int, y: int) -> None:
+            self.clicks.append((x, y))
+
         def wheel(self, *_: object) -> None:
             return None
-
-    class Locator:
-        first = None
-
-        def __init__(self) -> None:
-            self.first = self
-
-        def is_visible(self) -> bool:
-            return True
-
-        def click(self, *, timeout: int) -> None:
-            assert timeout == 1_500
 
     class FakePage:
         def __init__(self) -> None:
             self.keyboard = Keyboard()
             self.mouse = Mouse()
             self.blurred = False
-            self.next_button = Locator()
 
-        def evaluate(self, script: str, *_: object) -> None:
+        def evaluate(self, script: str, *_: object) -> dict[str, int] | None:
             if "activeElement" in script:
                 self.blurred = True
+                return None
+            if "video-switch-next-arrow" in script:
+                return {"x": 1100, "y": 150}
+            return None
 
         def wait_for_timeout(self, _: int) -> None:
             return None
-
-        def locator(self, _: str) -> Locator:
-            return self.next_button
 
     reads = iter([{"video_id": "new-video"}])
     states = iter([True, False])
@@ -1782,6 +1776,7 @@ def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.
     assert traffic_workbench._advance_video(page, "old-video") is True
     assert page.blurred is True
     assert page.keyboard.pressed == ["x"]
+    assert page.mouse.clicks == [(1100, 150)]
 
 
 def test_traffic_random_feed_recovers_when_loaded_feed_cannot_advance(monkeypatch: pytest.MonkeyPatch) -> None:
