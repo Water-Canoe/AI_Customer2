@@ -236,7 +236,7 @@ def _missing_creator_message(mode: str) -> str:
     return f"{_mode_creator_label(mode)}任务必须填写{_creator_input_label(mode)}"
 
 
-def create_task(payload: TaskCreate) -> dict[str, object]:
+def create_task(payload: TaskCreate, *, automation_managed: bool = False) -> dict[str, object]:
     task = normalize_task_defaults(payload)
     task_id = next_task_id()
     crawler_type = infer_crawler_type(task)
@@ -257,9 +257,9 @@ def create_task(payload: TaskCreate) -> dict[str, object]:
                 specified_id, creator_id, content_count, comment_count,
                 collect_content, collect_comments, collect_authors, collect_sub_comments,
                 max_concurrency, tcp_mode, headless, execute_crawler,
-                status, command, raw_started_ts_ms
+                status, command, raw_started_ts_ms, automation_managed
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -284,6 +284,7 @@ def create_task(payload: TaskCreate) -> dict[str, object]:
                 "pending",
                 " ".join(command),
                 raw_started_ts_ms,
+                int(automation_managed),
             ),
         )
         log_task(conn, task_id, "info", "任务已创建，等待执行")
@@ -860,6 +861,8 @@ def _run_post_success_automation(task_id: str) -> None:
     with database.connect() as conn:
         task = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
         if not task:
+            return
+        if int(task["automation_managed"] or 0):
             return
         auto_competitor = database.get_setting(conn, "auto_analyze_competitors", "false") == "true"
         auto_lead = database.get_setting(conn, "auto_analyze_leads", "false") == "true"

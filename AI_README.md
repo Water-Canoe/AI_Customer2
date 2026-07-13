@@ -13,7 +13,7 @@
 
 ## 统一后台任务队列与登录会话
 
-采集、账号分析、引流、单个/批量自动私信、AI 分析和视频生成统一进入 `backend/app/services/job_queue.py`，运行记录保存在 `runtime_jobs`。队列按浏览器、AI、视频、普通任务四类资源限流，视频资源并发固定为 1，浏览器、AI和视频互不占用额度；日志页会持续展示运行队列。浏览器任务全局串行，避免采集、引流和私信同时占用登录会话；业务内部仍可复用 `browser_queue.py` 保护具体浏览器上下文。
+采集、账号分析、引流、单个/批量自动私信、定时自动化、AI 分析和视频生成统一进入 `backend/app/services/job_queue.py`，运行记录保存在 `runtime_jobs`。队列按浏览器、AI、视频、普通任务四类资源限流，视频资源并发固定为 1，浏览器、AI和视频互不占用额度；日志页会持续展示运行队列。浏览器任务全局串行，避免采集、引流和私信同时占用登录会话；业务内部仍可复用 `browser_queue.py` 保护具体浏览器上下文。
 
 自动竞品分析和自动线索分析使用子任务串联：采集成功后只创建后续运行记录，不在当前采集线程里直接执行 AI；账号资料采集完成后立即释放浏览器资源，再由 AI 资源队列并行分析。这样慢模型调用不会占住登录会话，脚本重启时也能分别识别采集阶段和 AI 阶段。
 
@@ -21,7 +21,22 @@
 
 后端正常关闭时先停止派发新任务：浏览器任务收到取消请求，限时内仍未结束的任务标记为 `interrupted` 并同步修正业务状态；可安全重放的 AI 任务退回排队并在下次启动继续。脚本强制关闭或进程崩溃时，下一次启动会将遗留浏览器任务中断、把采集/引流/私信业务记录恢复为可理解的终态，并只自动恢复仍有剩余尝试次数的 AI 任务。这样不会把不可幂等的浏览器动作直接重放。
 
-`AI自动拓客`、`AI自动引流`、`/api/agent/*`、`agent_runs`、`agent_run_events` 和自然语言指令编排代码已移除。后续如果尝试新的浏览器操作脚本思路，应重新设计独立边界，不复用这套已删除的确定性编排入口。
+旧版自然语言 `AI自动拓客 / AI自动引流`、`/api/agent/*`、`agent_runs` 和 `agent_run_events` 仍保持移除。当前“自动化计划”是新的固定业务流程：不接受任意函数名、任意代码或步骤拖拽，只允许经过后端类型校验的关键词获客和自动私信配置，并复用统一任务队列。
+
+## 拓客自动化计划
+
+拓客工作台“任务管理”之后新增独立“自动化计划”页面。每个计划只配置名称、星期、一个开始时间、启停和对应业务参数；同一天需要多次运行时创建多个计划。调度器随 FastAPI 生命周期启动和关闭，只检查进程运行期间跨过的计划时刻，软件关闭期间错过的时间不会补跑。同一计划已有 `queued / running` 实例时，本次定时触发会写为“已跳过”，不会重复启动。
+
+计划分为两类：
+
+- `keyword_lead` 关键词自动获客：从配置关键词中按“从未运行优先、再按最久未运行”选择 1 至 10 个，逐个执行竞品候选采集、固定竞品 AI 筛选、竞品内容评论采集和可选客户意向分析。单个关键词失败会记录原因并继续下一个，最终按实际结果写为完成、部分完成或失败。计划创建的采集和 AI 任务带独立配置快照，不读取运行时可能变化的全局自动分析/自动删除开关；非竞品和非客户保留记录但不会进入后续流程，并且获客计划不直接发送私信。
+- `message` 自动私信：独立消化私信工作台的新旧积压客户，可覆盖全部关键词或指定关键词，按高、中、低、未标记意向排序，同意向下优先最早进入系统的客户。计划可使用客户已有 AI 话术或计划内固定话术。候选必须是抖音目标客户、未私信、未隐藏、主页可用且当天没有本软件私信尝试；AI 话术模式还要求已有话术。
+
+持久化表为 `automation_plans / automation_runs / automation_run_items`。运行记录保存计划配置快照和每个关键词的阶段、关联采集/运行任务、AI结果、客户数及错误。调度器本身不执行浏览器或 AI 操作，只创建 `automation_run` 编排任务；编排任务继续把采集、账号分析、AI和私信子任务交给 `runtime_jobs` 对应资源队列。后端重启时不会重放已经成功的浏览器步骤；正在执行的浏览器子任务按原规则中断，当前关键词记录失败，尚未开始的关键词由可恢复编排任务继续处理。
+
+自动私信额度保存在设置键 `message_daily_limit / message_hourly_limit`，页面要求用户自行填写，业务校验范围分别为 1-100 和 1-40。`message_send_attempts` 是单次自动私信、批量私信、定时私信和页面手工私信按钮的统一占额记录；真实发送前原子占额，失败或结果不明确仍计入本小时和当天，同一客户当天不再由自动任务重复选择。达到小时或每日额度后当前批次立即以 `quota_reached` 结束，剩余客户留给下次计划，不等待额度恢复。额度只统计本软件产生的操作，无法读取抖音 App 或其他工具的手动发送数量。设置页“自动私信只填内容不发送”是总安全开关，开启时不能启用或运行自动私信计划。
+
+自动化接口统一位于 `/api/automation`：`GET/POST/PATCH /plans` 管理计划，`POST /plans/{id}/run` 立即运行，`POST /plans/{id}/archive` 归档；`GET /runs`、`GET /runs/{id}` 和 `POST /runs/{id}/cancel` 查看或停止运行；`GET/PUT /message-limits` 查看用量并设置额度。立即运行、停止和实际业务子任务继续执行拓客授权校验，自动化测试不会连接真实抖音用户或发送私信。
 
 版本控制只保留项目源码和文档；`data/`、`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MyCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 本地采集依赖目录、界面文案、日志文案和默认路径统一显示为 `MyCrawler`；内部 `media_crawler_*` 设置键继续作为历史数据库/API 键保留，不做额外迁移。
@@ -79,13 +94,13 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 ## 后端 API 结构
 
-`backend/app/main.py` 只负责 FastAPI 生命周期、中间件、业务路由装配和前端静态文件托管。共享授权校验及“自家账号”默认参数位于 `api_dependencies.py`；接口按业务域拆到 `backend/app/routers/`：`system.py`、`traffic.py`、`content.py`、`tasks.py`、`overview.py`、`message.py`、`ai.py`、`runtime.py`。业务计算继续放在 `services/`，路由只负责参数、授权、错误码和任务入队，新增接口时不得重新堆回 `main.py`。
+`backend/app/main.py` 只负责 FastAPI 生命周期、中间件、业务路由装配和前端静态文件托管。共享授权校验及“自家账号”默认参数位于 `api_dependencies.py`；接口按业务域拆到 `backend/app/routers/`：`system.py`、`traffic.py`、`automation.py`、`content.py`、`tasks.py`、`overview.py`、`message.py`、`ai.py`、`runtime.py`。业务计算继续放在 `services/`，路由只负责参数、授权、错误码和任务入队，新增接口时不得重新堆回 `main.py`。
 
 `backend/tests/test_api_routes.py` 校验接口方法/路径不重复，并检查关键接口由正确业务路由拥有；其余服务和接口行为由现有后端测试覆盖。
 
 ## 前端结构
 
-前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts`、`TrafficWorkbenchPage.ts` 和 `ContentWorkbenchPage.ts`。内容工作台的四个路由共用同一个页面外壳，按当前路由渲染视频创作、内容资产、生成记录和内容设置。可复用控件放在 `frontend/src/components/ui/`，运行队列组件放在 `components/runtime/`，共享 API、类型和格式化工具放在 `frontend/src/shared/`。自动同步的并发保护、活跃/空闲节流、路由切换和可见性恢复已拆到 `frontend/src/composables/autoSync.ts`，避免定时器生命周期继续散落在应用壳。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
+前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`AutomationPlanPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts`、`TrafficWorkbenchPage.ts` 和 `ContentWorkbenchPage.ts`。内容工作台的四个路由共用同一个页面外壳，按当前路由渲染视频创作、内容资产、生成记录和内容设置。可复用控件放在 `frontend/src/components/ui/`，运行队列组件放在 `components/runtime/`，共享 API、类型和格式化工具放在 `frontend/src/shared/`。自动同步的并发保护、活跃/空闲节流、路由切换和可见性恢复已拆到 `frontend/src/composables/autoSync.ts`，避免定时器生命周期继续散落在应用壳。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
 前端构建链使用 Vite 8、Vue Test Utils 和 Vitest 4；测试文件与源码同目录使用 `*.test.ts`。当前测试覆盖共享格式化、自动同步调度和运行队列的加载/取消交互，`npm audit` 为 0 个已知漏洞。
 
@@ -392,7 +407,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
 `backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
-本轮完整后端回归为352项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布。前端为4个测试文件、10项测试通过，并完成类型检查和生产构建。
+本轮完整后端回归为365项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布或真实用户私信。前端为4个测试文件、11项测试通过，并完成类型检查和生产构建。
 
 ## 授权服务
 
@@ -429,7 +444,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - `POST /api/system/backups/{backup_id}/restore`：输入“恢复备份”后执行安全恢复。
 - `POST /api/settings/clear-data`：支持 `create_backup` 和 `include_crawler`，正式页面默认都为 `true`。
 
-当前最新迁移为版本 7，新增 `publish_accounts / publish_tasks / publish_task_assets` 国内发布账号和任务表。
+当前最新迁移为版本 8：版本 7 新增 `publish_accounts / publish_tasks / publish_task_assets` 国内发布账号和任务表；版本 8 新增 `automation_plans / automation_runs / automation_run_items / message_send_attempts`，并为采集、AI和私信批次增加自动化隔离与关联字段。
 
 ## 后续优化清单
 

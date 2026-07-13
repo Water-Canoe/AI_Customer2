@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 Platform = Literal["dy", "xhs", "ks"]
@@ -216,6 +216,7 @@ class BulkActionPreview(BaseModel):
 class CustomerFollowStatusUpdate(BaseModel):
     follow_status: Literal["待筛选", "未私信", "已私信", "未回复", "已回复", "未成交", "已成交", "非客户", "无需跟进"]
     note: str = ""
+    record_message_attempt: bool = False
 
 
 class CustomerAutoMessageRequest(BaseModel):
@@ -231,3 +232,90 @@ class MessageAutoBatchCreate(BaseModel):
     count: int = Field(default=10, ge=1, le=200)
     interval_min_seconds: int = Field(default=30, ge=0, le=3600)
     interval_max_seconds: int = Field(default=60, ge=0, le=3600)
+
+
+class KeywordLeadPlanConfig(BaseModel):
+    platform: Literal["dy"] = "dy"
+    keywords: list[str] = Field(min_length=1, max_length=100)
+    keyword_count: int = Field(default=1, ge=1, le=10)
+    discovery_content_count: int = Field(default=20, ge=1, le=100)
+    competitor_limit: int = Field(default=30, ge=1, le=100)
+    competitor_content_count: int = Field(default=10, ge=1, le=100)
+    comment_count: int = Field(default=50, ge=1, le=1000)
+    collect_sub_comments: bool = False
+    auto_analyze_leads: bool = True
+
+    @model_validator(mode="after")
+    def normalize_keywords(self) -> "KeywordLeadPlanConfig":
+        self.keywords = list(dict.fromkeys(value.strip() for value in self.keywords if value.strip()))
+        if not self.keywords:
+            raise ValueError("请至少填写一个关键词")
+        self.keyword_count = min(self.keyword_count, len(self.keywords))
+        return self
+
+
+class MessagePlanConfig(BaseModel):
+    platform: Literal["dy"] = "dy"
+    keyword_scope: Literal["all", "selected"] = "all"
+    keywords: list[str] = Field(default_factory=list, max_length=100)
+    count: int = Field(default=10, ge=1, le=100)
+    script_mode: Literal["ai", "fixed"] = "ai"
+    fixed_script: str = Field(default="", max_length=2000)
+    interval_min_seconds: int = Field(default=30, ge=0, le=3600)
+    interval_max_seconds: int = Field(default=60, ge=0, le=3600)
+
+    @model_validator(mode="after")
+    def validate_dependencies(self) -> "MessagePlanConfig":
+        self.keywords = list(dict.fromkeys(value.strip() for value in self.keywords if value.strip()))
+        if self.keyword_scope == "selected" and not self.keywords:
+            raise ValueError("指定关键词模式下请至少选择一个关键词")
+        if self.script_mode == "fixed" and not self.fixed_script.strip():
+            raise ValueError("固定话术模式下必须填写话术")
+        if self.interval_max_seconds < self.interval_min_seconds:
+            raise ValueError("最大间隔不能小于最小间隔")
+        return self
+
+
+AutomationPlanConfig = KeywordLeadPlanConfig | MessagePlanConfig
+
+
+class AutomationPlanCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    plan_type: Literal["keyword_lead", "message"]
+    weekdays: list[int] = Field(min_length=1, max_length=7)
+    run_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    config: AutomationPlanConfig
+    enabled: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_typed_config(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        values = dict(data)
+        expected = KeywordLeadPlanConfig if values.get("plan_type") == "keyword_lead" else MessagePlanConfig
+        values["config"] = expected.model_validate(values.get("config") or {})
+        return values
+
+    @model_validator(mode="after")
+    def validate_plan_config(self) -> "AutomationPlanCreate":
+        self.weekdays = sorted(set(self.weekdays))
+        if any(value < 1 or value > 7 for value in self.weekdays):
+            raise ValueError("星期只能是1至7")
+        expected = KeywordLeadPlanConfig if self.plan_type == "keyword_lead" else MessagePlanConfig
+        if not isinstance(self.config, expected):
+            raise ValueError("计划类型与配置不匹配")
+        return self
+
+
+class AutomationPlanPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    weekdays: list[int] | None = Field(default=None, min_length=1, max_length=7)
+    run_time: str | None = Field(default=None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+    config: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class AutomationMessageLimitsUpdate(BaseModel):
+    daily_limit: int = Field(ge=1, le=100)
+    hourly_limit: int = Field(ge=1, le=40)

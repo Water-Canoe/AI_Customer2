@@ -29,7 +29,12 @@ def update_overview_customer_follow_status(
     payload: CustomerFollowStatusUpdate,
 ) -> dict[str, object]:
     try:
-        return account_actions.update_customer_follow_status(lead_id, payload.follow_status, payload.note)
+        return account_actions.update_customer_follow_status(
+            lead_id,
+            payload.follow_status,
+            payload.note,
+            record_message_attempt=payload.record_message_attempt,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

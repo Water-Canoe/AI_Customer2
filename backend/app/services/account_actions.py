@@ -82,6 +82,7 @@ def _build_account_analysis_task(
     label: str,
     log_message: str,
     skipped: list[dict[str, Any]] | None = None,
+    automation_managed: bool = False,
 ) -> dict[str, Any]:
     skipped = skipped or []
     with database.connect() as conn:
@@ -135,7 +136,8 @@ def _build_account_analysis_task(
             max_concurrency=1,
             headless=headless,
             execute_crawler=True,
-        )
+        ),
+        automation_managed=automation_managed,
     )
     with database.connect() as conn:
         crawler_adapter.log_task(conn, str(task["id"]), "info", log_message)
@@ -179,7 +181,12 @@ def create_keyword_account_analysis_tasks(platform: str, keyword: str, limit: in
     )
 
 
-def create_task_account_analysis_task(source_task_id: str, limit: int = 100) -> dict[str, Any]:
+def create_task_account_analysis_task(
+    source_task_id: str,
+    limit: int = 100,
+    *,
+    automation_managed: bool = False,
+) -> dict[str, Any]:
     safe_limit = max(1, min(int(limit), 100))
     with database.connect() as conn:
         task = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (source_task_id,)).fetchone()
@@ -205,6 +212,7 @@ def create_task_account_analysis_task(source_task_id: str, limit: int = 100) -> 
         rows,
         str(task["keywords"] or task["name"] or source_task_id),
         f"自动竞品分析：来源任务 {source_task_id}，账号 {len(rows)} 个",
+        automation_managed=automation_managed,
     )
 
 
@@ -350,9 +358,18 @@ def _build_find_customer_task(
     task_mode: str = "competitor_crawl",
     account_label: str = "竞品账号",
     skipped: list[dict[str, Any]] | None = None,
+    automation_managed: bool = False,
+    content_count: int | None = None,
+    comment_count: int | None = None,
+    collect_sub_comments: bool | None = None,
 ) -> dict[str, Any]:
     skipped = skipped or []
     defaults = _find_customer_defaults()
+    if content_count is not None:
+        defaults["content_count"] = max(1, min(int(content_count), 500))
+    if comment_count is not None:
+        defaults["comment_count"] = max(0, min(int(comment_count), 1000))
+    sub_comments = True if collect_sub_comments is None else bool(collect_sub_comments)
     with database.connect() as conn:
         active_identifiers = _active_find_customer_identifiers(conn, platform)
         active_specified_ids = _active_find_customer_specified_ids(conn, platform)
@@ -439,11 +456,12 @@ def _build_find_customer_task(
                 content_count=max(1, min(len(chunk), 500)),
                 comment_count=defaults["comment_count"],
                 collect_comments=True,
-                collect_sub_comments=True,
+                collect_sub_comments=sub_comments,
                 max_concurrency=1,
                 headless=defaults["headless"],
                 execute_crawler=True,
-            )
+            ),
+            automation_managed=automation_managed,
         )
         result["task_ids"].append(task["id"])
         result["tasks"].append(
@@ -491,11 +509,12 @@ def _build_find_customer_task(
                 content_count=max(1, min(max_missing_count, 500)),
                 comment_count=defaults["comment_count"],
                 collect_comments=True,
-                collect_sub_comments=True,
+                collect_sub_comments=sub_comments,
                 max_concurrency=1,
                 headless=defaults["headless"],
                 execute_crawler=True,
-            )
+            ),
+            automation_managed=automation_managed,
         )
         crawler_adapter.set_task_skip_content_ids(str(task["id"]), skip_content_ids)
         result["task_ids"].append(task["id"])
@@ -555,7 +574,16 @@ def create_account_find_customer_task(account_id: int) -> dict[str, Any]:
     )
 
 
-def create_keyword_find_customer_task(platform: str, keyword: str, limit: int = 100) -> dict[str, Any]:
+def create_keyword_find_customer_task(
+    platform: str,
+    keyword: str,
+    limit: int = 100,
+    *,
+    automation_managed: bool = False,
+    content_count: int | None = None,
+    comment_count: int | None = None,
+    collect_sub_comments: bool | None = None,
+) -> dict[str, Any]:
     keyword_value = keyword or "未标记关键词"
     safe_limit = max(1, min(int(limit), 100))
     with database.connect() as conn:
@@ -582,10 +610,19 @@ def create_keyword_find_customer_task(platform: str, keyword: str, limit: int = 
         rows,
         keyword_value,
         f"关键词一键找客户：{platform}/{keyword_value}，竞品账号 {len(rows)} 个",
+        automation_managed=automation_managed,
+        content_count=content_count,
+        comment_count=comment_count,
+        collect_sub_comments=collect_sub_comments,
     )
 
 
-def prepare_account_analysis_jobs(account_ids: list[int], task_id: str) -> dict[str, Any]:
+def prepare_account_analysis_jobs(
+    account_ids: list[int],
+    task_id: str,
+    *,
+    auto_delete: bool | None = None,
+) -> dict[str, Any]:
     crawler_adapter.run_task(task_id)
     task = crawler_adapter.get_task(task_id)
     if not task or task.get("status") != "succeeded":
@@ -597,7 +634,10 @@ def prepare_account_analysis_jobs(account_ids: list[int], task_id: str) -> dict[
     job_ids: list[str] = []
     for account_id in account_ids:
         try:
-            job = ai_service.create_ai_job("competitor", int(account_id), run_now=False)
+            if auto_delete is None:
+                job = ai_service.create_ai_job("competitor", int(account_id), run_now=False)
+            else:
+                job = ai_service.create_ai_job("competitor", int(account_id), run_now=False, auto_delete=auto_delete)
             job_ids.append(str(job["id"]))
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, ensure_ascii=False)
@@ -716,7 +756,13 @@ def create_customer_intent_analysis(lead_id: int, run_now: bool = True) -> dict[
     return ai_service.create_ai_job("lead", lead_id, run_now=run_now)
 
 
-def update_customer_follow_status(lead_id: int, follow_status: str, note: str = "") -> dict[str, Any]:
+def update_customer_follow_status(
+    lead_id: int,
+    follow_status: str,
+    note: str = "",
+    *,
+    record_message_attempt: bool = False,
+) -> dict[str, Any]:
     follow_status = str(follow_status or "").strip()
     with database.connect() as conn:
         row = conn.execute(
@@ -752,6 +798,11 @@ def update_customer_follow_status(lead_id: int, follow_status: str, note: str = 
                 "INSERT INTO lead_status_events(lead_account_id, from_status, to_status, note) VALUES(?, ?, ?, ?)",
                 (lead_id, current_status, follow_status, note.strip() or "人工修改跟进状态"),
             )
+    if record_message_attempt and follow_status == "已私信":
+        # 手工点击发生在浏览器外，状态落库时同步计入软件额度统计。
+        from app.services import message_workbench
+
+        message_workbench.record_manual_message_attempt(lead_id, "follow-status")
     return {
         "ok": True,
         "lead_id": lead_id,

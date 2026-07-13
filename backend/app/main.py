@@ -10,8 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app import database
-from app.routers import ai, content, message, overview, runtime, system, tasks, traffic
-from app.services import job_queue, profile_manager
+from app.routers import ai, automation, content, message, overview, runtime, system, tasks, traffic
+from app.services import automation_workbench, job_queue, profile_manager
 from app.version import APP_VERSION
 
 
@@ -19,9 +19,11 @@ from app.version import APP_VERSION
 async def lifespan(_: FastAPI):
     database.init_db()
     job_queue.start()
+    automation_workbench.start_scheduler()
     try:
         yield
     finally:
+        automation_workbench.stop_scheduler()
         job_queue.shutdown()
         profile_manager.shutdown()
 
@@ -39,6 +41,7 @@ app.add_middleware(
 for api_router in (
     system.router,
     traffic.router,
+    automation.router,
     tasks.router,
     overview.router,
     message.router,

@@ -32,16 +32,22 @@ DEFAULT_ICP_PROFILE = {
 }
 
 
-def create_ai_job(target_type: str, target_id: int, run_now: bool = True) -> dict[str, Any]:
+def create_ai_job(
+    target_type: str,
+    target_id: int,
+    run_now: bool = True,
+    *,
+    auto_delete: bool | None = None,
+) -> dict[str, Any]:
     job_id = f"{target_type}-{target_id}-{int(time.time() * 1000)}"
     with database.connect() as conn:
         payload = build_input_payload(conn, target_type, target_id)
         conn.execute(
             """
-            INSERT INTO analysis_jobs(id, target_type, target_id, status, input_payload)
-            VALUES(?, ?, ?, 'pending', ?)
+            INSERT INTO analysis_jobs(id, target_type, target_id, status, input_payload, auto_delete)
+            VALUES(?, ?, ?, 'pending', ?, ?)
             """,
-            (job_id, target_type, target_id, json.dumps(payload, ensure_ascii=False)),
+            (job_id, target_type, target_id, json.dumps(payload, ensure_ascii=False), -1 if auto_delete is None else int(auto_delete)),
         )
     if run_now:
         return run_ai_job(job_id)
@@ -116,7 +122,7 @@ def run_auto_lead_analysis_for_task(task_id: str) -> dict[str, Any]:
     }
 
 
-def prepare_auto_lead_analysis_jobs(task_id: str) -> dict[str, Any]:
+def prepare_auto_lead_analysis_jobs(task_id: str, *, auto_delete: bool | None = None) -> dict[str, Any]:
     with database.connect() as conn:
         rows = conn.execute(
             """
@@ -137,7 +143,7 @@ def prepare_auto_lead_analysis_jobs(task_id: str) -> dict[str, Any]:
     errors: list[dict[str, str]] = []
     for lead_id in lead_ids:
         try:
-            job = _find_or_create_lead_job(lead_id)
+            job = _find_or_create_lead_job(lead_id, auto_delete=auto_delete)
             job_ids.append(str(job["id"]))
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, ensure_ascii=False)
@@ -157,7 +163,7 @@ def _run_or_create_lead_job(lead_id: int) -> dict[str, Any]:
     return run_ai_job(str(job["id"]))
 
 
-def _find_or_create_lead_job(lead_id: int) -> dict[str, Any]:
+def _find_or_create_lead_job(lead_id: int, *, auto_delete: bool | None = None) -> dict[str, Any]:
     with database.connect() as conn:
         row = conn.execute(
             """
@@ -172,8 +178,13 @@ def _find_or_create_lead_job(lead_id: int) -> dict[str, Any]:
             (lead_id,),
         ).fetchone()
     if row:
+        if auto_delete is not None:
+            with database.connect() as conn:
+                conn.execute("UPDATE analysis_jobs SET auto_delete = ? WHERE id = ?", (int(auto_delete), row["id"]))
         return get_ai_job(str(row["id"]))
-    return create_ai_job("lead", lead_id, run_now=False)
+    if auto_delete is None:
+        return create_ai_job("lead", lead_id, run_now=False)
+    return create_ai_job("lead", lead_id, run_now=False, auto_delete=auto_delete)
 
 
 def list_ai_jobs() -> list[dict[str, Any]]:
@@ -723,7 +734,8 @@ def run_ai_job(job_id: str) -> dict[str, Any]:
 
     auto_delete_result: dict[str, Any] | None = None
     auto_delete_error = ""
-    if _should_auto_delete_non_competitor(target_type, parsed):
+    auto_delete_override = int(job_result.get("auto_delete", -1))
+    if _should_auto_delete_non_competitor(target_type, parsed, auto_delete_override):
         try:
             auto_delete_result = deletion.delete_overview_account(target_id)
         except Exception as exc:
@@ -737,7 +749,7 @@ def run_ai_job(job_id: str) -> dict[str, Any]:
                     """,
                     (f"自动删除非竞品失败：{auto_delete_error}", job_id),
                 )
-    if _should_auto_delete_non_customer(target_type, parsed):
+    if _should_auto_delete_non_customer(target_type, parsed, auto_delete_override):
         try:
             auto_delete_result = _delete_non_customer_lead_account(target_id)
         except Exception as exc:
@@ -758,20 +770,24 @@ def run_ai_job(job_id: str) -> dict[str, Any]:
     return job_result
 
 
-def _should_auto_delete_non_competitor(target_type: str, result: dict[str, Any]) -> bool:
+def _should_auto_delete_non_competitor(target_type: str, result: dict[str, Any], override: int = -1) -> bool:
     if target_type != "competitor":
         return False
     if bool(result.get("is_competitor")):
         return False
+    if override >= 0:
+        return bool(override)
     with database.connect() as conn:
         return database.get_setting(conn, "auto_delete_non_competitors", "false") == "true"
 
 
-def _should_auto_delete_non_customer(target_type: str, result: dict[str, Any]) -> bool:
+def _should_auto_delete_non_customer(target_type: str, result: dict[str, Any], override: int = -1) -> bool:
     if target_type != "lead":
         return False
     if bool(result.get("is_customer")):
         return False
+    if override >= 0:
+        return bool(override)
     with database.connect() as conn:
         return database.get_setting(conn, "auto_delete_non_customers", "false") == "true"
 

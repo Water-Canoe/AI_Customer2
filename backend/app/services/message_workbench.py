@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from app import database
+from app.schemas import MessagePlanConfig
 from app.services import browser_queue
 
 
@@ -19,6 +20,10 @@ STATUS_ALIASES = {"待私信": "未私信", "全部": ""}
 UNLABELED_KEYWORD = "未标记关键词"
 _AUTO_DM_LOCKS: dict[int, asyncio.Lock] = {}
 ACTIVE_BATCH_STATUSES = {"pending", "running"}
+
+
+class MessageQuotaReached(RuntimeError):
+    pass
 
 
 def list_keywords() -> list[dict[str, Any]]:
@@ -134,6 +139,55 @@ def create_auto_message_batch(
                 (batch_id, customer["lead_id"], customer["nickname"], customer["profile_url"], customer["selected_script"]),
             )
 
+    return get_auto_message_batch(batch_id)
+
+
+def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig) -> dict[str, Any]:
+    with database.connect() as conn:
+        active = conn.execute(
+            "SELECT id FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if active:
+            raise ValueError(f"已有自动私信批次 {active['id']} 正在执行，请先等待结束或取消")
+        limits = message_limit_summary(conn)
+        if not limits["configured"]:
+            raise ValueError("请先配置自动私信的每小时和每日额度")
+        if database.get_setting(conn, "auto_dm_fill_only", "false") == "true":
+            raise ValueError("“自动私信只填内容不发送”已开启，不能运行自动私信计划")
+
+        available = min(int(limits["remaining_today"]), int(limits["remaining_hour"]), config.count)
+        customers = _scheduled_candidates(conn, config)[:available]
+        batch_id = uuid4().hex[:8]
+        status = "pending" if customers else "quota_reached"
+        error = "" if customers else "私信额度已用完或没有符合条件的积压客户"
+        conn.execute(
+            """
+            INSERT INTO message_batches(
+                id, platform, keyword, requested_count, interval_min_seconds,
+                interval_max_seconds, fill_only, timeout_seconds, status, total_count,
+                source, automation_run_id, error, finished_at
+            ) VALUES(?, 'dy', ?, ?, ?, ?, 0, 0, ?, ?, 'scheduled', ?, ?,
+                     CASE WHEN ? = 'quota_reached' THEN datetime('now', 'localtime') ELSE NULL END)
+            """,
+            (
+                batch_id,
+                "全部关键词" if config.keyword_scope == "all" else " / ".join(config.keywords),
+                config.count,
+                config.interval_min_seconds,
+                config.interval_max_seconds,
+                status,
+                len(customers),
+                run_id,
+                error,
+                status,
+            ),
+        )
+        for customer in customers:
+            script = customer["script"] if config.script_mode == "ai" else config.fixed_script.strip()
+            conn.execute(
+                "INSERT INTO message_batch_items(batch_id, lead_account_id, nickname, profile_url, script) VALUES(?, ?, ?, ?, ?)",
+                (batch_id, customer["lead_id"], customer["nickname"], customer["profile_url"], script),
+            )
     return get_auto_message_batch(batch_id)
 
 
@@ -314,15 +368,25 @@ async def auto_message_customer(
     effective_timeout = _bounded_int(timeout_seconds, configured_timeout, 0, 3600) if timeout_seconds else configured_timeout
 
     sender = _load_douyin_dm_sender()
-    async with _auto_dm_lock():
-        async with browser_queue.async_browser_slot(f"message_customer:{lead_id}"):
-            result = await sender(
-                customer["profile_url"],
-                selected_script,
-                profile_dir=database.get_douyin_cloak_profile_dir(),
-                dry_run=effective_dry_run,
-                manual_send_timeout_seconds=effective_timeout,
-            )
+    attempt_id: int | None = None
+    try:
+        if not effective_dry_run:
+            attempt_id = reserve_message_attempt(lead_id, "single", f"lead:{lead_id}")
+        async with _auto_dm_lock():
+            async with browser_queue.async_browser_slot(f"message_customer:{lead_id}"):
+                result = await sender(
+                    customer["profile_url"],
+                    selected_script,
+                    profile_dir=database.get_douyin_cloak_profile_dir(),
+                    dry_run=effective_dry_run,
+                    manual_send_timeout_seconds=effective_timeout,
+                )
+        if attempt_id is not None:
+            finish_message_attempt(attempt_id, "succeeded")
+    except Exception as exc:
+        if attempt_id is not None:
+            finish_message_attempt(attempt_id, "failed", str(exc))
+        raise
 
     follow_update: dict[str, Any] | None = None
     current_status = customer["follow_status"] or customer["screening_status"]
@@ -399,7 +463,13 @@ async def run_auto_message_batch(batch_id: str) -> None:
 
                     if page.is_closed():
                         page = await context.new_page()
-                    await _run_batch_item(page, database.row_to_dict(item) or {}, database.row_to_dict(batch) or {}, module)
+                    try:
+                        await _run_batch_item(page, database.row_to_dict(item) or {}, database.row_to_dict(batch) or {}, module)
+                    except MessageQuotaReached as exc:
+                        with database.connect() as conn:
+                            _mark_pending_items_skipped(conn, batch_id, str(exc))
+                            _finish_batch(conn, batch_id, "quota_reached", str(exc))
+                        return
                     await _sleep_between_batch_items(batch_id, int(batch["interval_min_seconds"] or 0), int(batch["interval_max_seconds"] or 0))
         except browser_queue.BrowserQueueCancelled:
             with database.connect() as conn:
@@ -424,6 +494,7 @@ def _auto_dm_lock() -> asyncio.Lock:
 
 
 async def _run_batch_item(page: Any, item: dict[str, Any], batch: dict[str, Any], module: Any) -> None:
+    attempt_id: int | None = None
     try:
         if not str(item.get("profile_url") or "").strip():
             _mark_batch_item(item["id"], "skipped", "缺少客户主页链接")
@@ -432,6 +503,8 @@ async def _run_batch_item(page: Any, item: dict[str, Any], batch: dict[str, Any]
             _mark_batch_item(item["id"], "skipped", "缺少私信话术")
             return
         fill_only = bool(batch.get("fill_only"))
+        if not fill_only:
+            attempt_id = reserve_message_attempt(int(item["lead_account_id"]), str(batch.get("source") or "batch"), str(batch["id"]))
         await module.send_douyin_dm_on_page(
             page,
             item["profile_url"],
@@ -443,6 +516,8 @@ async def _run_batch_item(page: Any, item: dict[str, Any], batch: dict[str, Any]
         if fill_only:
             _mark_batch_item(item["id"], "skipped", "只填内容不发送，未自动标记已私信")
             return
+        if attempt_id is not None:
+            finish_message_attempt(attempt_id, "succeeded")
 
         from app.services import account_actions
 
@@ -452,7 +527,13 @@ async def _run_batch_item(page: Any, item: dict[str, Any], batch: dict[str, Any]
             f"AI一键私信批次 {batch['id']} 自动发送",
         )
         _mark_batch_item(item["id"], "succeeded", "")
+    except MessageQuotaReached as exc:
+        _mark_batch_item(item["id"], "skipped", str(exc))
+        if "该客户今天" not in str(exc):
+            raise
     except Exception as exc:
+        if attempt_id is not None:
+            finish_message_attempt(attempt_id, "failed", str(exc))
         _mark_batch_item(item["id"], "failed", str(exc))
 
 
@@ -512,6 +593,101 @@ def _batch_candidates(conn, platform: str, keyword: str) -> list[dict[str, Any]]
     ]
     rows.sort(key=lambda item: (item["comment_at"] or item["latest_at"] or item["updated_at"] or ""), reverse=True)
     return rows
+
+
+def _scheduled_candidates(conn: Any, config: MessagePlanConfig) -> list[dict[str, Any]]:
+    customers = _aggregate_customers(_target_source_rows(conn), _reminder_days(conn))
+    attempted_today = {
+        int(row["lead_account_id"])
+        for row in conn.execute(
+            "SELECT DISTINCT lead_account_id FROM message_send_attempts WHERE date(attempted_at) = date('now', 'localtime')"
+        ).fetchall()
+    }
+    selected_keywords = set(config.keywords)
+    candidates = [
+        customer
+        for customer in customers
+        if customer["platform"] == "dy"
+        and customer["follow_status"] == "未私信"
+        and customer["profile_url"]
+        and int(customer["lead_id"]) not in attempted_today
+        and (config.keyword_scope == "all" or selected_keywords.intersection(customer["keywords"]))
+        and (config.script_mode == "fixed" or bool(str(customer.get("script") or "").strip()))
+    ]
+    intention_order = {"高": 0, "中": 1, "低": 2}
+    candidates.sort(
+        key=lambda item: (
+            intention_order.get(str(item.get("intention") or ""), 3),
+            str(item.get("lead_created_at") or item.get("latest_at") or ""),
+            int(item["lead_id"]),
+        )
+    )
+    return candidates
+
+
+def message_limit_summary(conn: Any | None = None) -> dict[str, Any]:
+    if conn is None:
+        with database.connect() as own_conn:
+            return message_limit_summary(own_conn)
+    daily_raw = database.get_setting(conn, "message_daily_limit", "").strip()
+    hourly_raw = database.get_setting(conn, "message_hourly_limit", "").strip()
+    daily = int(daily_raw) if daily_raw else None
+    hourly = int(hourly_raw) if hourly_raw else None
+    used_today = int(conn.execute("SELECT COUNT(*) AS c FROM message_send_attempts WHERE date(attempted_at) = date('now', 'localtime')").fetchone()["c"])
+    used_hour = int(conn.execute("SELECT COUNT(*) AS c FROM message_send_attempts WHERE attempted_at >= datetime('now', 'localtime', '-1 hour')").fetchone()["c"])
+    return {
+        "configured": daily is not None and hourly is not None,
+        "daily_limit": daily,
+        "hourly_limit": hourly,
+        "used_today": used_today,
+        "used_hour": used_hour,
+        "remaining_today": max(0, daily - used_today) if daily is not None else None,
+        "remaining_hour": max(0, hourly - used_hour) if hourly is not None else None,
+    }
+
+
+def reserve_message_attempt(lead_id: int, source: str, source_id: str) -> int:
+    with database.connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        limits = message_limit_summary(conn)
+        if limits["configured"] and int(limits["remaining_today"]) <= 0:
+            raise MessageQuotaReached("今日私信额度已用完")
+        if limits["configured"] and int(limits["remaining_hour"]) <= 0:
+            raise MessageQuotaReached("本小时私信额度已用完")
+        attempted = conn.execute(
+            "SELECT 1 FROM message_send_attempts WHERE lead_account_id = ? AND date(attempted_at) = date('now', 'localtime') LIMIT 1",
+            (lead_id,),
+        ).fetchone()
+        if attempted:
+            raise MessageQuotaReached("该客户今天已尝试私信，不再自动重试")
+        cursor = conn.execute(
+            "INSERT INTO message_send_attempts(lead_account_id, source, source_id) VALUES(?, ?, ?)",
+            (lead_id, source, source_id),
+        )
+        return int(cursor.lastrowid)
+
+
+def finish_message_attempt(attempt_id: int, status: str, error: str = "") -> None:
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE message_send_attempts SET status = ?, error = ?, finished_at = datetime('now', 'localtime') WHERE id = ?",
+            (status, error[:2000], attempt_id),
+        )
+
+
+def record_manual_message_attempt(lead_id: int, source_id: str = "") -> int:
+    with database.connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM message_send_attempts WHERE lead_account_id = ? AND date(attempted_at) = date('now', 'localtime') ORDER BY id LIMIT 1",
+            (lead_id,),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+        cursor = conn.execute(
+            "INSERT INTO message_send_attempts(lead_account_id, source, source_id, status, finished_at) VALUES(?, 'manual', ?, 'succeeded', datetime('now', 'localtime'))",
+            (lead_id, source_id),
+        )
+        return int(cursor.lastrowid)
 
 
 def _with_selected_scripts(conn, customers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -606,6 +782,19 @@ def _cancel_pending_items(conn, batch_id: str) -> None:
         WHERE batch_id = ? AND status = 'pending'
         """,
         (batch_id,),
+    )
+    _refresh_batch_counts(conn, batch_id)
+
+
+def _mark_pending_items_skipped(conn: Any, batch_id: str, reason: str) -> None:
+    conn.execute(
+        """
+        UPDATE message_batch_items
+        SET status = 'skipped', error = ?, finished_at = datetime('now', 'localtime'),
+            updated_at = datetime('now', 'localtime')
+        WHERE batch_id = ? AND status IN ('pending', 'running')
+        """,
+        (reason, batch_id),
     )
     _refresh_batch_counts(conn, batch_id)
 
@@ -783,6 +972,7 @@ def _customer_base(row: Any, reminder_days: int) -> dict[str, Any]:
         "suggested_action": row["suggested_action"] or "",
         "script": row["script"] or "",
         "updated_at": row["updated_at"] or "",
+        "lead_created_at": row["lead_created_at"] or "",
         "private_message_at": private_message_at,
         "reply_at": row["reply_at"] or "",
         "last_follow_at": row["last_follow_at"] or "",

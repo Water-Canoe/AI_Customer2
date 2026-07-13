@@ -12,7 +12,7 @@ from app import database
 
 
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
-SAFE_RESUME_KINDS = {"ai_job", "ai_batch", "account_customer_intent"}
+SAFE_RESUME_KINDS = {"ai_job", "ai_batch", "account_customer_intent", "automation_run"}
 RESOURCE_LIMITS = {"browser": 1, "ai": 1, "video": 1, "default": 2}
 HEARTBEAT_SECONDS = 3.0
 POLL_SECONDS = 0.5
@@ -179,11 +179,17 @@ def enqueue_crawl_batch(task_ids: list[str]) -> dict[str, Any]:
     )
 
 
-def enqueue_account_analysis(account_ids: list[int], task_id: str, kind: str = "account_analysis") -> dict[str, Any]:
+def enqueue_account_analysis(
+    account_ids: list[int],
+    task_id: str,
+    kind: str = "account_analysis",
+    *,
+    auto_delete: bool | None = None,
+) -> dict[str, Any]:
     return enqueue(
         kind,
         entity_id=task_id,
-        payload={"account_ids": [int(value) for value in account_ids], "task_id": task_id},
+        payload={"account_ids": [int(value) for value in account_ids], "task_id": task_id, "auto_delete": auto_delete},
         resource="browser",
     )
 
@@ -225,6 +231,16 @@ def enqueue_single_message(
             "script_label": script_label,
         },
         resource="browser",
+    )
+
+
+def enqueue_automation_run(run_id: str) -> dict[str, Any]:
+    return enqueue(
+        "automation_run",
+        entity_id=str(run_id),
+        payload={"run_id": str(run_id)},
+        resource="default",
+        max_attempts=20,
     )
 
 
@@ -378,6 +394,8 @@ def retry_job(job_id: str) -> dict[str, Any]:
         raise ValueError("只有已结束或已中断的运行任务可以重试")
     if job["kind"] == "message_batch":
         raise ValueError("自动私信批次请使用业务页面的“重试失败项”")
+    if job["kind"] == "automation_run":
+        raise ValueError("自动化计划请从计划页面重新运行")
     _prepare_domain_retry(job)
     return enqueue(
         str(job["kind"]),
@@ -465,7 +483,7 @@ def recover_interrupted_jobs() -> dict[str, int]:
         rows = conn.execute("SELECT * FROM runtime_jobs WHERE status = 'running'").fetchall()
         for row in rows:
             kind = str(row["kind"])
-            if kind in {"ai_job", "ai_batch", "account_customer_intent"} and int(row["attempt"] or 0) < int(row["max_attempts"] or 1):
+            if kind in SAFE_RESUME_KINDS and int(row["attempt"] or 0) < int(row["max_attempts"] or 1):
                 conn.execute(
                     """
                     UPDATE runtime_jobs
@@ -588,7 +606,7 @@ def _run_job(job: dict[str, Any]) -> None:
 
 
 def _execute_job(job: dict[str, Any]) -> Any:
-    from app.services import account_actions, ai_service, content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
+    from app.services import account_actions, ai_service, automation_workbench, content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
@@ -599,7 +617,14 @@ def _execute_job(job: dict[str, Any]) -> Any:
     if kind in {"account_analysis", "keyword_account_analysis"}:
         account_ids = [int(value) for value in payload.get("account_ids", [])]
         task_id = str(payload["task_id"])
-        prepared = account_actions.prepare_account_analysis_jobs(account_ids, task_id)
+        if payload.get("auto_delete") is None:
+            prepared = account_actions.prepare_account_analysis_jobs(account_ids, task_id)
+        else:
+            prepared = account_actions.prepare_account_analysis_jobs(
+                account_ids,
+                task_id,
+                auto_delete=bool(payload["auto_delete"]),
+            )
         job_ids = [str(value) for value in prepared.get("job_ids", [])]
         if job_ids:
             prepared["ai_runtime_job"] = enqueue_ai_batch(job_ids, entity_id=f"account-analysis:{task_id}")
@@ -620,6 +645,8 @@ def _execute_job(job: dict[str, Any]) -> Any:
                 script_label=str(payload.get("script_label") or "AI话术"),
             )
         )
+    if kind == "automation_run":
+        return automation_workbench.run_automation_run(str(payload["run_id"]))
     if kind == "ai_job":
         return ai_service.run_ai_job(str(payload["job_id"]))
     if kind == "ai_batch":
@@ -672,7 +699,9 @@ def _domain_outcome(job: dict[str, Any], result: Any = None) -> dict[str, str]:
     elif kind == "traffic_run":
         table, entity_id, success = "traffic_runs", str(payload["run_id"]), {"completed"}
     elif kind == "message_batch":
-        table, entity_id, success = "message_batches", str(payload["batch_id"]), {"succeeded"}
+        table, entity_id, success = "message_batches", str(payload["batch_id"]), {"succeeded", "quota_reached"}
+    elif kind == "automation_run":
+        table, entity_id, success = "automation_runs", str(payload["run_id"]), {"completed", "partial"}
     elif kind == "ai_job":
         table, entity_id, success = "analysis_jobs", str(payload["job_id"]), {"succeeded"}
     elif kind == "video_generation":
@@ -754,7 +783,7 @@ def _cancel_requested(job_id: str) -> bool:
 
 
 def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, queued: bool = False) -> None:
-    from app.services import content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
+    from app.services import automation_workbench, content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
@@ -770,6 +799,8 @@ def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, que
             traffic_workbench.stop_run(str(payload["run_id"]))
         elif kind == "message_batch":
             message_workbench.cancel_auto_message_batch(str(payload["batch_id"]))
+        elif kind == "automation_run":
+            automation_workbench.cancel_run(str(payload["run_id"]), reason=reason)
         elif kind == "video_generation":
             content_workbench.mark_video_job_cancelled(str(payload["video_job_id"]), reason)
         elif kind == "content_publish" and queued:
@@ -840,6 +871,12 @@ def _reset_crawl_task(conn: Any, task_id: str) -> None:
 
 def _normalize_resumable_domain(conn: Any, job: dict[str, Any]) -> None:
     payload = dict(job["payload"])
+    if job["kind"] == "automation_run":
+        conn.execute(
+            "UPDATE automation_runs SET status = 'queued', error = '本地服务关闭，等待恢复', updated_at = datetime('now', 'localtime') WHERE id = ? AND status = 'running'",
+            (str(payload["run_id"]),),
+        )
+        return
     job_ids = [str(payload["job_id"])] if job["kind"] == "ai_job" else [str(value) for value in payload.get("job_ids", [])]
     if not job_ids:
         return

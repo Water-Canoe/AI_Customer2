@@ -12,6 +12,7 @@
         <el-sub-menu index="lead-workbench">
           <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
           <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
+          <el-menu-item index="automation-plans"><el-icon><Clock /></el-icon><span>自动化计划</span></el-menu-item>
           <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
           <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
           <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
@@ -76,6 +77,7 @@ import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
   Collection,
+  Clock,
   Grid,
   MagicStick,
   Message,
@@ -127,6 +129,7 @@ const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
 const trafficRuns = ref<Dict[]>([])
 const trafficEnv = ref<Dict>({})
 const trafficRefreshSeq = ref(0)
+const automationRefreshSeq = ref(0)
 const contentAssets = ref<Dict[]>([])
 const contentJobs = ref<Dict[]>([])
 const contentEnv = ref<Dict>({})
@@ -151,7 +154,8 @@ const topbarEnvLabel = computed(() => {
 })
 const topbarPrimaryAction = computed(() => {
   if (isContentView.value) return '创作视频'
-  return isTrafficView.value ? '新建计划' : '新建任务'
+  if (isTrafficView.value || activeView.value === 'automation-plans') return '新建计划'
+  return '新建任务'
 })
 const hasActiveAsyncWork = computed(() => {
   return tasks.value.some(task => isActiveStatus(task.status))
@@ -238,6 +242,7 @@ const routeProps = computed(() => {
     }
   }
   if (activeView.value.startsWith('traffic-')) return { refreshSeq: trafficRefreshSeq.value }
+  if (activeView.value === 'automation-plans') return { refreshSeq: automationRefreshSeq.value }
   if (activeView.value.startsWith('content-')) return { refreshSeq: contentRefreshSeq.value }
   return {
     settings: settings.value,
@@ -335,6 +340,11 @@ function goToView(view: string) {
 }
 
 async function refreshAll() {
+  if (activeView.value === 'automation-plans') {
+    automationRefreshSeq.value += 1
+    autoSync.markSynced()
+    return
+  }
   if (isContentView.value) {
     await loadContentShell()
     contentRefreshSeq.value += 1
@@ -353,6 +363,10 @@ async function refreshAll() {
 }
 
 function createFromTopbar() {
+  if (activeView.value === 'automation-plans') {
+    router.push({ path: '/automation-plans', query: { create: '1' } })
+    return
+  }
   router.push(isContentView.value ? '/content-create' : (isTrafficView.value ? '/traffic-plans' : '/tasks'))
 }
 
@@ -517,6 +531,7 @@ async function syncCurrentView(_reason: AutoSyncReason) {
   if (activeView.value === 'logs') loaders.set('selected-task', refreshSelectedTask)
   if (activeView.value === 'overview') loaders.set('overview', loadOverview)
   if (activeView.value === 'message-workbench') loaders.set('message-workbench', () => loadMessageWorkbench(true))
+  if (activeView.value === 'automation-plans') loaders.set('automation-plans', async () => { automationRefreshSeq.value += 1 })
   if (activeView.value === 'tables') loaders.set('table', () => loadTable(activeLibrary.value, true))
   if (activeView.value === 'settings') {
     // 设置页有未保存草稿时，不用后台刷新覆盖本地输入。
@@ -916,7 +931,8 @@ async function messageOverviewCustomer(node: Dict) {
     if (shouldMarkMessaged) {
       await api.patch(`/overview/customers/${leadId}/follow-status`, {
         follow_status: '已私信',
-        note: `点击私信按钮：复制${scriptSelection.label}并打开客户主页`
+        note: `点击私信按钮：复制${scriptSelection.label}并打开客户主页`,
+        record_message_attempt: true,
       })
       ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开，跟进状态已更新为“已私信”`)
     } else {
@@ -994,7 +1010,8 @@ async function messageWorkbenchCustomer(row: Dict) {
     if (shouldMarkMessaged) {
       await api.patch(`/overview/customers/${leadId}/follow-status`, {
         follow_status: '已私信',
-        note: `私信工作台：复制${scriptSelection.label}并打开客户主页`
+        note: `私信工作台：复制${scriptSelection.label}并打开客户主页`,
+        record_message_attempt: true,
       })
       ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开，跟进状态已更新为“已私信”`)
     } else {

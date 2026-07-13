@@ -26,6 +26,7 @@ def test_api_routes_have_unique_method_paths_and_business_owners() -> None:
         ("POST", "/api/ai/jobs"): "app.routers.ai",
         ("GET", "/api/runtime/jobs"): "app.routers.runtime",
         ("POST", "/api/traffic/plans"): "app.routers.traffic",
+        ("GET", "/api/automation/plans"): "app.routers.automation",
         ("GET", "/api/system/backups"): "app.routers.system",
     }
     for key, module in expected_owners.items():

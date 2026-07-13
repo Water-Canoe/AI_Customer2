@@ -12,6 +12,10 @@ CONFIRM_TEXT = "清空所有数据"
 
 PROJECT_DATA_TABLES = [
     "runtime_jobs",
+    "message_send_attempts",
+    "automation_run_items",
+    "automation_runs",
+    "automation_plans",
     "traffic_action_logs",
     "traffic_records",
     "traffic_run_items",

@@ -563,6 +563,8 @@ DEFAULT_SETTINGS = {
     "fixed_dm_script": "",
     "auto_dm_fill_only": "false",
     "auto_dm_timeout_seconds": "300",
+    "message_daily_limit": "",
+    "message_hourly_limit": "",
     "douyin_detail_sleep_seconds": "2",
     "max_concurrency": "1",
     "headless": "false",

@@ -258,6 +258,106 @@ def _create_content_publish(conn: sqlite3.Connection, _: str) -> None:
     )
 
 
+def _create_automation_plans(conn: sqlite3.Connection, _: str) -> None:
+    # 自动化只保存声明式配置和运行快照，实际工作仍由 runtime_jobs 执行。
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS automation_plans (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            plan_type TEXT NOT NULL CHECK(plan_type IN ('keyword_lead', 'message')),
+            weekdays TEXT NOT NULL DEFAULT '[]',
+            run_time TEXT NOT NULL,
+            config TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0,
+            last_triggered_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS automation_runs (
+            id TEXT PRIMARY KEY,
+            plan_id TEXT,
+            plan_name TEXT NOT NULL,
+            plan_type TEXT NOT NULL CHECK(plan_type IN ('keyword_lead', 'message')),
+            trigger_type TEXT NOT NULL CHECK(trigger_type IN ('scheduled', 'manual')),
+            scheduled_at TEXT,
+            config_snapshot TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'queued',
+            current_stage TEXT NOT NULL DEFAULT 'queued',
+            runtime_job_id TEXT NOT NULL DEFAULT '',
+            total_count INTEGER NOT NULL DEFAULT 0,
+            success_count INTEGER NOT NULL DEFAULT 0,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            message_batch_id TEXT NOT NULL DEFAULT '',
+            message_attempted_count INTEGER NOT NULL DEFAULT 0,
+            message_success_count INTEGER NOT NULL DEFAULT 0,
+            stop_requested INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY(plan_id) REFERENCES automation_plans(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS automation_run_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            keyword TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            current_stage TEXT NOT NULL DEFAULT 'pending',
+            context TEXT NOT NULL DEFAULT '{}',
+            error TEXT NOT NULL DEFAULT '',
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY(run_id) REFERENCES automation_runs(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS message_send_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_account_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            source_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'reserved',
+            error TEXT NOT NULL DEFAULT '',
+            attempted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            finished_at TEXT,
+            FOREIGN KEY(lead_account_id) REFERENCES lead_user_accounts(id) ON DELETE CASCADE
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_scheduled_once
+        ON automation_runs(plan_id, scheduled_at)
+        WHERE trigger_type = 'scheduled' AND scheduled_at IS NOT NULL;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_active_plan
+        ON automation_runs(plan_id)
+        WHERE plan_id IS NOT NULL AND status IN ('queued', 'running');
+
+        CREATE INDEX IF NOT EXISTS idx_automation_plans_enabled_time
+        ON automation_plans(enabled, archived, run_time);
+
+        CREATE INDEX IF NOT EXISTS idx_automation_runs_plan_status
+        ON automation_runs(plan_id, status, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_automation_run_items_run_status
+        ON automation_run_items(run_id, status, id);
+
+        CREATE INDEX IF NOT EXISTS idx_message_send_attempts_time
+        ON message_send_attempts(attempted_at, lead_account_id);
+
+        ALTER TABLE crawl_jobs ADD COLUMN automation_managed INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE analysis_jobs ADD COLUMN auto_delete INTEGER NOT NULL DEFAULT -1;
+        ALTER TABLE message_batches ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+        ALTER TABLE message_batches ADD COLUMN automation_run_id TEXT NOT NULL DEFAULT '';
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
@@ -266,6 +366,7 @@ MIGRATIONS = (
     Migration(5, "create_voice_profiles", _create_voice_profiles),
     Migration(6, "classify_audio_assets", _classify_audio_assets),
     Migration(7, "create_content_publish", _create_content_publish),
+    Migration(8, "create_automation_plans", _create_automation_plans),
 )
 
 

@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import AiPage from './pages/AiPage'
+import AutomationPlanPage from './pages/AutomationPlanPage'
 import ContentWorkbenchPage from './pages/ContentWorkbenchPage'
 import PublishCenterPage from './pages/PublishCenterPage'
 import LogsPage from './pages/LogsPage'
@@ -21,6 +22,12 @@ export const routes = [
     name: 'tasks',
     component: TaskPage,
     meta: { title: '任务管理', subtitle: '选择拓客模式，生成采集任务，并自动导入项目库。', hint: '选择模式后直接开始采集' },
+  },
+  {
+    path: '/automation-plans',
+    name: 'automation-plans',
+    component: AutomationPlanPage,
+    meta: { title: '自动化计划', subtitle: '按星期和时间自动执行获客或私信任务。', hint: '把重复工作交给固定计划' },
   },
   {
     path: '/overview',

@@ -8,6 +8,7 @@ from app import data_lifecycle, database, migrations
 
 RESTORE_CONFIRM_TEXT = "恢复备份"
 ACTIVE_JOB_QUERIES = (
+    ("automation_runs", "status IN ('queued', 'running')"),
     ("crawl_jobs", "status IN ('running')"),
     ("analysis_jobs", "status IN ('running')"),
     ("message_batches", "status IN ('running')"),

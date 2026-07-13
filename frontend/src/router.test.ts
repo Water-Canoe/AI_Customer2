@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
 import ContentWorkbenchPage, { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
+import AutomationPlanPage from './pages/AutomationPlanPage'
 import PublishCenterPage from './pages/PublishCenterPage'
 import { routes } from './router'
 
 
 describe('内容工作台路由', () => {
+  it('任务管理之后提供独立自动化计划页面', () => {
+    const taskIndex = routes.findIndex(route => route.name === 'tasks')
+    const automationIndex = routes.findIndex(route => route.name === 'automation-plans')
+
+    expect(automationIndex).toBe(taskIndex + 1)
+    expect(routes[automationIndex].path).toBe('/automation-plans')
+    expect(routes[automationIndex].component).toBe(AutomationPlanPage)
+  })
+
   it('提供五个内容工作台子页面', () => {
     const contentRoutes = routes.filter(route => String(route.name || '').startsWith('content-'))
 
