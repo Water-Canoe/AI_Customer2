@@ -9,10 +9,10 @@
         </div>
       </div>
       <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench', 'content-workbench']" class="nav" @select="goToView">
+        <el-menu-item index="automation-plans"><el-icon><Clock /></el-icon><span>自动化计划</span></el-menu-item>
         <el-sub-menu index="lead-workbench">
           <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
           <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
-          <el-menu-item index="automation-plans"><el-icon><Clock /></el-icon><span>自动化计划</span></el-menu-item>
           <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
           <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
           <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
@@ -45,7 +45,7 @@
           <h1>{{ viewTitle }}</h1>
           <p>{{ viewSubtitle }}</p>
         </div>
-        <div class="topbar-insights" aria-label="当前工作台指标">
+        <div v-if="dashboardInsights.length" class="topbar-insights" aria-label="当前工作台指标">
           <div
             v-for="item in dashboardInsights"
             :key="item.label"
@@ -57,7 +57,7 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <span class="topbar-env-tag" :class="topbarEnvOk ? 'is-ok' : 'is-warn'">{{ topbarEnvLabel }}</span>
+          <span class="topbar-env-tag" :class="topbarEnvClass">{{ topbarEnvLabel }}</span>
           <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
           <el-button type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
         </div>
@@ -140,14 +140,17 @@ const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', 
 let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
+const isAutomationView = computed(() => activeView.value === 'automation-plans')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
-const topbarKicker = computed(() => isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))
+const topbarKicker = computed(() => isAutomationView.value ? '自动化中心' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台')))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
-const topbarEnvOk = computed(() => isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value))
+const topbarEnvOk = computed(() => isAutomationView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
+const topbarEnvClass = computed(() => isAutomationView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
 const topbarEnvLabel = computed(() => {
+  if (isAutomationView.value) return '共用浏览器队列'
   if (isContentView.value) return topbarEnvOk.value ? '视频环境正常' : '需要检查视频环境'
   if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
   return topbarEnvOk.value ? '环境就绪' : '需要检查环境'
@@ -169,6 +172,7 @@ const autoSync = createAutoSyncController({
   interval: () => hasActiveAsyncWork.value ? 3000 : 12000,
 })
 const dashboardInsights = computed(() => {
+  if (isAutomationView.value) return []
   if (isContentView.value) {
     const activeCount = contentJobs.value.filter(job => ['queued', 'running'].includes(String(job.status || ''))).length
     const completedCount = contentJobs.value.filter(job => String(job.status || '') === 'succeeded').length

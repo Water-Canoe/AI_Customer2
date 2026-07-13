@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api_dependencies import require_license
+from app.api_dependencies import require_license, require_license_for
 from app.schemas import AutomationMessageLimitsUpdate, AutomationPlanCreate, AutomationPlanOrderUpdate, AutomationPlanPatch
 from app.services import automation_workbench, job_queue
 
@@ -18,6 +18,8 @@ def automation_plans() -> dict[str, object]:
 @router.post("/plans")
 def create_automation_plan(payload: AutomationPlanCreate) -> dict[str, object]:
     try:
+        if payload.enabled:
+            _require_plan_license(payload.plan_type)
         return automation_workbench.create_plan(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -34,6 +36,9 @@ def reorder_automation_plans(payload: AutomationPlanOrderUpdate) -> dict[str, ob
 @router.patch("/plans/{plan_id}")
 def update_automation_plan(plan_id: str, payload: AutomationPlanPatch) -> dict[str, object]:
     try:
+        current = automation_workbench.get_plan(plan_id)
+        if payload.enabled is True or (payload.enabled is None and current["enabled"]):
+            _require_plan_license(str(current["plan_type"]))
         return automation_workbench.update_plan(plan_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -41,8 +46,9 @@ def update_automation_plan(plan_id: str, payload: AutomationPlanPatch) -> dict[s
 
 @router.post("/plans/{plan_id}/run")
 def run_automation_plan(plan_id: str) -> dict[str, object]:
-    require_license()
     try:
+        plan = automation_workbench.get_plan(plan_id)
+        _require_plan_license(str(plan["plan_type"]))
         return automation_workbench.create_run(plan_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -74,7 +80,6 @@ def automation_run_detail(run_id: str) -> dict[str, object]:
 
 @router.post("/runs/{run_id}/cancel")
 def cancel_automation_run(run_id: str) -> dict[str, object]:
-    require_license()
     try:
         run = automation_workbench.get_run(run_id)
         runtime_job_id = str(run.get("runtime_job_id") or "")
@@ -93,3 +98,10 @@ def automation_message_limits() -> dict[str, object]:
 @router.put("/message-limits")
 def update_automation_message_limits(payload: AutomationMessageLimitsUpdate) -> dict[str, object]:
     return automation_workbench.update_message_limits(payload.daily_limit, payload.hourly_limit)
+
+
+def _require_plan_license(plan_type: str) -> None:
+    if automation_workbench.license_scope(plan_type) == "traffic":
+        require_license_for("traffic")
+    else:
+        require_license()

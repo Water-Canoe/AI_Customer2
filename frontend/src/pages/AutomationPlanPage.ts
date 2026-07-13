@@ -25,7 +25,7 @@ import {
   ElTag,
   ElTimePicker,
 } from 'element-plus'
-import { ChatDotRound, Clock, Promotion, Rank } from '@element-plus/icons-vue'
+import { ChatDotRound, Clock, Connection, Promotion, Rank } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
@@ -35,9 +35,30 @@ const weekdays = [
   [1, '周一'], [2, '周二'], [3, '周三'], [4, '周四'], [5, '周五'], [6, '周六'], [7, '周日'],
 ]
 
+export const automationPlanTypes = [
+  ['keyword_lead', '关键词自动获客'],
+  ['message', '自动私信'],
+  ['traffic', '自动引流'],
+]
+
+export const trafficSourceOptions = [
+  ['random_feed', '随机推荐流'],
+  ['competitor_videos', '拓客竞品视频'],
+  ['collected_keyword', '已采集关键词'],
+  ['search_keyword', '手动搜索关键词'],
+]
+
+const trafficActions = [
+  ['action_like', '点赞视频'],
+  ['action_collect', '收藏视频'],
+  ['action_follow', '关注作者'],
+  ['action_comment_text', '文字评论'],
+  ['action_comment_image', '图片评论'],
+]
+
 const emptyDraft = (planType = 'keyword_lead'): Dict => ({
   id: '',
-  name: planType === 'message' ? '自动私信' : '关键词自动获客',
+  name: planType === 'message' ? '自动私信' : planType === 'traffic' ? '自动引流' : '关键词自动获客',
   plan_type: planType,
   weekdays: [1, 2, 3, 4, 5],
   run_time: '09:00',
@@ -47,6 +68,12 @@ const emptyDraft = (planType = 'keyword_lead'): Dict => ({
         platform: 'dy', keyword_scope: 'all', keywords: [], count: 20,
         script_mode: 'ai', fixed_script: '', interval_min_seconds: 30, interval_max_seconds: 60,
       }
+    : planType === 'traffic'
+      ? {
+          platform: 'dy', source_mode: 'random_feed', source_value: '',
+          action_like: false, action_collect: false, action_follow: false,
+          action_comment_text: false, action_comment_image: false, round_video_limit: 5,
+        }
     : {
         platform: 'dy', keywords: [], keyword_count: 1, discovery_content_count: 20,
         competitor_limit: 30, competitor_content_count: 10, comment_count: 50,
@@ -66,6 +93,11 @@ export function movePlan(items: Dict[], sourceId: string, targetId: string): Dic
   return ordered
 }
 
+export function normalizeTrafficConfig(config: Dict): Dict {
+  if (config.platform !== 'ks') return { ...config }
+  return { ...config, source_mode: 'random_feed', source_value: '', action_comment_image: false }
+}
+
 
 export default defineComponent({
   name: 'AutomationPlanPage',
@@ -78,6 +110,7 @@ export default defineComponent({
     const summary = ref<Dict>({})
     const limits = ref<Dict>({})
     const limitDraft = reactive({ daily_limit: 100, hourly_limit: 40 })
+    const typePickerOpen = ref(false)
     const editorOpen = ref(false)
     const runDetailOpen = ref(false)
     const saving = ref(false)
@@ -121,14 +154,29 @@ export default defineComponent({
 
     function openFromRoute() {
       if (String(route.query.create || '') !== '1') return
-      openEditor(String(route.query.type || 'keyword_lead'))
+      const type = String(route.query.type || '')
+      if (['keyword_lead', 'message', 'traffic'].includes(type)) openEditor(type)
+      else typePickerOpen.value = true
       router.replace({ path: '/automation-plans', query: {} })
     }
 
     function openEditor(type: string, plan?: Dict) {
       Object.keys(draft).forEach(key => delete draft[key])
       Object.assign(draft, plan ? JSON.parse(JSON.stringify(plan)) : emptyDraft(type))
+      typePickerOpen.value = false
       editorOpen.value = true
+    }
+
+    function setTrafficPlatform(platform: string) {
+      draft.config = normalizeTrafficConfig({ ...(draft.config || {}), platform })
+    }
+
+    function setTrafficSource(sourceMode: string) {
+      if (draft.config.platform === 'ks' && sourceMode !== 'random_feed') {
+        ElMessage.info('快手当前仅支持随机推荐流')
+        return
+      }
+      draft.config = { ...(draft.config || {}), source_mode: sourceMode, source_value: '' }
     }
 
     function keywordText(config: Dict) {
@@ -140,6 +188,21 @@ export default defineComponent({
     }
 
     async function savePlan() {
+      if (!String(draft.name || '').trim()) {
+        ElMessage.warning('请填写计划名称')
+        return
+      }
+      if (!Array.isArray(draft.weekdays) || !draft.weekdays.length) {
+        ElMessage.warning('请至少选择一个运行星期')
+        return
+      }
+      if (draft.plan_type === 'traffic') {
+        draft.config = normalizeTrafficConfig(draft.config || {})
+        if (['collected_keyword', 'search_keyword'].includes(draft.config.source_mode) && !String(draft.config.source_value || '').trim()) {
+          ElMessage.warning('请填写引流来源内容')
+          return
+        }
+      }
       saving.value = true
       try {
         const payload = {
@@ -283,7 +346,7 @@ export default defineComponent({
 
     function renderTaskCards() {
       return h(ElRow, { gutter: 16, class: 'automation-task-cards' }, () => [
-        h(ElCol, { span: 12 }, () => h(ElCard, { shadow: 'hover', class: 'automation-task-card' }, () => [
+        h(ElCol, { xs: 24, md: 8 }, () => h(ElCard, { shadow: 'hover', class: 'automation-task-card' }, () => [
           h('div', { class: 'automation-card-icon lead' }, [h(Promotion)]),
           h('div', { class: 'automation-card-content' }, [
             h('h3', '关键词自动获客'),
@@ -292,7 +355,7 @@ export default defineComponent({
           ]),
           h(ElButton, { type: 'primary', onClick: () => openEditor('keyword_lead') }, () => '新建获客计划'),
         ])),
-        h(ElCol, { span: 12 }, () => h(ElCard, { shadow: 'hover', class: 'automation-task-card' }, () => [
+        h(ElCol, { xs: 24, md: 8 }, () => h(ElCard, { shadow: 'hover', class: 'automation-task-card' }, () => [
           h('div', { class: 'automation-card-icon message' }, [h(ChatDotRound)]),
           h('div', { class: 'automation-card-content' }, [
             h('h3', '自动私信'),
@@ -300,6 +363,15 @@ export default defineComponent({
             h('div', { class: 'automation-flow' }, '筛选积压客户 → 占用额度 → 按间隔逐个私信'),
           ]),
           h(ElButton, { type: 'primary', onClick: () => openEditor('message') }, () => '新建私信计划'),
+        ])),
+        h(ElCol, { xs: 24, md: 8 }, () => h(ElCard, { shadow: 'hover', class: 'automation-task-card' }, () => [
+          h('div', { class: 'automation-card-icon traffic' }, [h(Connection)]),
+          h('div', { class: 'automation-card-content' }, [
+            h('h3', '自动引流'),
+            h('p', '定时启动抖音或快手引流批次，与获客、私信计划共用浏览器队列。'),
+            h('div', { class: 'automation-flow' }, '选择来源 → 浏览视频 → 按组合执行互动 → 记录结果'),
+          ]),
+          h(ElButton, { type: 'primary', onClick: () => openEditor('traffic') }, () => '新建引流计划'),
         ])),
       ])
     }
@@ -372,16 +444,44 @@ export default defineComponent({
           h(ElTableColumn, { label: '计划', minWidth: 160 }, { default: ({ row }: Dict) => h('div', [h('strong', row.plan_name), h('small', { class: 'table-subtext' }, row.trigger_type === 'manual' ? '立即运行' : '定时触发')]) }),
           h(ElTableColumn, { label: '状态', width: 110 }, { default: ({ row }: Dict) => statusTag(row.status) }),
           h(ElTableColumn, { label: '当前阶段', minWidth: 140 }, { default: ({ row }: Dict) => h('span', stageLabel(row.current_stage)) }),
-          h(ElTableColumn, { label: '进度', width: 150 }, { default: ({ row }: Dict) => row.plan_type === 'message'
+          h(ElTableColumn, { label: '进度', width: 170 }, { default: ({ row }: Dict) => row.plan_type === 'message'
             ? h('span', `${row.message_success_count || 0} 成功 / ${row.message_attempted_count || 0} 尝试`)
-            : h(ElProgress, { percentage: planProgress(row), strokeWidth: 8 }) }),
-          h(ElTableColumn, { label: '结果', minWidth: 180 }, { default: ({ row }: Dict) => h('span', row.error || `${row.success_count || 0} 成功，${row.failed_count || 0} 失败`) }),
+            : row.plan_type === 'traffic'
+              ? h('span', trafficProgressText(row))
+              : h(ElProgress, { percentage: planProgress(row), strokeWidth: 8 }) }),
+          h(ElTableColumn, { label: '结果', minWidth: 210 }, { default: ({ row }: Dict) => h('span', runResultText(row)) }),
           h(ElTableColumn, { label: '操作', width: 150, fixed: 'right' }, { default: ({ row }: Dict) => h('div', { class: 'table-actions' }, [
             h(ElButton, { text: true, type: 'primary', onClick: () => showRun(row) }, () => '详情'),
             ['queued', 'running'].includes(row.status) ? h(ElButton, { text: true, type: 'danger', onClick: () => cancelRun(row) }, () => '停止') : null,
           ]) }),
         ]),
       ])
+    }
+
+    function renderTypePicker() {
+      const descriptions: Dict = {
+        keyword_lead: '定时采集竞品、评论并筛选目标客户',
+        message: '定时消化新旧积压客户并统一控制私信额度',
+        traffic: '定时启动抖音或快手浏览与互动批次',
+      }
+      const icons: Dict = { keyword_lead: Promotion, message: ChatDotRound, traffic: Connection }
+      return h(ElDialog, {
+        modelValue: typePickerOpen.value,
+        title: '选择自动化任务类型',
+        width: '680px',
+        'onUpdate:modelValue': (value: boolean) => typePickerOpen.value = value,
+      }, { default: () => h('div', { class: 'automation-type-picker' }, automationPlanTypes.map(([type, label]) => h(ElCard, {
+        shadow: 'hover',
+        class: `automation-type-option type-${type}`,
+        tabindex: 0,
+        onClick: () => openEditor(type),
+        onKeydown: (event: KeyboardEvent) => { if (['Enter', ' '].includes(event.key)) openEditor(type) },
+      }, () => [
+        h('div', { class: ['automation-card-icon', type === 'keyword_lead' ? 'lead' : type] }, [h(icons[type])]),
+        h('strong', label),
+        h('p', descriptions[type]),
+        h(ElButton, { type: 'primary', plain: true }, () => `新建${label}计划`),
+      ]))) })
     }
 
     function renderEditor() {
@@ -399,8 +499,10 @@ export default defineComponent({
           h(ElDivider, { contentPosition: 'left' }, () => '固定执行步骤'),
           h('div', { class: 'automation-step-preview' }, draft.plan_type === 'keyword_lead'
             ? '选择关键词 → 采集竞品候选 → 竞品AI筛选（固定） → 采集评论 → 可选客户意向分析'
-            : '选择新旧积压客户 → 高意向优先排序 → 占用统一额度 → 逐个私信'),
-          ...(draft.plan_type === 'keyword_lead' ? renderKeywordFields() : renderMessageFields()),
+            : draft.plan_type === 'message'
+              ? '选择新旧积压客户 → 高意向优先排序 → 占用统一额度 → 逐个私信'
+              : '创建引流批次 → 等待共用浏览器 → 浏览视频 → 执行互动 → 记录结果'),
+          ...(draft.plan_type === 'keyword_lead' ? renderKeywordFields() : draft.plan_type === 'message' ? renderMessageFields() : renderTrafficFields()),
         ]),
         footer: () => h('div', [h(ElButton, { onClick: () => editorOpen.value = false }, () => '取消'), h(ElButton, { type: 'primary', loading: saving.value, onClick: savePlan }, () => '保存计划')]),
       })
@@ -440,16 +542,77 @@ export default defineComponent({
       ]
     }
 
+    function renderTrafficFields() {
+      const config = draft.config as Dict
+      const sourceMode = String(config.source_mode || 'random_feed')
+      const sourceLabel = sourceMode === 'competitor_videos'
+        ? '竞品视频链接或 ID（每行一条）'
+        : sourceMode === 'collected_keyword' ? '已采集关键词' : '搜索关键词'
+      const sourceRequired = ['collected_keyword', 'search_keyword'].includes(sourceMode)
+      return [
+        h(ElRow, { gutter: 16 }, () => [
+          h(ElCol, { span: 8 }, () => h(ElFormItem, { label: '平台', required: true }, () => h(ElSelect, {
+            modelValue: config.platform,
+            'onUpdate:modelValue': setTrafficPlatform,
+          }, () => [h(ElOption, { label: '抖音', value: 'dy' }), h(ElOption, { label: '快手', value: 'ks' })]))),
+          h(ElCol, { span: 8 }, () => h(ElFormItem, { label: '来源模式', required: true }, () => h(ElSelect, {
+            modelValue: sourceMode,
+            'onUpdate:modelValue': setTrafficSource,
+          }, () => trafficSourceOptions.map(([value, label]) => h(ElOption, { label, value, disabled: config.platform === 'ks' && value !== 'random_feed' }))))),
+          numberField('每轮视频数量', config, 'round_video_limit', 1, 200),
+        ]),
+        sourceMode !== 'random_feed' ? h(ElFormItem, { label: sourceLabel, required: sourceRequired }, () => h(ElInput, {
+          type: sourceMode === 'competitor_videos' ? 'textarea' : 'text',
+          rows: sourceMode === 'competitor_videos' ? 4 : undefined,
+          modelValue: config.source_value,
+          placeholder: sourceMode === 'competitor_videos' ? '可填写多条视频链接或 ID；留空时使用全部已采集竞品视频' : '填写一个关键词',
+          'onUpdate:modelValue': (value: string) => config.source_value = value,
+        })) : null,
+        h(ElFormItem, { label: '动作组合（不选表示纯浏览）' }, () => h('div', { class: 'automation-action-options' }, trafficActions.map(([key, label]) => h(ElCheckbox, {
+          modelValue: Boolean(config[key]),
+          disabled: config.platform === 'ks' && key === 'action_comment_image',
+          'onUpdate:modelValue': (value: string | number | boolean) => config[key] = Boolean(value),
+        }, () => label)))),
+        h('div', { class: 'automation-traffic-summary' }, trafficActionLabel(config).length
+          ? `将执行：${trafficActionLabel(config).join('、')}`
+          : '纯浏览：只浏览并记录视频，不执行点赞、收藏、关注或评论。'),
+        h(ElAlert, {
+          title: config.platform === 'ks'
+            ? '快手仅支持随机推荐流，且不支持图片评论。'
+            : '抖音支持随机推荐流、竞品视频、已采集关键词和手动搜索关键词。',
+          description: '停留时间、动作概率、每日动作上限、失败停机规则和评论素材会在执行时读取“引流设置”的最新值。',
+          type: 'info', showIcon: true, closable: false,
+        }),
+        h(ElButton, { text: true, type: 'primary', onClick: () => { editorOpen.value = false; router.push('/traffic-settings') } }, () => '前往引流设置'),
+      ]
+    }
+
     function numberField(label: string, target: Dict, key: string, min: number, max: number, span = 8) {
       return h(ElCol, { span }, () => h(ElFormItem, { label }, () => h(ElInputNumber, { modelValue: target[key], min, max, controlsPosition: 'right', 'onUpdate:modelValue': (value: number | undefined) => { if (value !== undefined) target[key] = value } })))
     }
 
     function renderRunDetail() {
       const run = selectedRun.value
+      const traffic = trafficRunData(run)
+      const trafficRunId = String(run.traffic_run_id || traffic.id || '')
       return h(ElDialog, { modelValue: runDetailOpen.value, title: `执行详情 · ${run.plan_name || ''}`, width: '820px', 'onUpdate:modelValue': (value: boolean) => runDetailOpen.value = value }, { default: () => [
-        h('div', { class: 'automation-run-summary' }, [statusTag(run.status), h('span', `阶段：${stageLabel(run.current_stage)}`), h('span', `成功 ${run.success_count || 0}`), h('span', `失败 ${run.failed_count || 0}`), h('span', `跳过 ${run.skipped_count || 0}`)]),
+        h('div', { class: 'automation-run-summary' }, run.plan_type === 'traffic'
+          ? [statusTag(run.status), h('span', `阶段：${stageLabel(run.current_stage)}`), h('span', `浏览 ${traffic.browsed_count || 0}`), h('span', `成功动作 ${traffic.action_success_count || 0}`), h('span', `失败/跳过 ${(traffic.failed_count || 0) + (traffic.skipped_count || 0)}`)]
+          : [statusTag(run.status), h('span', `阶段：${stageLabel(run.current_stage)}`), h('span', `成功 ${run.success_count || 0}`), h('span', `失败 ${run.failed_count || 0}`), h('span', `跳过 ${run.skipped_count || 0}`)]),
         run.error ? h(ElAlert, { title: run.error, type: run.status === 'partial' ? 'warning' : 'error', showIcon: true, closable: false }) : null,
         run.plan_type === 'message' ? h('div', { class: 'automation-message-result' }, `私信批次 ${run.message_batch_id || '—'}：尝试 ${run.message_attempted_count || 0}，成功 ${run.message_success_count || 0}`) : null,
+        run.plan_type === 'traffic' ? h('div', { class: 'automation-traffic-result' }, [
+          h('div', { class: 'automation-traffic-result-grid' }, [
+            metric('关联引流批次', trafficRunId ? shortId(trafficRunId) : '尚未创建'),
+            metric('浏览视频', traffic.browsed_count || 0, 'blue'),
+            metric('成功动作', traffic.action_success_count || 0, 'green'),
+            metric('失败 / 跳过', `${traffic.failed_count || 0} / ${traffic.skipped_count || 0}`, 'red'),
+          ]),
+          trafficRunId ? h(ElButton, {
+            type: 'primary',
+            onClick: () => { runDetailOpen.value = false; router.push({ path: '/traffic-monitor', query: { run: trafficRunId } }) },
+          }, () => '前往引流执行监控') : null,
+        ]) : null,
         (run.items || []).length ? h(ElTable, { data: run.items, stripe: true }, () => [
           h(ElTableColumn, { prop: 'keyword', label: '关键词', width: 140 }),
           h(ElTableColumn, { label: '状态', width: 100 }, { default: ({ row }: Dict) => statusTag(row.status) }),
@@ -463,13 +626,14 @@ export default defineComponent({
 
     return () => h('div', { class: 'automation-page' }, [
       h('section', { class: 'automation-hero' }, [
-        h('div', [h('div', { class: 'automation-eyebrow' }, [h(Clock), h('span', '无人值守获客')]), h('h1', '自动化计划'), h('p', '按指定星期和时间运行固定业务流程。软件未运行时错过的计划会直接跳过。')]),
+        h('div', [h('div', { class: 'automation-eyebrow' }, [h(Clock), h('span', '跨工作台自动化')]), h('h1', '自动化计划'), h('p', '按指定星期和时间运行获客、私信或引流流程；计划按列表顺序共用浏览器队列。软件未运行时错过的计划会直接跳过。')]),
         h('div', { class: 'automation-metrics' }, [metric('已启用计划', summary.value.enabled || 0, 'green'), metric('下一个计划', summary.value.next_run_at || '暂无', 'blue'), metric('正在运行', summary.value.running || 0, 'blue'), metric('今日失败', summary.value.failed_today || 0, 'red')]),
       ]),
       renderTaskCards(),
       renderLimits(),
       renderPlans(),
       renderRuns(),
+      renderTypePicker(),
       renderEditor(),
       renderRunDetail(),
     ])
@@ -478,7 +642,7 @@ export default defineComponent({
 
 
 function planTypeLabel(type: string) {
-  return type === 'message' ? '自动私信' : '关键词自动获客'
+  return Object.fromEntries(automationPlanTypes)[type] || type || '未知计划'
 }
 
 function weekdayText(values: number[]) {
@@ -491,7 +655,44 @@ function weekdayText(values: number[]) {
 function scopeText(plan: Dict) {
   const config = plan.config || {}
   if (plan.plan_type === 'message') return config.keyword_scope === 'all' ? `全部关键词 · ${config.count || 0}人` : `${(config.keywords || []).join('、')} · ${config.count || 0}人`
+  if (plan.plan_type === 'traffic') return `${trafficPlatformLabel(config.platform)} · ${trafficSourceLabel(config.source_mode)} · ${trafficActionLabel(config).join('、') || '纯浏览'} · ${config.round_video_limit || 0}条`
   return `${(config.keywords || []).length}个关键词 · 每次${config.keyword_count || 1}个`
+}
+
+function trafficPlatformLabel(platform: string) {
+  return platform === 'ks' ? '快手' : '抖音'
+}
+
+function trafficSourceLabel(sourceMode: string) {
+  return Object.fromEntries(trafficSourceOptions)[sourceMode] || sourceMode || '未知来源'
+}
+
+function trafficActionLabel(config: Dict) {
+  return trafficActions.filter(([key]) => Boolean(config?.[key])).map(([, label]) => label)
+}
+
+function trafficRunData(run: Dict): Dict {
+  return run.traffic_run || run.traffic_summary || {}
+}
+
+function trafficProgressText(run: Dict) {
+  const traffic = trafficRunData(run)
+  if (!run.traffic_run_id && !traffic.id) return ['queued', 'running'].includes(run.status) ? '等待创建批次' : '未创建批次'
+  const total = Number(run.config_snapshot?.round_video_limit || run.total_count || 0)
+  if (!traffic.id) return ['queued', 'running'].includes(run.status) ? `目标 ${total} 个视频` : `已处理 ${run.total_count || 0} 个视频`
+  return total ? `${traffic.browsed_count || 0} / ${total} 个视频` : `${traffic.browsed_count || 0} 个视频`
+}
+
+function runResultText(run: Dict) {
+  if (run.error) return run.error
+  if (run.plan_type === 'message') return `${run.message_success_count || 0} 成功，${run.message_attempted_count || 0} 尝试`
+  if (run.plan_type === 'traffic') {
+    const traffic = trafficRunData(run)
+    return traffic.id
+      ? `浏览 ${traffic.browsed_count || 0} · 动作 ${traffic.action_success_count || 0} · 失败/跳过 ${(traffic.failed_count || 0) + (traffic.skipped_count || 0)}`
+      : `动作 ${run.success_count || 0} · 失败/跳过 ${(run.failed_count || 0) + (run.skipped_count || 0)}`
+  }
+  return `${run.success_count || 0} 成功，${run.failed_count || 0} 失败`
 }
 
 function statusTag(status: string) {
@@ -501,7 +702,13 @@ function statusTag(status: string) {
 }
 
 function stageLabel(stage: string) {
-  const labels: Dict = { queued: '等待运行', starting: '准备中', competitor_discovery: '采集竞品候选', competitor_analysis: '竞品AI筛选', comment_collection: '采集竞品评论', lead_analysis: '客户意向分析', message_sending: '自动私信', completed: '已完成', partial: '部分完成', failed: '失败', cancelled: '已停止', skipped: '已跳过', pending: '待执行', succeeded: '已完成' }
+  const labels: Dict = {
+    queued: '等待运行', starting: '准备中', competitor_discovery: '采集竞品候选', competitor_analysis: '竞品AI筛选',
+    comment_collection: '采集竞品评论', lead_analysis: '客户意向分析', message_sending: '自动私信',
+    traffic_creating: '创建引流批次', create_traffic_run: '创建引流批次', traffic_waiting: '等待浏览器', waiting_browser: '等待浏览器',
+    traffic_running: '执行引流', traffic_execution: '执行引流',
+    completed: '已完成', partial: '部分完成', failed: '失败', cancelled: '已停止', skipped: '已跳过', pending: '待执行', succeeded: '已完成',
+  }
   return labels[stage] || stage || '—'
 }
 
@@ -511,4 +718,8 @@ function relatedJobIds(context: Dict) {
 
 function timeValue(value: string) {
   return value || '09:00'
+}
+
+function shortId(value: string) {
+  return value.length > 10 ? value.slice(0, 8) : value
 }

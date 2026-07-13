@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,80 @@ def keyword_plan_payload(**overrides: object):
     return AutomationPlanCreate.model_validate(data)
 
 
+def traffic_plan_payload(**overrides: object):
+    from app.schemas import AutomationPlanCreate
+
+    data = {
+        "name": "自动引流",
+        "plan_type": "traffic",
+        "weekdays": [1, 2, 3, 4, 5, 6, 7],
+        "run_time": "09:00",
+        "enabled": True,
+        "config": {
+            "platform": "dy",
+            "source_mode": "random_feed",
+            "source_value": "",
+            "action_like": False,
+            "action_collect": False,
+            "action_follow": False,
+            "action_comment_text": False,
+            "action_comment_image": False,
+            "round_video_limit": 5,
+        },
+    }
+    data.update(overrides)
+    return AutomationPlanCreate.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("source_mode", "source_value"),
+    [
+        ("random_feed", ""),
+        ("competitor_videos", ""),
+        ("collected_keyword", "AI客服"),
+        ("search_keyword", "AI获客"),
+    ],
+)
+def test_traffic_plan_schema_supports_douyin_sources_and_pure_browsing(source_mode: str, source_value: str) -> None:
+    from app.schemas import TrafficAutomationPlanConfig
+
+    payload = traffic_plan_payload(
+        config={
+            "platform": "dy",
+            "source_mode": source_mode,
+            "source_value": source_value,
+            "round_video_limit": 200,
+        }
+    )
+
+    assert isinstance(payload.config, TrafficAutomationPlanConfig)
+    assert payload.config.source_mode == source_mode
+    assert payload.config.round_video_limit == 200
+    assert not any(
+        (
+            payload.config.action_like,
+            payload.config.action_collect,
+            payload.config.action_follow,
+            payload.config.action_comment_text,
+            payload.config.action_comment_image,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({"platform": "ks", "source_mode": "search_keyword", "source_value": "AI客服"}, "只支持随机推荐流"),
+        ({"platform": "ks", "source_mode": "random_feed", "action_comment_image": True}, "不支持评论图片"),
+        ({"platform": "dy", "source_mode": "search_keyword", "source_value": ""}, "必须填写关键词"),
+        ({"platform": "dy", "source_mode": "random_feed", "round_video_limit": 201}, "less than or equal to 200"),
+    ],
+)
+def test_traffic_plan_schema_rejects_invalid_platform_dependencies(config: dict[str, object], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        traffic_plan_payload(config=config)
+
+
 def test_scheduled_window_triggers_only_when_time_is_crossed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.services import automation_workbench, license_service
@@ -85,9 +160,11 @@ def test_drag_order_serializes_same_time_plans(tmp_path: Path, monkeypatch: pyte
         )
     )
     lead_plan = automation_workbench.create_plan(keyword_plan_payload(name="关键词自动获客"))
-    ordered = automation_workbench.reorder_plans([lead_plan["id"], message_plan["id"]])
+    traffic_plan = automation_workbench.create_plan(traffic_plan_payload(name="自动引流"))
+    ordered = automation_workbench.reorder_plans([traffic_plan["id"], lead_plan["id"], message_plan["id"]])
 
     monkeypatch.setattr(license_service, "ensure_authorized", lambda: {"authorized": True})
+    monkeypatch.setattr(license_service, "ensure_authorized_for", lambda scope: {"authorized": True, "scope": scope})
     runs = automation_workbench.trigger_due_plans(datetime(2026, 7, 13, 8, 59, 50), datetime(2026, 7, 13, 9, 0, 5))
     with database.connect() as conn:
         queued = conn.execute(
@@ -98,13 +175,190 @@ def test_drag_order_serializes_same_time_plans(tmp_path: Path, monkeypatch: pyte
             """
         ).fetchall()
 
-    assert [plan["id"] for plan in ordered["items"]] == [lead_plan["id"], message_plan["id"]]
-    assert [run["plan_id"] for run in runs] == [lead_plan["id"], message_plan["id"]]
+    assert [plan["id"] for plan in ordered["items"]] == [traffic_plan["id"], lead_plan["id"], message_plan["id"]]
+    assert [run["plan_id"] for run in runs] == [traffic_plan["id"], lead_plan["id"], message_plan["id"]]
     assert [(row["plan_id"], row["resource"], row["priority"]) for row in queued] == [
-        (lead_plan["id"], "automation", 0),
-        (message_plan["id"], "automation", -1),
+        (traffic_plan["id"], "automation", 0),
+        (lead_plan["id"], "automation", -1),
+        (message_plan["id"], "automation", -2),
     ]
     assert job_queue.RESOURCE_LIMITS["automation"] == 1
+
+
+def test_traffic_run_uses_snapshot_and_hides_internal_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import AutomationPlanPatch, TrafficAutomationPlanConfig
+    from app.services import automation_workbench, job_queue, traffic_workbench
+
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"automation-job-{run_id}"})
+    monkeypatch.setattr(job_queue, "enqueue_traffic_run", lambda run_id: {"id": f"traffic-job-{run_id}"})
+    plan = automation_workbench.create_plan(
+        traffic_plan_payload(
+            config={
+                "platform": "dy",
+                "source_mode": "search_keyword",
+                "source_value": "旧关键词",
+                "action_like": True,
+                "round_video_limit": 3,
+            }
+        )
+    )
+    run = automation_workbench.create_run(plan["id"])
+    automation_workbench.update_plan(
+        plan["id"],
+        AutomationPlanPatch(
+            config={
+                "platform": "dy",
+                "source_mode": "search_keyword",
+                "source_value": "新关键词",
+                "action_like": False,
+                "round_video_limit": 9,
+            }
+        ),
+    )
+
+    def complete_without_browser(_: str, __: str, *, running_stage: str = "") -> dict[str, object]:
+        assert running_stage == "traffic_running"
+        with database.connect() as conn:
+            conn.execute(
+                """
+                UPDATE traffic_runs
+                SET status = 'completed', total_videos = 3, browsed_count = 3,
+                    action_success_count = 2, skipped_count = 1, failed_count = 0,
+                    finished_at = datetime('now', 'localtime')
+                WHERE id = ?
+                """,
+                (f"automation:{run['id']}",),
+            )
+        return {}
+
+    monkeypatch.setattr(automation_workbench, "_wait_existing_child", complete_without_browser)
+    snapshot = TrafficAutomationPlanConfig.model_validate(run["config_snapshot"])
+    automation_workbench._run_traffic_plan(run["id"], snapshot)
+
+    internal_id = f"automation:{run['id']}"
+    internal_plan = traffic_workbench.get_plan(internal_id)
+    detail = automation_workbench.get_run(run["id"])
+    assert internal_plan is not None
+    assert internal_plan["automation_managed"] is True
+    assert internal_plan["source_value"] == "旧关键词"
+    assert internal_plan["action_like"] is True
+    assert internal_plan["round_video_limit"] == 3
+    assert traffic_workbench.list_plans() == []
+    assert traffic_workbench.list_plans(include_archived=True) == []
+    assert detail["status"] == "completed"
+    assert detail["traffic_run_id"] == internal_id
+    assert detail["traffic_run"]["browsed_count"] == 3
+    assert detail["traffic_run"]["action_success_count"] == 2
+    assert traffic_workbench.create_automation_run(run["id"], plan["name"], snapshot)["id"] == internal_id
+    with database.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) AS c FROM traffic_plans WHERE id = ?", (internal_id,)).fetchone()["c"] == 1
+        assert conn.execute("SELECT COUNT(*) AS c FROM traffic_runs WHERE id = ?", (internal_id,)).fetchone()["c"] == 1
+
+
+def test_cancelling_traffic_automation_stops_child_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TrafficAutomationPlanConfig
+    from app.services import automation_workbench, job_queue, traffic_workbench
+
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"automation-job-{run_id}"})
+    plan = automation_workbench.create_plan(traffic_plan_payload())
+    run = automation_workbench.create_run(plan["id"])
+    traffic_run = traffic_workbench.create_automation_run(
+        run["id"],
+        plan["name"],
+        TrafficAutomationPlanConfig.model_validate(run["config_snapshot"]),
+    )
+    child_job = job_queue.enqueue_traffic_run(traffic_run["id"])
+    with database.connect() as conn:
+        conn.execute(
+            """
+            UPDATE automation_runs
+            SET status = 'running', traffic_run_id = ?, traffic_runtime_job_id = ?
+            WHERE id = ?
+            """,
+            (traffic_run["id"], child_job["id"], run["id"]),
+        )
+
+    cancelled = automation_workbench.cancel_run(run["id"])
+
+    assert cancelled["stop_requested"] is True
+    assert job_queue.get_job(child_job["id"])["status"] == "cancelled"
+    assert traffic_workbench.get_run(traffic_run["id"])["status"] == "stopped"
+
+
+def test_automation_routes_split_lead_and_traffic_authorization(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.services import job_queue, license_service
+
+    calls: list[str] = []
+    monkeypatch.setattr(license_service, "ensure_authorized", lambda: calls.append("lead") or {"authorized": True})
+    monkeypatch.setattr(license_service, "ensure_authorized_for", lambda scope: calls.append(scope) or {"authorized": True})
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"runtime-{run_id}"})
+    client = TestClient(app)
+
+    traffic_response = client.post("/api/automation/plans", json=traffic_plan_payload().model_dump(mode="json"))
+    assert traffic_response.status_code == 200
+    traffic_run_response = client.post(f"/api/automation/plans/{traffic_response.json()['id']}/run")
+    assert traffic_run_response.status_code == 200
+    lead_response = client.post("/api/automation/plans", json=keyword_plan_payload().model_dump(mode="json"))
+    assert lead_response.status_code == 200
+    assert calls == ["traffic", "traffic", "lead"]
+
+    monkeypatch.setattr(license_service, "ensure_authorized_for", lambda scope: (_ for _ in ()).throw(ValueError(f"{scope} 未授权")))
+    rejected = client.post("/api/automation/plans", json=traffic_plan_payload(name="未授权引流").model_dump(mode="json"))
+    assert rejected.status_code == 403
+    assert "traffic 未授权" in rejected.json()["detail"]
+
+
+def test_migration_10_preserves_existing_automation_data(tmp_path: Path) -> None:
+    from app import database, migrations
+
+    db_path = tmp_path / "migration-v9.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        for migration in migrations.MIGRATIONS[:9]:
+            migration.action(conn, database.SCHEMA_SQL)
+        conn.execute(
+            """
+            INSERT INTO automation_plans(id, name, plan_type, weekdays, run_time, config, sort_order)
+            VALUES('old-plan', '旧自动化计划', 'keyword_lead', '[1]', '09:00', '{}', 4)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO automation_runs(id, plan_id, plan_name, plan_type, trigger_type, config_snapshot, status)
+            VALUES('old-run', 'old-plan', '旧自动化计划', 'keyword_lead', 'manual', '{}', 'completed')
+            """
+        )
+        conn.execute("INSERT INTO automation_run_items(run_id, keyword, status) VALUES('old-run', '旧关键词', 'succeeded')")
+        conn.execute("INSERT INTO traffic_plans(id, name) VALUES('normal-traffic', '普通引流计划')")
+        conn.commit()
+
+        migrations.MIGRATIONS[9].action(conn, database.SCHEMA_SQL)
+
+        preserved_plan = conn.execute("SELECT name, sort_order FROM automation_plans WHERE id = 'old-plan'").fetchone()
+        assert (preserved_plan["name"], preserved_plan["sort_order"]) == ("旧自动化计划", 4)
+        assert conn.execute("SELECT status FROM automation_runs WHERE id = 'old-run'").fetchone()["status"] == "completed"
+        assert conn.execute("SELECT keyword FROM automation_run_items WHERE run_id = 'old-run'").fetchone()["keyword"] == "旧关键词"
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(automation_runs)")}
+        assert {"traffic_run_id", "traffic_runtime_job_id"}.issubset(columns)
+        assert conn.execute("SELECT automation_managed FROM traffic_plans WHERE id = 'normal-traffic'").fetchone()[0] == 0
+        conn.execute(
+            """
+            INSERT INTO automation_plans(id, name, plan_type, weekdays, run_time, config, sort_order)
+            VALUES('traffic-plan', '自动引流', 'traffic', '[1]', '10:00', '{}', 5)
+            """
+        )
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        conn.close()
 
 
 def test_keyword_selection_prefers_never_run_then_oldest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

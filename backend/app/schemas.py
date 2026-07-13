@@ -276,12 +276,43 @@ class MessagePlanConfig(BaseModel):
         return self
 
 
-AutomationPlanConfig = KeywordLeadPlanConfig | MessagePlanConfig
+class TrafficAutomationPlanConfig(BaseModel):
+    platform: Literal["dy", "ks"] = "dy"
+    source_mode: Literal["random_feed", "competitor_videos", "collected_keyword", "search_keyword"] = "random_feed"
+    source_value: str = ""
+    action_like: bool = False
+    action_collect: bool = False
+    action_follow: bool = False
+    action_comment_text: bool = False
+    action_comment_image: bool = False
+    round_video_limit: int = Field(default=5, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def validate_dependencies(self) -> "TrafficAutomationPlanConfig":
+        self.source_value = self.source_value.strip()
+        if self.source_mode in {"collected_keyword", "search_keyword"} and not self.source_value:
+            raise ValueError("关键词来源必须填写关键词")
+        if self.platform == "ks" and self.source_mode != "random_feed":
+            raise ValueError("快手引流当前只支持随机推荐流")
+        if self.platform == "ks" and self.action_comment_image:
+            raise ValueError("快手 Web 端暂不支持评论图片")
+        return self
+
+
+AutomationPlanConfig = KeywordLeadPlanConfig | MessagePlanConfig | TrafficAutomationPlanConfig
+
+
+def _automation_config_type(plan_type: str) -> type[KeywordLeadPlanConfig] | type[MessagePlanConfig] | type[TrafficAutomationPlanConfig]:
+    return {
+        "keyword_lead": KeywordLeadPlanConfig,
+        "message": MessagePlanConfig,
+        "traffic": TrafficAutomationPlanConfig,
+    }.get(plan_type, MessagePlanConfig)
 
 
 class AutomationPlanCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    plan_type: Literal["keyword_lead", "message"]
+    plan_type: Literal["keyword_lead", "message", "traffic"]
     weekdays: list[int] = Field(min_length=1, max_length=7)
     run_time: str = Field(pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     config: AutomationPlanConfig
@@ -293,7 +324,7 @@ class AutomationPlanCreate(BaseModel):
         if not isinstance(data, dict):
             return data
         values = dict(data)
-        expected = KeywordLeadPlanConfig if values.get("plan_type") == "keyword_lead" else MessagePlanConfig
+        expected = _automation_config_type(str(values.get("plan_type") or ""))
         values["config"] = expected.model_validate(values.get("config") or {})
         return values
 
@@ -302,7 +333,7 @@ class AutomationPlanCreate(BaseModel):
         self.weekdays = sorted(set(self.weekdays))
         if any(value < 1 or value > 7 for value in self.weekdays):
             raise ValueError("星期只能是1至7")
-        expected = KeywordLeadPlanConfig if self.plan_type == "keyword_lead" else MessagePlanConfig
+        expected = _automation_config_type(self.plan_type)
         if not isinstance(self.config, expected):
             raise ValueError("计划类型与配置不匹配")
         return self

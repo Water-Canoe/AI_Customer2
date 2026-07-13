@@ -27,7 +27,7 @@ export const routes = [
     path: '/automation-plans',
     name: 'automation-plans',
     component: AutomationPlanPage,
-    meta: { title: '自动化计划', subtitle: '按星期和时间自动执行获客或私信任务。', hint: '把重复工作交给固定计划' },
+    meta: { title: '自动化计划', subtitle: '统一安排获客、私信和引流任务，并按列表顺序共用浏览器队列。', hint: '把跨工作台的重复工作交给固定计划' },
   },
   {
     path: '/overview',

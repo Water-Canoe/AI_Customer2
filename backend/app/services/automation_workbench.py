@@ -15,6 +15,7 @@ from app.schemas import (
     KeywordLeadPlanConfig,
     MessagePlanConfig,
     TaskCreate,
+    TrafficAutomationPlanConfig,
 )
 
 
@@ -73,9 +74,7 @@ def trigger_due_plans(start: datetime, end: datetime) -> list[dict[str, Any]]:
                 scheduled_at = datetime.fromisoformat(f"{cursor.isoformat()} {row['run_time']}:00")
                 if start < scheduled_at <= end:
                     try:
-                        from app.services import license_service
-
-                        license_service.ensure_authorized()
+                        _ensure_plan_authorized(str(row["plan_type"]))
                         created.append(create_run(str(row["id"]), "scheduled", scheduled_at))
                     except ValueError as exc:
                         created.append(_record_scheduled_skip(row, scheduled_at, str(exc)))
@@ -184,7 +183,7 @@ def update_plan(plan_id: str, payload: AutomationPlanPatch) -> dict[str, Any]:
         values["weekdays"] = weekdays
     config_value = values.get("config")
     if config_value is not None:
-        expected = KeywordLeadPlanConfig if current["plan_type"] == "keyword_lead" else MessagePlanConfig
+        expected = _config_type(str(current["plan_type"]))
         config_value = expected.model_validate(config_value)
         values["config"] = config_value
     effective_config = config_value or _parse_config(current["plan_type"], current["config"])
@@ -355,6 +354,7 @@ def get_run(run_id: str) -> dict[str, Any]:
             _enrich_run_item(conn, item)
             for item in conn.execute("SELECT * FROM automation_run_items WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()
         ]
+        result["traffic_run"] = _traffic_run_summary(str(result.get("traffic_run_id") or ""))
     return result
 
 
@@ -382,10 +382,22 @@ def cancel_run(run_id: str, *, reason: str = "用户停止") -> dict[str, Any]:
                 (reason, run_id),
             )
         batch_id = str(run["message_batch_id"] or "")
+        traffic_run_id = str(run["traffic_run_id"] or "")
+        traffic_runtime_job_id = str(run["traffic_runtime_job_id"] or "")
     if batch_id and not already_terminal:
         from app.services import message_workbench
 
         message_workbench.cancel_auto_message_batch(batch_id)
+    if traffic_run_id and not already_terminal:
+        from app.services import job_queue, traffic_workbench
+
+        if traffic_runtime_job_id:
+            try:
+                job_queue.request_cancel(traffic_runtime_job_id, reason=reason)
+            except (RuntimeError, ValueError):
+                traffic_workbench.stop_run(traffic_run_id)
+        else:
+            traffic_workbench.stop_run(traffic_run_id)
     return get_run(run_id)
 
 
@@ -404,10 +416,13 @@ def run_automation_run(run_id: str) -> dict[str, Any]:
             (run_id,),
         )
     try:
+        _ensure_plan_authorized(str(run["plan_type"]))
         if run["plan_type"] == "keyword_lead":
             _run_keyword_plan(run_id, KeywordLeadPlanConfig.model_validate(run["config_snapshot"]))
-        else:
+        elif run["plan_type"] == "message":
             _run_message_plan(run_id, MessagePlanConfig.model_validate(run["config_snapshot"]))
+        else:
+            _run_traffic_plan(run_id, TrafficAutomationPlanConfig.model_validate(run["config_snapshot"]))
     except _RunCancelled as exc:
         _finish_run(run_id, "cancelled", str(exc))
     except Exception as exc:
@@ -571,6 +586,68 @@ def _run_message_plan(run_id: str, config: MessagePlanConfig) -> None:
     _finish_run(run_id, "completed", "" if batch_status == "succeeded" else "私信额度已用完，剩余客户留待下次计划")
 
 
+def _run_traffic_plan(run_id: str, config: TrafficAutomationPlanConfig) -> None:
+    from app.services import job_queue, traffic_workbench
+
+    with database.connect() as conn:
+        run = conn.execute("SELECT * FROM automation_runs WHERE id = ?", (run_id,)).fetchone()
+        if not run:
+            raise RuntimeError("自动化运行记录不存在")
+        traffic_run_id = str(run["traffic_run_id"] or "")
+        runtime_job_id = str(run["traffic_runtime_job_id"] or "")
+        plan_name = str(run["plan_name"] or "自动引流")
+
+    if not traffic_run_id:
+        _set_run_stage(run_id, "traffic_creating")
+        traffic_run = traffic_workbench.create_automation_run(run_id, plan_name, config)
+        traffic_run_id = str(traffic_run["id"])
+        with database.connect() as conn:
+            conn.execute(
+                """
+                UPDATE automation_runs
+                SET traffic_run_id = ?, total_count = ?, current_stage = 'traffic_waiting',
+                    updated_at = datetime('now', 'localtime')
+                WHERE id = ?
+                """,
+                (traffic_run_id, config.round_video_limit, run_id),
+            )
+
+    traffic_run = traffic_workbench.get_run(traffic_run_id)
+    if not traffic_run:
+        raise RuntimeError("关联的引流批次不存在")
+    if str(traffic_run["status"]) in {"completed", "failed", "stopped"}:
+        _sync_traffic_counts(run_id, traffic_run)
+        if str(traffic_run["status"]) == "completed":
+            _finish_run(run_id, "completed", "")
+            return
+        if _stop_requested(run_id) or str(traffic_run["status"]) == "stopped":
+            raise _RunCancelled(str(traffic_run.get("stop_reason") or "用户停止"))
+        raise RuntimeError(str(traffic_run.get("stop_reason") or "自动引流执行失败"))
+
+    if runtime_job_id:
+        try:
+            job_queue.get_job(runtime_job_id)
+        except ValueError:
+            runtime_job_id = ""
+    if not runtime_job_id:
+        runtime_job = job_queue.enqueue_traffic_run(traffic_run_id)
+        runtime_job_id = str(runtime_job["id"])
+        with database.connect() as conn:
+            conn.execute(
+                "UPDATE automation_runs SET traffic_runtime_job_id = ?, current_stage = 'traffic_waiting', updated_at = datetime('now', 'localtime') WHERE id = ?",
+                (runtime_job_id, run_id),
+            )
+    try:
+        _wait_existing_child(run_id, runtime_job_id, running_stage="traffic_running")
+    finally:
+        traffic_run = traffic_workbench.get_run(traffic_run_id)
+        if traffic_run:
+            _sync_traffic_counts(run_id, traffic_run)
+    if not traffic_run or str(traffic_run["status"]) != "completed":
+        raise RuntimeError(str((traffic_run or {}).get("stop_reason") or "自动引流未正常完成"))
+    _finish_run(run_id, "completed", "")
+
+
 def _create_discovery_task(keyword: str, config: KeywordLeadPlanConfig) -> dict[str, Any]:
     from app.services import crawler_adapter
 
@@ -611,9 +688,10 @@ def _wait_child_job(
     return _wait_existing_child(run_id, job_id)
 
 
-def _wait_existing_child(run_id: str, job_id: str) -> dict[str, Any]:
+def _wait_existing_child(run_id: str, job_id: str, *, running_stage: str = "") -> dict[str, Any]:
     from app.services import job_queue
 
+    stage_set = False
     while True:
         if _stop_requested(run_id):
             try:
@@ -623,6 +701,9 @@ def _wait_existing_child(run_id: str, job_id: str) -> dict[str, Any]:
             raise _RunCancelled("用户停止")
         job = job_queue.get_job(job_id)
         status = str(job["status"])
+        if running_stage and status == "running" and not stage_set:
+            _set_run_stage(run_id, running_stage)
+            stage_set = True
         if status in TERMINAL_JOB_STATUSES:
             if status != "succeeded":
                 raise RuntimeError(str(job.get("error") or f"子任务 {job_id} 执行失败"))
@@ -714,6 +795,64 @@ def _validate_message_plan_state(plan_type: str, config: Any, enabled_or_run: bo
         raise ValueError("“自动私信只填内容不发送”已开启，不能启用或运行自动私信计划")
 
 
+def _ensure_plan_authorized(plan_type: str) -> None:
+    from app.services import license_service
+
+    if plan_type == "traffic":
+        license_service.ensure_authorized_for("traffic")
+    else:
+        license_service.ensure_authorized()
+
+
+def license_scope(plan_type: str) -> str:
+    return "traffic" if plan_type == "traffic" else "lead"
+
+
+def _traffic_run_summary(traffic_run_id: str) -> dict[str, Any] | None:
+    if not traffic_run_id:
+        return None
+    from app.services import traffic_workbench
+
+    run = traffic_workbench.get_run(traffic_run_id)
+    if not run:
+        return None
+    keys = (
+        "id",
+        "plan_id",
+        "status",
+        "total_videos",
+        "browsed_count",
+        "action_success_count",
+        "skipped_count",
+        "failed_count",
+        "stop_reason",
+        "stop_suggestion",
+        "started_at",
+        "finished_at",
+        "created_at",
+    )
+    return {key: run.get(key) for key in keys}
+
+
+def _sync_traffic_counts(run_id: str, traffic_run: dict[str, Any]) -> None:
+    with database.connect() as conn:
+        conn.execute(
+            """
+            UPDATE automation_runs
+            SET total_count = ?, success_count = ?, failed_count = ?, skipped_count = ?,
+                updated_at = datetime('now', 'localtime')
+            WHERE id = ?
+            """,
+            (
+                int(traffic_run.get("total_videos") or 0),
+                int(traffic_run.get("action_success_count") or 0),
+                int(traffic_run.get("failed_count") or 0),
+                int(traffic_run.get("skipped_count") or 0),
+                run_id,
+            ),
+        )
+
+
 def _format_plan(conn: Any, row: Any, now: datetime) -> dict[str, Any]:
     result = database.row_to_dict(row) or {}
     result["weekdays"] = _loads(result.get("weekdays"), [])
@@ -778,9 +917,17 @@ def _enrich_run_item(conn: Any, row: Any) -> dict[str, Any]:
     return result
 
 
-def _parse_config(plan_type: str, value: Any) -> KeywordLeadPlanConfig | MessagePlanConfig:
+def _config_type(plan_type: str) -> type[KeywordLeadPlanConfig] | type[MessagePlanConfig] | type[TrafficAutomationPlanConfig]:
+    return {
+        "keyword_lead": KeywordLeadPlanConfig,
+        "message": MessagePlanConfig,
+        "traffic": TrafficAutomationPlanConfig,
+    }[plan_type]
+
+
+def _parse_config(plan_type: str, value: Any) -> KeywordLeadPlanConfig | MessagePlanConfig | TrafficAutomationPlanConfig:
     data = _loads(value, {})
-    return KeywordLeadPlanConfig.model_validate(data) if plan_type == "keyword_lead" else MessagePlanConfig.model_validate(data)
+    return _config_type(plan_type).model_validate(data)
 
 
 def _next_run(weekdays: list[int], run_time: str, now: datetime) -> str:
@@ -791,6 +938,14 @@ def _next_run(weekdays: list[int], run_time: str, now: datetime) -> str:
         if day.isoweekday() in weekdays and candidate > now:
             return candidate.strftime("%Y-%m-%d %H:%M:%S")
     return ""
+
+
+def _set_run_stage(run_id: str, stage: str) -> None:
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE automation_runs SET current_stage = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (stage, run_id),
+        )
 
 
 def _set_item_stage(run_id: str, item_id: int, stage: str, context: dict[str, Any]) -> None:
@@ -821,9 +976,11 @@ def _finish_item(item_id: int, status: str, error: str) -> None:
 def _refresh_run_counts(run_id: str) -> None:
     with database.connect() as conn:
         row = conn.execute(
-            "SELECT SUM(status = 'succeeded') AS ok, SUM(status = 'failed') AS failed, SUM(status = 'skipped') AS skipped FROM automation_run_items WHERE run_id = ?",
+            "SELECT COUNT(*) AS total, SUM(status = 'succeeded') AS ok, SUM(status = 'failed') AS failed, SUM(status = 'skipped') AS skipped FROM automation_run_items WHERE run_id = ?",
             (run_id,),
         ).fetchone()
+        if not int(row["total"] or 0):
+            return
         conn.execute(
             "UPDATE automation_runs SET success_count = ?, failed_count = ?, skipped_count = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
             (int(row["ok"] or 0), int(row["failed"] or 0), int(row["skipped"] or 0), run_id),

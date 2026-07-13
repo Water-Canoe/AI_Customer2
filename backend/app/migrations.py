@@ -371,6 +371,132 @@ def _add_automation_plan_order(conn: sqlite3.Connection, _: str) -> None:
     conn.execute("CREATE INDEX idx_automation_plans_sort_order ON automation_plans(archived, sort_order, id)")
 
 
+def _extend_automation_with_traffic(conn: sqlite3.Connection, _: str) -> None:
+    plan_sql_row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'automation_plans'").fetchone()
+    run_sql_row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'automation_runs'").fetchone()
+    plan_sql = str(plan_sql_row["sql"] or "") if plan_sql_row else ""
+    run_sql = str(run_sql_row["sql"] or "") if run_sql_row else ""
+    run_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(automation_runs)").fetchall()}
+    traffic_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(traffic_plans)").fetchall()}
+    plans_ready = "'traffic'" in plan_sql
+    runs_ready = "'traffic'" in run_sql and {"traffic_run_id", "traffic_runtime_job_id"}.issubset(run_columns)
+    traffic_ready = "automation_managed" in traffic_columns
+    if plans_ready and runs_ready and traffic_ready:
+        return
+
+    # SQLite cannot alter a CHECK constraint. Rebuild only the two small parent tables
+    # with foreign keys temporarily disabled, then verify every preserved reference.
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if not plans_ready:
+            conn.execute(
+                """
+                CREATE TABLE automation_plans_v10 (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    plan_type TEXT NOT NULL CHECK(plan_type IN ('keyword_lead', 'message', 'traffic')),
+                    weekdays TEXT NOT NULL DEFAULT '[]',
+                    run_time TEXT NOT NULL,
+                    config TEXT NOT NULL DEFAULT '{}',
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    last_triggered_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                    sort_order INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO automation_plans_v10(
+                    id, name, plan_type, weekdays, run_time, config, enabled, archived,
+                    last_triggered_at, created_at, updated_at, sort_order
+                )
+                SELECT id, name, plan_type, weekdays, run_time, config, enabled, archived,
+                       last_triggered_at, created_at, updated_at, sort_order
+                FROM automation_plans
+                """
+            )
+            conn.execute("DROP TABLE automation_plans")
+            conn.execute("ALTER TABLE automation_plans_v10 RENAME TO automation_plans")
+
+        if not runs_ready:
+            conn.execute(
+                """
+                CREATE TABLE automation_runs_v10 (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT,
+                    plan_name TEXT NOT NULL,
+                    plan_type TEXT NOT NULL CHECK(plan_type IN ('keyword_lead', 'message', 'traffic')),
+                    trigger_type TEXT NOT NULL CHECK(trigger_type IN ('scheduled', 'manual')),
+                    scheduled_at TEXT,
+                    config_snapshot TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    current_stage TEXT NOT NULL DEFAULT 'queued',
+                    runtime_job_id TEXT NOT NULL DEFAULT '',
+                    total_count INTEGER NOT NULL DEFAULT 0,
+                    success_count INTEGER NOT NULL DEFAULT 0,
+                    failed_count INTEGER NOT NULL DEFAULT 0,
+                    skipped_count INTEGER NOT NULL DEFAULT 0,
+                    message_batch_id TEXT NOT NULL DEFAULT '',
+                    message_attempted_count INTEGER NOT NULL DEFAULT 0,
+                    message_success_count INTEGER NOT NULL DEFAULT 0,
+                    traffic_run_id TEXT NOT NULL DEFAULT '',
+                    traffic_runtime_job_id TEXT NOT NULL DEFAULT '',
+                    stop_requested INTEGER NOT NULL DEFAULT 0,
+                    error TEXT NOT NULL DEFAULT '',
+                    started_at TEXT,
+                    finished_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                    FOREIGN KEY(plan_id) REFERENCES automation_plans(id) ON DELETE SET NULL
+                )
+                """
+            )
+            traffic_run_expr = "traffic_run_id" if "traffic_run_id" in run_columns else "''"
+            traffic_job_expr = "traffic_runtime_job_id" if "traffic_runtime_job_id" in run_columns else "''"
+            conn.execute(
+                f"""
+                INSERT INTO automation_runs_v10(
+                    id, plan_id, plan_name, plan_type, trigger_type, scheduled_at, config_snapshot,
+                    status, current_stage, runtime_job_id, total_count, success_count, failed_count,
+                    skipped_count, message_batch_id, message_attempted_count, message_success_count,
+                    traffic_run_id, traffic_runtime_job_id, stop_requested, error, started_at,
+                    finished_at, created_at, updated_at
+                )
+                SELECT id, plan_id, plan_name, plan_type, trigger_type, scheduled_at, config_snapshot,
+                       status, current_stage, runtime_job_id, total_count, success_count, failed_count,
+                       skipped_count, message_batch_id, message_attempted_count, message_success_count,
+                       {traffic_run_expr}, {traffic_job_expr}, stop_requested, error, started_at,
+                       finished_at, created_at, updated_at
+                FROM automation_runs
+                """
+            )
+            conn.execute("DROP TABLE automation_runs")
+            conn.execute("ALTER TABLE automation_runs_v10 RENAME TO automation_runs")
+
+        if not traffic_ready:
+            conn.execute("ALTER TABLE traffic_plans ADD COLUMN automation_managed INTEGER NOT NULL DEFAULT 0")
+
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_scheduled_once ON automation_runs(plan_id, scheduled_at) WHERE trigger_type = 'scheduled' AND scheduled_at IS NOT NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_active_plan ON automation_runs(plan_id) WHERE plan_id IS NOT NULL AND status IN ('queued', 'running')")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_automation_plans_enabled_time ON automation_plans(enabled, archived, run_time)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_automation_plans_sort_order ON automation_plans(archived, sort_order, id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_automation_runs_plan_status ON automation_runs(plan_id, status, created_at DESC)")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(f"migration 10 foreign key check failed: {len(violations)} violation(s)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
@@ -381,6 +507,7 @@ MIGRATIONS = (
     Migration(7, "create_content_publish", _create_content_publish),
     Migration(8, "create_automation_plans", _create_automation_plans),
     Migration(9, "add_automation_plan_order", _add_automation_plan_order),
+    Migration(10, "extend_automation_with_traffic", _extend_automation_with_traffic),
 )
 
 

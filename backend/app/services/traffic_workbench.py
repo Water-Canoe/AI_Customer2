@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import parse_qs, quote, urlparse
 
 from app import database
-from app.schemas import TrafficPlanCreate, TrafficSettingsUpdate
+from app.schemas import TrafficAutomationPlanConfig, TrafficPlanCreate, TrafficSettingsUpdate
 from app.services import browser_queue, profile_manager
 
 
@@ -82,7 +82,7 @@ ACTIVE_RUN_STATUSES = {"queued", "running"}
 
 def list_plans(include_archived: bool = False) -> list[dict[str, Any]]:
     with database.connect() as conn:
-        where = "" if include_archived else "WHERE archived = 0"
+        where = "WHERE automation_managed = 0" if include_archived else "WHERE automation_managed = 0 AND archived = 0"
         rows = conn.execute(f"SELECT * FROM traffic_plans {where} ORDER BY created_at DESC").fetchall()
     return [_format_plan(row) for row in rows]
 
@@ -124,6 +124,58 @@ def create_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
     created = get_plan(plan_id)
     assert created is not None
     return created
+
+
+def create_automation_run(automation_run_id: str, plan_name: str, config: TrafficAutomationPlanConfig) -> dict[str, Any]:
+    """Create the hidden traffic plan/run once for a resumable automation run."""
+    plan_id = f"automation:{automation_run_id}"
+    run_id = f"automation:{automation_run_id}"
+    payload = TrafficPlanCreate(name=plan_name, enabled=True, **config.model_dump())
+    plan = _normalize_plan(payload, plan_id)
+    _validate_run_plan({**plan, "actions": _plan_actions(plan)})
+    with database.connect() as conn:
+        existing_plan = conn.execute("SELECT automation_managed FROM traffic_plans WHERE id = ?", (plan_id,)).fetchone()
+        if existing_plan and not bool(existing_plan["automation_managed"]):
+            raise RuntimeError("自动化引流内部计划 ID 与普通计划冲突")
+        if not existing_plan:
+            conn.execute(
+                """
+                INSERT INTO traffic_plans(
+                    id, name, platform, source_mode, source_value,
+                    action_like, action_collect, action_follow,
+                    action_comment_text, action_comment_image, round_video_limit,
+                    enabled, automation_managed
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+                """,
+                (
+                    plan_id,
+                    plan["name"],
+                    plan["platform"],
+                    plan["source_mode"],
+                    plan["source_value"],
+                    int(plan["action_like"]),
+                    int(plan["action_collect"]),
+                    int(plan["action_follow"]),
+                    int(plan["action_comment_text"]),
+                    int(plan["action_comment_image"]),
+                    int(plan["round_video_limit"]),
+                ),
+            )
+        if not conn.execute("SELECT 1 FROM traffic_runs WHERE id = ?", (run_id,)).fetchone():
+            _insert_run(conn, run_id, plan_id)
+            _insert_log(
+                conn,
+                run_id,
+                "info",
+                "probe",
+                "自动引流批次已创建，等待浏览器资源。",
+                "任务已进入自动化队列。",
+                "系统会按照自动化计划顺序执行。",
+                {"automation_run_id": automation_run_id},
+            )
+    run = get_run(run_id)
+    assert run is not None
+    return run
 
 
 def update_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, Any]:
@@ -667,6 +719,8 @@ def run_traffic_run(run_id: str) -> None:
     # 后台任务只写批次状态和日志，前端通过执行监控轮询读取。
     run = get_run(run_id)
     if not run:
+        return
+    if str(run.get("status")) not in ACTIVE_RUN_STATUSES:
         return
     plan = get_plan(str(run["plan_id"]))
     if not plan:
@@ -2939,6 +2993,7 @@ def _format_plan(row: Any) -> dict[str, Any]:
     data["round_video_limit"] = int(data.get("round_video_limit") or 5)
     data["enabled"] = bool(data.get("enabled"))
     data["archived"] = bool(data.get("archived"))
+    data["automation_managed"] = bool(data.get("automation_managed"))
     data["actions"] = _plan_actions(data)
     data["action_label"] = "、".join(_action_label(action) for action in data["actions"]) or "仅浏览"
     return data

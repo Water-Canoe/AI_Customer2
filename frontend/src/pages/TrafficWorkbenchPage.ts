@@ -104,6 +104,7 @@ export default defineComponent({
 
     onMounted(loadPage)
     watch(view, () => loadPage())
+    watch(() => route.query.run, () => { if (view.value === 'traffic-monitor') loadRuns() })
     watch(() => props.refreshSeq, () => loadPage())
     watch(
       () => ({
@@ -139,6 +140,13 @@ export default defineComponent({
     async function loadRuns() {
       const { data } = await api.get('/traffic/runs', { params: { include_archived: runArchiveFilter.value === 'archived' } })
       runs.value = data
+      const requestedRunId = String(route.query.run || '')
+      const requestedIndex = visibleRuns.value.findIndex(run => String(run.id) === requestedRunId)
+      if (requestedIndex >= 0) {
+        runPage.value = Math.floor(requestedIndex / SIDE_PAGE_SIZE) + 1
+        await selectRun(requestedRunId)
+        return
+      }
       if (selectedRun.value && !visibleRuns.value.some(run => run.id === selectedRun.value?.id)) selectedRun.value = null
       const firstVisible = visibleRuns.value[0]
       if (!selectedRun.value && firstVisible) await selectRun(firstVisible.id)

@@ -1,26 +1,57 @@
 import { describe, expect, it } from 'vitest'
 
 import ContentWorkbenchPage, { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
-import AutomationPlanPage, { movePlan } from './pages/AutomationPlanPage'
+import AutomationPlanPage, {
+  automationPlanTypes,
+  movePlan,
+  normalizeTrafficConfig,
+  trafficSourceOptions,
+} from './pages/AutomationPlanPage'
 import PublishCenterPage from './pages/PublishCenterPage'
 import { routes } from './router'
 
 
-describe('内容工作台路由', () => {
-  it('任务管理之后提供独立自动化计划页面', () => {
-    const taskIndex = routes.findIndex(route => route.name === 'tasks')
-    const automationIndex = routes.findIndex(route => route.name === 'automation-plans')
+describe('工作台路由', () => {
+  it('提供独立的自动化中心页面', () => {
+    const automationRoute = routes.find(route => route.name === 'automation-plans')
 
-    expect(automationIndex).toBe(taskIndex + 1)
-    expect(routes[automationIndex].path).toBe('/automation-plans')
-    expect(routes[automationIndex].component).toBe(AutomationPlanPage)
+    expect(automationRoute?.path).toBe('/automation-plans')
+    expect(automationRoute?.component).toBe(AutomationPlanPage)
   })
 
-  it('自动化计划拖动后按目标位置重排', () => {
-    const plans = [{ id: 'lead' }, { id: 'message' }, { id: 'backup' }]
+  it('三类自动化计划拖动后按目标位置重排', () => {
+    const plans = [{ id: 'lead' }, { id: 'message' }, { id: 'traffic' }]
 
-    expect(movePlan(plans, 'message', 'lead').map(plan => plan.id)).toEqual(['message', 'lead', 'backup'])
-    expect(plans.map(plan => plan.id)).toEqual(['lead', 'message', 'backup'])
+    expect(movePlan(plans, 'traffic', 'lead').map(plan => plan.id)).toEqual(['traffic', 'lead', 'message'])
+    expect(plans.map(plan => plan.id)).toEqual(['lead', 'message', 'traffic'])
+  })
+
+  it('自动化中心只提供三种固定任务卡', () => {
+    expect(automationPlanTypes.map(([value]) => value)).toEqual(['keyword_lead', 'message', 'traffic'])
+  })
+
+  it('自动引流提供抖音四种来源并归一化快手限制', () => {
+    expect(trafficSourceOptions.map(([value]) => value)).toEqual([
+      'random_feed',
+      'competitor_videos',
+      'collected_keyword',
+      'search_keyword',
+    ])
+    expect(normalizeTrafficConfig({
+      platform: 'ks',
+      source_mode: 'search_keyword',
+      source_value: 'AI客服',
+      action_comment_image: true,
+      action_like: true,
+    })).toMatchObject({
+      platform: 'ks',
+      source_mode: 'random_feed',
+      source_value: '',
+      action_comment_image: false,
+      action_like: true,
+    })
+    expect(normalizeTrafficConfig({ platform: 'dy', source_mode: 'search_keyword', source_value: 'AI客服' }))
+      .toMatchObject({ platform: 'dy', source_mode: 'search_keyword', source_value: 'AI客服' })
   })
 
   it('提供五个内容工作台子页面', () => {
