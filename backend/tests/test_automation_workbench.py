@@ -65,6 +65,48 @@ def test_scheduled_window_triggers_only_when_time_is_crossed(tmp_path: Path, mon
     assert calls == [(plan["id"], "scheduled", datetime(2026, 7, 13, 9, 0, 0))]
 
 
+def test_drag_order_serializes_same_time_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import AutomationPlanCreate
+    from app.services import automation_workbench, job_queue, license_service
+
+    automation_workbench.update_message_limits(100, 40)
+    message_plan = automation_workbench.create_plan(
+        AutomationPlanCreate.model_validate(
+            {
+                "name": "自动私信",
+                "plan_type": "message",
+                "weekdays": [1, 2, 3, 4, 5, 6, 7],
+                "run_time": "09:00",
+                "enabled": True,
+                "config": {"keyword_scope": "all", "count": 20, "script_mode": "fixed", "fixed_script": "你好"},
+            }
+        )
+    )
+    lead_plan = automation_workbench.create_plan(keyword_plan_payload(name="关键词自动获客"))
+    ordered = automation_workbench.reorder_plans([lead_plan["id"], message_plan["id"]])
+
+    monkeypatch.setattr(license_service, "ensure_authorized", lambda: {"authorized": True})
+    runs = automation_workbench.trigger_due_plans(datetime(2026, 7, 13, 8, 59, 50), datetime(2026, 7, 13, 9, 0, 5))
+    with database.connect() as conn:
+        queued = conn.execute(
+            """
+            SELECT r.plan_id, j.resource, j.priority
+            FROM runtime_jobs j JOIN automation_runs r ON r.id = j.entity_id
+            WHERE j.kind = 'automation_run' ORDER BY j.priority DESC
+            """
+        ).fetchall()
+
+    assert [plan["id"] for plan in ordered["items"]] == [lead_plan["id"], message_plan["id"]]
+    assert [run["plan_id"] for run in runs] == [lead_plan["id"], message_plan["id"]]
+    assert [(row["plan_id"], row["resource"], row["priority"]) for row in queued] == [
+        (lead_plan["id"], "automation", 0),
+        (message_plan["id"], "automation", -1),
+    ]
+    assert job_queue.RESOURCE_LIMITS["automation"] == 1
+
+
 def test_keyword_selection_prefers_never_run_then_oldest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database

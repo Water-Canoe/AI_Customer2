@@ -6905,6 +6905,48 @@ input[type='checkbox'] {
   color: #82928f;
 }
 
+.automation-plan-drag-cell {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: grab;
+}
+
+.automation-plan-drag-cell:active {
+  cursor: grabbing;
+}
+
+.automation-plan-drag-cell:focus-visible,
+.automation-plan-drag-cell.is-over {
+  border-color: #8ac9c1;
+  outline: none;
+  background: #eef9f7;
+}
+
+.automation-plan-drag-cell.is-dragging {
+  opacity: 0.45;
+}
+
+.automation-drag-handle {
+  display: inline-flex;
+  min-width: 38px;
+  align-items: center;
+  gap: 4px;
+  color: #6c8b87;
+}
+
+.automation-drag-handle svg {
+  width: 16px;
+}
+
+.automation-drag-handle b {
+  font-size: 12px;
+}
+
 .table-actions {
   display: flex;
   align-items: center;

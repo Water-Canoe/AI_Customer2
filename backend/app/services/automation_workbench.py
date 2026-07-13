@@ -62,7 +62,7 @@ def trigger_due_plans(start: datetime, end: datetime) -> list[dict[str, Any]]:
         return []
     with database.connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM automation_plans WHERE enabled = 1 AND archived = 0 ORDER BY run_time, id"
+            "SELECT * FROM automation_plans WHERE enabled = 1 AND archived = 0 ORDER BY run_time, sort_order, id"
         ).fetchall()
     created: list[dict[str, Any]] = []
     for row in rows:
@@ -109,7 +109,7 @@ def _record_scheduled_skip(plan: Any, scheduled_at: datetime, reason: str) -> di
 def list_plans() -> dict[str, Any]:
     now = datetime.now()
     with database.connect() as conn:
-        rows = conn.execute("SELECT * FROM automation_plans WHERE archived = 0 ORDER BY created_at DESC").fetchall()
+        rows = conn.execute("SELECT * FROM automation_plans WHERE archived = 0 ORDER BY sort_order, id").fetchall()
         plans = [_format_plan(conn, row, now) for row in rows]
         active = int(conn.execute("SELECT COUNT(*) AS c FROM automation_runs WHERE status IN ('queued', 'running')").fetchone()["c"])
         failed_today = int(
@@ -133,10 +133,11 @@ def create_plan(payload: AutomationPlanCreate) -> dict[str, Any]:
     _validate_message_plan_state(payload.plan_type, payload.config, payload.enabled)
     plan_id = uuid4().hex[:12]
     with database.connect() as conn:
+        sort_order = int(conn.execute("SELECT COALESCE(MAX(sort_order), -1) + 1 AS value FROM automation_plans WHERE archived = 0").fetchone()["value"])
         conn.execute(
             """
-            INSERT INTO automation_plans(id, name, plan_type, weekdays, run_time, config, enabled)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO automation_plans(id, name, plan_type, weekdays, run_time, config, enabled, sort_order)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 plan_id,
@@ -146,9 +147,31 @@ def create_plan(payload: AutomationPlanCreate) -> dict[str, Any]:
                 payload.run_time,
                 json.dumps(payload.config.model_dump(), ensure_ascii=False),
                 int(payload.enabled),
+                sort_order,
             ),
         )
     return get_plan(plan_id)
+
+
+def reorder_plans(plan_ids: list[str]) -> dict[str, Any]:
+    clean_ids = [str(plan_id).strip() for plan_id in plan_ids]
+    if any(not plan_id for plan_id in clean_ids) or len(clean_ids) != len(set(clean_ids)):
+        raise ValueError("计划顺序包含无效或重复ID")
+    with database.connect() as conn:
+        current_ids = [str(row["id"]) for row in conn.execute("SELECT id FROM automation_plans WHERE archived = 0").fetchall()]
+        if len(clean_ids) != len(current_ids) or set(clean_ids) != set(current_ids):
+            raise ValueError("计划列表已变化，请刷新后重新拖动")
+        for index, plan_id in enumerate(clean_ids):
+            conn.execute("UPDATE automation_plans SET sort_order = ?, updated_at = datetime('now', 'localtime') WHERE id = ?", (index, plan_id))
+            conn.execute(
+                """
+                UPDATE runtime_jobs SET priority = ?, updated_at = datetime('now', 'localtime')
+                WHERE kind = 'automation_run' AND status = 'queued'
+                  AND entity_id IN (SELECT id FROM automation_runs WHERE plan_id = ?)
+                """,
+                (-index, plan_id),
+            )
+    return list_plans()
 
 
 def update_plan(plan_id: str, payload: AutomationPlanPatch) -> dict[str, Any]:

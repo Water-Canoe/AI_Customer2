@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import ContentWorkbenchPage, { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
-import AutomationPlanPage from './pages/AutomationPlanPage'
+import AutomationPlanPage, { movePlan } from './pages/AutomationPlanPage'
 import PublishCenterPage from './pages/PublishCenterPage'
 import { routes } from './router'
 
@@ -14,6 +14,13 @@ describe('内容工作台路由', () => {
     expect(automationIndex).toBe(taskIndex + 1)
     expect(routes[automationIndex].path).toBe('/automation-plans')
     expect(routes[automationIndex].component).toBe(AutomationPlanPage)
+  })
+
+  it('自动化计划拖动后按目标位置重排', () => {
+    const plans = [{ id: 'lead' }, { id: 'message' }, { id: 'backup' }]
+
+    expect(movePlan(plans, 'message', 'lead').map(plan => plan.id)).toEqual(['message', 'lead', 'backup'])
+    expect(plans.map(plan => plan.id)).toEqual(['lead', 'message', 'backup'])
   })
 
   it('提供五个内容工作台子页面', () => {

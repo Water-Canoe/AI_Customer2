@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api_dependencies import require_license
-from app.schemas import AutomationMessageLimitsUpdate, AutomationPlanCreate, AutomationPlanPatch
+from app.schemas import AutomationMessageLimitsUpdate, AutomationPlanCreate, AutomationPlanOrderUpdate, AutomationPlanPatch
 from app.services import automation_workbench, job_queue
 
 
@@ -19,6 +19,14 @@ def automation_plans() -> dict[str, object]:
 def create_automation_plan(payload: AutomationPlanCreate) -> dict[str, object]:
     try:
         return automation_workbench.create_plan(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/plans/order")
+def reorder_automation_plans(payload: AutomationPlanOrderUpdate) -> dict[str, object]:
+    try:
+        return automation_workbench.reorder_plans(payload.plan_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

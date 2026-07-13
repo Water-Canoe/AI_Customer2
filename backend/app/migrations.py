@@ -358,6 +358,19 @@ def _create_automation_plans(conn: sqlite3.Connection, _: str) -> None:
     )
 
 
+def _add_automation_plan_order(conn: sqlite3.Connection, _: str) -> None:
+    # 计划顺序同时用于页面展示和运行队列优先级。
+    conn.execute("ALTER TABLE automation_plans ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+    rows = conn.execute("SELECT id FROM automation_plans WHERE archived = 0 ORDER BY created_at DESC, id DESC").fetchall()
+    for index, row in enumerate(rows):
+        conn.execute("UPDATE automation_plans SET sort_order = ? WHERE id = ?", (index, row["id"]))
+        conn.execute(
+            "UPDATE runtime_jobs SET resource = 'automation', priority = ? WHERE kind = 'automation_run' AND entity_id IN (SELECT id FROM automation_runs WHERE plan_id = ?)",
+            (-index, row["id"]),
+        )
+    conn.execute("CREATE INDEX idx_automation_plans_sort_order ON automation_plans(archived, sort_order, id)")
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
@@ -367,6 +380,7 @@ MIGRATIONS = (
     Migration(6, "classify_audio_assets", _classify_audio_assets),
     Migration(7, "create_content_publish", _create_content_publish),
     Migration(8, "create_automation_plans", _create_automation_plans),
+    Migration(9, "add_automation_plan_order", _add_automation_plan_order),
 )
 
 

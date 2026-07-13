@@ -13,7 +13,7 @@ from app import database
 
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
 SAFE_RESUME_KINDS = {"ai_job", "ai_batch", "account_customer_intent", "automation_run"}
-RESOURCE_LIMITS = {"browser": 1, "ai": 1, "video": 1, "default": 2}
+RESOURCE_LIMITS = {"browser": 1, "ai": 1, "video": 1, "automation": 1, "default": 2}
 HEARTBEAT_SECONDS = 3.0
 POLL_SECONDS = 0.5
 
@@ -235,11 +235,17 @@ def enqueue_single_message(
 
 
 def enqueue_automation_run(run_id: str) -> dict[str, Any]:
+    with database.connect() as conn:
+        row = conn.execute(
+            "SELECT p.sort_order FROM automation_runs r JOIN automation_plans p ON p.id = r.plan_id WHERE r.id = ?",
+            (run_id,),
+        ).fetchone()
     return enqueue(
         "automation_run",
         entity_id=str(run_id),
         payload={"run_id": str(run_id)},
-        resource="default",
+        resource="automation",
+        priority=-int(row["sort_order"] or 0) if row else 0,
         max_attempts=20,
     )
 

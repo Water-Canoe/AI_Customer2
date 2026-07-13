@@ -25,7 +25,7 @@ import {
   ElTag,
   ElTimePicker,
 } from 'element-plus'
-import { ChatDotRound, Clock, Promotion } from '@element-plus/icons-vue'
+import { ChatDotRound, Clock, Promotion, Rank } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
@@ -55,6 +55,18 @@ const emptyDraft = (planType = 'keyword_lead'): Dict => ({
 })
 
 
+// 返回拖动后的新数组，原数组保持不变，便于接口失败时恢复。
+export function movePlan(items: Dict[], sourceId: string, targetId: string): Dict[] {
+  const sourceIndex = items.findIndex(item => String(item.id) === sourceId)
+  const targetIndex = items.findIndex(item => String(item.id) === targetId)
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return items
+  const ordered = [...items]
+  const [moved] = ordered.splice(sourceIndex, 1)
+  ordered.splice(targetIndex, 0, moved)
+  return ordered
+}
+
+
 export default defineComponent({
   name: 'AutomationPlanPage',
   props: { refreshSeq: { type: Number, default: 0 } },
@@ -70,6 +82,9 @@ export default defineComponent({
     const runDetailOpen = ref(false)
     const saving = ref(false)
     const selectedRun = ref<Dict>({})
+    const draggedPlanId = ref('')
+    const dragOverPlanId = ref('')
+    const reordering = ref(false)
     const draft = reactive<Dict>(emptyDraft())
 
     const editing = computed(() => Boolean(draft.id))
@@ -156,6 +171,58 @@ export default defineComponent({
       } finally {
         await loadAll()
       }
+    }
+
+    async function persistPlanMove(sourceId: string, targetId: string) {
+      const previous = plans.value
+      const ordered = movePlan(previous, sourceId, targetId)
+      if (ordered === previous || reordering.value) return
+      plans.value = ordered
+      reordering.value = true
+      try {
+        const { data } = await api.put('/automation/plans/order', { plan_ids: ordered.map(plan => String(plan.id)) })
+        plans.value = data.items || ordered
+        summary.value = data.summary || summary.value
+        ElMessage.success('计划执行顺序已保存')
+      } catch (error: any) {
+        plans.value = previous
+        ElMessage.error(error?.response?.data?.detail || '计划顺序保存失败')
+      } finally {
+        reordering.value = false
+        draggedPlanId.value = ''
+        dragOverPlanId.value = ''
+      }
+    }
+
+    function startPlanDrag(plan: Dict, event: DragEvent) {
+      if (reordering.value) return event.preventDefault()
+      draggedPlanId.value = String(plan.id)
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', draggedPlanId.value)
+      }
+    }
+
+    function overPlan(plan: Dict, event: DragEvent) {
+      if (!draggedPlanId.value || draggedPlanId.value === String(plan.id)) return
+      event.preventDefault()
+      dragOverPlanId.value = String(plan.id)
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    }
+
+    function dropPlan(plan: Dict, event: DragEvent) {
+      event.preventDefault()
+      const sourceId = draggedPlanId.value || event.dataTransfer?.getData('text/plain') || ''
+      void persistPlanMove(sourceId, String(plan.id))
+    }
+
+    function movePlanByKeyboard(plan: Dict, index: number, event: KeyboardEvent) {
+      if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
+      const targetIndex = index + (event.key === 'ArrowUp' ? -1 : 1)
+      const target = plans.value[targetIndex]
+      if (!target) return
+      event.preventDefault()
+      void persistPlanMove(String(plan.id), String(target.id))
     }
 
     async function runNow(plan: Dict) {
@@ -266,9 +333,24 @@ export default defineComponent({
 
     function renderPlans() {
       return h(ElCard, { class: 'automation-section', shadow: 'never' }, () => [
-        h('div', { class: 'automation-section-head' }, [h('div', [h('h2', '计划列表'), h('p', '一天需要多次执行时，创建多个开始时间不同的计划。')])]),
+        h('div', { class: 'automation-section-head' }, [h('div', [h('h2', '计划列表'), h('p', '拖动计划调整顺序；相同时间从上到下逐个执行，前一个结束后再执行下一个。')])]),
         h(ElTable, { data: plans.value, stripe: true, emptyText: '还没有自动化计划' }, () => [
-          h(ElTableColumn, { label: '计划', minWidth: 180 }, { default: ({ row }: Dict) => h('div', [h('strong', row.name), h('small', { class: 'table-subtext' }, planTypeLabel(row.plan_type))]) }),
+          h(ElTableColumn, { label: '计划', minWidth: 210 }, { default: ({ row, $index }: Dict) => h('div', {
+            class: ['automation-plan-drag-cell', { 'is-dragging': draggedPlanId.value === String(row.id), 'is-over': dragOverPlanId.value === String(row.id) }],
+            draggable: !reordering.value,
+            tabindex: 0,
+            'aria-label': `第${$index + 1}项，${row.name}。拖动排序，或按 Alt 加上下方向键调整`,
+            title: '按住拖动调整执行顺序',
+            onDragstart: (event: DragEvent) => startPlanDrag(row, event),
+            onDragover: (event: DragEvent) => overPlan(row, event),
+            onDragleave: () => { if (dragOverPlanId.value === String(row.id)) dragOverPlanId.value = '' },
+            onDrop: (event: DragEvent) => dropPlan(row, event),
+            onDragend: () => { draggedPlanId.value = ''; dragOverPlanId.value = '' },
+            onKeydown: (event: KeyboardEvent) => movePlanByKeyboard(row, Number($index), event),
+          }, [
+            h('span', { class: 'automation-drag-handle', 'aria-hidden': 'true' }, [h(Rank), h('b', String($index + 1))]),
+            h('div', [h('strong', row.name), h('small', { class: 'table-subtext' }, planTypeLabel(row.plan_type))]),
+          ]) }),
           h(ElTableColumn, { label: '执行时间', minWidth: 190 }, { default: ({ row }: Dict) => h('div', [h('span', `${weekdayText(row.weekdays)} ${row.run_time}`), h('small', { class: 'table-subtext' }, row.next_run_at ? `下次 ${row.next_run_at}` : '已停用')]) }),
           h(ElTableColumn, { label: '范围', minWidth: 190 }, { default: ({ row }: Dict) => h('span', scopeText(row)) }),
           h(ElTableColumn, { label: '最近结果', width: 120 }, { default: ({ row }: Dict) => row.recent_run ? statusTag(row.recent_run.status) : h('span', '—') }),
