@@ -385,11 +385,9 @@ export default defineComponent({
         h('div', { class: 'automation-metrics' }, [metric('已启用计划', summary.value.enabled || 0, 'green'), metric('下一个计划', summary.value.next_run_at || '暂无', 'blue'), metric('正在运行', summary.value.running || 0, 'blue'), metric('今日失败', summary.value.failed_today || 0, 'red')]),
       ]),
       renderTaskCards(),
-      h('div', { class: 'automation-details' }, [
-        renderLimits(),
-        renderPlans(),
-        renderRuns(),
-      ]),
+      renderLimits(),
+      renderPlans(),
+      renderRuns(),
       renderEditor(),
       renderRunDetail(),
     ])

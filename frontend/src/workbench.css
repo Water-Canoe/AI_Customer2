@@ -6738,20 +6738,13 @@ input[type='checkbox'] {
 
 }
 .automation-page {
-  flex: 1 1 auto;
-  min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 18px;
-  overflow: hidden;
+  padding-bottom: 28px;
 }
 
-.automation-details {
-  min-height: 0;
-  display: grid;
-  gap: 18px;
-  padding-right: 6px;
-  padding-bottom: 28px;
+/* 长页面只滚动主工作区，保持左侧导航和顶部状态栏固定。 */
+.main.view-automation-plans {
   overflow-y: auto;
 }
 
