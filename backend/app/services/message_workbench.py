@@ -855,7 +855,10 @@ def _matches_customer(customer: dict[str, Any], keyword: str, platform: str, sta
         return False
     if keyword and keyword not in customer["keywords"]:
         return False
-    if status and customer["follow_status"] != status:
+    # “已超时”复用提醒计算，不写入新的跟进状态。
+    if status == "已超时" and not customer["overdue"]:
+        return False
+    if status and status != "已超时" and customer["follow_status"] != status:
         return False
     if query:
         haystack = "\n".join(

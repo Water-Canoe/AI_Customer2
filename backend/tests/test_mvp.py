@@ -4504,6 +4504,14 @@ def test_message_workbench_keyword_queue_and_global_follow_status(tmp_path: Path
     assert overdue_list["rows"][0]["overdue"] is True
     assert overdue_list["rows"][0]["private_message_at"] == "2020-01-01 00:00:00"
 
+    overdue_only = client.get(
+        "/api/message-workbench/customers",
+        params={"keyword": "电动车", "status": "已超时", "page": 1, "page_size": 10},
+    ).json()
+    assert overdue_only["total"] == 1
+    assert overdue_only["rows"][0]["lead_id"] == lead_id
+    assert overdue_only["rows"][0]["follow_status"] == "未回复"
+
     detail = client.get(f"/api/message-workbench/customers/{lead_id}").json()
     assert len(detail["sources"]) == 2
     assert detail["events"][0]["to_status"] == "已私信"

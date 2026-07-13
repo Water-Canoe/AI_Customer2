@@ -6,7 +6,8 @@ import { platformName } from '../shared/format'
 import type { Dict } from '../shared/types'
 import { iconBadge, sectionTitle } from '../components/ui/Workbench'
 
-const statusTabs = ['待私信', '已私信', '未回复', '已回复', '未成交', '已成交', '全部']
+// “已超时”是提醒视图，不改变客户原有跟进状态。
+const statusTabs = ['待私信', '已私信', '未回复', '已超时', '已回复', '未成交', '已成交', '全部']
 const keywordPageSize = 8
 const autoBatchConfigKey = 'message-workbench-auto-batch-config'
 const autoBatchDefaults = { count: 10, min: 5, max: 20 }
