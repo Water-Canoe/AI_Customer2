@@ -57,6 +57,17 @@ def get_backup_root(db_path: Path | None = None) -> Path:
     return (db_path or get_db_path()).parent / "backups"
 
 
+def get_backup_data_roots() -> dict[str, Path]:
+    """Return user-owned folders that must stay consistent with the business database."""
+    root = get_data_root()
+    return {
+        "traffic_images": root / "traffic_images",
+        "content_assets": get_content_assets_root(),
+        "video_tasks": get_video_generation_root() / "tasks",
+        "social_publish": get_social_publish_root(),
+    }
+
+
 @contextmanager
 def connect(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
     """Open a SQLite connection with dict-like rows and FK checks."""
@@ -623,7 +634,7 @@ def init_db() -> None:
                 get_backup_root(path),
                 reason=f"pre_migration_{pending[0].version}_{pending[-1].version}",
                 schema_version=migrations.current_version(conn),
-                assets_root=path.parent / "traffic_images",
+                data_roots=get_backup_data_roots(),
             )
         migrations.apply_migrations(conn, SCHEMA_SQL)
         for key, value in DEFAULT_SETTINGS.items():

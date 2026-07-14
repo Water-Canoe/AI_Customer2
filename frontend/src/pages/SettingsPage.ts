@@ -215,7 +215,7 @@ export default defineComponent({
       backupCreating.value = true
       try {
         await api.post('/system/backups', { reason: 'manual' })
-        ElMessage.success('业务数据库和引流图片已备份')
+        ElMessage.success('业务数据库、内容资产和成品文件已备份')
         await loadBackups()
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '创建备份失败')
@@ -394,8 +394,8 @@ export default defineComponent({
           renderTombstones(props.tombstoneSummary as Dict, props.tombstones as Dict, props.tombstoneFilters as Dict, filters => emit('load-tombstones', filters)),
           h('div', { class: 'danger-zone' }, [
             sectionTitle({ title: '危险操作', subtitle: '执行前自动备份', icon: Warning, tone: 'red', compact: true }),
-            h('p', '清空项目库和原始采集库中的采集、私信、引流、AI 与日志数据；配置和浏览器登录状态保留。'),
-            h('button', { class: 'wide-action danger-action', onClick: () => emit('clear-data') }, [h(Delete, { class: 'inline-icon' }), '清空所有数据'])
+            h('p', '清空项目库和原始采集库中的业务记录；配置、登录状态和本地素材文件保留。'),
+            h('button', { class: 'wide-action danger-action', onClick: () => emit('clear-data') }, [h(Delete, { class: 'inline-icon' }), '清空业务记录'])
           ])
         ])
         ]
@@ -623,7 +623,7 @@ function renderBackups(
       ? h('div', { class: 'backup-list' }, items.map((item: Dict) => h('article', [
           h('div', [
             h('strong', item.created_at || item.id),
-            h('span', `${formatFileSize(item.database_size)} · ${item.asset_count || 0} 张图片`)
+            h('span', `${formatFileSize(item.database_size)} + ${formatFileSize(item.data_size)} · ${item.file_count || 0} 个文件`)
           ]),
           h('small', backupReasonLabel(item.reason)),
           h('button', {
@@ -638,6 +638,7 @@ function renderBackups(
 
 function formatFileSize(value: unknown) {
   const bytes = Number(value || 0)
+  if (bytes <= 0) return '0 KB'
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }

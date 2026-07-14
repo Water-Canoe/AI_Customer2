@@ -44,6 +44,10 @@ def stop_scheduler(timeout_seconds: float = 3.0) -> None:
         thread.join(timeout=max(0.0, timeout_seconds))
 
 
+def scheduler_running() -> bool:
+    return bool(_SCHEDULER_THREAD and _SCHEDULER_THREAD.is_alive())
+
+
 def _scheduler_loop() -> None:
     # 起始时间设为进程启动时刻，因此关机期间错过的计划不会补跑。
     last_scan = datetime.now()

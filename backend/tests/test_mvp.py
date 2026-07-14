@@ -5969,6 +5969,7 @@ def test_clear_all_data_clears_project_and_media_crawler_databases(tmp_path: Pat
     )
     import_for_task(str(task["id"]))
     with database.connect() as conn:
+        conn.execute("UPDATE crawl_jobs SET status = 'succeeded' WHERE id = ?", (task["id"],))
         conn.execute(
             """
             INSERT INTO deleted_identities(entity_type, platform, identifier_type, identifier_value, source)
@@ -5980,7 +5981,7 @@ def test_clear_all_data_clears_project_and_media_crawler_databases(tmp_path: Pat
     rejected = client.post("/api/settings/clear-data", json={"confirm": "确认"})
     assert rejected.status_code == 400
 
-    response = client.post("/api/settings/clear-data", json={"confirm": "清空所有数据"})
+    response = client.post("/api/settings/clear-data", json={"confirm": "清空业务记录"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["project"]["rows"] > 0

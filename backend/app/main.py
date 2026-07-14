@@ -5,13 +5,13 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app import database
 from app.routers import ai, automation, content, message, overview, runtime, system, tasks, traffic
-from app.services import automation_workbench, job_queue, profile_manager
+from app.services import automation_workbench, data_management, job_queue, profile_manager
 from app.version import APP_VERSION
 
 
@@ -29,6 +29,13 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="AI拓客工具", version=APP_VERSION, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def reject_requests_during_maintenance(request: Request, call_next):
+    if data_management.maintenance_active() and request.url.path != "/api/health":
+        return JSONResponse(status_code=503, content={"detail": "系统正在备份或维护数据，请稍后重试"})
+    return await call_next(request)
 
 app.add_middleware(
     CORSMiddleware,

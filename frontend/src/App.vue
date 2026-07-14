@@ -1355,14 +1355,14 @@ async function clearAllData() {
   let value = ''
   try {
     const result = await ElMessageBox.prompt(
-      '系统会先自动备份，再清空项目业务库、私信批次、引流记录、AI结果、证据链和原始采集数据。配置项与浏览器登录状态保留。请输入“清空所有数据”确认。',
-      '清空所有数据',
+      '系统会先完整备份，再清空项目和原始采集库中的业务记录。配置、登录状态和本地素材文件保留。请输入“清空业务记录”确认。',
+      '清空业务记录',
       {
         confirmButtonText: '清空',
         cancelButtonText: '取消',
-        inputPlaceholder: '清空所有数据',
-        inputPattern: /^清空所有数据$/,
-        inputErrorMessage: '必须输入“清空所有数据”',
+        inputPlaceholder: '清空业务记录',
+        inputPattern: /^清空业务记录$/,
+        inputErrorMessage: '必须输入“清空业务记录”',
         type: 'warning',
       },
     )
@@ -1377,7 +1377,7 @@ async function clearAllData() {
     selectedTask.value = null
     await refreshAll()
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '清空所有数据失败')
+    ElMessage.error(error?.response?.data?.detail || '清空业务记录失败')
   }
 }
 

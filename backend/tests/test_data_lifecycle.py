@@ -58,32 +58,99 @@ def test_backup_restore_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     from app import database
     from app.services import data_management
 
+    files = {
+        database.get_backup_data_roots()["traffic_images"] / "comment.png": b"old-image",
+        database.get_backup_data_roots()["content_assets"] / "originals" / "asset.mp4": b"old-asset",
+        database.get_backup_data_roots()["video_tasks"] / "job-1" / "final.mp4": b"old-video",
+        database.get_backup_data_roots()["social_publish"] / "accounts" / "account.json": b"old-login",
+    }
+    for path, content in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
     with database.connect() as conn:
         database.set_setting(conn, "ai_model", "before-backup")
     backup = data_management.create_backup("test_round_trip")
+    assert backup["file_count"] == 4
     with database.connect() as conn:
         database.set_setting(conn, "ai_model", "after-backup")
+    for path in files:
+        path.write_bytes(b"changed")
 
     result = data_management.restore_backup(str(backup["id"]), "恢复备份")
 
     assert result["ok"] is True
     assert result["safety_backup"]["reason"].startswith("pre_restore_")
+    assert result["restored"]["restored_files"] == {
+        "traffic_images": 1,
+        "content_assets": 1,
+        "video_tasks": 1,
+        "social_publish": 1,
+    }
+    for path, content in files.items():
+        assert path.read_bytes() == content
     with database.connect() as conn:
         assert database.get_setting(conn, "ai_model") == "before-backup"
 
 
-def test_clear_all_data_includes_message_and_traffic_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_active_jobs_covers_runtime_content_and_pending_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_database(tmp_path, monkeypatch)
+    from app import database
+    from app.services import data_management
+
+    with database.connect() as conn:
+        conn.execute("INSERT INTO runtime_jobs(id, kind) VALUES('runtime-1', 'video_generation')")
+        conn.execute("INSERT INTO video_jobs(id, subject) VALUES('video-1', '测试视频')")
+        conn.execute("INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES('account-1', 'dy', '测试账号', 'accounts/account-1.json')")
+        conn.execute("INSERT INTO publish_tasks(id, batch_id, account_id, source_type, content_type, title) VALUES('publish-1', 'batch-1', 'account-1', 'asset_video', 'video', '测试发布')")
+        conn.execute("INSERT INTO analysis_jobs(id, target_type, target_id) VALUES('analysis-1', 'lead', 1)")
+
+    assert {item["table"] for item in data_management.active_jobs()} >= {
+        "runtime_jobs",
+        "video_jobs",
+        "publish_tasks",
+        "analysis_jobs",
+    }
+    with pytest.raises(ValueError, match="不能创建备份"):
+        data_management.create_backup("active_jobs")
+    assert data_management.maintenance_active() is False
+
+
+def test_maintenance_window_pauses_scheduler_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_database(tmp_path, monkeypatch)
+    from app.services import automation_workbench, data_management
+
+    events: list[str] = []
+    monkeypatch.setattr(automation_workbench, "scheduler_running", lambda: True)
+    monkeypatch.setattr(automation_workbench, "stop_scheduler", lambda: events.append("stop"))
+    monkeypatch.setattr(automation_workbench, "start_scheduler", lambda: events.append("start"))
+
+    with data_management.maintenance_window("测试维护"):
+        assert data_management.maintenance_active() is True
+        with data_management.maintenance_window("嵌套维护"):
+            assert data_management.maintenance_active() is True
+
+    assert data_management.maintenance_active() is False
+    assert events == ["stop", "start"]
+
+
+def test_clear_all_data_includes_all_business_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, raw_db = prepare_database(tmp_path, monkeypatch)
     from app import database
     from app.services import maintenance
 
     with database.connect() as conn:
-        conn.execute("INSERT INTO message_batches(id) VALUES('batch-1')")
+        conn.execute("INSERT INTO message_batches(id, status) VALUES('batch-1', 'completed')")
         conn.execute("INSERT INTO traffic_plans(id, name) VALUES('plan-1', '测试计划')")
-        conn.execute("INSERT INTO analysis_jobs(id, target_type, target_id) VALUES('job-1', 'lead', 1)")
+        conn.execute("INSERT INTO analysis_jobs(id, target_type, target_id, status) VALUES('job-1', 'lead', 1, 'succeeded')")
+        conn.execute("INSERT INTO content_assets(id, name, asset_type, relative_path, file_size, sha256) VALUES('asset-1', '素材', 'video', 'originals/asset-1.mp4', 1, 'hash-1')")
+        conn.execute("INSERT INTO video_jobs(id, subject, status) VALUES('video-1', '测试视频', 'succeeded')")
+        conn.execute("INSERT INTO video_job_assets(video_job_id, asset_id) VALUES('video-1', 'asset-1')")
+        conn.execute("INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES('account-1', 'dy', '测试账号', 'accounts/account-1.json')")
+        conn.execute("INSERT INTO publish_tasks(id, batch_id, account_id, source_type, content_type, title, status) VALUES('publish-1', 'publish-batch-1', 'account-1', 'asset_video', 'video', '测试发布', 'succeeded')")
+        conn.execute("INSERT INTO publish_task_assets(task_id, asset_id) VALUES('publish-1', 'asset-1')")
 
     result = maintenance.clear_all_data(
-        "清空所有数据",
+        "清空业务记录",
         create_backup=False,
         include_crawler=True,
     )
@@ -91,7 +158,17 @@ def test_clear_all_data_includes_message_and_traffic_tables(tmp_path: Path, monk
     assert result["project"]["tables"]["message_batches"] == 1
     assert result["project"]["tables"]["traffic_plans"] == 1
     with database.connect() as conn:
-        for table in ("message_batches", "traffic_plans", "analysis_jobs"):
+        for table in (
+            "message_batches",
+            "traffic_plans",
+            "analysis_jobs",
+            "content_assets",
+            "video_jobs",
+            "video_job_assets",
+            "publish_accounts",
+            "publish_tasks",
+            "publish_task_assets",
+        ):
             assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
     raw_conn = sqlite3.connect(raw_db)
     try:

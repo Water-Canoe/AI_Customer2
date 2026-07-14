@@ -8,38 +8,8 @@ from app import database
 from app.services import data_management
 
 
-CONFIRM_TEXT = "清空所有数据"
-
-PROJECT_DATA_TABLES = [
-    "runtime_jobs",
-    "message_send_attempts",
-    "automation_run_items",
-    "automation_runs",
-    "automation_plans",
-    "traffic_action_logs",
-    "traffic_records",
-    "traffic_run_items",
-    "traffic_runs",
-    "traffic_plans",
-    "traffic_material_texts",
-    "traffic_material_images",
-    "traffic_dedup_ledger",
-    "message_batch_items",
-    "message_batches",
-    "deletion_audit",
-    "analysis_jobs",
-    "deleted_identities",
-    "raw_source_refs",
-    "lead_status_events",
-    "lead_sources",
-    "lead_user_accounts",
-    "account_sources",
-    "comments",
-    "contents",
-    "user_accounts",
-    "task_logs",
-    "crawl_jobs",
-]
+CONFIRM_TEXT = "清空业务记录"
+RETAINED_PROJECT_TABLES = {"settings", "schema_migrations"}
 
 
 def _table_count(conn: sqlite3.Connection, table: str) -> int:
@@ -77,43 +47,35 @@ def clear_all_data(
     if confirm != CONFIRM_TEXT:
         raise ValueError(f"确认文本不正确，请输入：{CONFIRM_TEXT}")
 
-    active = data_management.active_jobs()
-    if active:
-        summary = "、".join(f"{item['table']} {item['count']} 个" for item in active)
-        raise ValueError(f"仍有运行中任务，不能清空数据：{summary}")
+    with data_management.maintenance_window("清空业务记录"):
+        backup = data_management.create_backup("pre_clear_all_data") if create_backup else None
 
-    backup = data_management.create_backup("pre_clear_all_data") if create_backup else None
+        with database.connect() as conn:
+            # 接受用户从设置页粘贴的带引号路径，但不放宽确认文本。
+            raw_db_value = str(database.get_setting(conn, "media_crawler_db_path", "")).strip().strip('"').strip("'")
+            raw_db_path = Path(raw_db_value).expanduser()
+            if include_crawler and not raw_db_path.exists():
+                raise ValueError(f"MyCrawler SQLite 不存在：{raw_db_path}")
+            project_result = _clear_project_database(conn)
 
-    with database.connect() as conn:
-        # 接受用户从设置页粘贴的带引号路径，但不放宽确认文本。
-        raw_db_value = str(database.get_setting(conn, "media_crawler_db_path", "")).strip().strip('"').strip("'")
-        raw_db_path = Path(raw_db_value).expanduser()
-        if include_crawler and not raw_db_path.exists():
-            raise ValueError(f"MyCrawler SQLite 不存在：{raw_db_path}")
-        project_result = _clear_project_database(conn)
-
-    raw_result = _clear_media_crawler_database(raw_db_path) if include_crawler else None
-    return {
-        "ok": True,
-        "backup": backup,
-        "project": project_result,
-        "media_crawler": raw_result,
-        "retained_asset_directory": str(database.get_db_path().parent / "traffic_images"),
-    }
+        raw_result = _clear_media_crawler_database(raw_db_path) if include_crawler else None
+        return {
+            "ok": True,
+            "backup": backup,
+            "project": project_result,
+            "media_crawler": raw_result,
+            "retained_data_directories": [str(path) for path in database.get_backup_data_roots().values()],
+        }
 
 
 def _clear_project_database(conn: sqlite3.Connection) -> dict[str, Any]:
     deleted: dict[str, int] = {}
     conn.execute("PRAGMA foreign_keys = OFF")
     try:
-        existing_tables = set(_list_user_tables(conn))
-        cleared_tables: list[str] = []
-        for table in PROJECT_DATA_TABLES:
-            if table not in existing_tables:
-                continue
+        cleared_tables = [table for table in _list_user_tables(conn) if table not in RETAINED_PROJECT_TABLES]
+        for table in cleared_tables:
             deleted[table] = _table_count(conn, table)
             conn.execute(f"DELETE FROM {database.quote_identifier(table)}")
-            cleared_tables.append(table)
         _reset_sequences(conn, cleared_tables)
         database.set_setting(conn, "next_task_number", "1")
     finally:

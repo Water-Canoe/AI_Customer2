@@ -11,7 +11,7 @@ from typing import Any
 
 DATABASE_FILE = "ai_customer.sqlite3"
 MANIFEST_FILE = "manifest.json"
-ASSET_DIR = "traffic_images"
+DATA_DIR = "files"
 
 
 def create_backup(
@@ -19,7 +19,7 @@ def create_backup(
     backup_root: Path,
     reason: str,
     schema_version: int,
-    assets_root: Path | None = None,
+    data_roots: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
     backup_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     backup_dir = backup_root / backup_id
@@ -35,7 +35,11 @@ def create_backup(
     finally:
         destination.close()
 
-    asset_count = _copy_assets(assets_root, backup_dir / ASSET_DIR)
+    directories: dict[str, dict[str, int]] = {}
+    for name, source in (data_roots or {}).items():
+        safe_name = _safe_directory_name(name)
+        file_count, size = _copy_directory(source, backup_dir / DATA_DIR / safe_name)
+        directories[safe_name] = {"file_count": file_count, "size": size}
     manifest = {
         "id": backup_id,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -44,8 +48,9 @@ def create_backup(
         "database_file": DATABASE_FILE,
         "database_size": database_path.stat().st_size,
         "database_sha256": _sha256(database_path),
-        "asset_dir": ASSET_DIR,
-        "asset_count": asset_count,
+        "file_count": sum(item["file_count"] for item in directories.values()),
+        "data_size": sum(item["size"] for item in directories.values()),
+        "data_directories": directories,
     }
     (backup_dir / MANIFEST_FILE).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
@@ -72,12 +77,32 @@ def list_backups(backup_root: Path) -> list[dict[str, Any]]:
     return sorted(results, key=lambda item: str(item.get("id") or ""), reverse=True)
 
 
-def restore_backup(backup_root: Path, backup_id: str, target_db: Path, assets_root: Path) -> dict[str, Any]:
+def restore_backup(
+    backup_root: Path,
+    backup_id: str,
+    target_db: Path,
+    data_roots: dict[str, Path],
+) -> dict[str, Any]:
     manifest, backup_dir, source_db = load_backup(backup_root, backup_id)
     expected_hash = str(manifest.get("database_sha256") or "")
     actual_hash = _sha256(source_db)
     if not expected_hash or actual_hash != expected_hash:
         raise ValueError("备份数据库校验失败，已拒绝恢复")
+
+    directories = manifest.get("data_directories")
+    if not isinstance(directories, dict):
+        raise ValueError("备份缺少业务文件清单")
+    restore_sources: list[tuple[str, Path, Path]] = []
+    for name, metadata in directories.items():
+        safe_name = _safe_directory_name(name)
+        destination = data_roots.get(safe_name)
+        if destination is None:
+            raise ValueError(f"备份包含未知业务目录：{safe_name}")
+        expected_count = int(metadata.get("file_count") or 0) if isinstance(metadata, dict) else 0
+        source = backup_dir / DATA_DIR / safe_name
+        if expected_count and not source.is_dir():
+            raise ValueError(f"备份业务目录不完整：{safe_name}")
+        restore_sources.append((safe_name, source, destination))
 
     source = sqlite3.connect(f"file:{source_db.as_posix()}?mode=ro", uri=True)
     target_db.parent.mkdir(parents=True, exist_ok=True)
@@ -92,11 +117,13 @@ def restore_backup(backup_root: Path, backup_id: str, target_db: Path, assets_ro
         target.close()
         source.close()
 
-    restored_assets = _copy_assets(backup_dir / ASSET_DIR, assets_root)
+    restored: dict[str, int] = {}
+    for name, source_dir, destination in restore_sources:
+        restored[name] = _copy_directory(source_dir, destination)[0]
     return {
         "id": backup_id,
         "schema_version": int(manifest.get("schema_version") or 0),
-        "restored_assets": restored_assets,
+        "restored_files": restored,
     }
 
 
@@ -115,10 +142,11 @@ def load_backup(backup_root: Path, backup_id: str) -> tuple[dict[str, Any], Path
     return manifest, backup_dir, source_db
 
 
-def _copy_assets(source: Path | None, destination: Path) -> int:
+def _copy_directory(source: Path | None, destination: Path) -> tuple[int, int]:
     if source is None or not source.is_dir():
-        return 0
+        return 0, 0
     count = 0
+    size = 0
     for item in source.rglob("*"):
         if not item.is_file():
             continue
@@ -127,7 +155,15 @@ def _copy_assets(source: Path | None, destination: Path) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(item, target)
         count += 1
-    return count
+        size += item.stat().st_size
+    return count, size
+
+
+def _safe_directory_name(value: str) -> str:
+    name = str(value or "").strip()
+    if not name or Path(name).name != name or name in {".", ".."}:
+        raise ValueError("备份业务目录名称不合法")
+    return name
 
 
 def _sha256(path: Path) -> str:
