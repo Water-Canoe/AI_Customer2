@@ -423,14 +423,38 @@ def get_task(task_id: str) -> dict[str, object] | None:
         return task
 
 
-def list_tasks(include_archived: bool = False) -> list[dict[str, object]]:
+def list_tasks(
+    include_archived: bool = False,
+    page: int = 1,
+    page_size: int = 20,
+    query: str = "",
+) -> dict[str, object]:
+    page = max(1, int(page or 1))
+    page_size = max(1, min(100, int(page_size or 20)))
+    query = str(query or "").strip()
+    # 任务产出统计只计算当前页，避免列表越大查询越慢。
     with database.connect() as conn:
-        where = "" if include_archived else "WHERE archived = 0"
-        rows = conn.execute(f"SELECT * FROM crawl_jobs {where} ORDER BY created_at DESC").fetchall()
+        clauses = [] if include_archived else ["archived = 0"]
+        params: list[object] = []
+        if query:
+            clauses.append("(id LIKE ? OR name LIKE ?)")
+            params.extend([f"%{query}%", f"%{query}%"])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        total = _count(conn, f"SELECT COUNT(*) AS count FROM crawl_jobs {where}", tuple(params))
+        rows = conn.execute(
+            f"SELECT * FROM crawl_jobs {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            [*params, page_size, (page - 1) * page_size],
+        ).fetchall()
         tasks = database.rows_to_dicts(rows)
         for task in tasks:
             task["outcome"] = _task_outcome(conn, task)
-        return tasks
+        return {
+            "items": tasks,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
+        }
 
 
 def _count(conn, sql: str, params: tuple[object, ...]) -> int:

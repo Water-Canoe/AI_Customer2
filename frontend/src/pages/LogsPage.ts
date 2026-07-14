@@ -1,7 +1,7 @@
-﻿import { computed, defineComponent, h, ref, watch } from 'vue'
+﻿import { defineComponent, h, ref, watch } from 'vue'
 import { Document, Tickets, Warning } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
-import { clamp, platformName } from '../shared/format'
+import { platformName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 import { RuntimeQueuePanel } from '../components/runtime/RuntimeQueuePanel'
@@ -11,41 +11,26 @@ export default defineComponent({
     tasks: { type: Array, required: true },
     selectedTask: { type: Object, default: null },
     diagnostics: { type: Object, default: () => ({}) },
-    dedupSummary: { type: Object, default: () => ({}) }
+    dedupSummary: { type: Object, default: () => ({}) },
+    page: { type: Number, default: 1 },
+    pageSize: { type: Number, default: 20 },
+    total: { type: Number, default: 0 },
+    totalPages: { type: Number, default: 1 },
+    query: { type: String, default: '' }
   },
-  emits: ['select-task', 'retry-task', 'cancel-task', 'archive-task', 'delete-task'],
+  emits: ['select-task', 'retry-task', 'cancel-task', 'archive-task', 'delete-task', 'change-task-page', 'change-task-query'],
   setup(props, { emit }) {
-    const taskSearch = ref('')
-    const taskPage = ref(1)
-    const taskPageSize = 5
-    const filteredTasks = computed(() => {
-      const keyword = taskSearch.value.trim().toLowerCase()
-      const tasks = props.tasks as Dict[]
-      if (!keyword) return tasks
-      return tasks.filter(task => {
-        const taskId = String(task.id || '').toLowerCase()
-        const taskName = String(task.name || '').toLowerCase()
-        return taskId.includes(keyword) || taskName.includes(keyword)
-      })
-    })
-
-    const totalTaskPages = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / taskPageSize)))
-    const pagedTasks = computed(() => {
-      const start = (taskPage.value - 1) * taskPageSize
-      return filteredTasks.value.slice(start, start + taskPageSize)
-    })
+    const taskSearch = ref(props.query)
 
     function goTaskPage(delta: number) {
-      taskPage.value = clamp(taskPage.value + delta, 1, totalTaskPages.value)
+      emit('change-task-page', { page: Math.max(1, Math.min(props.totalPages, props.page + delta)) })
     }
 
-    watch(() => [taskSearch.value, (props.tasks as Dict[]).length], () => {
-      taskPage.value = 1
-    })
+    function applyTaskSearch() {
+      emit('change-task-query', taskSearch.value)
+    }
 
-    watch(totalTaskPages, pages => {
-      if (taskPage.value > pages) taskPage.value = pages
-    })
+    watch(() => props.query, value => taskSearch.value = value)
 
     return () => h(SplitPane, { storageKey: 'logs', side: 'right', defaultSideWidth: 390 }, {
       default: () => [
@@ -77,11 +62,13 @@ export default defineComponent({
             placeholder: '搜索任务ID或任务名',
             onInput: (event: Event) => {
               taskSearch.value = (event.target as HTMLInputElement).value
-            }
+            },
+            onKeydown: (event: KeyboardEvent) => { if (event.key === 'Enter') applyTaskSearch() }
           }),
-          h('small', `共 ${filteredTasks.value.length} 个任务`)
+          h('button', { class: 'filter-button', onClick: applyTaskSearch }, '搜索'),
+          h('small', `共 ${props.total} 个任务`)
         ]),
-        h('div', { class: 'task-list' }, pagedTasks.value.length ? pagedTasks.value.map(task => h('article', {
+        h('div', { class: 'task-list' }, (props.tasks as Dict[]).length ? (props.tasks as Dict[]).map(task => h('article', {
           class: ['task-row', { selected: props.selectedTask?.id === task.id }],
           role: 'button',
           tabindex: 0,
@@ -141,9 +128,9 @@ export default defineComponent({
           tone: 'gray'
         })]),
         h('div', { class: 'task-list-pagination' }, [
-          h('button', { disabled: taskPage.value <= 1, onClick: () => goTaskPage(-1) }, '上一页'),
-          h('span', `${taskPage.value} / ${totalTaskPages.value}`),
-          h('button', { disabled: taskPage.value >= totalTaskPages.value, onClick: () => goTaskPage(1) }, '下一页')
+          h('button', { disabled: props.page <= 1, onClick: () => goTaskPage(-1) }, '上一页'),
+          h('span', `${props.page} / ${props.totalPages}`),
+          h('button', { disabled: props.page >= props.totalPages, onClick: () => goTaskPage(1) }, '下一页')
         ])
       ])
       ]

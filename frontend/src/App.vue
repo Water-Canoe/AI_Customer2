@@ -104,6 +104,11 @@ const activeLibrary = ref('contents')
 const tableStatus = ref('')
 const tableKeyword = ref('')
 const tasks = ref<Dict[]>([])
+const taskPage = ref(1)
+const taskPageSize = ref(10)
+const taskTotal = ref(0)
+const taskTotalPages = ref(1)
+const taskQuery = ref('')
 const tableRows = ref<Dict[]>([])
 const tableLoading = ref(false)
 const tablePage = ref(1)
@@ -225,6 +230,11 @@ const routeProps = computed(() => {
       selectedTask: selectedTask.value || undefined,
       diagnostics: taskDiagnostics.value,
       dedupSummary: taskDedupSummary.value,
+      page: taskPage.value,
+      pageSize: taskPageSize.value,
+      total: taskTotal.value,
+      totalPages: taskTotalPages.value,
+      query: taskQuery.value,
     }
   }
   if (activeView.value === 'tables') {
@@ -310,6 +320,8 @@ const routeListeners = computed(() => {
       'cancel-task': cancelTask,
       'archive-task': archiveTask,
       'delete-task': deleteTask,
+      'change-task-page': changeTaskPage,
+      'change-task-query': changeTaskQuery,
     }
   }
   if (activeView.value === 'tables') {
@@ -365,9 +377,39 @@ async function loadContentShell() {
 }
 
 async function loadTasks() {
-  const { data } = await api.get('/tasks')
-  tasks.value = data
-  if (!selectedTask.value && data.length) selectedTask.value = await fetchTask(data[0].id)
+  const { data } = await api.get('/tasks', {
+    params: { page: taskPage.value, page_size: taskPageSize.value, query: taskQuery.value }
+  })
+  tasks.value = data.items
+  taskTotal.value = Number(data.total || 0)
+  taskPage.value = Number(data.page || 1)
+  taskPageSize.value = Number(data.page_size || taskPageSize.value)
+  taskTotalPages.value = Number(data.total_pages || 1)
+  if (!data.items.length && taskPage.value > taskTotalPages.value) {
+    taskPage.value = taskTotalPages.value
+    await loadTasks()
+    return
+  }
+  if (!selectedTask.value && data.items.length) selectedTask.value = await fetchTask(data.items[0].id)
+}
+
+async function changeTaskPage(payload: Dict) {
+  taskPage.value = Number(payload.page || 1)
+  selectedTask.value = null
+  taskDiagnostics.value = {}
+  taskDedupSummary.value = {}
+  await loadTasks()
+  await loadSelectedTaskDiagnostics()
+}
+
+async function changeTaskQuery(query: string) {
+  taskQuery.value = String(query || '').trim()
+  taskPage.value = 1
+  selectedTask.value = null
+  taskDiagnostics.value = {}
+  taskDedupSummary.value = {}
+  await loadTasks()
+  await loadSelectedTaskDiagnostics()
 }
 
 async function fetchTask(id: string) {

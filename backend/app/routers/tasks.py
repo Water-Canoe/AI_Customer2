@@ -89,8 +89,13 @@ def create_account_find_customer_task(account_id: int, run_now: bool = True) -> 
 
 
 @router.get("/tasks")
-def list_tasks(include_archived: bool = False) -> list[dict[str, object]]:
-    return crawler_adapter.list_tasks(include_archived)
+def list_tasks(
+    include_archived: bool = False,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    query: str = Query(default=""),
+) -> dict[str, object]:
+    return crawler_adapter.list_tasks(include_archived, page, page_size, query)
 
 
 @router.get("/tasks/{task_id}")

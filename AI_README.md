@@ -108,6 +108,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 数据表接口使用数据库级分页，参数为 `page / page_size`，响应包含 `total / total_pages`。前端切页和切换每页数量时只请求当前页，不再先读取最多 500 行后在浏览器内切片。
 
+采集任务列表同样使用服务端分页并支持按任务 ID 或名称搜索；任务产出统计只计算当前页。任务与日志页提交搜索词或切页时才请求对应记录，不再加载全部任务后在前端过滤。
+
 前端构建链使用 Vite 8、Vue Test Utils 和 Vitest 4；测试文件与源码同目录使用 `*.test.ts`。当前测试覆盖共享格式化、自动同步调度和运行队列的加载/取消交互，`npm audit` 为 0 个已知漏洞。
 
 `App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。

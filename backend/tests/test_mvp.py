@@ -5728,7 +5728,7 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     assert task_response.json()["outcome"]["counts"]["leads"] == 1
     list_response = client.get("/api/tasks")
     assert list_response.status_code == 200
-    assert list_response.json()[0]["outcome"]["counts"]["comments"] == 1
+    assert list_response.json()["items"][0]["outcome"]["counts"]["comments"] == 1
     response = client.put("/api/settings", json={"values": {"ai_model": "deepseek-chat"}})
     assert response.status_code == 200
     assert response.json()["ai_model"] == "deepseek-chat"
@@ -5773,6 +5773,32 @@ def test_table_api_uses_database_pagination(tmp_path: Path) -> None:
     assert payload["total_pages"] == 3
     assert payload["page"] == 3
     assert len(payload["rows"]) == 5
+
+
+def test_task_api_uses_database_pagination_and_search(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+
+    for index in range(25):
+        crawler_adapter.create_task(
+            TaskCreate(
+                mode="competitor_discovery",
+                platform="dy",
+                keywords=f"分页关键词-{index}",
+                execute_crawler=False,
+            )
+        )
+
+    client = TestClient(app)
+    page = client.get("/api/tasks", params={"page": 3, "page_size": 10}).json()
+    assert page["total"] == 25
+    assert page["total_pages"] == 3
+    assert len(page["items"]) == 5
+    query = client.get("/api/tasks", params={"query": "分页关键词-24"}).json()
+    assert query["total"] == 1
+    assert query["items"][0]["keywords"] == "分页关键词-24"
 
 
 def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
