@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Any, List, Optional, Union
 
 import pydantic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.video_engine.config import config
 
@@ -44,11 +44,10 @@ class VideoAspect(str, Enum):
         raise ValueError(f"unsupported video aspect: {self}")
 
 
-class _Config:
-    arbitrary_types_allowed = True
+_MATERIAL_CONFIG = ConfigDict(arbitrary_types_allowed=True)
 
 
-@pydantic.dataclasses.dataclass(config=_Config)
+@pydantic.dataclasses.dataclass(config=_MATERIAL_CONFIG)
 class MaterialInfo:
     provider: str = "pexels"
     url: str = ""
@@ -233,19 +232,20 @@ class TaskResponse(BaseResponse):
 
     data: TaskResponseData
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
                 "data": {"task_id": "6c85c8cc-a77a-42b9-bc30-947815aa0558"},
             },
         }
+    )
 
 
 class TaskQueryResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
@@ -261,11 +261,12 @@ class TaskQueryResponse(BaseResponse):
                 },
             },
         }
+    )
 
 
 class TaskDeletionResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
@@ -281,11 +282,12 @@ class TaskDeletionResponse(BaseResponse):
                 },
             },
         }
+    )
 
 
 class VideoScriptResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
@@ -294,22 +296,24 @@ class VideoScriptResponse(BaseResponse):
                 },
             },
         }
+    )
 
 
 class VideoTermsResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
                 "data": {"video_terms": ["sky", "tree"]},
             },
         }
+    )
 
 
 class VideoSocialMetadataResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
@@ -320,11 +324,12 @@ class VideoSocialMetadataResponse(BaseResponse):
                 },
             },
         }
+    )
 
 
 class BgmRetrieveResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
@@ -339,21 +344,23 @@ class BgmRetrieveResponse(BaseResponse):
                 },
             },
         }
+    )
 
 
 class BgmUploadResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
                 "data": {"file": "/video engine/resource/songs/example.mp3"},
             },
         }
+    )
 
 class VideoMaterialRetrieveResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
@@ -368,10 +375,11 @@ class VideoMaterialRetrieveResponse(BaseResponse):
                 },
             },
         }
+    )
 
 class VideoMaterialUploadResponse(BaseResponse):
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "message": "success",
@@ -380,3 +388,4 @@ class VideoMaterialUploadResponse(BaseResponse):
                 },
             },
         }
+    )

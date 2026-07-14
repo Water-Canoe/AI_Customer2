@@ -422,7 +422,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/publish-accounts`：发布账号列表、新增、修改和软删除；`/{id}/login`、`/{id}/check`、`/{id}/qrcode` 负责扫码登录、有效性检查和二维码展示。
 - `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
-`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
+`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。视频引擎的数据模型统一使用 Pydantic 2 的 `ConfigDict`，不再保留已经弃用的类式 `Config`。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
 本轮完整后端回归为380项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布或真实用户私信。前端为4个测试文件、14项测试通过，并完成类型检查和生产构建。
 
 ## 授权服务
