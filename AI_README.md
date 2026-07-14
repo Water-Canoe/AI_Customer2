@@ -41,6 +41,7 @@
 
 版本控制只保留项目源码和文档；`data/`、`backend/runtime/`、`runtime/`、`.manual_test_find_customers/` 里的数据库文件以及本地 `MyCrawler/` 外部依赖目录都属于运行产物或本机依赖，不提交到源码仓库。
 本地采集依赖目录、界面文案、日志文案和默认路径统一显示为 `MyCrawler`；内部 `media_crawler_*` 设置键继续作为历史数据库/API 键保留，不做额外迁移。
+根目录 `pytest.ini` 把测试收集范围固定为 `backend/tests` 并加入后端模块路径；从项目根目录运行 `backend\.venv\Scripts\python.exe -m pytest -q` 不会误收集 `GitItem/` 或 `MyCrawler/` 的上游测试。运行目录忽略规则使用根路径锚定，不会再把 `frontend/src/components/runtime/` 误判为运行产物；三个平台验证工具各自的浏览器登录态目录使用明确路径忽略。视频引擎的 `azure_voices.json` 属于源码数据并纳入版本控制，打包时复制到对应模块目录。
 
 ## 抖音私信自动化测试工具
 

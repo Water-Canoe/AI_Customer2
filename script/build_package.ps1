@@ -92,6 +92,7 @@ finally {
     --additional-hooks-dir (Join-Path $ProjectRoot "packaging\hooks") `
     --add-data "$FrontendDir\dist;frontend_dist" `
     --add-data "$BackendDir\app\video_engine\resource;app/video_engine/resource" `
+    --add-data "$BackendDir\app\video_engine\services\data;app/video_engine/services/data" `
     --add-data "$BackendDir\app\video_engine\config.default.toml;app/video_engine" `
     --add-data "$BackendDir\app\video_engine\LICENSE;app/video_engine" `
     --add-data "$BackendDir\app\publish_engine\utils\stealth.min.js;app/publish_engine/utils" `

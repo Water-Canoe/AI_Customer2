@@ -9,9 +9,12 @@ __pycache__/
 htmlcov/
 
 # Runtime databases and logs
-backend/runtime/
-runtime/
-data/
+/backend/runtime/
+/runtime/
+/data/
+/tools/douyin_dm_automation/runtime/
+/tools/kuaishou_dm_automation/runtime/
+/tools/xiaohongshu_automation/runtime/
 *.sqlite
 *.sqlite3
 *.sqlite3-*
