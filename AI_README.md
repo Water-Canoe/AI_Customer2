@@ -35,6 +35,8 @@
 
 持久化表为 `automation_plans / automation_runs / automation_run_items`，其中 `automation_plans.sort_order` 同时控制页面顺序和运行优先级。运行记录保存计划配置快照、当前阶段和关联业务任务；关键词运行明细继续保存关键词、采集/AI结果和客户数，自动引流则直接在 `automation_runs.traffic_run_id / traffic_runtime_job_id` 保存关联批次和浏览器子任务，不创建伪关键词明细。调度器本身不执行浏览器、AI或引流操作，只创建 `automation_run` 编排任务；编排任务使用并发数为 1 的 `automation` 资源串行执行，再把采集、账号分析、AI、私信和引流子任务交给 `runtime_jobs` 对应资源队列。自动引流轮到执行时才按快照创建 ID 为 `automation:<automation_run_id>` 的内部 `traffic_plan` 和同 ID 的正常 `traffic_run`；内部计划不出现在引流“计划工作台”，但批次、日志、视频明细、操作记录和防重复账本仍复用现有 `traffic_*` 数据流并出现在“执行监控”和“操作记录”。停止父运行会同时取消浏览器子任务并停止关联引流批次。后端重启时复用已经持久化的关联子任务，不重放已经执行过的浏览器动作。
 
+调度器启动时只补查前 10 分钟的计划，足以覆盖正常升级和短暂重启，不会重放长时间停机期间的旧任务；`plan_id + scheduled_at` 唯一约束继续防止重复。单个到期计划触发异常会写入失败运行并继续处理同一时刻的后续计划，不会让一次异常吞掉整批调度。
+
 自动私信额度保存在设置键 `message_daily_limit / message_hourly_limit`，页面要求用户自行填写，业务校验范围分别为 1-100 和 1-40。`message_send_attempts` 是单次自动私信、批量私信、定时私信和页面手工私信按钮的统一占额记录；真实发送前原子占额，失败或结果不明确仍计入本小时和当天，同一客户当天不再由自动任务重复选择。达到小时或每日额度后当前批次立即以 `quota_reached` 结束，剩余客户留给下次计划，不等待额度恢复。额度只统计本软件产生的操作，无法读取抖音 App 或其他工具的手动发送数量。设置页“自动私信只填内容不发送”是总安全开关，开启时不能启用或运行自动私信计划。
 
 自动化接口统一位于 `/api/automation`：`GET/POST/PATCH /plans` 管理三类计划，`PUT /plans/order` 保存完整计划顺序，`POST /plans/{id}/run` 立即运行，`POST /plans/{id}/archive` 归档；`GET /runs`、`GET /runs/{id}` 和 `POST /runs/{id}/cancel` 查看或停止运行；`GET/PUT /message-limits` 查看用量并设置额度。关键词获客和自动私信在启用、立即运行及定时触发时校验 `lead` 授权，自动引流对应校验 `traffic` 授权；定时触发授权失败会留下“已跳过”运行记录和原因。自动化测试会替换授权及子任务入口，不连接真实平台、浏览器或用户。

@@ -140,6 +140,39 @@ def test_scheduled_window_triggers_only_when_time_is_crossed(tmp_path: Path, mon
     assert calls == [(plan["id"], "scheduled", datetime(2026, 7, 13, 9, 0, 0))]
 
 
+def test_scheduler_start_only_catches_up_ten_minutes() -> None:
+    from app.services import automation_workbench
+
+    now = datetime(2026, 7, 13, 9, 8, 30)
+    assert automation_workbench._scheduler_scan_start(now) == datetime(2026, 7, 13, 8, 58, 30)
+
+
+def test_scheduled_plan_failure_does_not_block_later_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import automation_workbench, license_service
+
+    first = automation_workbench.create_plan(keyword_plan_payload(name="异常计划"))
+    second = automation_workbench.create_plan(keyword_plan_payload(name="正常计划"))
+    calls: list[str] = []
+
+    def fake_create_run(plan_id: str, _trigger_type: str, _scheduled_at: datetime | None):
+        calls.append(plan_id)
+        if plan_id == first["id"]:
+            raise RuntimeError("模拟调度异常")
+        return {"id": "second-run", "plan_id": plan_id}
+
+    monkeypatch.setattr(automation_workbench, "create_run", fake_create_run)
+    monkeypatch.setattr(license_service, "ensure_authorized", lambda: {"authorized": True})
+    runs = automation_workbench.trigger_due_plans(
+        datetime(2026, 7, 13, 8, 59, 50),
+        datetime(2026, 7, 13, 9, 0, 5),
+    )
+
+    assert calls == [first["id"], second["id"]]
+    assert runs[0]["status"] == "failed"
+    assert runs[1]["id"] == "second-run"
+
+
 def test_drag_order_serializes_same_time_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database

@@ -21,6 +21,7 @@ from app.schemas import (
 
 ACTIVE_RUN_STATUSES = {"queued", "running"}
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
+SCHEDULER_CATCHUP_MINUTES = 10
 _SCHEDULER_STOP = threading.Event()
 _SCHEDULER_THREAD: threading.Thread | None = None
 _SCHEDULER_LOCK = threading.RLock()
@@ -49,8 +50,8 @@ def scheduler_running() -> bool:
 
 
 def _scheduler_loop() -> None:
-    # 起始时间设为进程启动时刻，因此关机期间错过的计划不会补跑。
-    last_scan = datetime.now()
+    # 仅补跑启动前十分钟，覆盖短暂重启且避免重放长时间停机任务。
+    last_scan = _scheduler_scan_start(datetime.now())
     while not _SCHEDULER_STOP.wait(10.0):
         now = datetime.now()
         try:
@@ -81,12 +82,28 @@ def trigger_due_plans(start: datetime, end: datetime) -> list[dict[str, Any]]:
                         _ensure_plan_authorized(str(row["plan_type"]))
                         created.append(create_run(str(row["id"]), "scheduled", scheduled_at))
                     except ValueError as exc:
-                        created.append(_record_scheduled_skip(row, scheduled_at, str(exc)))
+                        created.append(_record_scheduled_issue(row, scheduled_at, "skipped", str(exc)))
+                    except Exception as exc:
+                        # 单个计划异常只记录本次失败，后续同一时刻计划继续创建。
+                        LOGGER.exception("自动化计划触发失败：%s", row["id"])
+                        try:
+                            created.append(_record_scheduled_issue(row, scheduled_at, "failed", str(exc)))
+                        except Exception:
+                            LOGGER.exception("自动化计划失败记录写入失败：%s", row["id"])
             cursor += timedelta(days=1)
     return created
 
 
-def _record_scheduled_skip(plan: Any, scheduled_at: datetime, reason: str) -> dict[str, Any]:
+def _scheduler_scan_start(now: datetime) -> datetime:
+    return now - timedelta(minutes=SCHEDULER_CATCHUP_MINUTES)
+
+
+def _record_scheduled_issue(
+    plan: Any,
+    scheduled_at: datetime,
+    status: str,
+    reason: str,
+) -> dict[str, Any]:
     run_id = uuid4().hex[:12]
     with database.connect() as conn:
         existing = conn.execute(
@@ -101,9 +118,19 @@ def _record_scheduled_skip(plan: Any, scheduled_at: datetime, reason: str) -> di
                 INSERT INTO automation_runs(
                     id, plan_id, plan_name, plan_type, trigger_type, scheduled_at,
                     config_snapshot, status, current_stage, error, finished_at
-                ) VALUES(?, ?, ?, ?, 'scheduled', ?, ?, 'skipped', 'skipped', ?, datetime('now', 'localtime'))
+                ) VALUES(?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?, datetime('now', 'localtime'))
                 """,
-                (run_id, plan["id"], plan["name"], plan["plan_type"], scheduled_at.strftime("%Y-%m-%d %H:%M:%S"), plan["config"], reason[:2000]),
+                (
+                    run_id,
+                    plan["id"],
+                    plan["name"],
+                    plan["plan_type"],
+                    scheduled_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    plan["config"],
+                    status,
+                    status,
+                    reason[:2000],
+                ),
             )
             existing_id = run_id
     return get_run(existing_id)
