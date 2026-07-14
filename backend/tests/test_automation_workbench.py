@@ -119,6 +119,40 @@ def test_traffic_plan_schema_rejects_invalid_platform_dependencies(config: dict[
         traffic_plan_payload(config=config)
 
 
+def test_keyword_plan_cleanup_switches_require_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import automation_workbench, job_queue
+
+    payload = keyword_plan_payload(
+        config={
+            "keywords": ["AI客服"],
+            "auto_delete_non_competitors": True,
+            "auto_analyze_leads": True,
+            "auto_delete_non_customers": True,
+        }
+    )
+    assert payload.config.auto_delete_non_competitors is True
+    assert payload.config.auto_delete_non_customers is True
+
+    with pytest.raises(ValueError, match="必须先开启客户意向分析"):
+        keyword_plan_payload(
+            config={
+                "keywords": ["AI客服"],
+                "auto_analyze_leads": False,
+                "auto_delete_non_customers": True,
+            }
+        )
+
+    captured: dict[str, object] = {}
+
+    def fake_enqueue(account_ids, task_id, auto_delete=False):
+        captured.update({"account_ids": account_ids, "task_id": task_id, "auto_delete": auto_delete})
+        return {"id": "runtime-job"}
+
+    monkeypatch.setattr(job_queue, "enqueue_account_analysis", fake_enqueue)
+    automation_workbench._enqueue_account_analysis([1, 2], "task-1", True)
+    assert captured == {"account_ids": [1, 2], "task_id": "task-1", "auto_delete": True}
+
+
 def test_scheduled_window_triggers_only_when_time_is_crossed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.services import automation_workbench, license_service

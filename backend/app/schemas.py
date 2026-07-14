@@ -243,7 +243,10 @@ class KeywordLeadPlanConfig(BaseModel):
     competitor_content_count: int = Field(default=10, ge=1, le=100)
     comment_count: int = Field(default=50, ge=1, le=1000)
     collect_sub_comments: bool = False
+    # 清理开关只在对应 AI 分析完成且明确判负后生效。
+    auto_delete_non_competitors: bool = False
     auto_analyze_leads: bool = True
+    auto_delete_non_customers: bool = False
 
     @model_validator(mode="after")
     def normalize_keywords(self) -> "KeywordLeadPlanConfig":
@@ -251,6 +254,8 @@ class KeywordLeadPlanConfig(BaseModel):
         if not self.keywords:
             raise ValueError("请至少填写一个关键词")
         self.keyword_count = min(self.keyword_count, len(self.keywords))
+        if self.auto_delete_non_customers and not self.auto_analyze_leads:
+            raise ValueError("自动删除非客户必须先开启客户意向分析")
         return self
 
 

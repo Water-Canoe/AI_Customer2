@@ -522,7 +522,11 @@ def _run_keyword_item(run_id: str, item: dict[str, Any], config: KeywordLeadPlan
             item_id,
             context,
             "analysis_runtime_job_id",
-            lambda: _enqueue_account_analysis(context["analysis_account_ids"], analysis_task_id),
+            lambda: _enqueue_account_analysis(
+                context["analysis_account_ids"],
+                analysis_task_id,
+                config.auto_delete_non_competitors,
+            ),
         )
         context["competitor_ai_job_ids"] = [str(value) for value in (result or {}).get("job_ids", [])]
         _save_item_context(item_id, context)
@@ -560,7 +564,10 @@ def _run_keyword_item(run_id: str, item: dict[str, Any], config: KeywordLeadPlan
 
             errors: list[dict[str, Any]] = []
             for task_id in task_ids:
-                prepared = ai_service.prepare_auto_lead_analysis_jobs(task_id, auto_delete=False)
+                prepared = ai_service.prepare_auto_lead_analysis_jobs(
+                    task_id,
+                    auto_delete=config.auto_delete_non_customers,
+                )
                 lead_job_ids.extend(str(value) for value in prepared.get("job_ids", []))
                 errors.extend(prepared.get("errors", []))
             if errors:
@@ -754,10 +761,14 @@ def _enqueue_crawl_batch(task_ids: list[str]) -> dict[str, Any]:
     return job_queue.enqueue_crawl_batch(task_ids)
 
 
-def _enqueue_account_analysis(account_ids: list[int], task_id: str) -> dict[str, Any]:
+def _enqueue_account_analysis(
+    account_ids: list[int],
+    task_id: str,
+    auto_delete: bool,
+) -> dict[str, Any]:
     from app.services import job_queue
 
-    return job_queue.enqueue_account_analysis(account_ids, task_id, auto_delete=False)
+    return job_queue.enqueue_account_analysis(account_ids, task_id, auto_delete=auto_delete)
 
 
 def _enqueue_ai(job_ids: list[str], run_id: str, item_id: int) -> dict[str, Any]:

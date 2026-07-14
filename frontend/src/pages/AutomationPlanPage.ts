@@ -77,7 +77,8 @@ const emptyDraft = (planType = 'keyword_lead'): Dict => ({
     : {
         platform: 'dy', keywords: [], keyword_count: 1, discovery_content_count: 20,
         competitor_limit: 30, competitor_content_count: 10, comment_count: 50,
-        collect_sub_comments: false, auto_analyze_leads: true,
+        collect_sub_comments: false, auto_delete_non_competitors: false,
+        auto_analyze_leads: true, auto_delete_non_customers: false,
       },
 })
 
@@ -350,7 +351,7 @@ export default defineComponent({
           h('div', { class: 'automation-card-icon lead' }, [h(Promotion)]),
           h('div', { class: 'automation-card-content' }, [
             h('h3', '关键词自动获客'),
-            h('p', '按优先级选择关键词，依次采竞品、AI筛选、采评论并可选分析客户。'),
+            h('p', '按优先级选择关键词，依次采竞品、AI筛选、采评论并可选分析和清理无关对象。'),
             h('div', { class: 'automation-flow' }, '选择关键词 → 采竞品 → AI筛选 → 采评论 → 客户分析'),
           ]),
           h(ElButton, { type: 'primary', onClick: () => openEditor('keyword_lead') }, () => '新建获客计划'),
@@ -522,8 +523,18 @@ export default defineComponent({
           numberField('每条内容评论数', config, 'comment_count', 1, 1000),
           h(ElCol, { span: 8 }, () => h(ElFormItem, { label: '采集子评论' }, () => h(ElSwitch, { modelValue: config.collect_sub_comments, 'onUpdate:modelValue': (value: string | number | boolean) => config.collect_sub_comments = Boolean(value) }))),
         ]),
-        h(ElFormItem, { label: '客户意向分析' }, () => h(ElSwitch, { modelValue: config.auto_analyze_leads, activeText: '采集后自动分析', inactiveText: '仅保留待筛选客户', 'onUpdate:modelValue': (value: string | number | boolean) => config.auto_analyze_leads = Boolean(value) })),
-        h(ElAlert, { title: '竞品 AI 筛选固定执行；非竞品和非客户保留记录，但不会进入后续流程。此计划不会直接触发私信。', type: 'info', showIcon: true, closable: false }),
+        h(ElFormItem, { label: '竞品筛选后清理' }, () => h(ElSwitch, { modelValue: config.auto_delete_non_competitors, activeText: '自动删除非竞品', inactiveText: '保留分析记录', 'onUpdate:modelValue': (value: string | number | boolean) => config.auto_delete_non_competitors = Boolean(value) })),
+        h(ElFormItem, { label: '客户意向分析' }, () => h(ElSwitch, {
+          modelValue: config.auto_analyze_leads,
+          activeText: '采集后自动分析',
+          inactiveText: '仅保留待筛选客户',
+          'onUpdate:modelValue': (value: string | number | boolean) => {
+            config.auto_analyze_leads = Boolean(value)
+            if (!config.auto_analyze_leads) config.auto_delete_non_customers = false
+          }
+        })),
+        config.auto_analyze_leads ? h(ElFormItem, { label: '客户分析后清理' }, () => h(ElSwitch, { modelValue: config.auto_delete_non_customers, activeText: '自动删除非客户', inactiveText: '保留分析记录', 'onUpdate:modelValue': (value: string | number | boolean) => config.auto_delete_non_customers = Boolean(value) })) : null,
+        h(ElAlert, { title: '竞品 AI 筛选是采评论的必要步骤。需要自动私信时，可创建同一时间的“自动私信”计划并拖到本计划之后，系统会按顺序执行。', type: 'info', showIcon: true, closable: false }),
       ]
     }
 
