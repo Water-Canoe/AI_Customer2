@@ -1467,15 +1467,3 @@ def _overview_account_analysis_states(conn: sqlite3.Connection, platform: str, r
             for account_id in identifiers.get(creator_id.strip(), set()):
                 states.setdefault(account_id, "排队分析")
     return states
-
-
-def overview_node(node_id: str) -> dict[str, Any]:
-    kind, _, raw_id = node_id.partition(":")
-    with database.connect() as conn:
-        if kind == "account":
-            row = conn.execute("SELECT * FROM user_accounts WHERE id = ?", (raw_id,)).fetchone()
-            contents = conn.execute("SELECT * FROM contents WHERE author_account_id = ? LIMIT 20", (raw_id,)).fetchall()
-            return {"node": database.row_to_dict(row), "contents": database.rows_to_dicts(contents)}
-        if kind == "platform":
-            return {"node": {"platform": raw_id}, "tables": list_library("contents", keyword="")}
-    return {"node": {"id": node_id}}

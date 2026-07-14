@@ -212,8 +212,3 @@ def bulk_action_preview(payload: BulkActionPreview) -> dict[str, object]:
 @router.get("/platform-capabilities")
 def platform_capabilities() -> list[dict[str, object]]:
     return views.platform_capabilities()
-
-
-@router.get("/overview/node/{node_id:path}")
-def overview_node(node_id: str) -> dict[str, object]:
-    return views.overview_node(node_id)
