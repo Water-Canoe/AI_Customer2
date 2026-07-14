@@ -116,6 +116,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 AI 分析工作台接口按 `tab / keyword / status / result / page / page_size` 返回当前标签页数据。前端只显示服务端当前页，批量分析、删除和重试明确限定为本页对象；轮询不再同时组装竞品、客户、失败任务和历史四份列表。
 
+总览树根接口只返回平台节点；展开平台、关键词、无关键词来源组或账号时，前端再通过统一子节点接口按每页10条加载直接下级。账号统计在当前页批量计算，客户只在展开具体账号后查询，避免原实现一次请求全量账号和客户并对每个账号重复查询统计。
+
 前端页面在 `router.ts` 中使用动态导入，启动时只加载应用壳和当前路由；首次进入自动化、总览、AI、私信、数据表、设置、引流或内容工作台时再加载对应页面代码。引流和内容的多个子路由继续共享同一个异步页面模块。
 
 前端构建链使用 Vite 8、Vue Test Utils 和 Vitest 4；测试文件与源码同目录使用 `*.test.ts`。当前测试覆盖共享格式化、自动同步调度和运行队列的加载/取消交互，`npm audit` 为 0 个已知漏洞。
@@ -267,7 +269,8 @@ npm run dev
 - `POST /api/message-workbench/auto-message-batches/{batch_id}/cancel`：请求取消正在排队或运行中的自动私信批次，未开始的客户会标记为跳过。
 - `POST /api/message-workbench/auto-message-batches/{batch_id}/retry`：基于历史批次中失败、跳过或未执行的未私信客户创建一个新的重试批次；已成功或已经进入已私信/未回复等跟进状态的客户不会重复发送。
 - `DELETE /api/message-workbench/auto-message-batches/{batch_id}`：删除已结束的自动私信批次历史记录和明细，不删除客户数据；运行中批次需先取消。
-- `GET /api/overview/tree`：查看平台、关键词、账号、内容、客户的总览树。
+- `GET /api/overview/tree`：返回总览树平台根节点和平台级统计，不预加载下级数据。
+- `GET /api/overview/children`：使用 `node_id/page/page_size` 分页加载平台、关键词、来源组或账号的直接子节点；响应统一包含 `items/total/total_pages`。
 - `GET /api/settings/env-check`：检查项目库、MyCrawler 路径、底层库、AI 配置；同时返回项目库关键字段质量和按平台诊断的 MyCrawler 原始表、行数、关键字段非空情况。
 - `POST /api/settings/platform-login/{platform}`：设置页“登录配置”入口，`platform` 支持 `dy / xhs / ks`，会用同一个 CloakBrowser Profile 打开抖音、小红书或快手登录窗口。
 - `POST /api/settings/clear-data`：清空项目业务库和当前设置指向的 MyCrawler SQLite 业务表，必须输入确认文本 `清空业务记录`。

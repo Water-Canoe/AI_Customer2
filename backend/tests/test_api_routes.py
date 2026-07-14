@@ -22,6 +22,7 @@ def test_api_routes_have_unique_method_paths_and_business_owners() -> None:
     expected_owners = {
         ("POST", "/api/tasks"): "app.routers.tasks",
         ("GET", "/api/overview/tree"): "app.routers.overview",
+        ("GET", "/api/overview/children"): "app.routers.overview",
         ("POST", "/api/message-workbench/auto-message-batches"): "app.routers.message",
         ("POST", "/api/ai/jobs"): "app.routers.ai",
         ("GET", "/api/runtime/jobs"): "app.routers.runtime",

@@ -98,6 +98,18 @@ def overview_tree() -> list[dict[str, object]]:
     return views.overview_tree()
 
 
+@router.get("/overview/children")
+def overview_children(
+    node_id: str = Query(...),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict[str, object]:
+    try:
+        return views.overview_children(node_id, page, page_size)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc.args[0])) from exc
+
+
 @router.post("/overview/keywords/non-competitors/delete")
 def delete_keyword_non_competitors(
     platform: str = Query(...),

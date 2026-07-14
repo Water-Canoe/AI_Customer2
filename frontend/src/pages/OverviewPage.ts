@@ -1,7 +1,9 @@
 ﻿import { defineComponent, h, reactive } from 'vue'
 import { Compass, Connection } from '@element-plus/icons-vue'
+import { watch } from 'vue'
 import { ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
+import { api } from '../shared/api'
 import { accountRoleLabel, competitorStatusClass, competitorStatusLabel, platformName, taskModeName } from '../shared/format'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
@@ -28,15 +30,65 @@ export default defineComponent({
   emits: ['account-analyze', 'keyword-analyze', 'customer-intent-analyze', 'account-customers-analyze', 'customer-message', 'customer-follow-update', 'delete-account', 'delete-customer', 'delete-account-noncustomers', 'delete-platform', 'delete-keyword', 'delete-keyword-noncompetitors', 'find-customers'],
   setup(props, { emit }) {
     const expanded = reactive<Record<string, boolean>>({})
-    const pages = reactive<Record<string, number>>({})
+    const childStates = reactive<Record<string, Dict>>({})
     const isExpanded = (node: Dict) => expanded[node.id] ?? false
-    const toggle = (node: Dict) => {
-      expanded[node.id] = !isExpanded(node)
+    const childState = (node: Dict) => {
+      if (!childStates[node.id]) {
+        childStates[node.id] = {
+          items: [],
+          total: Number(node.child_count || 0),
+          page: 1,
+          page_size: OVERVIEW_CHILD_PAGE_SIZE,
+          total_pages: 1,
+          loaded: false,
+          loading: false,
+          error: '',
+        }
+      }
+      return childStates[node.id]
     }
-    const getPage = (node: Dict) => pages[node.id] || 1
-    const setPage = (node: Dict, page: number) => {
-      pages[node.id] = Math.max(1, page)
+    const loadChildren = async (node: Dict, page = 1, refreshDescendants = false) => {
+      const state = childState(node)
+      if (state.loading) return
+      state.loading = true
+      state.error = ''
+      try {
+        const { data } = await api.get('/overview/children', {
+          params: { node_id: node.id, page: Math.max(1, page), page_size: OVERVIEW_CHILD_PAGE_SIZE }
+        })
+        state.items = data.items || []
+        state.total = Number(data.total || 0)
+        state.page = Number(data.page || 1)
+        state.page_size = Number(data.page_size || OVERVIEW_CHILD_PAGE_SIZE)
+        state.total_pages = Number(data.total_pages || 1)
+        state.loaded = true
+        if (refreshDescendants) {
+          await Promise.all((state.items as Dict[])
+            .filter(child => isExpanded(child) && child.has_children)
+            .map(child => loadChildren(child, Number(childState(child).page || 1), true)))
+        }
+      } catch (error: any) {
+        state.error = error?.response?.data?.detail || '子节点加载失败'
+      } finally {
+        state.loading = false
+      }
     }
+    const toggle = async (node: Dict) => {
+      const opened = !isExpanded(node)
+      expanded[node.id] = opened
+      if (opened && !childState(node).loaded) await loadChildren(node)
+    }
+    const setPage = async (node: Dict, page: number) => {
+      await loadChildren(node, page)
+    }
+    watch(
+      () => props.tree,
+      async (tree) => {
+        await Promise.all((tree as Dict[])
+          .filter(node => isExpanded(node) && node.has_children)
+          .map(node => loadChildren(node, Number(childState(node).page || 1), true)))
+      }
+    )
     const handlers = {
       analyzeAccount: (node: Dict) => emit('account-analyze', node),
       analyzeKeyword: (node: Dict) => emit('keyword-analyze', node),
@@ -55,7 +107,7 @@ export default defineComponent({
     return () => h('section', { class: 'pane overview-pane' }, [
       sectionTitle({ title: '关系总览', subtitle: '平台 / 关键词 / 账号层级表', icon: Compass, tone: 'blue' }),
       (props.tree as Dict[]).length
-        ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, getPage, setPage, handlers)))
+        ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, childState, setPage, handlers)))
         : emptyState({
           title: '暂无总览数据',
           description: '先创建一次采集任务，导入平台、关键词、账号和客户关系后这里会生成层级表。',
@@ -71,19 +123,21 @@ function renderOverviewRow(
   level: number,
   isExpanded: (node: Dict) => boolean,
   toggle: (node: Dict) => void,
-  getPage: (node: Dict) => number,
+  childState: (node: Dict) => Dict,
   setPage: (node: Dict, page: number) => void,
   handlers: OverviewHandlers
 ): any[] {
-  const children = node.children || []
+  const state = childState(node)
+  const children = state.items || []
+  const hasChildren = Boolean(node.has_children || state.total || children.length)
   const opened = isExpanded(node)
   const row = node.kind === 'account'
-    ? renderOverviewAccountRow(node, level, handlers, children.length ? opened : false, children.length ? () => toggle(node) : undefined)
+    ? renderOverviewAccountRow(node, level, handlers, hasChildren ? opened : false, hasChildren ? () => toggle(node) : undefined)
     : node.kind === 'customer'
       ? renderOverviewCustomerRow(node, level, handlers)
     : h('div', { class: ['overview-row', `level-${level}`, node.kind] }, [
         h('div', { class: 'overview-main', style: { paddingLeft: `${level * 34}px` } }, [
-          children.length
+          hasChildren
             ? h('button', { class: 'outline-button', onClick: () => toggle(node) }, opened ? '收起' : '展开')
             : h('span', { class: 'overview-spacer' }),
         h('div', { class: 'overview-title' }, [
@@ -100,31 +154,41 @@ function renderOverviewRow(
     row
   ]
   if (opened) {
-    // Each expanded node owns pagination so large account/customer lists stay navigable.
-    const pagination = paginateChildren(node, children, getPage)
-    pagination.items.forEach((child: Dict) => rows.push(...renderOverviewRow(child, level + 1, isExpanded, toggle, getPage, setPage, handlers)))
-    if (pagination.totalPages > 1) {
-      rows.push(renderOverviewPagination(node, level + 1, pagination, setPage))
+    if (state.loading && !state.loaded) {
+      rows.push(renderOverviewLoadState(level + 1, '正在加载…'))
+    } else if (state.error) {
+      rows.push(renderOverviewLoadState(level + 1, String(state.error), true))
+    } else {
+      children.forEach((child: Dict) => rows.push(...renderOverviewRow(child, level + 1, isExpanded, toggle, childState, setPage, handlers)))
+    }
+    if (Number(state.total_pages || 1) > 1) {
+      rows.push(renderOverviewPagination(node, level + 1, overviewPagination(state, children), setPage))
     }
   }
   return rows
 }
 
-function paginateChildren(node: Dict, children: Dict[], getPage: (node: Dict) => number) {
-  const total = children.length
-  const totalPages = Math.max(1, Math.ceil(total / OVERVIEW_CHILD_PAGE_SIZE))
-  const page = Math.min(Math.max(getPage(node), 1), totalPages)
-  const start = (page - 1) * OVERVIEW_CHILD_PAGE_SIZE
-  const end = Math.min(start + OVERVIEW_CHILD_PAGE_SIZE, total)
+function overviewPagination(state: Dict, children: Dict[]) {
+  const total = Number(state.total || 0)
+  const page = Number(state.page || 1)
+  const pageSize = Number(state.page_size || OVERVIEW_CHILD_PAGE_SIZE)
+  const start = total ? (page - 1) * pageSize + 1 : 0
+  const end = Math.min((page - 1) * pageSize + children.length, total)
   return {
-    items: children.slice(start, end),
     page,
     total,
-    totalPages,
+    totalPages: Number(state.total_pages || 1),
     label: overviewChildPageLabel(children),
-    start: total ? start + 1 : 0,
+    start,
     end
   }
+}
+
+function renderOverviewLoadState(level: number, message: string, error = false) {
+  return h('div', {
+    class: ['overview-pagination-row', error ? 'is-error' : ''],
+    style: { paddingLeft: `${level * 34}px` }
+  }, message)
 }
 
 function overviewChildPageLabel(children: Dict[]) {

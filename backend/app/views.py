@@ -887,6 +887,7 @@ def _update_table(library: str) -> str:
 
 
 def overview_tree() -> list[dict[str, Any]]:
+    """只返回平台根节点，子节点在展开时分页加载。"""
     with database.connect() as conn:
         platforms = conn.execute(
             """
@@ -899,304 +900,409 @@ def overview_tree() -> list[dict[str, Any]]:
             FROM contents c
             LEFT JOIN user_accounts ua ON ua.id = c.author_account_id
             LEFT JOIN comments cm ON cm.content_id = c.id
-            LEFT JOIN lead_sources ls ON ls.content_id = c.id
-            LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+            LEFT JOIN lead_sources ls ON ls.content_id = c.id AND ls.active = 1
+            LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id AND lua.hidden = 0
             GROUP BY c.platform
+            ORDER BY latest DESC, c.platform
             """,
         ).fetchall()
         result: list[dict[str, Any]] = []
-        for platform in platforms:
-            platform_key = platform["platform"]
-            keywords = conn.execute(
-                """
-                WITH keyword_scope AS (
-                    SELECT c.source_keyword AS keyword,
-                           c.id AS content_id,
-                           c.author_account_id AS account_id,
-                           c.updated_at AS latest
-                    FROM contents c
-                    WHERE c.platform = ? AND NULLIF(c.source_keyword, '') IS NOT NULL
-                    UNION
-                    SELECT ac.keyword AS keyword,
-                           ac.content_id AS content_id,
-                           ac.account_id AS account_id,
-                           COALESCE(c.updated_at, ac.created_at) AS latest
-                    FROM account_sources ac
-                    JOIN user_accounts source_ua ON source_ua.id = ac.account_id
-                    LEFT JOIN contents c ON c.id = ac.content_id
-                    WHERE ac.active = 1
-                      AND NULLIF(ac.keyword, '') IS NOT NULL
-                      AND COALESCE(c.platform, source_ua.platform) = ?
-                )
-                SELECT ks.keyword AS keyword,
-                       COUNT(DISTINCT CASE WHEN ua.competitor_status = '竞品' THEN ua.id END) AS competitors,
-                       COUNT(DISTINCT ks.content_id) AS contents,
-                       COUNT(DISTINCT cm.id) AS comments,
-                       COUNT(DISTINCT lua.id) AS customers,
-                       MAX(ks.latest) AS latest
-                FROM keyword_scope ks
-                LEFT JOIN user_accounts ua ON ua.id = ks.account_id
-                LEFT JOIN comments cm ON cm.content_id = ks.content_id
-                LEFT JOIN lead_sources ls ON ls.content_id = ks.content_id
-                LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-                GROUP BY ks.keyword
-                """,
-                (platform_key, platform_key),
-            ).fetchall()
-            account_source_groups = conn.execute(
-                """
-                SELECT COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) AS source_mode,
-                       COUNT(DISTINCT CASE WHEN ua.competitor_status = '竞品' THEN ua.id END) AS competitors,
-                       COUNT(DISTINCT c.id) AS contents,
-                       COUNT(DISTINCT cm.id) AS comments,
-                       COUNT(DISTINCT lua.id) AS customers,
-                       MAX(c.updated_at) AS latest
-                FROM contents c
-                LEFT JOIN crawl_jobs j ON j.id = c.task_id
-                LEFT JOIN user_accounts ua ON ua.id = c.author_account_id
-                LEFT JOIN comments cm ON cm.content_id = c.id
-                LEFT JOIN lead_sources ls ON ls.content_id = c.id AND ls.active = 1
-                LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-                WHERE c.platform = ?
-                  AND NULLIF(c.source_keyword, '') IS NULL
-                  AND COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) IN ('competitor_crawl', 'own_account')
-                GROUP BY source_mode
-                """,
-                (platform_key,),
-            ).fetchall()
+        for row in platforms:
+            platform = str(row["platform"])
+            _, child_count = _overview_platform_groups(conn, platform, 1, 1)
             result.append(
                 {
-                    "id": f"platform:{platform_key}",
-                    "label": platform_key,
+                    "id": f"platform:{platform}",
+                    "label": platform,
                     "kind": "platform",
-                    "metrics": database.row_to_dict(platform),
-                    "children": [
-                        *[_keyword_node(conn, platform_key, row["keyword"], database.row_to_dict(row)) for row in keywords],
-                        *[
-                            _source_group_node(conn, platform_key, row["source_mode"], database.row_to_dict(row))
-                            for row in account_source_groups
-                        ],
-                    ],
+                    "metrics": database.row_to_dict(row),
+                    "has_children": child_count > 0,
+                    "child_count": child_count,
                 }
             )
-    return result
+        return result
 
 
-def _source_group_node(conn, platform: str, source_mode: str, metrics: dict[str, Any]) -> dict[str, Any]:
-    accounts = conn.execute(
-        """
-        SELECT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
-               ua.nickname, ua.profile_url, ua.fans, ua.signature,
-               ua.account_role, ua.competitor_status, ua.competitor_reason,
-               ua.content_total_count, ua.is_own_account,
-               ua.raw_payload,
-               COUNT(DISTINCT c.id) AS content_count,
-               COUNT(DISTINCT cm.id) AS comment_count,
-               COUNT(DISTINCT lua.id) AS customer_count,
-               MAX(c.updated_at) AS latest
-        FROM contents c
-        JOIN user_accounts ua ON ua.id = c.author_account_id
-        LEFT JOIN crawl_jobs j ON j.id = c.task_id
-        LEFT JOIN comments cm ON cm.content_id = c.id
-        LEFT JOIN lead_sources ls ON ls.content_id = c.id AND ls.active = 1
-        LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-        WHERE c.platform = ?
-          AND NULLIF(c.source_keyword, '') IS NULL
-          AND COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) = ?
-        GROUP BY ua.id
-        ORDER BY latest DESC, ua.id DESC
-        """,
-        (platform, source_mode),
-    ).fetchall()
-    analysis_states = _overview_account_analysis_states(conn, platform, accounts)
-    node_metrics = dict(metrics)
-    node_metrics.update(
-        {
-            "platform": platform,
-            "source_mode": source_mode,
-            "source_label": ACCOUNT_SOURCE_GROUPS.get(source_mode, source_mode),
-            "keyword": "",
-            "unlabeled": True,
-        }
-    )
+def overview_children(node_id: str, page: int = 1, page_size: int = 10) -> dict[str, Any]:
+    """分页返回平台、关键词、来源组或账号的直接子节点。"""
+    kind, _, remainder = str(node_id or "").partition(":")
+    if not remainder:
+        raise KeyError("无效总览节点")
+    with database.connect() as conn:
+        if kind == "platform":
+            items, total = _overview_platform_groups(conn, remainder, page, page_size)
+        elif kind == "keyword":
+            platform, separator, keyword = remainder.partition(":")
+            if not separator or not keyword:
+                raise KeyError("无效关键词节点")
+            items, total = _overview_keyword_accounts(conn, platform, keyword, page, page_size)
+        elif kind == "source":
+            platform, separator, source_mode = remainder.partition(":")
+            if not separator or not source_mode:
+                raise KeyError("无效来源节点")
+            items, total = _overview_source_accounts(conn, platform, source_mode, page, page_size)
+        elif kind == "account":
+            try:
+                account_id = int(remainder)
+            except ValueError as exc:
+                raise KeyError("无效账号节点") from exc
+            items, total = _overview_customer_nodes_for_account(conn, account_id, page, page_size)
+        else:
+            raise KeyError("不支持的总览节点")
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    if page > total_pages:
+        return overview_children(node_id, total_pages, page_size)
     return {
-        "id": f"source:{platform}:{source_mode}:unlabeled",
-        "label": ACCOUNT_SOURCE_GROUPS.get(source_mode, source_mode),
-        "kind": "source_group",
-        "metrics": node_metrics,
-        "children": [_overview_account_node(conn, row, analysis_states) for row in accounts],
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
     }
 
 
-def _keyword_node(conn, platform: str, keyword: str, metrics: dict[str, Any]) -> dict[str, Any]:
-    # 返回完整账号列表，由前端逐层分页，避免后端静默截断业务数据。
-    accounts = conn.execute(
+def _overview_platform_groups(
+    conn: sqlite3.Connection,
+    platform: str,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict[str, Any]], int]:
+    rows = conn.execute(
         """
-        WITH keyword_accounts AS (
-            SELECT c.author_account_id AS account_id,
+        WITH keyword_scope AS (
+            SELECT c.source_keyword AS keyword,
                    c.id AS content_id,
+                   c.author_account_id AS account_id,
                    c.updated_at AS latest
             FROM contents c
-            WHERE c.platform = ? AND c.source_keyword = ?
+            WHERE c.platform = ? AND NULLIF(c.source_keyword, '') IS NOT NULL
             UNION
-            SELECT ac.account_id AS account_id,
+            SELECT ac.keyword AS keyword,
                    ac.content_id AS content_id,
+                   ac.account_id AS account_id,
                    COALESCE(c.updated_at, ac.created_at) AS latest
             FROM account_sources ac
             JOIN user_accounts source_ua ON source_ua.id = ac.account_id
             LEFT JOIN contents c ON c.id = ac.content_id
             WHERE ac.active = 1
-              AND ac.keyword = ?
+              AND NULLIF(ac.keyword, '') IS NOT NULL
               AND COALESCE(c.platform, source_ua.platform) = ?
+        ),
+        keyword_groups AS (
+            SELECT 'keyword' AS kind,
+                   ks.keyword AS label,
+                   ks.keyword AS keyword,
+                   '' AS source_mode,
+                   COUNT(DISTINCT ks.account_id) AS accounts,
+                   COUNT(DISTINCT CASE WHEN ua.competitor_status = '竞品' THEN ua.id END) AS competitors,
+                   COUNT(DISTINCT ks.content_id) AS contents,
+                   COUNT(DISTINCT cm.id) AS comments,
+                   COUNT(DISTINCT CASE WHEN lua.hidden = 0 THEN lua.id END) AS customers,
+                   MAX(ks.latest) AS latest
+            FROM keyword_scope ks
+            LEFT JOIN user_accounts ua ON ua.id = ks.account_id
+            LEFT JOIN comments cm ON cm.content_id = ks.content_id
+            LEFT JOIN lead_sources ls ON ls.content_id = ks.content_id AND ls.active = 1
+            LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+            GROUP BY ks.keyword
+        ),
+        source_groups AS (
+            SELECT 'source_group' AS kind,
+                   COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) AS label,
+                   '' AS keyword,
+                   COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) AS source_mode,
+                   COUNT(DISTINCT c.author_account_id) AS accounts,
+                   COUNT(DISTINCT CASE WHEN ua.competitor_status = '竞品' THEN ua.id END) AS competitors,
+                   COUNT(DISTINCT c.id) AS contents,
+                   COUNT(DISTINCT cm.id) AS comments,
+                   COUNT(DISTINCT CASE WHEN lua.hidden = 0 THEN lua.id END) AS customers,
+                   MAX(c.updated_at) AS latest
+            FROM contents c
+            LEFT JOIN crawl_jobs j ON j.id = c.task_id
+            LEFT JOIN user_accounts ua ON ua.id = c.author_account_id
+            LEFT JOIN comments cm ON cm.content_id = c.id
+            LEFT JOIN lead_sources ls ON ls.content_id = c.id AND ls.active = 1
+            LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+            WHERE c.platform = ?
+              AND NULLIF(c.source_keyword, '') IS NULL
+              AND COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) IN ('competitor_crawl', 'own_account')
+            GROUP BY source_mode
+        ),
+        groups AS (
+            SELECT * FROM keyword_groups
+            UNION ALL
+            SELECT * FROM source_groups
         )
+        SELECT *, (SELECT COUNT(*) FROM groups) AS total
+        FROM groups
+        ORDER BY latest DESC, kind, label
+        LIMIT ? OFFSET ?
+        """,
+        (platform, platform, platform, page_size, (page - 1) * page_size),
+    ).fetchall()
+    total = int(rows[0]["total"] or 0) if rows else _overview_platform_group_count(conn, platform)
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        metrics = database.row_to_dict(row)
+        metrics.pop("total", None)
+        kind = str(row["kind"])
+        if kind == "keyword":
+            keyword = str(row["keyword"])
+            metrics.update({"platform": platform, "keyword": keyword})
+            node_id = f"keyword:{platform}:{keyword}"
+            label = keyword
+        else:
+            source_mode = str(row["source_mode"])
+            source_label = ACCOUNT_SOURCE_GROUPS.get(source_mode, source_mode)
+            metrics.update(
+                {
+                    "platform": platform,
+                    "keyword": "",
+                    "source_mode": source_mode,
+                    "source_label": source_label,
+                    "unlabeled": True,
+                }
+            )
+            node_id = f"source:{platform}:{source_mode}"
+            label = source_label
+        child_count = int(row["accounts"] or 0)
+        items.append(
+            {
+                "id": node_id,
+                "label": label,
+                "kind": kind,
+                "metrics": metrics,
+                "has_children": child_count > 0,
+                "child_count": child_count,
+            }
+        )
+    return items, total
+
+
+def _overview_platform_group_count(conn: sqlite3.Connection, platform: str) -> int:
+    row = conn.execute(
+        """
+        WITH group_keys AS (
+            SELECT 'keyword:' || c.source_keyword AS group_key
+            FROM contents c
+            WHERE c.platform = ? AND NULLIF(c.source_keyword, '') IS NOT NULL
+            GROUP BY c.source_keyword
+            UNION
+            SELECT 'keyword:' || ac.keyword AS group_key
+            FROM account_sources ac
+            JOIN user_accounts ua ON ua.id = ac.account_id
+            LEFT JOIN contents c ON c.id = ac.content_id
+            WHERE ac.active = 1
+              AND NULLIF(ac.keyword, '') IS NOT NULL
+              AND COALESCE(c.platform, ua.platform) = ?
+            GROUP BY ac.keyword
+            UNION
+            SELECT 'source:' || COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) AS group_key
+            FROM contents c
+            LEFT JOIN crawl_jobs j ON j.id = c.task_id
+            LEFT JOIN lead_sources ls ON ls.content_id = c.id AND ls.active = 1
+            WHERE c.platform = ?
+              AND NULLIF(c.source_keyword, '') IS NULL
+              AND COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) IN ('competitor_crawl', 'own_account')
+            GROUP BY COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, ''))
+        )
+        SELECT COUNT(*) FROM group_keys
+        """,
+        (platform, platform, platform),
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def _overview_keyword_accounts(
+    conn: sqlite3.Connection,
+    platform: str,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict[str, Any]], int]:
+    keyword_accounts_sql = """
+        SELECT c.author_account_id AS account_id,
+               c.id AS content_id,
+               c.updated_at AS latest
+        FROM contents c
+        WHERE c.platform = ? AND c.source_keyword = ?
+        UNION
+        SELECT ac.account_id AS account_id,
+               ac.content_id AS content_id,
+               COALESCE(c.updated_at, ac.created_at) AS latest
+        FROM account_sources ac
+        JOIN user_accounts source_ua ON source_ua.id = ac.account_id
+        LEFT JOIN contents c ON c.id = ac.content_id
+        WHERE ac.active = 1
+          AND ac.keyword = ?
+          AND COALESCE(c.platform, source_ua.platform) = ?
+    """
+    params = (platform, keyword, keyword, platform)
+    total = int(
+        conn.execute(
+            f"WITH keyword_accounts AS ({keyword_accounts_sql}) SELECT COUNT(DISTINCT account_id) FROM keyword_accounts",
+            params,
+        ).fetchone()[0]
+        or 0
+    )
+    rows = conn.execute(
+        f"""
+        WITH keyword_accounts AS ({keyword_accounts_sql})
         SELECT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
                ua.nickname, ua.profile_url, ua.fans, ua.signature,
                ua.account_role, ua.competitor_status, ua.competitor_reason,
-               ua.content_total_count, ua.is_own_account,
-               ua.raw_payload,
-               COUNT(DISTINCT ka.content_id) AS content_count,
-               COUNT(DISTINCT cm.id) AS comment_count,
-               COUNT(DISTINCT lua.id) AS customer_count,
-               MAX(ka.latest) AS latest
+               ua.content_total_count, ua.is_own_account, ua.raw_payload,
+               MAX(ka.latest) AS branch_latest
         FROM keyword_accounts ka
         JOIN user_accounts ua ON ua.id = ka.account_id
-        LEFT JOIN comments cm ON cm.content_id = ka.content_id
-        LEFT JOIN lead_sources ls ON ls.content_id = ka.content_id
-        LEFT JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
         GROUP BY ua.id
-        ORDER BY latest DESC, ua.id DESC
+        ORDER BY branch_latest DESC, ua.id DESC
+        LIMIT ? OFFSET ?
         """,
-        (platform, keyword, keyword, platform),
+        (*params, page_size, (page - 1) * page_size),
     ).fetchall()
-    analysis_states = _overview_account_analysis_states(conn, platform, accounts)
-    node_metrics = dict(metrics)
-    node_metrics["platform"] = platform
-    node_metrics["keyword"] = keyword
-    return {
-        "id": f"keyword:{platform}:{keyword}",
-        "label": keyword,
-        "kind": "keyword",
-        "metrics": node_metrics,
-        "children": [_overview_account_node(conn, row, analysis_states) for row in accounts],
-    }
+    return _overview_account_nodes(conn, platform, rows), total
 
 
-def _overview_account_node(conn: sqlite3.Connection, row: sqlite3.Row, analysis_states: dict[int, str]) -> dict[str, Any]:
-    metrics = database.row_to_dict(row)
-    account_id = int(row["id"])
-    children = _overview_customer_nodes_for_account(conn, account_id)
-    metrics.update(_overview_account_totals(conn, account_id))
-    base_status = str(metrics.get("competitor_status") or "未分析")
-    metrics["competitor_display_status"] = analysis_states.get(account_id, base_status) if base_status == "未分析" else base_status
-    metrics["content_total_count"] = metrics.get("content_total_count") or _overview_content_total_count(metrics.get("raw_payload"))
-    metrics["crawled_content_count"] = int(metrics.get("content_count") or 0)
-    return {
-        "id": f"account:{account_id}",
-        "label": row["nickname"] or f"账号 {account_id}",
-        "kind": "account",
-        "metrics": metrics,
-        "children": children,
-    }
-
-
-def _overview_account_totals(conn: sqlite3.Connection, account_id: int) -> dict[str, Any]:
-    # Account cards show account-wide totals, not only the current keyword branch.
-    row = conn.execute(
-        """
-        SELECT
-            (
-                SELECT COUNT(DISTINCT c.id)
-                FROM contents c
-                WHERE c.author_account_id = ?
-            ) AS content_count,
-            (
-                SELECT COUNT(DISTINCT cm.id)
-                FROM contents c
-                JOIN comments cm ON cm.content_id = c.id
-                WHERE c.author_account_id = ?
-            ) AS comment_count,
-            (
-                SELECT COUNT(DISTINCT lua.id)
-                FROM lead_sources ls
-                JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-                LEFT JOIN contents c ON c.id = ls.content_id
-                WHERE ls.active = 1
-                  AND lua.hidden = 0
-                  AND (ls.source_account_id = ? OR c.author_account_id = ?)
-            ) AS customer_count,
-            (
-                SELECT COUNT(DISTINCT lua.id)
-                FROM lead_sources ls
-                JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-                LEFT JOIN contents c ON c.id = ls.content_id
-                WHERE ls.active = 1
-                  AND lua.hidden = 0
-                  AND (ls.source_account_id = ? OR c.author_account_id = ?)
-                  AND (
-                    lua.screening_status = '目标客户'
-                    OR lua.follow_status IN ('未私信', '已私信', '未回复', '已回复', '未成交', '已成交')
-                  )
-            ) AS target_customer_count,
-            (
-                SELECT COUNT(DISTINCT lua.id)
-                FROM lead_sources ls
-                JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
-                LEFT JOIN contents c ON c.id = ls.content_id
-                WHERE ls.active = 1
-                  AND lua.hidden = 0
-                  AND (ls.source_account_id = ? OR c.author_account_id = ?)
-                  AND (
-                    lua.screening_status = '非客户'
-                    OR lua.follow_status IN ('非客户', '无需跟进')
-                  )
-            ) AS non_customer_count,
-            (
-                SELECT MAX(ts)
-                FROM (
-                    SELECT c.updated_at AS ts
-                    FROM contents c
-                    WHERE c.author_account_id = ?
-                    UNION ALL
-                    SELECT cm.updated_at AS ts
-                    FROM comments cm
-                    JOIN contents c ON c.id = cm.content_id
-                    WHERE c.author_account_id = ?
-                    UNION ALL
-                    SELECT ls.created_at AS ts
-                    FROM lead_sources ls
-                    LEFT JOIN contents c ON c.id = ls.content_id
-                    WHERE ls.active = 1
-                      AND (ls.source_account_id = ? OR c.author_account_id = ?)
-                )
-            ) AS latest
+def _overview_source_accounts(
+    conn: sqlite3.Connection,
+    platform: str,
+    source_mode: str,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict[str, Any]], int]:
+    source_sql = """
+        FROM contents c
+        JOIN user_accounts ua ON ua.id = c.author_account_id
+        LEFT JOIN crawl_jobs j ON j.id = c.task_id
+        LEFT JOIN lead_sources ls ON ls.content_id = c.id AND ls.active = 1
+        WHERE c.platform = ?
+          AND NULLIF(c.source_keyword, '') IS NULL
+          AND COALESCE(NULLIF(j.mode, ''), NULLIF(ls.source_type, '')) = ?
+    """
+    total = int(conn.execute(f"SELECT COUNT(DISTINCT ua.id) {source_sql}", (platform, source_mode)).fetchone()[0] or 0)
+    rows = conn.execute(
+        f"""
+        SELECT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
+               ua.nickname, ua.profile_url, ua.fans, ua.signature,
+               ua.account_role, ua.competitor_status, ua.competitor_reason,
+               ua.content_total_count, ua.is_own_account, ua.raw_payload,
+               MAX(c.updated_at) AS branch_latest
+        {source_sql}
+        GROUP BY ua.id
+        ORDER BY branch_latest DESC, ua.id DESC
+        LIMIT ? OFFSET ?
         """,
-        (
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-            account_id,
-        ),
-    ).fetchone()
-    return database.row_to_dict(row) if row else {
-        "content_count": 0,
-        "comment_count": 0,
-        "customer_count": 0,
-        "target_customer_count": 0,
-        "non_customer_count": 0,
-        "latest": "",
-    }
+        (platform, source_mode, page_size, (page - 1) * page_size),
+    ).fetchall()
+    return _overview_account_nodes(conn, platform, rows), total
 
 
-def _overview_customer_nodes_for_account(conn: sqlite3.Connection, source_account_id: int) -> list[dict[str, Any]]:
-    # 客户节点同样返回完整集合，具体展示页码交给总览树前端控制。
+def _overview_account_nodes(
+    conn: sqlite3.Connection,
+    platform: str,
+    rows: list[sqlite3.Row],
+) -> list[dict[str, Any]]:
+    analysis_states = _overview_account_analysis_states(conn, platform, rows)
+    totals = _overview_account_totals_many(conn, [int(row["id"]) for row in rows])
+    nodes: list[dict[str, Any]] = []
+    for row in rows:
+        metrics = database.row_to_dict(row)
+        account_id = int(row["id"])
+        metrics.update(totals.get(account_id, {}))
+        base_status = str(metrics.get("competitor_status") or "未分析")
+        metrics["competitor_display_status"] = analysis_states.get(account_id, base_status) if base_status == "未分析" else base_status
+        metrics["content_total_count"] = metrics.get("content_total_count") or _overview_content_total_count(metrics.get("raw_payload"))
+        metrics["crawled_content_count"] = int(metrics.get("content_count") or 0)
+        child_count = int(metrics.get("customer_count") or 0)
+        nodes.append(
+            {
+                "id": f"account:{account_id}",
+                "label": row["nickname"] or f"账号 {account_id}",
+                "kind": "account",
+                "metrics": metrics,
+                "has_children": child_count > 0,
+                "child_count": child_count,
+            }
+        )
+    return nodes
+
+
+def _overview_account_totals_many(conn: sqlite3.Connection, account_ids: list[int]) -> dict[int, dict[str, Any]]:
+    if not account_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(account_ids))
+    rows = conn.execute(
+        f"""
+        SELECT ua.id,
+               (SELECT COUNT(DISTINCT c.id) FROM contents c WHERE c.author_account_id = ua.id) AS content_count,
+               (
+                   SELECT COUNT(DISTINCT cm.id)
+                   FROM contents c JOIN comments cm ON cm.content_id = c.id
+                   WHERE c.author_account_id = ua.id
+               ) AS comment_count,
+               (
+                   SELECT COUNT(DISTINCT lua.id)
+                   FROM lead_sources ls
+                   JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+                   LEFT JOIN contents c ON c.id = ls.content_id
+                   WHERE ls.active = 1 AND lua.hidden = 0
+                     AND (ls.source_account_id = ua.id OR c.author_account_id = ua.id)
+               ) AS customer_count,
+               (
+                   SELECT COUNT(DISTINCT lua.id)
+                   FROM lead_sources ls
+                   JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+                   LEFT JOIN contents c ON c.id = ls.content_id
+                   WHERE ls.active = 1 AND lua.hidden = 0
+                     AND (ls.source_account_id = ua.id OR c.author_account_id = ua.id)
+                     AND (lua.screening_status = '目标客户' OR lua.follow_status IN ('未私信', '已私信', '未回复', '已回复', '未成交', '已成交'))
+               ) AS target_customer_count,
+               (
+                   SELECT COUNT(DISTINCT lua.id)
+                   FROM lead_sources ls
+                   JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+                   LEFT JOIN contents c ON c.id = ls.content_id
+                   WHERE ls.active = 1 AND lua.hidden = 0
+                     AND (ls.source_account_id = ua.id OR c.author_account_id = ua.id)
+                     AND (lua.screening_status = '非客户' OR lua.follow_status IN ('非客户', '无需跟进'))
+               ) AS non_customer_count,
+               (
+                   SELECT MAX(ts)
+                   FROM (
+                       SELECT c.updated_at AS ts FROM contents c WHERE c.author_account_id = ua.id
+                       UNION ALL
+                       SELECT cm.updated_at AS ts FROM comments cm JOIN contents c ON c.id = cm.content_id WHERE c.author_account_id = ua.id
+                       UNION ALL
+                       SELECT ls.created_at AS ts FROM lead_sources ls LEFT JOIN contents c ON c.id = ls.content_id
+                       WHERE ls.active = 1 AND (ls.source_account_id = ua.id OR c.author_account_id = ua.id)
+                   )
+               ) AS latest
+        FROM user_accounts ua
+        WHERE ua.id IN ({placeholders})
+        """,
+        account_ids,
+    ).fetchall()
+    return {int(row["id"]): database.row_to_dict(row) for row in rows}
+
+
+def _overview_customer_nodes_for_account(
+    conn: sqlite3.Connection,
+    source_account_id: int,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict[str, Any]], int]:
+    where_sql = """
+        FROM lead_sources ls
+        JOIN lead_user_accounts lua ON lua.id = ls.lead_account_id
+        WHERE ls.active = 1
+          AND lua.hidden = 0
+          AND (
+            ls.source_account_id = ?
+            OR ls.content_id IN (SELECT id FROM contents WHERE author_account_id = ?)
+          )
+    """
+    total = int(conn.execute(f"SELECT COUNT(DISTINCT lua.id) {where_sql}", (source_account_id, source_account_id)).fetchone()[0] or 0)
     rows = conn.execute(
         """
         SELECT lua.id AS lead_id, lua.screening_status, lua.follow_status,
@@ -1229,8 +1335,9 @@ def _overview_customer_nodes_for_account(conn: sqlite3.Connection, source_accoun
         )
         GROUP BY lua.id
         ORDER BY lua.updated_at DESC, lua.id DESC
+        LIMIT ? OFFSET ?
         """,
-        (source_account_id, source_account_id),
+        (source_account_id, source_account_id, page_size, (page - 1) * page_size),
     ).fetchall()
     analysis_states = _overview_customer_analysis_states(conn, [int(row["lead_id"]) for row in rows])
     nodes: list[dict[str, Any]] = []
@@ -1246,10 +1353,11 @@ def _overview_customer_nodes_for_account(conn: sqlite3.Connection, source_accoun
                 "label": row["nickname"] or f"客户 {lead_id}",
                 "kind": "customer",
                 "metrics": metrics,
-                "children": [],
+                "has_children": False,
+                "child_count": 0,
             }
         )
-    return nodes
+    return nodes, total
 
 
 def _overview_customer_analysis_status(metrics: dict[str, Any]) -> str:

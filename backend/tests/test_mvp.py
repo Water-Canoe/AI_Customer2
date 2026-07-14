@@ -43,6 +43,18 @@ def prepare_project(tmp_path: Path) -> tuple[Path, Path]:
     return project_db, raw_db
 
 
+def expanded_overview_tree(views) -> list[dict]:
+    """测试通过真实分页入口逐层展开总览树。"""
+    tree = views.overview_tree()
+    for platform in tree:
+        platform["children"] = views.overview_children(platform["id"], page_size=1000)["items"]
+        for group in platform["children"]:
+            group["children"] = views.overview_children(group["id"], page_size=1000)["items"]
+            for account in group["children"]:
+                account["children"] = views.overview_children(account["id"], page_size=1000)["items"]
+    return tree
+
+
 def test_browser_queue_serializes_shared_browser_access() -> None:
     from app.services import browser_queue
 
@@ -275,7 +287,7 @@ def test_task_command_mapping_and_import(tmp_path: Path) -> None:
             (lead_id, extra_content_id, extra_comment_id),
         )
 
-    tree = views.overview_tree()
+    tree = expanded_overview_tree(views)
     assert tree[0]["kind"] == "platform"
     assert tree[0]["label"] == "dy"
     account_metrics = tree[0]["children"][0]["children"][0]["metrics"]
@@ -285,6 +297,53 @@ def test_task_command_mapping_and_import(tmp_path: Path) -> None:
     assert account_metrics["customer_count"] == 2
     assert account_metrics["target_customer_count"] == 1
     assert account_metrics["non_customer_count"] == 1
+
+
+def test_overview_loads_direct_children_with_server_pagination(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database, views
+    from app.main import app
+
+    with database.connect() as conn:
+        for index in range(12):
+            account_id = conn.execute(
+                """
+                INSERT INTO user_accounts(platform, platform_user_id, nickname)
+                VALUES('dy', ?, ?)
+                """,
+                (f"paged-{index}", f"分页账号{index}"),
+            ).lastrowid
+            conn.execute(
+                """
+                INSERT INTO contents(platform, content_id, author_account_id, title, source_keyword)
+                VALUES('dy', ?, ?, '分页内容', '分页关键词')
+                """,
+                (f"paged-content-{index}", account_id),
+            )
+
+    tree = views.overview_tree()
+    assert "children" not in tree[0]
+    assert tree[0]["child_count"] == 1
+
+    groups = views.overview_children(tree[0]["id"], page_size=5)
+    assert groups["total"] == 1
+    assert groups["items"][0]["kind"] == "keyword"
+
+    first_page = views.overview_children(groups["items"][0]["id"], page=1, page_size=5)
+    last_page = views.overview_children(groups["items"][0]["id"], page=3, page_size=5)
+    assert first_page["total"] == 12
+    assert first_page["total_pages"] == 3
+    assert len(first_page["items"]) == 5
+    assert len(last_page["items"]) == 2
+    assert all("children" not in item for item in first_page["items"])
+
+    response = TestClient(app).get(
+        "/api/overview/children",
+        params={"node_id": groups["items"][0]["id"], "page": 2, "page_size": 5},
+    )
+    assert response.status_code == 200
+    assert response.json()["page"] == 2
+    assert len(response.json()["items"]) == 5
 
 
 def test_import_kuaishou_creator_profile_for_account_analysis(tmp_path: Path) -> None:
@@ -419,7 +478,7 @@ def test_overview_groups_unlabeled_account_tasks_by_source_mode(tmp_path: Path) 
             (competitor_account_id,),
         )
 
-    tree = views.overview_tree()
+    tree = expanded_overview_tree(views)
     groups = {child["metrics"]["source_mode"]: child for child in tree[0]["children"] if child["kind"] == "source_group"}
 
     assert all(child["kind"] != "keyword" for child in tree[0]["children"])
@@ -458,7 +517,7 @@ def test_overview_shows_same_competitor_under_multiple_keywords(tmp_path: Path) 
                 (account_id, content_id, keyword),
             )
 
-    tree = views.overview_tree()
+    tree = expanded_overview_tree(views)
     keywords = {child["label"]: child for child in tree[0]["children"] if child["kind"] == "keyword"}
 
     assert {"关键词A", "关键词B"}.issubset(keywords)
@@ -2687,7 +2746,7 @@ def test_account_analysis_task_imports_profile_and_recent_contents(tmp_path: Pat
     assert content_count == 5
     assert content["task_id"] == task["id"]
     assert account_matches == 1
-    tree = views.overview_tree()
+    tree = expanded_overview_tree(views)
     labels = [child["label"] for platform in tree for child in platform["children"]]
     assert "未标记关键词" not in labels
 
@@ -3244,7 +3303,7 @@ def test_overview_shows_account_analysis_progress_statuses(tmp_path: Path) -> No
             (analysed,),
         )
 
-    tree = views.overview_tree()
+    tree = expanded_overview_tree(views)
     account_rows = {
         account["label"]: account["metrics"]
         for keyword in tree[0]["children"]
@@ -3304,7 +3363,7 @@ def test_deleting_cancelled_account_analysis_releases_accounts_for_reanalysis(tm
 
     before_rows = {
         account["label"]: account["metrics"]["competitor_display_status"]
-        for keyword in views.overview_tree()[0]["children"]
+        for keyword in expanded_overview_tree(views)[0]["children"]
         for account in keyword["children"]
     }
     assert before_rows["重新排队A"] == "排队分析"
@@ -3317,7 +3376,7 @@ def test_deleting_cancelled_account_analysis_releases_accounts_for_reanalysis(tm
     assert response.json()["analysis_cleanup"]["deleted_jobs"] == 2
     after_rows = {
         account["label"]: account["metrics"]["competitor_display_status"]
-        for keyword in views.overview_tree()[0]["children"]
+        for keyword in expanded_overview_tree(views)[0]["children"]
         for account in keyword["children"]
     }
     assert after_rows["重新排队A"] == "未分析"
@@ -5402,7 +5461,7 @@ def test_competitor_ai_reason_is_saved_and_returned_in_overview(tmp_path: Path) 
             {"is_competitor": True, "reason": "账号主页和视频都在销售同类AI客服产品"},
         )
 
-    tree = views.overview_tree()
+    tree = expanded_overview_tree(views)
     account = tree[0]["children"][0]["children"][0]
     assert account["metrics"]["competitor_status"] == "竞品"
     assert account["metrics"]["competitor_reason"] == "账号主页和视频都在销售同类AI客服产品"
@@ -5435,7 +5494,7 @@ def test_overview_customer_rows_include_reason_and_script(tmp_path: Path) -> Non
             },
         )
 
-    tree = views.overview_tree()
+    tree = expanded_overview_tree(views)
     account = tree[0]["children"][0]["children"][0]
     customer = account["children"][0]
 
@@ -5459,7 +5518,7 @@ def test_overview_customer_rows_show_ai_analysis_status(tmp_path: Path) -> None:
     lead_id = int(views.list_library("lead_customers")["rows"][0]["id"])
 
     def customer_metrics() -> dict:
-        tree = views.overview_tree()
+        tree = expanded_overview_tree(views)
         return tree[0]["children"][0]["children"][0]["children"][0]["metrics"]
 
     assert customer_metrics()["ai_analysis_status"] == "未分析"
