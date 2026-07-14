@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
@@ -33,3 +35,19 @@ def test_api_routes_have_unique_method_paths_and_business_owners() -> None:
     for key, module in expected_owners.items():
         assert key in routes
         assert routes[key].endpoint.__module__ == module
+
+
+def test_frontend_static_files_cannot_escape_dist_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import main
+
+    dist = tmp_path / "frontend_dist"
+    sibling = tmp_path / "frontend_dist_private"
+    dist.mkdir()
+    sibling.mkdir()
+    (dist / "index.html").write_text("index", encoding="utf-8")
+    (sibling / "secret.txt").write_text("secret", encoding="utf-8")
+    monkeypatch.setattr(main, "_frontend_dist", lambda: dist)
+
+    response = main.serve_frontend("../frontend_dist_private/secret.txt")
+
+    assert Path(response.path).resolve() == (dist / "index.html").resolve()

@@ -83,6 +83,6 @@ def serve_frontend(full_path: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="前端静态文件不存在，请先运行 npm run build")
     safe_dist = dist.resolve()
     target = (safe_dist / full_path).resolve()
-    if target.is_file() and str(target).startswith(str(safe_dist)):
+    if target.is_file() and safe_dist in target.parents:
         return FileResponse(target)
     return FileResponse(safe_dist / "index.html")
