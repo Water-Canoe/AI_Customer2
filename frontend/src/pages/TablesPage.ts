@@ -1,7 +1,6 @@
 ﻿import { defineComponent, h, onBeforeUnmount, reactive, watch } from 'vue'
 import type { Component } from 'vue'
 import { ChatDotRound, CopyDocument, DataBoard, Delete, Files, MagicStick, Management, Memo, Refresh, Search, User } from '@element-plus/icons-vue'
-import { computed, ref } from 'vue'
 import type { Dict } from '../shared/types'
 import { clamp } from '../shared/format'
 import { iconBadge, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
@@ -11,10 +10,14 @@ export default defineComponent({
     library: { type: String, required: true },
     rows: { type: Array, required: true },
     loading: { type: Boolean, required: true },
+    page: { type: Number, default: 1 },
+    pageSize: { type: Number, default: 20 },
+    total: { type: Number, default: 0 },
+    totalPages: { type: Number, default: 1 },
     statusFilter: { type: String, default: '' },
     keywordFilter: { type: String, default: '' }
   },
-  emits: ['change-library', 'change-filter', 'update-row', 'delete-row', 'analyze-row', 'enrich-profile', 'find-customers'],
+  emits: ['change-library', 'change-filter', 'change-page', 'update-row', 'delete-row', 'analyze-row', 'enrich-profile', 'find-customers'],
   setup(props, { emit }) {
     const libraries: Array<{ key: string, label: string, icon: Component, tone: WorkbenchTone }> = [
       { key: 'contents', label: '内容库', icon: Files, tone: 'blue' },
@@ -31,8 +34,6 @@ export default defineComponent({
     const competitorWidths = [220, 260, 280, 110, 100, 180, 140, 190]
     const widthsByLibrary = reactive<Record<string, number[]>>({})
     const filterDraft = reactive({ status: props.statusFilter, keyword: props.keywordFilter })
-    const currentPage = ref(1)
-    const pageSize = ref(10)
     let stopColumnResize: (() => void) | null = null
     watch(() => [props.statusFilter, props.keywordFilter], ([status, keyword]) => {
       filterDraft.status = String(status || '')
@@ -47,18 +48,6 @@ export default defineComponent({
     function headers() {
       return props.library === 'competitors' ? competitorHeaders : baseHeaders
     }
-    const totalRows = computed(() => (props.rows as Dict[]).length)
-    const totalPages = computed(() => Math.max(1, Math.ceil(totalRows.value / pageSize.value)))
-    const pagedRows = computed(() => {
-      const page = Math.min(currentPage.value, totalPages.value)
-      const start = (page - 1) * pageSize.value
-      return (props.rows as Dict[]).slice(start, start + pageSize.value)
-    })
-    const pageStart = computed(() => totalRows.value ? (Math.min(currentPage.value, totalPages.value) - 1) * pageSize.value + 1 : 0)
-    const pageEnd = computed(() => Math.min(totalRows.value, Math.min(currentPage.value, totalPages.value) * pageSize.value))
-    watch(() => [props.library, props.rows, props.statusFilter, props.keywordFilter], () => {
-      currentPage.value = 1
-    })
     function statusOptions() {
       if (['competitor_candidates', 'competitors'].includes(props.library)) return ['未分析', '竞品', '非竞品']
       if (['lead_customers', 'target_customers'].includes(props.library)) return ['待筛选', '非客户', '未私信', '已私信', '未回复', '已回复', '未成交', '已成交', '无需跟进']
@@ -73,14 +62,13 @@ export default defineComponent({
       emit('change-filter', { status: '', keyword: '' })
     }
     function changePageSize(event: Event) {
-      pageSize.value = Number((event.target as HTMLSelectElement).value)
-      currentPage.value = 1
+      emit('change-page', { page: 1, page_size: Number((event.target as HTMLSelectElement).value) })
     }
     function previousPage() {
-      currentPage.value = Math.max(1, currentPage.value - 1)
+      emit('change-page', { page: Math.max(1, props.page - 1), page_size: props.pageSize })
     }
     function nextPage() {
-      currentPage.value = Math.min(totalPages.value, currentPage.value + 1)
+      emit('change-page', { page: Math.min(props.totalPages, props.page + 1), page_size: props.pageSize })
     }
     function startColumnResize(index: number, event: PointerEvent) {
       event.preventDefault()
@@ -133,7 +121,7 @@ export default defineComponent({
       h('div', { class: 'table-content' }, [
         sectionTitle({
           title: libraries.find(library => library.key === props.library)?.label || '数据',
-          subtitle: totalRows.value ? `${pageStart.value}-${pageEnd.value} / ${totalRows.value} 条记录` : '0 条记录',
+          subtitle: props.total ? `${(props.page - 1) * props.pageSize + 1}-${Math.min(props.total, props.page * props.pageSize)} / ${props.total} 条记录` : '0 条记录',
           icon: DataBoard,
           tone: 'teal'
         }),
@@ -144,7 +132,7 @@ export default defineComponent({
             h('span', label),
             h('button', { class: 'column-resizer', type: 'button', title: '拖动调整列宽', onPointerdown: (event: PointerEvent) => startColumnResize(index, event) })
           ])))]),
-          h('tbody', pagedRows.value.length ? pagedRows.value.map(row => renderRow(props.library, row, emit, accountLibraries)) : [
+          h('tbody', (props.rows as Dict[]).length ? (props.rows as Dict[]).map(row => renderRow(props.library, row, emit, accountLibraries)) : [
             h('tr', [h('td', { class: 'table-empty', colspan: headers().length }, props.loading ? '加载中...' : '暂无数据')])
           ])
         ])
@@ -152,7 +140,7 @@ export default defineComponent({
         h('div', { class: 'table-pagination' }, [
           h('div', { class: 'table-page-size' }, [
             h('span', '每页'),
-            h('select', { value: String(pageSize.value), onChange: changePageSize }, [
+            h('select', { value: String(props.pageSize), onChange: changePageSize }, [
               h('option', { value: '10' }, '10'),
               h('option', { value: '20' }, '20'),
               h('option', { value: '50' }, '50')
@@ -160,9 +148,9 @@ export default defineComponent({
             h('span', '条')
           ]),
           h('div', { class: 'table-page-controls' }, [
-            h('button', { type: 'button', disabled: currentPage.value <= 1, onClick: previousPage }, '上一页'),
-            h('span', `${Math.min(currentPage.value, totalPages.value)} / ${totalPages.value}`),
-            h('button', { type: 'button', disabled: currentPage.value >= totalPages.value, onClick: nextPage }, '下一页')
+            h('button', { type: 'button', disabled: props.page <= 1, onClick: previousPage }, '上一页'),
+            h('span', `${Math.min(props.page, props.totalPages)} / ${props.totalPages}`),
+            h('button', { type: 'button', disabled: props.page >= props.totalPages, onClick: nextPage }, '下一页')
           ])
         ])
       ])

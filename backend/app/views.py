@@ -531,19 +531,34 @@ def _field_diagnostic(
     return {"key": key, "label": label, "column": column, "supported": True, "non_empty": non_empty, "row_count": row_count}
 
 
-def list_library(library: str, status: str = "", keyword: str = "") -> dict[str, Any]:
+def list_library(
+    library: str,
+    status: str = "",
+    keyword: str = "",
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    # 数据表直接在 SQLite 中分页，避免把整库记录传给前端切片。
+    page = max(1, int(page or 1))
+    page_size = max(1, min(100, int(page_size or 20)))
     if library == "contents":
-        return _library_response(library, _list_contents(keyword))
+        rows, total = _list_contents(keyword, page, page_size)
+        return _library_response(library, rows, total, page, page_size)
     if library == "comments":
-        return _library_response(library, _list_comments(keyword))
+        rows, total = _list_comments(keyword, page, page_size)
+        return _library_response(library, rows, total, page, page_size)
     if library == "competitor_candidates":
-        return _library_response(library, _list_competitors(candidate=True, status=status, keyword=keyword))
+        rows, total = _list_competitors(candidate=True, status=status, keyword=keyword, page=page, page_size=page_size)
+        return _library_response(library, rows, total, page, page_size)
     if library == "competitors":
-        return _library_response(library, _list_competitors(candidate=False, status=status, keyword=keyword))
+        rows, total = _list_competitors(candidate=False, status=status, keyword=keyword, page=page, page_size=page_size)
+        return _library_response(library, rows, total, page, page_size)
     if library == "lead_customers":
-        return _library_response(library, _list_leads(target=False, status=status, keyword=keyword))
+        rows, total = _list_leads(target=False, status=status, keyword=keyword, page=page, page_size=page_size)
+        return _library_response(library, rows, total, page, page_size)
     if library == "target_customers":
-        return _library_response(library, _list_leads(target=True, status=status, keyword=keyword))
+        rows, total = _list_leads(target=True, status=status, keyword=keyword, page=page, page_size=page_size)
+        return _library_response(library, rows, total, page, page_size)
     raise KeyError(library)
 
 
@@ -665,8 +680,22 @@ def _scalar_count(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = 
     return int(row["count"] or 0) if row else 0
 
 
-def _library_response(library: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"library": library, "label": LIBRARY_LABELS[library], "rows": rows}
+def _library_response(
+    library: str,
+    rows: list[dict[str, Any]],
+    total: int,
+    page: int,
+    page_size: int,
+) -> dict[str, Any]:
+    return {
+        "library": library,
+        "label": LIBRARY_LABELS[library],
+        "rows": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (total + page_size - 1) // page_size),
+    }
 
 
 def _keyword_clause(keyword: str, fields: list[str]) -> tuple[str, list[str]]:
@@ -677,9 +706,19 @@ def _keyword_clause(keyword: str, fields: list[str]) -> tuple[str, list[str]]:
     return clause, params
 
 
-def _list_contents(keyword: str) -> list[dict[str, Any]]:
+def _list_contents(keyword: str, page: int, page_size: int) -> tuple[list[dict[str, Any]], int]:
     clause, params = _keyword_clause(keyword, ["c.title", "c.description", "ua.nickname", "c.source_keyword"])
     with database.connect() as conn:
+        total = _scalar_count(
+            conn,
+            f"""
+            SELECT COUNT(*) AS count
+            FROM contents c
+            LEFT JOIN user_accounts ua ON ua.id = c.author_account_id
+            WHERE 1 = 1 {clause}
+            """,
+            tuple(params),
+        )
         rows = conn.execute(
             f"""
             SELECT c.*, ua.nickname AS author_nickname, ua.profile_url AS author_url, j.name AS task_name
@@ -688,16 +727,27 @@ def _list_contents(keyword: str) -> list[dict[str, Any]]:
             LEFT JOIN crawl_jobs j ON j.id = c.task_id
             WHERE 1 = 1 {clause}
             ORDER BY c.updated_at DESC
-            LIMIT 500
+            LIMIT ? OFFSET ?
             """,
-            params,
+            [*params, page_size, (page - 1) * page_size],
         ).fetchall()
-    return database.rows_to_dicts(rows)
+    return database.rows_to_dicts(rows), total
 
 
-def _list_comments(keyword: str) -> list[dict[str, Any]]:
+def _list_comments(keyword: str, page: int, page_size: int) -> tuple[list[dict[str, Any]], int]:
     clause, params = _keyword_clause(keyword, ["cm.body", "ua.nickname", "ct.title"])
     with database.connect() as conn:
+        total = _scalar_count(
+            conn,
+            f"""
+            SELECT COUNT(*) AS count
+            FROM comments cm
+            LEFT JOIN user_accounts ua ON ua.id = cm.author_account_id
+            LEFT JOIN contents ct ON ct.id = cm.content_id
+            WHERE 1 = 1 {clause}
+            """,
+            tuple(params),
+        )
         rows = conn.execute(
             f"""
             SELECT cm.*, ua.nickname AS commenter_nickname, ua.profile_url AS commenter_url,
@@ -708,19 +758,36 @@ def _list_comments(keyword: str) -> list[dict[str, Any]]:
             LEFT JOIN crawl_jobs j ON j.id = cm.task_id
             WHERE 1 = 1 {clause}
             ORDER BY cm.updated_at DESC
-            LIMIT 500
+            LIMIT ? OFFSET ?
             """,
-            params,
+            [*params, page_size, (page - 1) * page_size],
         ).fetchall()
-    return database.rows_to_dicts(rows)
+    return database.rows_to_dicts(rows), total
 
 
-def _list_competitors(candidate: bool, status: str, keyword: str) -> list[dict[str, Any]]:
+def _list_competitors(
+    candidate: bool,
+    status: str,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict[str, Any]], int]:
     base_status = "ua.competitor_status != '竞品'" if candidate else "ua.competitor_status = '竞品'"
     status_clause = " AND ua.competitor_status = ?" if status else ""
     kw_clause, params = _keyword_clause(keyword, ["ua.nickname", "ua.signature", "ua.platform_user_id"])
     all_params: list[Any] = ([status] if status else []) + params
     with database.connect() as conn:
+        total = _scalar_count(
+            conn,
+            f"""
+            SELECT COUNT(DISTINCT ua.id) AS count
+            FROM user_accounts ua
+            LEFT JOIN account_sources ac ON ac.account_id = ua.id AND ac.active = 1
+            WHERE {base_status} AND (ua.account_role IN ('competitor_candidate', 'competitor') OR ac.id IS NOT NULL)
+            {status_clause} {kw_clause}
+            """,
+            tuple(all_params),
+        )
         rows = conn.execute(
             f"""
             SELECT ua.*, COUNT(DISTINCT ac.content_id) AS content_count,
@@ -732,20 +799,36 @@ def _list_competitors(candidate: bool, status: str, keyword: str) -> list[dict[s
             {status_clause} {kw_clause}
             GROUP BY ua.id
             ORDER BY ua.updated_at DESC
-            LIMIT 500
+            LIMIT ? OFFSET ?
             """,
-            all_params,
+            [*all_params, page_size, (page - 1) * page_size],
         ).fetchall()
-    return database.rows_to_dicts(rows)
+    return database.rows_to_dicts(rows), total
 
 
-def _list_leads(target: bool, status: str, keyword: str) -> list[dict[str, Any]]:
+def _list_leads(
+    target: bool,
+    status: str,
+    keyword: str,
+    page: int,
+    page_size: int,
+) -> tuple[list[dict[str, Any]], int]:
     non_target_statuses = "('待筛选', '无需跟进', '非客户')"
     target_clause = f"lua.follow_status NOT IN {non_target_statuses} AND lua.hidden = 0" if target else f"lua.follow_status IN {non_target_statuses} AND lua.hidden = 0"
     status_clause = " AND lua.follow_status = ?" if status else ""
     kw_clause, params = _keyword_clause(keyword, ["ua.nickname", "ua.signature", "lua.reason", "lua.script"])
     all_params: list[Any] = ([status] if status else []) + params
     with database.connect() as conn:
+        total = _scalar_count(
+            conn,
+            f"""
+            SELECT COUNT(DISTINCT lua.id) AS count
+            FROM lead_user_accounts lua
+            JOIN user_accounts ua ON ua.id = lua.account_id
+            WHERE {target_clause} {status_clause} {kw_clause}
+            """,
+            tuple(all_params),
+        )
         rows = conn.execute(
             f"""
             SELECT lua.*, ua.platform, ua.nickname, ua.profile_url, ua.platform_user_id,
@@ -760,11 +843,11 @@ def _list_leads(target: bool, status: str, keyword: str) -> list[dict[str, Any]]
             WHERE {target_clause} {status_clause} {kw_clause}
             GROUP BY lua.id
             ORDER BY lua.updated_at DESC
-            LIMIT 500
+            LIMIT ? OFFSET ?
             """,
-            all_params,
+            [*all_params, page_size, (page - 1) * page_size],
         ).fetchall()
-    return database.rows_to_dicts(rows)
+    return database.rows_to_dicts(rows), total
 
 
 def update_library_row(library: str, row_id: int, values: dict[str, Any]) -> dict[str, Any]:

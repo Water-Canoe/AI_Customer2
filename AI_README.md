@@ -106,6 +106,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 顶部指标统一读取轻量 `/api/workbench/status`，只统计当前工作台和全局运行态。定时同步只刷新当前路由所需数据；设置、环境检查和非当前页面的大列表不再被每 3/12 秒全量请求。手动刷新同样限定在当前工作台，自动化计划页额外显示启用、运行和失败计数。
 
+数据表接口使用数据库级分页，参数为 `page / page_size`，响应包含 `total / total_pages`。前端切页和切换每页数量时只请求当前页，不再先读取最多 500 行后在浏览器内切片。
+
 前端构建链使用 Vite 8、Vue Test Utils 和 Vitest 4；测试文件与源码同目录使用 `*.test.ts`。当前测试覆盖共享格式化、自动同步调度和运行队列的加载/取消交互，`npm audit` 为 0 个已知漏洞。
 
 `App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。

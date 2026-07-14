@@ -106,6 +106,10 @@ const tableKeyword = ref('')
 const tasks = ref<Dict[]>([])
 const tableRows = ref<Dict[]>([])
 const tableLoading = ref(false)
+const tablePage = ref(1)
+const tablePageSize = ref(20)
+const tableTotal = ref(0)
+const tableTotalPages = ref(1)
 const overviewTree = ref<Dict[]>([])
 const aiWorkbench = ref<Dict>({})
 const selectedTask = ref<Dict | null>(null)
@@ -228,6 +232,10 @@ const routeProps = computed(() => {
       library: activeLibrary.value,
       rows: tableRows.value,
       loading: tableLoading.value,
+      page: tablePage.value,
+      pageSize: tablePageSize.value,
+      total: tableTotal.value,
+      totalPages: tableTotalPages.value,
       statusFilter: tableStatus.value,
       keywordFilter: tableKeyword.value,
     }
@@ -308,6 +316,7 @@ const routeListeners = computed(() => {
     return {
       'change-library': changeLibrary,
       'change-filter': changeTableFilter,
+      'change-page': changeTablePage,
       'update-row': updateRow,
       'delete-row': deleteRow,
       'analyze-row': analyzeTableRow,
@@ -450,8 +459,23 @@ async function loadTrafficShell() {
 async function loadTable(library: string, silent = false) {
   if (!silent) tableLoading.value = true
   try {
-    const { data } = await api.get(`/tables/${library}`, { params: { status: tableStatus.value, keyword: tableKeyword.value } })
+    const { data } = await api.get(`/tables/${library}`, {
+      params: {
+        status: tableStatus.value,
+        keyword: tableKeyword.value,
+        page: tablePage.value,
+        page_size: tablePageSize.value,
+      }
+    })
     tableRows.value = data.rows
+    tableTotal.value = Number(data.total || 0)
+    tablePage.value = Number(data.page || 1)
+    tablePageSize.value = Number(data.page_size || tablePageSize.value)
+    tableTotalPages.value = Number(data.total_pages || 1)
+    if (!data.rows.length && tablePage.value > tableTotalPages.value) {
+      tablePage.value = tableTotalPages.value
+      await loadTable(library, silent)
+    }
   } finally {
     if (!silent) tableLoading.value = false
   }
@@ -524,12 +548,20 @@ async function changeLibrary(library: string) {
   activeLibrary.value = library
   tableStatus.value = ''
   tableKeyword.value = ''
+  tablePage.value = 1
   await loadTable(library)
 }
 
 async function changeTableFilter(filters: Dict) {
   tableStatus.value = filters.status || ''
   tableKeyword.value = filters.keyword || ''
+  tablePage.value = 1
+  await loadTable(activeLibrary.value)
+}
+
+async function changeTablePage(payload: Dict) {
+  tablePage.value = Number(payload.page || 1)
+  tablePageSize.value = Number(payload.page_size || tablePageSize.value)
   await loadTable(activeLibrary.value)
 }
 

@@ -5755,6 +5755,26 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     assert created.json()["creator_id"] == "xhs-account"
 
 
+def test_table_api_uses_database_pagination(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.main import app
+
+    with database.connect() as conn:
+        conn.executemany(
+            "INSERT INTO contents(platform, content_id, title) VALUES('dy', ?, ?)",
+            [(f"content-{index}", f"内容 {index}") for index in range(25)],
+        )
+
+    response = TestClient(app).get("/api/tables/contents", params={"page": 3, "page_size": 10})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 25
+    assert payload["total_pages"] == 3
+    assert payload["page"] == 3
+    assert len(payload["rows"]) == 5
+
+
 def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app
