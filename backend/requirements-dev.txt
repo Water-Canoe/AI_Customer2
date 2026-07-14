@@ -3,3 +3,4 @@
 # Development, test, and packaging tools only.
 pytest==8.3.4
 pyinstaller==6.21.0
+httpx2==2.5.0

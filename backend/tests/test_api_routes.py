@@ -10,11 +10,21 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 
+def _walk_routes(routes: list[object]):
+    # FastAPI 0.139 keeps included routers nested instead of copying their routes.
+    for route in routes:
+        nested_router = getattr(route, "original_router", None)
+        if nested_router is not None:
+            yield from _walk_routes(nested_router.routes)
+            continue
+        yield route
+
+
 def test_api_routes_have_unique_method_paths_and_business_owners() -> None:
     from app.main import app
 
     routes: dict[tuple[str, str], object] = {}
-    for route in app.routes:
+    for route in _walk_routes(app.routes):
         for method in getattr(route, "methods", set()):
             key = (method, route.path)
             if route.path.startswith("/api/"):

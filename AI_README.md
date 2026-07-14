@@ -47,7 +47,7 @@
 本地采集依赖目录、界面文案、日志文案和默认路径统一显示为 `MyCrawler`；内部 `media_crawler_*` 设置键继续作为历史数据库/API 键保留，不做额外迁移。
 根目录 `pytest.ini` 把测试收集范围固定为 `backend/tests` 并加入后端模块路径；从项目根目录运行 `backend\.venv\Scripts\python.exe -m pytest -q` 不会误收集 `GitItem/` 或 `MyCrawler/` 的上游测试。运行目录忽略规则使用根路径锚定，不会再把 `frontend/src/components/runtime/` 误判为运行产物；三个平台验证工具各自的浏览器登录态目录使用明确路径忽略。视频引擎的 `azure_voices.json` 属于源码数据并纳入版本控制，打包时复制到对应模块目录。
 
-后端依赖分为 `requirements.txt` 运行依赖和 `requirements-dev.txt` 开发/测试/打包工具；开发环境安装后者，客户环境和页面环境修复只安装前者。Pytest 与 PyInstaller 不再进入客户运行依赖，打包器固定为已经验收的 6.21.0。
+后端依赖分为 `requirements.txt` 运行依赖和 `requirements-dev.txt` 开发/测试/打包工具；开发环境安装后者，客户环境和页面环境修复只安装前者。Pytest、PyInstaller 与仅供 Starlette 测试客户端使用的 HTTPX2 不再进入客户运行依赖，打包器固定为已经验收的 6.21.0。FastAPI 固定为 0.139.0、Starlette 固定为 1.3.1，使主服务与 VoxCPM 间接安装的 Gradio 共用同一依赖版本，避免开发环境冲突和安装结果漂移。
 
 后端只从已经解析的前端 `dist` 目录提供静态文件；请求路径必须在该目录的父子关系内，不能使用 `..` 读取名称前缀相同的相邻目录。未匹配到真实静态文件时只返回前端 `index.html`。
 
@@ -432,7 +432,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
 `backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。视频引擎的数据模型统一使用 Pydantic 2 的 `ConfigDict`，不再保留已经弃用的类式 `Config`；Gemini 测试使用新 SDK 的模拟 Client，验证文本、语音和自定义地址参数，不连接收费接口。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
-本轮完整后端回归为380项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布或真实用户私信。前端为4个测试文件、14项测试通过，并完成类型检查和生产构建。
+本轮完整后端回归为389项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布或真实用户私信。前端为4个测试文件、14项测试通过，并完成类型检查和生产构建。
 
 ## 授权服务
 
@@ -499,6 +499,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - MyCrawler 仓库许可证声明为非商业学习使用，本项目按本地自用验证处理。
 - 首版只覆盖文档要求的平台：抖音、小红书、快手。
 - 自动测试默认使用模拟 MyCrawler SQLite，不会触发真实采集。
+- 当前运行时固定为 Python 3.11；Pydub 仍依赖标准库中已弃用的 `audioop`，因此升级到 Python 3.13 前必须先替换或升级该音频处理链路。
 - 视频在线素材、AI、TTS和TwelveLabs依赖用户自己的网络与供应商配置；收费供应商在自动测试中只使用模拟请求，不消耗真实额度。当前开发机Edge TTS实测3次均在30秒超时，系统已返回明确错误且未切换供应商；本地视频、图片、自定义配音和WAV背景音乐的6秒成片已真实生成成功。
 - Whisper默认模型为 `large-v3`，不进入发布包；用户在内容设置选择Whisper后首次任务会下载到稳定 `data/video_generation/models`，下载失败会保留具体错误。
 - 移植的9个字体按当前产品方案随包分发，商业授权风险为已知接受项；后续正式商业发行仍应由发行方保留字体授权凭证。
