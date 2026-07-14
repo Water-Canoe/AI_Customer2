@@ -5529,18 +5529,47 @@ def test_ai_workbench_enriches_targets_and_failure_categories(tmp_path: Path) ->
     assert response.status_code == 200
     payload = response.json()
     assert payload["summary"]["failed"] == 1
-    competitor = next(item for item in payload["competitors"] if item["id"] == account_id)
+    assert payload["tab"] == "competitors"
+    competitor = next(item for item in payload["items"] if item["id"] == account_id)
     assert competitor["nickname"] == "AI客服竞品号"
     assert competitor["analysis_status"] == "已分析"
     assert competitor["result_label"] == "竞品"
-    lead = next(item for item in payload["leads"] if item["id"] == lead_id)
+    lead_payload = client.get("/api/ai/workbench", params={"tab": "leads"}).json()
+    lead = next(item for item in lead_payload["items"] if item["id"] == lead_id)
     assert lead["nickname"] == "准备采购的老板"
     assert "多少钱" in lead["comment_samples"]
-    failed = payload["failed_jobs"][0]
+    failed = client.get("/api/ai/workbench", params={"tab": "failed"}).json()["items"][0]
     assert failed["id"] == "workbench-lead-failed"
     assert failed["target_name"] == "准备采购的老板"
     assert failed["error_category"] == "JSON解析失败"
-    assert any(item["id"] == "workbench-competitor-ok" and "竞品" in item["output_summary"] for item in payload["history"])
+    history = client.get("/api/ai/workbench", params={"tab": "history"}).json()["items"]
+    assert any(item["id"] == "workbench-competitor-ok" and "竞品" in item["output_summary"] for item in history)
+    assert client.get("/api/ai/workbench", params={"tab": "unknown"}).status_code == 400
+
+
+def test_ai_workbench_uses_server_pagination_and_filters(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.main import app
+
+    with database.connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO user_accounts(
+                platform, platform_user_id, nickname, account_role, competitor_status
+            ) VALUES('dy', ?, ?, 'competitor_candidate', '未分析')
+            """,
+            [(f"candidate-{index}", f"候选账号 {index}") for index in range(25)],
+        )
+
+    client = TestClient(app)
+    page = client.get("/api/ai/workbench", params={"page": 3, "page_size": 10}).json()
+    assert page["total"] == 25
+    assert page["total_pages"] == 3
+    assert len(page["items"]) == 5
+    filtered = client.get("/api/ai/workbench", params={"keyword": "候选账号 24"}).json()
+    assert filtered["total"] == 1
+    assert filtered["items"][0]["nickname"] == "候选账号 24"
 
 
 def test_ai_workbench_bulk_delete_only_confirmed_negative_results(tmp_path: Path) -> None:

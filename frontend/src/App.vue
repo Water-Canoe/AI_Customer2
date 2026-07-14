@@ -117,6 +117,7 @@ const tableTotal = ref(0)
 const tableTotalPages = ref(1)
 const overviewTree = ref<Dict[]>([])
 const aiWorkbench = ref<Dict>({})
+const aiQuery = ref<Dict>({ tab: 'competitors', keyword: '', status: '', result: '', page: 1, page_size: 10 })
 const selectedTask = ref<Dict | null>(null)
 const taskDiagnostics = ref<Dict>({})
 const taskDedupSummary = ref<Dict>({})
@@ -297,6 +298,7 @@ const routeListeners = computed(() => {
       'delete-non-customers': deleteAiWorkbenchNonCustomers,
       'retry-job': retryAiJob,
       'retry-jobs': retryAiJobs,
+      'query-change': changeAiQuery,
     }
   }
   if (activeView.value === 'message-workbench') {
@@ -432,8 +434,17 @@ async function checkEnv() {
 }
 
 async function loadAiJobs() {
-  const workbench = await api.get('/ai/workbench')
+  const workbench = await api.get('/ai/workbench', { params: aiQuery.value })
   aiWorkbench.value = workbench.data
+  if (!workbench.data.items?.length && Number(aiQuery.value.page || 1) > Number(workbench.data.total_pages || 1)) {
+    aiQuery.value.page = Number(workbench.data.total_pages || 1)
+    await loadAiJobs()
+  }
+}
+
+async function changeAiQuery(query: Dict) {
+  aiQuery.value = { ...aiQuery.value, ...query }
+  await loadAiJobs()
 }
 
 async function loadOverview() {

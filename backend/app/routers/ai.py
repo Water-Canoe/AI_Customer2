@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
 
 from app.api_dependencies import require_license
 from app.schemas import AiBatchCreate, AiBulkDelete, AiJobCreate
@@ -36,8 +36,18 @@ def list_ai_jobs() -> list[dict[str, object]]:
 
 
 @router.get("/workbench")
-def ai_workbench() -> dict[str, object]:
-    return ai_service.ai_workbench()
+def ai_workbench(
+    tab: str = Query(default="competitors"),
+    keyword: str = Query(default=""),
+    status: str = Query(default=""),
+    result: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+) -> dict[str, object]:
+    try:
+        return ai_service.ai_workbench(tab, keyword, status, result, page, page_size)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/workbench/non-competitors/delete")

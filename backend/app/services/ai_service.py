@@ -193,41 +193,167 @@ def list_ai_jobs() -> list[dict[str, Any]]:
         return database.rows_to_dicts(rows)
 
 
-def ai_workbench() -> dict[str, Any]:
+def ai_workbench(
+    tab: str = "competitors",
+    keyword: str = "",
+    status: str = "",
+    result: str = "",
+    page: int = 1,
+    page_size: int = 10,
+) -> dict[str, Any]:
+    if tab not in {"competitors", "leads", "failed", "history"}:
+        raise ValueError("未知 AI 工作台标签")
+    page = max(1, int(page or 1))
+    page_size = max(1, min(100, int(page_size or 10)))
     with database.connect() as conn:
-        jobs = database.rows_to_dicts(
-            conn.execute("SELECT * FROM analysis_jobs ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC").fetchall()
-        )
-        latest_jobs = _latest_jobs_by_target(jobs)
-        competitors = _workbench_competitors(conn, latest_jobs)
-        leads = _workbench_leads(conn, latest_jobs)
-        failed_jobs = [_enrich_workbench_job(conn, job) for job in jobs if job.get("status") == "failed"]
-        history = [
-            _enrich_workbench_job(conn, job)
-            for job in jobs
-            if job.get("status") in ("succeeded", "failed")
-        ][:80]
-        today = time.strftime("%Y-%m-%d")
-        summary = {
-            "competitor_pending": sum(1 for item in competitors if item.get("analysis_status") == "未分析"),
-            "lead_pending": sum(1 for item in leads if item.get("analysis_status") == "未分析"),
-            "running": sum(1 for job in jobs if job.get("status") == "running"),
-            "failed": len(failed_jobs),
-            "succeeded_today": sum(
-                1
-                for job in jobs
-                if job.get("status") == "succeeded" and str(job.get("updated_at") or "").startswith(today)
-            ),
-            "total_jobs": len(jobs),
-            "concurrency": ai_analysis_concurrency(),
-        }
+        # 每次只组装当前标签，避免轮询时同时加载四份大列表。
+        if tab in {"competitors", "leads"}:
+            target_type = "competitor" if tab == "competitors" else "lead"
+            latest_jobs = _latest_jobs_by_target(
+                database.rows_to_dicts(
+                    conn.execute(
+                        """
+                        SELECT * FROM (
+                            SELECT analysis_jobs.*,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY target_type, target_id
+                                       ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC
+                                   ) AS row_number
+                            FROM analysis_jobs
+                            WHERE target_type = ?
+                        ) latest
+                        WHERE row_number = 1
+                        """,
+                        (target_type,),
+                    ).fetchall()
+                )
+            )
+            unfiltered = not any((keyword, status, result))
+            if tab == "competitors":
+                total = _workbench_competitor_count(conn) if unfiltered else None
+                items = _workbench_competitors(
+                    conn,
+                    latest_jobs,
+                    page_size if unfiltered else 1000,
+                    (page - 1) * page_size if unfiltered else 0,
+                )
+            else:
+                total = _workbench_lead_count(conn) if unfiltered else None
+                items = _workbench_leads(
+                    conn,
+                    latest_jobs,
+                    page_size if unfiltered else 1000,
+                    (page - 1) * page_size if unfiltered else 0,
+                )
+        else:
+            status_clause = "status = ?" if tab == "failed" else "status IN ('succeeded', 'failed')"
+            params = ("failed",) if tab == "failed" else ()
+            jobs = database.rows_to_dicts(
+                conn.execute(
+                    f"SELECT * FROM analysis_jobs WHERE {status_clause} ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC LIMIT 2000",
+                    params,
+                ).fetchall()
+            )
+            items = [_enrich_workbench_job(conn, job) for job in jobs]
+
+        filtered = [item for item in items if _matches_workbench_item(item, tab, keyword, status, result)]
+        if tab in {"competitors", "leads"} and not any((keyword, status, result)):
+            rows = filtered
+        else:
+            total = len(filtered)
+            start = (page - 1) * page_size
+            rows = filtered[start:start + page_size]
     return {
-        "summary": summary,
-        "competitors": competitors,
-        "leads": leads,
-        "failed_jobs": failed_jobs,
-        "history": history,
-        "jobs": jobs,
+        "summary": _ai_workbench_summary(),
+        "tab": tab,
+        "items": rows,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (total + page_size - 1) // page_size),
+    }
+
+
+def _matches_workbench_item(item: dict[str, Any], tab: str, keyword: str, status: str, result: str) -> bool:
+    status_value = item.get("error_category") if tab == "failed" else item.get("status") if tab == "history" else item.get("analysis_status")
+    result_value = "" if tab in {"failed", "history"} else item.get("result_label")
+    if status and status_value != status:
+        return False
+    if result and result_value != result:
+        return False
+    keyword = str(keyword or "").strip().lower()
+    if not keyword:
+        return True
+    fields = (
+        "id", "job_id", "nickname", "target_name", "signature", "comment_samples",
+        "content_samples", "source_keywords", "source_account_names", "result_reason",
+        "reason", "error", "output_summary",
+    )
+    return any(keyword in str(item.get(field) or "").lower() for field in fields)
+
+
+def _ai_workbench_summary() -> dict[str, int]:
+    with database.connect() as conn:
+        competitor_pending = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM user_accounts ua
+                WHERE ua.competitor_status NOT IN ('竞品', '非竞品')
+                  AND (
+                    ua.account_role IN ('competitor_candidate', 'competitor')
+                    OR EXISTS (SELECT 1 FROM account_sources src WHERE src.account_id = ua.id AND src.active = 1)
+                    OR EXISTS (SELECT 1 FROM contents c WHERE c.author_account_id = ua.id AND COALESCE(c.source_keyword, '') <> '')
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM analysis_jobs aj
+                    WHERE aj.target_type = 'competitor' AND aj.target_id = ua.id
+                      AND aj.status IN ('pending', 'running', 'failed')
+                      AND aj.updated_at = (
+                        SELECT MAX(latest.updated_at) FROM analysis_jobs latest
+                        WHERE latest.target_type = 'competitor' AND latest.target_id = ua.id
+                      )
+                  )
+                """
+            ).fetchone()["count"]
+        )
+        lead_pending = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM lead_user_accounts lua
+                WHERE lua.hidden = 0
+                  AND COALESCE(lua.reason, '') = ''
+                  AND COALESCE(lua.script, '') = ''
+                  AND lua.screening_status NOT IN ('目标客户', '非客户')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM analysis_jobs aj
+                    WHERE aj.target_type = 'lead' AND aj.target_id = lua.id
+                      AND aj.status IN ('pending', 'running', 'failed')
+                      AND aj.updated_at = (
+                        SELECT MAX(latest.updated_at) FROM analysis_jobs latest
+                        WHERE latest.target_type = 'lead' AND latest.target_id = lua.id
+                      )
+                  )
+                """
+            ).fetchone()["count"]
+        )
+        job_counts = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                SUM(CASE WHEN status = 'succeeded' AND date(updated_at) = date('now', 'localtime') THEN 1 ELSE 0 END) AS succeeded_today
+            FROM analysis_jobs
+            """
+        ).fetchone()
+    return {
+        "competitor_pending": competitor_pending,
+        "lead_pending": lead_pending,
+        "running": int(job_counts["running"] or 0),
+        "failed": int(job_counts["failed"] or 0),
+        "succeeded_today": int(job_counts["succeeded_today"] or 0),
+        "concurrency": ai_analysis_concurrency(),
     }
 
 
@@ -335,9 +461,32 @@ def _latest_jobs_by_target(jobs: list[dict[str, Any]]) -> dict[tuple[str, int], 
     return latest
 
 
+def _workbench_competitor_count(conn: database.sqlite3.Connection) -> int:
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM user_accounts ua
+        WHERE ua.account_role IN ('competitor_candidate', 'competitor')
+           OR EXISTS (SELECT 1 FROM account_sources src WHERE src.account_id = ua.id AND src.active = 1)
+           OR EXISTS (
+                SELECT 1 FROM contents c
+                WHERE c.author_account_id = ua.id AND COALESCE(c.source_keyword, '') <> ''
+           )
+        """
+    ).fetchone()
+    return int(row["count"] or 0)
+
+
+def _workbench_lead_count(conn: database.sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) AS count FROM lead_user_accounts WHERE hidden = 0").fetchone()
+    return int(row["count"] or 0)
+
+
 def _workbench_competitors(
     conn: database.sqlite3.Connection,
     latest_jobs: dict[tuple[str, int], dict[str, Any]],
+    limit: int = 1000,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
@@ -381,8 +530,9 @@ def _workbench_competitors(
                   AND COALESCE(c.source_keyword, '') <> ''
            )
         ORDER BY datetime(ua.updated_at) DESC, ua.id DESC
-        LIMIT 1000
-        """
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
     ).fetchall()
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -411,6 +561,8 @@ def _workbench_competitors(
 def _workbench_leads(
     conn: database.sqlite3.Connection,
     latest_jobs: dict[tuple[str, int], dict[str, Any]],
+    limit: int = 1000,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
@@ -444,8 +596,9 @@ def _workbench_leads(
         WHERE lua.hidden = 0
         GROUP BY lua.id
         ORDER BY datetime(lua.updated_at) DESC, lua.id DESC
-        LIMIT 1000
-        """
+        LIMIT ? OFFSET ?
+        """,
+        (limit, offset),
     ).fetchall()
     items: list[dict[str, Any]] = []
     for row in rows:

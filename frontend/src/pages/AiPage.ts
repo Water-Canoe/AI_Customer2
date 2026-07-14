@@ -12,7 +12,7 @@ export default defineComponent({
   props: {
     workbench: { type: Object, default: () => ({}) }
   },
-  emits: ['create-job', 'create-batch-jobs', 'delete-non-competitors', 'delete-non-customers', 'retry-job', 'retry-jobs'],
+  emits: ['create-job', 'create-batch-jobs', 'delete-non-competitors', 'delete-non-customers', 'retry-job', 'retry-jobs', 'query-change'],
   setup(props, { emit }) {
     const activeTab = ref<'competitors' | 'leads' | 'failed' | 'history'>('competitors')
     const selected = ref<Dict | null>(null)
@@ -25,59 +25,70 @@ export default defineComponent({
     })
 
     const summary = computed(() => props.workbench?.summary || {})
-    const tabRows = computed(() => {
-      if (activeTab.value === 'competitors') return props.workbench?.competitors || []
-      if (activeTab.value === 'leads') return props.workbench?.leads || []
-      if (activeTab.value === 'failed') return props.workbench?.failed_jobs || []
-      return props.workbench?.history || []
-    })
-    const filteredRows = computed(() => filterRows(tabRows.value || [], activeTab.value, filters))
-    const totalPages = computed(() => Math.max(1, Math.ceil(filteredRows.value.length / filters.pageSize)))
-    const pagedRows = computed(() => {
-      const page = Math.min(filters.page, totalPages.value)
-      const start = (page - 1) * filters.pageSize
-      return filteredRows.value.slice(start, start + filters.pageSize)
-    })
-    const pageStart = computed(() => filteredRows.value.length ? (Math.min(filters.page, totalPages.value) - 1) * filters.pageSize + 1 : 0)
-    const pageEnd = computed(() => Math.min(filteredRows.value.length, Math.min(filters.page, totalPages.value) * filters.pageSize))
+    const rows = computed<Dict[]>(() => props.workbench?.items || [])
+    const total = computed(() => Number(props.workbench?.total || 0))
+    const totalPages = computed(() => Number(props.workbench?.total_pages || 1))
 
-    watch(activeTab, () => {
+    watch(() => props.workbench?.tab, tab => {
+      if (['competitors', 'leads', 'failed', 'history'].includes(String(tab || ''))) {
+        activeTab.value = tab as typeof activeTab.value
+      }
+    }, { immediate: true })
+    watch(() => props.workbench?.page, page => filters.page = Number(page || 1))
+    watch(() => props.workbench?.page_size, pageSize => filters.pageSize = Number(pageSize || 10))
+
+    function requestRows(page = filters.page, pageSize = filters.pageSize) {
+      emit('query-change', {
+        tab: activeTab.value,
+        keyword: filters.keyword,
+        status: filters.status,
+        result: filters.result,
+        page,
+        page_size: pageSize,
+      })
+    }
+    function selectTab(tab: 'competitors' | 'leads' | 'failed' | 'history') {
+      activeTab.value = tab
+      filters.keyword = ''
       filters.status = ''
       filters.result = ''
       filters.page = 1
       selected.value = null
-    })
-    watch(() => [filters.keyword, filters.status, filters.result], () => {
+      requestRows(1)
+    }
+    function applyFilters() {
       filters.page = 1
-    })
+      selected.value = null
+      requestRows(1)
+    }
 
     function runSingle(row: Dict) {
       emit('create-job', row.target_type, Number(row.target_id || row.id))
     }
     function runBatch() {
       const targetType = activeTab.value === 'leads' ? 'lead' : 'competitor'
-      const ids = filteredRows.value
+      const ids = rows.value
         .filter(row => row.target_type === targetType)
         .filter(row => ['未分析', '失败'].includes(String(row.analysis_status || '')))
         .map(row => Number(row.target_id || row.id))
       emit('create-batch-jobs', targetType, ids)
     }
     function deleteNonCompetitors() {
-      const ids = filteredRows.value
+      const ids = rows.value
         .filter(row => row.target_type === 'competitor')
         .filter(isNonCompetitorRow)
         .map(row => Number(row.target_id || row.id))
       emit('delete-non-competitors', ids)
     }
     function deleteNonCustomers() {
-      const ids = filteredRows.value
+      const ids = rows.value
         .filter(row => row.target_type === 'lead')
         .filter(isNonCustomerRow)
         .map(row => Number(row.target_id || row.id))
       emit('delete-non-customers', ids)
     }
     function retryBatch() {
-      const ids = filteredRows.value
+      const ids = rows.value
         .filter(row => row.status === 'failed' || row.job_status === 'failed')
         .map(row => String(row.id || row.job_id || ''))
         .filter(Boolean)
@@ -94,18 +105,24 @@ export default defineComponent({
     return () => h(SplitPane, { storageKey: 'ai-workbench', side: 'right', defaultSideWidth: 360 }, {
       default: () => h('section', { class: 'pane ai-workbench' }, [
         renderSummary(summary.value),
-        renderTabs(activeTab.value, tab => activeTab.value = tab),
-        renderToolbar(activeTab.value, filters, runBatch, retryBatch, deleteNonCompetitors, deleteNonCustomers),
+        renderTabs(activeTab.value, selectTab),
+        renderToolbar(activeTab.value, filters, applyFilters, runBatch, retryBatch, deleteNonCompetitors, deleteNonCustomers),
         renderRows({
           tab: activeTab.value,
-          rows: pagedRows.value,
+          rows: rows.value,
           selected: selected.value,
           onSelect: row => selected.value = row,
           onRun: runSingle,
           onRetry: retryOne,
           onCopy: copyScript
         }),
-        renderPagination(filters, filteredRows.value.length, pageStart.value, pageEnd.value, totalPages.value)
+        renderPagination(
+          filters,
+          total.value,
+          totalPages.value,
+          page => { filters.page = page; selected.value = null; requestRows(page) },
+          pageSize => { filters.page = 1; filters.pageSize = pageSize; selected.value = null; requestRows(1, pageSize) },
+        )
       ]),
       side: () => renderDetailPane(selected.value, activeTab.value)
     })
@@ -141,6 +158,7 @@ function renderTabs(active: string, setActive: (tab: 'competitors' | 'leads' | '
 function renderToolbar(
   tab: string,
   filters: Dict,
+  applyFilters: () => void,
   runBatch: () => void,
   retryBatch: () => void,
   deleteNonCompetitors: () => void,
@@ -162,32 +180,34 @@ function renderToolbar(
       h('input', {
         value: filters.keyword,
         placeholder: tab === 'failed' ? '搜索任务、对象、错误原因' : '搜索名称、简介、评论、来源、原因',
-        onInput: (event: Event) => filters.keyword = (event.target as HTMLInputElement).value
+        onInput: (event: Event) => filters.keyword = (event.target as HTMLInputElement).value,
+        onKeydown: (event: KeyboardEvent) => { if (event.key === 'Enter') applyFilters() }
       })
     ]),
-    h('select', { value: filters.status, onChange: (event: Event) => filters.status = (event.target as HTMLSelectElement).value }, [
+    h('select', { value: filters.status, onChange: (event: Event) => { filters.status = (event.target as HTMLSelectElement).value; applyFilters() } }, [
       h('option', { value: '' }, tab === 'failed' ? '全部失败类型' : '全部状态'),
       ...statusOptions.map(status => h('option', { value: status }, status))
     ]),
-    resultOptions.length ? h('select', { value: filters.result, onChange: (event: Event) => filters.result = (event.target as HTMLSelectElement).value }, [
+    resultOptions.length ? h('select', { value: filters.result, onChange: (event: Event) => { filters.result = (event.target as HTMLSelectElement).value; applyFilters() } }, [
       h('option', { value: '' }, '全部结论'),
       ...resultOptions.map(result => h('option', { value: result }, result))
     ]) : null,
+    h('button', { class: 'filter-button', type: 'button', onClick: applyFilters }, '搜索'),
     ['competitors', 'leads'].includes(tab) ? h('button', { class: 'primary-action', type: 'button', onClick: runBatch }, [
       h(MagicStick, { class: 'inline-icon' }),
-      tab === 'competitors' ? '批量分析当前筛选' : '批量意向分析'
+      '批量分析本页'
     ]) : null,
     tab === 'competitors' ? h('button', { class: 'primary-action ai-danger-action', type: 'button', onClick: deleteNonCompetitors }, [
       h(Delete, { class: 'inline-icon' }),
-      '删除非竞品'
+      '删除本页非竞品'
     ]) : null,
     tab === 'leads' ? h('button', { class: 'primary-action ai-danger-action', type: 'button', onClick: deleteNonCustomers }, [
       h(Delete, { class: 'inline-icon' }),
-      '删除非客户'
+      '删除本页非客户'
     ]) : null,
     tab === 'failed' ? h('button', { class: 'primary-action', type: 'button', onClick: retryBatch }, [
       h(Refresh, { class: 'inline-icon' }),
-      '重试当前失败'
+      '重试本页失败'
     ]) : null
   ])
 }
@@ -307,16 +327,24 @@ function renderHistoryRow(row: Dict, active: boolean, args: Dict) {
   ])
 }
 
-function renderPagination(filters: Dict, total: number, start: number, end: number, totalPages: number) {
+function renderPagination(
+  filters: Dict,
+  total: number,
+  totalPages: number,
+  changePage: (page: number) => void,
+  changePageSize: (pageSize: number) => void,
+) {
+  const start = total ? (filters.page - 1) * filters.pageSize + 1 : 0
+  const end = Math.min(total, filters.page * filters.pageSize)
   return h('div', { class: 'table-pagination ai-pagination' }, [
     h('div', { class: 'table-page-size' }, [
       h('span', total ? `${start}-${end} / ${total}` : '0 条'),
-      h('select', { value: String(filters.pageSize), onChange: (event: Event) => { filters.pageSize = Number((event.target as HTMLSelectElement).value); filters.page = 1 } }, PAGE_SIZE_OPTIONS.map(size => h('option', { value: String(size) }, `${size}条`)))
+      h('select', { value: String(filters.pageSize), onChange: (event: Event) => changePageSize(Number((event.target as HTMLSelectElement).value)) }, PAGE_SIZE_OPTIONS.map(size => h('option', { value: String(size) }, `${size}条`)))
     ]),
     h('div', { class: 'table-page-controls' }, [
-      h('button', { type: 'button', disabled: filters.page <= 1, onClick: () => filters.page = Math.max(1, filters.page - 1) }, '上一页'),
+      h('button', { type: 'button', disabled: filters.page <= 1, onClick: () => changePage(Math.max(1, filters.page - 1)) }, '上一页'),
       h('span', `${Math.min(filters.page, totalPages)} / ${totalPages}`),
-      h('button', { type: 'button', disabled: filters.page >= totalPages, onClick: () => filters.page = Math.min(totalPages, filters.page + 1) }, '下一页')
+      h('button', { type: 'button', disabled: filters.page >= totalPages, onClick: () => changePage(Math.min(totalPages, filters.page + 1)) }, '下一页')
     ])
   ])
 }
@@ -372,32 +400,6 @@ function renderDetailBlock(title: string, rows: Array<[string, unknown]>) {
 function renderObjectTitle(label: string, href: string) {
   if (href) return h('a', { class: 'ai-object-title', href, target: '_blank', rel: 'noreferrer', title: label }, label)
   return h('strong', { class: 'ai-object-title', title: label }, label)
-}
-
-function filterRows(rows: Dict[], tab: string, filters: Dict) {
-  const keyword = String(filters.keyword || '').trim().toLowerCase()
-  return rows.filter(row => {
-    const statusValue = tab === 'failed' ? row.error_category : tab === 'history' ? row.status : row.analysis_status
-    const resultValue = tab === 'history' ? '' : row.result_label
-    if (filters.status && statusValue !== filters.status) return false
-    if (filters.result && resultValue !== filters.result) return false
-    if (!keyword) return true
-    return [
-      row.id,
-      row.job_id,
-      row.nickname,
-      row.target_name,
-      row.signature,
-      row.comment_samples,
-      row.content_samples,
-      row.source_keywords,
-      row.source_account_names,
-      row.result_reason,
-      row.reason,
-      row.error,
-      row.output_summary
-    ].some(value => String(value || '').toLowerCase().includes(keyword))
-  })
 }
 
 function isNonCompetitorRow(row: Dict) {
