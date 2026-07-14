@@ -108,7 +108,7 @@ finally {
     --collect-all faster_whisper `
     --collect-all ctranslate2 `
     --collect-all openai `
-    --collect-all google.generativeai `
+    --collect-all google.genai `
     --collect-all dashscope `
     --collect-all azure.cognitiveservices.speech `
     --collect-all twelvelabs `

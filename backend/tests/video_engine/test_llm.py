@@ -144,6 +144,55 @@ class TestScriptPromptOptions(unittest.TestCase):
             )
 
 
+class TestGeminiProvider(unittest.TestCase):
+    def setUp(self):
+        self.original_app_config = dict(config.app)
+
+    def tearDown(self):
+        config.app.clear()
+        config.app.update(self.original_app_config)
+
+    def test_gemini_uses_google_genai_client_and_custom_endpoint(self):
+        captured = {}
+
+        class FakeModels:
+            def generate_content(self, **kwargs):
+                captured["request"] = kwargs
+                part = types.SimpleNamespace(text="hello\nworld")
+                content = types.SimpleNamespace(parts=[part])
+                return types.SimpleNamespace(candidates=[types.SimpleNamespace(content=content)])
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured["client"] = kwargs
+                self.models = FakeModels()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        config.app.update(
+            {
+                "llm_provider": "gemini",
+                "gemini_api_key": "gemini-key",
+                "gemini_model_name": "gemini-2.5-flash",
+                "gemini_base_url": "https://gemini-proxy.example.com",
+            }
+        )
+
+        with patch("google.genai.Client", FakeClient):
+            result = llm._generate_response("Say hello")
+
+        self.assertEqual(result, "helloworld")
+        self.assertEqual(captured["client"]["api_key"], "gemini-key")
+        self.assertEqual(captured["client"]["http_options"].base_url, "https://gemini-proxy.example.com")
+        self.assertEqual(captured["request"]["model"], "gemini-2.5-flash")
+        self.assertEqual(captured["request"]["contents"], "Say hello")
+        self.assertEqual(captured["request"]["config"].max_output_tokens, 2048)
+
+
 class TestLiteLLMProvider(unittest.TestCase):
     def setUp(self):
         self.original_app_config = dict(config.app)

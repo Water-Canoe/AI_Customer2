@@ -391,11 +391,11 @@ class TestVoiceService(unittest.TestCase):
             def __init__(self, data):
                 self.candidates = [_Candidate(data)]
 
-        class _FakeModel:
-            def __init__(self, name):
-                self.name = name
-
-            def generate_content(self, contents, generation_config):
+        class _FakeModels:
+            def generate_content(self, model, contents, config):
+                self.model = model
+                self.contents = contents
+                self.config = config
                 tone = (
                     AudioSegment.silent(duration=1800)
                     .set_frame_rate(24000)
@@ -404,13 +404,26 @@ class TestVoiceService(unittest.TestCase):
                 )
                 return _Response(tone.raw_data)
 
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.models = _FakeModels()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
         voice_file = f"{temp_dir}/tts-gemini-Zephyr.mp3"
         subtitle_file = f"{temp_dir}/tts-gemini-Zephyr.srt"
         text = "Gemini subtitle generation should work now. Testing multiple lines."
 
-        with patch("google.generativeai.configure"), patch(
-            "google.generativeai.GenerativeModel", _FakeModel
-        ), patch.object(vs.config, "app", dict(vs.config.app, gemini_api_key="test-key")):
+        with patch("google.genai.Client", _FakeClient), patch.object(
+            vs.config,
+            "app",
+            dict(vs.config.app, gemini_api_key="test-key"),
+        ):
             sub_maker = vs.gemini_tts(
                 text=text,
                 voice_name="Zephyr",

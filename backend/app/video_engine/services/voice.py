@@ -1052,10 +1052,9 @@ def gemini_tts(
     Returns:
         SubMaker对象或None
     """
-    import base64
-    import io
     from pydub import AudioSegment
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     _configure_pydub_ffmpeg(AudioSegment)
 
     try:
@@ -1065,28 +1064,23 @@ def gemini_tts(
             logger.error("Gemini API key is not set")
             return None
 
-        genai.configure(api_key=api_key)
-
         logger.info(f"start, voice name: {voice_name}, try: 1")
-
-        # 使用Gemini TTS API
-        model = genai.GenerativeModel("gemini-2.5-flash-preview-tts")
-
-        generation_config = {
-            "response_modalities": ["AUDIO"],
-            "speech_config": {
-                "voice_config": {
-                    "prebuilt_voice_config": {
-                        "voice_name": voice_name
-                    }
-                }
-            }
-        }
-
-        response = model.generate_content(
-            contents=text,
-            generation_config=generation_config
+        base_url = str(config.app.get("gemini_base_url", "") or "").strip()
+        http_options = types.HttpOptions(base_url=base_url) if base_url else None
+        generation_config = types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                )
+            ),
         )
+        with genai.Client(api_key=api_key, http_options=http_options) as client:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-preview-tts",
+                contents=text,
+                config=generation_config,
+            )
 
         # 检查响应
         if not response.candidates or not response.candidates[0].content:

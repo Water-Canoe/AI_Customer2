@@ -387,7 +387,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - “生成记录”左侧统一展示全部成品预览，可按主题或文件名搜索；每个成品显示生成时间、真实平台发布汇总状态和人工标记。主按钮“一键发布”会立即向全部有效默认账号建立任务，下拉“发布设置”进入平台、账号、文案、封面和定时配置。右侧以“缩略预览 + 主题/阶段/进度”的紧凑卡片展示生成任务；重试写入新的 `attempt-N` 目录，不覆盖旧结果。
 - “发布中心”以分段页管理发布任务和平台账号。账号支持抖音、快手、小红书扫码登录、状态校验、多默认账号、停用和软删除；任务支持视频、多图图文、立即/平台定时发布、独立取消、人工重试和不确定结果确认。
 - 从成品“发布设置”进入时，发布中心使用“左侧发布设置 + 右侧发布任务”双栏详情布局；滚动统一交给整个内容详情区，设置和任务卡片不再各自滚动。窄屏时双栏自动改为上下排列。账号备注输入框保留可用宽度，任务刷新按钮显示明确文字。视频创作的自动发布卡片按内容高度展示，不再被同行展开的高级参数拉伸。
-- “内容设置”独立保存视频AI、TTS、素材源、Whisper、TwelveLabs、代理和TLS设置，不读取拓客工作台AI配置。Upload-Post配置已从前端移除；密钥读取时统一显示 `********`，提交空值或遮罩值时保留原密钥。
+- “内容设置”独立保存视频AI、TTS、素材源、Whisper、TwelveLabs、代理和TLS设置，不读取拓客工作台AI配置。Gemini 文案与语音统一使用仍在维护的 `google-genai` SDK，并共用 API Key 和可选自定义地址；旧 `google-generativeai` 依赖已经移除。Upload-Post配置已从前端移除；密钥读取时统一显示 `********`，提交空值或遮罩值时保留原密钥。
 
 完整生成阶段由 `backend/app/services/content_workbench.py` 调用移植引擎执行：文案、素材词、本地/在线素材、TTS、自定义配音、字幕、Whisper、转场、合成和社交元数据。视频任务进入 `runtime_jobs` 的 `video_generation` 类型和独立 `video` 资源，并发固定为1。取消在阶段边界检查；FFmpeg已经开始编码时会完成当前阶段再停止。“生成后自动发布”默认关闭；开启后先创建 `waiting_media` 任务，生成成功才绑定成品入队，生成失败则取消对应发布任务。Upload-Post Python服务和原测试仍保留，但前端、生成流程和HTTP路由都不再调用它。
 
@@ -425,7 +425,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/publish-accounts`：发布账号列表、新增、修改和软删除；`/{id}/login`、`/{id}/check`、`/{id}/qrcode` 负责扫码登录、有效性检查和二维码展示。
 - `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
-`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。视频引擎的数据模型统一使用 Pydantic 2 的 `ConfigDict`，不再保留已经弃用的类式 `Config`。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
+`backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。视频引擎的数据模型统一使用 Pydantic 2 的 `ConfigDict`，不再保留已经弃用的类式 `Config`；Gemini 测试使用新 SDK 的模拟 Client，验证文本、语音和自定义地址参数，不连接收费接口。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
 本轮完整后端回归为380项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布或真实用户私信。前端为4个测试文件、14项测试通过，并完成类型检查和生产构建。
 
 ## 授权服务
