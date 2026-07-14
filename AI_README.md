@@ -120,6 +120,8 @@ AI 分析工作台接口按 `tab / keyword / status / result / page / page_size`
 
 前端页面在 `router.ts` 中使用动态导入，启动时只加载应用壳和当前路由；首次进入自动化、总览、AI、私信、数据表、设置、引流或内容工作台时再加载对应页面代码。引流和内容的多个子路由继续共享同一个异步页面模块。
 
+AI分析、私信详情、数据表、内容生成和授权窗口中的纯图标按钮同时提供可见悬浮提示与 `aria-label`，并统一声明为普通按钮，避免键盘或读屏用户无法识别操作，也避免按钮嵌入表单后误触提交。
+
 前端构建链使用 Vite 8、Vue Test Utils 和 Vitest 4；测试文件与源码同目录使用 `*.test.ts`。当前测试覆盖共享格式化、自动同步调度和运行队列的加载/取消交互，`npm audit` 为 0 个已知漏洞。
 
 `App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。

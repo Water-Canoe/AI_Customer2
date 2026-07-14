@@ -740,7 +740,7 @@ export default defineComponent({
           ]),
         ]),
         side: () => h('aside', { class: 'pane side-pane content-create-side' }, [
-          sectionTitle({ title: '生成队列', subtitle: `${activeJobs.value.length} 个进行中`, icon: Tickets, tone: 'blue', aside: h('button', { class: 'icon-refresh', onClick: () => loadJobs(false) }, [h(Refresh)]) }),
+          sectionTitle({ title: '生成队列', subtitle: `${activeJobs.value.length} 个进行中`, icon: Tickets, tone: 'blue', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新生成队列', 'aria-label': '刷新生成队列', onClick: () => loadJobs(false) }, [h(Refresh)]) }),
           renderJobList((jobs.value.items || []).slice(0, 10)),
         ]),
       })
@@ -977,7 +977,7 @@ export default defineComponent({
             : emptyState({ title: '暂无生成内容', description: '生成成功的视频会统一展示在这里', icon: VideoPlay }),
         ]),
         side: () => h('aside', { class: 'pane side-pane content-record-list' }, [
-          sectionTitle({ title: '生成记录', subtitle: `共 ${jobs.value.total || 0} 条`, icon: Tickets, tone: 'blue', aside: h('button', { class: 'icon-refresh', onClick: () => loadJobs(true) }, [h(Refresh)]) }),
+          sectionTitle({ title: '生成记录', subtitle: `共 ${jobs.value.total || 0} 条`, icon: Tickets, tone: 'blue', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新生成记录', 'aria-label': '刷新生成记录', onClick: () => loadJobs(true) }, [h(Refresh)]) }),
           renderJobList(jobs.value.items || []),
           renderJobPagination(),
         ]),
@@ -1066,7 +1066,7 @@ export default defineComponent({
           ])),
         ]),
         side: () => h('aside', { class: 'pane side-pane content-env-pane' }, [
-          sectionTitle({ title: '内容环境', subtitle: environment.value.ok ? '可以生成视频' : '存在缺失项', icon: Setting, tone: environment.value.ok ? 'green' : 'amber', aside: h('button', { class: 'icon-refresh', onClick: loadEnvironment }, [h(Refresh)]) }),
+          sectionTitle({ title: '内容环境', subtitle: environment.value.ok ? '可以生成视频' : '存在缺失项', icon: Setting, tone: environment.value.ok ? 'green' : 'amber', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新内容环境', 'aria-label': '刷新内容环境', onClick: loadEnvironment }, [h(Refresh)]) }),
           renderEnvironment(),
         ]),
       })

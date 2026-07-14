@@ -171,7 +171,7 @@ function renderRow(library: string, row: Dict, emit: any, accountLibraries: stri
       h('td', { class: 'row-actions' }, [
         h('button', { class: 'text-icon-button reserved', type: 'button', title: '采集竞品账号内容评论区寻找客户', onClick: () => emit('find-customers', row) }, [h(Search), h('span', '找客户')]),
         renderEnrichButton(library, row, emit, accountLibraries),
-        h('button', { class: 'icon-button danger', title: '删除', onClick: () => emit('delete-row', library, row) }, [h(Delete)])
+        h('button', { type: 'button', class: 'icon-button danger', title: '删除', 'aria-label': '删除', onClick: () => emit('delete-row', library, row) }, [h(Delete)])
       ])
     ])
   }
@@ -181,10 +181,10 @@ function renderRow(library: string, row: Dict, emit: any, accountLibraries: stri
     h('td', [renderTruncatedText(row.task_name || row.task_id || '-', 'table-plain-text')]),
     h('td', row.profile_url || row.content_url ? h('a', { href: row.profile_url || row.content_url, target: '_blank', rel: 'noreferrer' }, '打开链接') : '-'),
     h('td', { class: 'row-actions' }, [
-      ['competitor_candidates', 'lead_customers'].includes(library) ? h('button', { class: 'icon-button', title: 'AI分析', onClick: () => emit('analyze-row', library, row) }, [h(MagicStick)]) : null,
+      ['competitor_candidates', 'lead_customers'].includes(library) ? h('button', { type: 'button', class: 'icon-button', title: 'AI分析', 'aria-label': 'AI分析', onClick: () => emit('analyze-row', library, row) }, [h(MagicStick)]) : null,
       renderEnrichButton(library, row, emit, accountLibraries),
-      library === 'target_customers' && row.script ? h('button', { class: 'icon-button', title: '复制话术', onClick: () => navigator.clipboard.writeText(row.script) }, [h(CopyDocument)]) : null,
-      h('button', { class: 'icon-button danger', title: '删除', onClick: () => emit('delete-row', library, row) }, [h(Delete)])
+      library === 'target_customers' && row.script ? h('button', { type: 'button', class: 'icon-button', title: '复制话术', 'aria-label': '复制话术', onClick: () => navigator.clipboard.writeText(row.script) }, [h(CopyDocument)]) : null,
+      h('button', { type: 'button', class: 'icon-button danger', title: '删除', 'aria-label': '删除', onClick: () => emit('delete-row', library, row) }, [h(Delete)])
     ])
   ])
 }
@@ -192,8 +192,10 @@ function renderRow(library: string, row: Dict, emit: any, accountLibraries: stri
 function renderEnrichButton(library: string, row: Dict, emit: any, accountLibraries: string[]) {
   if (!accountLibraries.includes(library)) return null
   return h('button', {
+    type: 'button',
     class: 'icon-button',
     title: '补资料',
+    'aria-label': '补资料',
     onClick: () => emit('enrich-profile', library, row)
   }, [h(Refresh)])
 }

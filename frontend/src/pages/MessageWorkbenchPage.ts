@@ -443,7 +443,7 @@ function renderDetailDrawer(detail: Dict, emit: any) {
         h('h3', customer.nickname || '客户详情'),
         h('p', customer.keyword_text || '无关键词')
       ]),
-      h('button', { type: 'button', class: 'icon-button', onClick: () => emit('close-detail') }, [h(Close)])
+      h('button', { type: 'button', class: 'icon-button', title: '关闭详情', 'aria-label': '关闭详情', onClick: () => emit('close-detail') }, [h(Close)])
     ]),
     h('div', {
       class: ['drawer-section', 'drawer-script-section', rawScript ? 'copyable-script' : 'empty-script'],

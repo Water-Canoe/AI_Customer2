@@ -259,7 +259,7 @@ function renderCompetitorRow(row: Dict, active: boolean, args: Dict) {
     h('div', { class: 'ai-object-actions' }, [
       h('button', { type: 'button', class: 'overview-action', disabled: ['排队分析', '正在分析'].includes(row.analysis_status), onClick: stop(() => args.onRun(row)) }, '分析'),
       row.job_status === 'failed' ? h('button', { type: 'button', class: 'overview-action', onClick: stop(() => args.onRetry(row)) }, '重试') : null,
-      h('button', { type: 'button', class: 'icon-button', title: '查看详情', onClick: stop(() => args.onSelect(row)) }, [h(View)])
+      h('button', { type: 'button', class: 'icon-button', title: '查看详情', 'aria-label': '查看详情', onClick: stop(() => args.onSelect(row)) }, [h(View)])
     ])
   ])
 }
@@ -290,7 +290,7 @@ function renderLeadRow(row: Dict, active: boolean, args: Dict) {
     ]),
     h('div', { class: 'ai-object-actions' }, [
       h('button', { type: 'button', class: 'overview-action', disabled: ['排队分析', '正在分析'].includes(row.analysis_status), onClick: stop(() => args.onRun(row)) }, '意向分析'),
-      row.result_script || row.script ? h('button', { type: 'button', class: 'icon-button', title: '复制话术', onClick: stop(() => args.onCopy(row)) }, [h(CopyDocument)]) : null,
+      row.result_script || row.script ? h('button', { type: 'button', class: 'icon-button', title: '复制话术', 'aria-label': '复制话术', onClick: stop(() => args.onCopy(row)) }, [h(CopyDocument)]) : null,
       row.job_status === 'failed' ? h('button', { type: 'button', class: 'overview-action', onClick: stop(() => args.onRetry(row)) }, '重试') : null
     ])
   ])
@@ -308,7 +308,7 @@ function renderFailedRow(row: Dict, active: boolean, args: Dict) {
     ]),
     h('div', { class: 'ai-object-actions' }, [
       h('button', { type: 'button', class: 'overview-action', onClick: stop(() => args.onRetry(row)) }, '重试'),
-      h('button', { type: 'button', class: 'icon-button', title: '查看详情', onClick: stop(() => args.onSelect(row)) }, [h(View)])
+      h('button', { type: 'button', class: 'icon-button', title: '查看详情', 'aria-label': '查看详情', onClick: stop(() => args.onSelect(row)) }, [h(View)])
     ])
   ])
 }

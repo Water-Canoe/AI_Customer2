@@ -25,7 +25,7 @@ export const LicenseDialog = defineComponent({
               h('h3', '授权与设备'),
               h('p', '授权码可修改，设备码由本机生成且不可编辑')
             ]),
-            h('button', { class: 'icon-button', onClick: () => emit('close') }, '×')
+            h('button', { type: 'button', class: 'icon-button', title: '关闭授权窗口', 'aria-label': '关闭授权窗口', onClick: () => emit('close') }, '×')
           ]),
           props.loading
             ? h('div', { class: 'diagnostic-empty' }, '正在读取授权信息')
