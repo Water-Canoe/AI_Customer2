@@ -1,13 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import ContentWorkbenchPage, { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
-import AutomationPlanPage, {
+import { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
+import {
   automationPlanTypes,
   movePlan,
   normalizeTrafficConfig,
   trafficSourceOptions,
 } from './pages/AutomationPlanPage'
-import PublishCenterPage from './pages/PublishCenterPage'
 import { routes } from './router'
 
 
@@ -16,7 +15,7 @@ describe('工作台路由', () => {
     const automationRoute = routes.find(route => route.name === 'automation-plans')
 
     expect(automationRoute?.path).toBe('/automation-plans')
-    expect(automationRoute?.component).toBe(AutomationPlanPage)
+    expect(typeof automationRoute?.component).toBe('function')
   })
 
   it('三类自动化计划拖动后按目标位置重排', () => {
@@ -64,8 +63,9 @@ describe('工作台路由', () => {
       '/content-publish',
       '/content-settings',
     ])
-    expect(contentRoutes.filter(route => route.name !== 'content-publish').every(route => route.component === ContentWorkbenchPage)).toBe(true)
-    expect(contentRoutes.find(route => route.name === 'content-publish')?.component).toBe(PublishCenterPage)
+    const sharedContentLoader = contentRoutes.find(route => route.name === 'content-create')?.component
+    expect(contentRoutes.filter(route => route.name !== 'content-publish').every(route => route.component === sharedContentLoader)).toBe(true)
+    expect(contentRoutes.find(route => route.name === 'content-publish')?.component).not.toBe(sharedContentLoader)
     expect(contentRoutes.map(route => route.meta?.title)).toEqual(['视频创作', '内容资产', '生成记录', '发布中心', '内容设置'])
   })
 

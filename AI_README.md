@@ -116,6 +116,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 AI 分析工作台接口按 `tab / keyword / status / result / page / page_size` 返回当前标签页数据。前端只显示服务端当前页，批量分析、删除和重试明确限定为本页对象；轮询不再同时组装竞品、客户、失败任务和历史四份列表。
 
+前端页面在 `router.ts` 中使用动态导入，启动时只加载应用壳和当前路由；首次进入自动化、总览、AI、私信、数据表、设置、引流或内容工作台时再加载对应页面代码。引流和内容的多个子路由继续共享同一个异步页面模块。
+
 前端构建链使用 Vite 8、Vue Test Utils 和 Vitest 4；测试文件与源码同目录使用 `*.test.ts`。当前测试覆盖共享格式化、自动同步调度和运行队列的加载/取消交互，`npm audit` 为 0 个已知漏洞。
 
 `App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。

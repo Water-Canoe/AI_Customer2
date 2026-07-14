@@ -1,16 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import AiPage from './pages/AiPage'
-import AutomationPlanPage from './pages/AutomationPlanPage'
-import ContentWorkbenchPage from './pages/ContentWorkbenchPage'
-import PublishCenterPage from './pages/PublishCenterPage'
-import LogsPage from './pages/LogsPage'
-import MessageWorkbenchPage from './pages/MessageWorkbenchPage'
-import OverviewPage from './pages/OverviewPage'
-import SettingsPage from './pages/SettingsPage'
-import TablesPage from './pages/TablesPage'
-import TaskPage from './pages/TaskPage'
-import TrafficWorkbenchPage from './pages/TrafficWorkbenchPage'
+// 页面按路由异步加载，首次启动只解析应用壳和当前工作台。
+const AiPage = () => import('./pages/AiPage')
+const AutomationPlanPage = () => import('./pages/AutomationPlanPage')
+const ContentWorkbenchPage = () => import('./pages/ContentWorkbenchPage')
+const PublishCenterPage = () => import('./pages/PublishCenterPage')
+const LogsPage = () => import('./pages/LogsPage')
+const MessageWorkbenchPage = () => import('./pages/MessageWorkbenchPage')
+const OverviewPage = () => import('./pages/OverviewPage')
+const SettingsPage = () => import('./pages/SettingsPage')
+const TablesPage = () => import('./pages/TablesPage')
+const TaskPage = () => import('./pages/TaskPage')
+const TrafficWorkbenchPage = () => import('./pages/TrafficWorkbenchPage')
 
 export const routes = [
   {
