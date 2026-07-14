@@ -47,6 +47,8 @@
 本地采集依赖目录、界面文案、日志文案和默认路径统一显示为 `MyCrawler`；内部 `media_crawler_*` 设置键继续作为历史数据库/API 键保留，不做额外迁移。
 根目录 `pytest.ini` 把测试收集范围固定为 `backend/tests` 并加入后端模块路径；从项目根目录运行 `backend\.venv\Scripts\python.exe -m pytest -q` 不会误收集 `GitItem/` 或 `MyCrawler/` 的上游测试。运行目录忽略规则使用根路径锚定，不会再把 `frontend/src/components/runtime/` 误判为运行产物；三个平台验证工具各自的浏览器登录态目录使用明确路径忽略。视频引擎的 `azure_voices.json` 属于源码数据并纳入版本控制，打包时复制到对应模块目录。
 
+后端依赖分为 `requirements.txt` 运行依赖和 `requirements-dev.txt` 开发/测试/打包工具；开发环境安装后者，客户环境和页面环境修复只安装前者。Pytest 与 PyInstaller 不再进入客户运行依赖，打包器固定为已经验收的 6.21.0。
+
 ## 抖音私信自动化测试工具
 
 `tools/douyin_dm_automation/` 是一个单用户抖音私信自动化验证目录，同时被“私信工作台”的自动私信按钮和 AI 一键私信批次复用。它复用 `backend/.venv` 中的 `playwright`、`cloakbrowser`、`fastapi` 和 `uvicorn`，通过 CloakBrowser 的 Playwright 兼容持久化浏览器打开最大化窗口并访问抖音用户主页，等待人工登录，点击“私信/发私信”，向 Draft.js 聊天输入框写入话术，并可选择实际点击“发送”。设置页打开“自动私信只填内容不发送”后，工作台只填入话术并按“自动私信等待秒数”保留窗口给人工确认，超时后关闭窗口且不会自动写入已私信状态。前端页面由 `server.py` 提供，访问 `http://127.0.0.1:8025/` 即可填写用户主页 URL 和话术。
@@ -217,8 +219,8 @@ python -m venv .venv
 # 激活虚拟环境，让 pip 和 python 使用本项目依赖
 .\.venv\Scripts\Activate.ps1
 
-# 安装 FastAPI、测试工具等后端依赖
-python -m pip install -r requirements.txt
+# 安装运行依赖和开发测试工具；客户运行环境只需 requirements.txt
+python -m pip install -r requirements-dev.txt
 
 # 启动后端 API 服务
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
