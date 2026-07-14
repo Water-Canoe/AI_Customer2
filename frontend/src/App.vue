@@ -107,14 +107,11 @@ const tasks = ref<Dict[]>([])
 const tableRows = ref<Dict[]>([])
 const tableLoading = ref(false)
 const overviewTree = ref<Dict[]>([])
-const aiJobs = ref<Dict[]>([])
 const aiWorkbench = ref<Dict>({})
 const selectedTask = ref<Dict | null>(null)
 const taskDiagnostics = ref<Dict>({})
 const taskDedupSummary = ref<Dict>({})
 const retryDraft = ref<Dict | null>(null)
-const leadRows = ref<Dict[]>([])
-const competitorRows = ref<Dict[]>([])
 const settings = ref<Dict>({})
 const settingsDraftDirty = ref(false)
 const settingsSaving = ref(false)
@@ -126,14 +123,12 @@ const messageDetail = ref<Dict>({})
 const messageLoading = ref(false)
 const messageFilters = ref<Dict>({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 })
 const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
-const trafficRuns = ref<Dict[]>([])
 const trafficEnv = ref<Dict>({})
 const trafficRefreshSeq = ref(0)
 const automationRefreshSeq = ref(0)
-const contentAssets = ref<Dict[]>([])
-const contentJobs = ref<Dict[]>([])
 const contentEnv = ref<Dict>({})
 const contentRefreshSeq = ref(0)
+const workbenchStatus = ref<Dict>({ metrics: {}, active: false })
 const tombstoneSummary = ref<Dict>({})
 const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
@@ -161,49 +156,41 @@ const topbarPrimaryAction = computed(() => {
   return '新建任务'
 })
 const hasActiveAsyncWork = computed(() => {
-  return tasks.value.some(task => isActiveStatus(task.status))
-    || aiJobs.value.some(job => isActiveStatus(job.status))
-    || isActiveStatus(messageBatches.value?.active?.status)
-    || trafficRuns.value.some(run => isActiveStatus(run.status))
-    || contentJobs.value.some(job => ['queued', 'running'].includes(String(job.status || '')))
+  return Boolean(workbenchStatus.value?.active)
 })
 const autoSync = createAutoSyncController({
   sync: syncCurrentView,
   interval: () => hasActiveAsyncWork.value ? 3000 : 12000,
 })
 const dashboardInsights = computed(() => {
-  if (isAutomationView.value) return []
-  if (isContentView.value) {
-    const activeCount = contentJobs.value.filter(job => ['queued', 'running'].includes(String(job.status || ''))).length
-    const completedCount = contentJobs.value.filter(job => String(job.status || '') === 'succeeded').length
-    const failedCount = contentJobs.value.filter(job => String(job.status || '') === 'failed').length
+  const metrics = workbenchStatus.value?.metrics || {}
+  if (isAutomationView.value) {
     return [
-      { label: '内容资产', value: compactCount(contentAssets.value.length), tone: 'green' },
-      { label: '生成中', value: compactCount(activeCount), tone: 'blue' },
-      { label: '已完成', value: compactCount(completedCount), tone: 'green' },
-      { label: '失败', value: compactCount(failedCount), tone: 'red' },
+      { label: '启用计划', value: compactCount(metrics.enabled_plans), tone: 'green' },
+      { label: '运行中', value: compactCount(metrics.active_runs), tone: 'blue' },
+      { label: '失败', value: compactCount(metrics.failed_runs), tone: 'red' },
+    ]
+  }
+  if (isContentView.value) {
+    return [
+      { label: '内容资产', value: compactCount(metrics.assets), tone: 'green' },
+      { label: '生成中', value: compactCount(metrics.active_jobs), tone: 'blue' },
+      { label: '已完成', value: compactCount(metrics.succeeded_jobs), tone: 'green' },
+      { label: '失败', value: compactCount(metrics.failed_jobs), tone: 'red' },
     ]
   }
   if (isTrafficView.value) {
-    const activeRunCount = trafficRuns.value.filter(run => isActiveStatus(run.status)).length
-    const successCount = trafficRuns.value.reduce((total, run) => total + Number(run.action_success_count || 0), 0)
-    const failedCount = trafficRuns.value.reduce((total, run) => total + Number(run.failed_count || 0) + Number(run.skipped_count || 0), 0)
     return [
-      { label: '运行批次', value: compactCount(activeRunCount), tone: 'blue' },
-      { label: '成功动作', value: compactCount(successCount), tone: 'green' },
-      { label: '失败/跳过', value: compactCount(failedCount), tone: 'red' },
+      { label: '运行批次', value: compactCount(metrics.active_runs), tone: 'blue' },
+      { label: '成功动作', value: compactCount(metrics.successful_actions), tone: 'green' },
+      { label: '失败/跳过', value: compactCount(metrics.failed_actions), tone: 'red' },
     ]
   }
-  const summary = aiWorkbench.value?.summary || {}
-  const pendingAi = Number(summary.competitor_pending || 0) + Number(summary.lead_pending || 0)
-  const failedAi = Number(summary.failed || 0)
-  const activeTaskCount = tasks.value.filter(task => isActiveStatus(task.status)).length
-  const failedTaskCount = tasks.value.filter(task => String(task.status || '') === 'failed').length
   return [
-    { label: '运行任务', value: compactCount(activeTaskCount), tone: 'blue' },
-    { label: 'AI待处理', value: compactCount(pendingAi), tone: 'amber' },
-    { label: '待私信', value: compactCount(messageCustomers.value?.total || 0), tone: 'green' },
-    { label: '失败待查', value: compactCount(failedTaskCount + failedAi), tone: 'red' },
+    { label: '运行任务', value: compactCount(metrics.active_tasks), tone: 'blue' },
+    { label: 'AI待处理', value: compactCount(metrics.ai_pending), tone: 'amber' },
+    { label: '待私信', value: compactCount(metrics.message_pending), tone: 'green' },
+    { label: '失败待查', value: compactCount(Number(metrics.failed_tasks || 0) + Number(metrics.ai_failed || 0)), tone: 'red' },
   ]
 })
 
@@ -216,7 +203,7 @@ const routeProps = computed(() => {
     }
   }
   if (activeView.value === 'overview') return { tree: overviewTree.value }
-  if (activeView.value === 'ai') return { workbench: aiWorkbench.value, jobs: aiJobs.value, leadRows: leadRows.value, competitorRows: competitorRows.value }
+  if (activeView.value === 'ai') return { workbench: aiWorkbench.value }
   if (activeView.value === 'message-workbench') {
     return {
       keywords: messageKeywords.value,
@@ -344,26 +331,15 @@ function goToView(view: string) {
 }
 
 async function refreshAll() {
-  if (activeView.value === 'automation-plans') {
-    automationRefreshSeq.value += 1
-    autoSync.markSynced()
-    return
-  }
-  if (isContentView.value) {
-    await loadContentShell()
-    contentRefreshSeq.value += 1
-    autoSync.markSynced()
-    return
-  }
-  if (isTrafficView.value) {
-    await loadTrafficShell()
-    trafficRefreshSeq.value += 1
-    autoSync.markSynced()
-    return
-  }
-  // 首页各面板独立加载，单个接口失败时不阻塞其它工作区。
-  await Promise.allSettled([loadTasks(), loadSettings(), checkEnv(), loadAiJobs(), loadOverview(), loadMessageWorkbench(true), loadTombstoneSummary(), loadTombstones(), loadTable(activeLibrary.value)])
+  // 手动刷新只请求当前工作台，避免每次刷新拉取所有业务大列表。
+  await Promise.allSettled([loadWorkbenchStatus(), ...currentViewLoaders(true, true).map(loader => loader())])
   autoSync.markSynced()
+}
+
+async function loadWorkbenchStatus() {
+  const scope = isAutomationView.value ? 'automation' : (isContentView.value ? 'content' : (isTrafficView.value ? 'traffic' : 'lead'))
+  const { data } = await api.get('/workbench/status', { params: { scope } })
+  workbenchStatus.value = data
 }
 
 function createFromTopbar() {
@@ -375,14 +351,8 @@ function createFromTopbar() {
 }
 
 async function loadContentShell() {
-  const [assetsResult, jobsResult, envResult] = await Promise.allSettled([
-    api.get('/content/assets'),
-    api.get('/content/video-jobs', { params: { page: 1, page_size: 100 } }),
-    api.get('/content/environment-check'),
-  ])
-  if (assetsResult.status === 'fulfilled') contentAssets.value = assetsResult.value.data
-  if (jobsResult.status === 'fulfilled') contentJobs.value = jobsResult.value.data.items || []
-  if (envResult.status === 'fulfilled') contentEnv.value = envResult.value.data
+  const { data } = await api.get('/content/environment-check')
+  contentEnv.value = data
 }
 
 async function loadTasks() {
@@ -411,8 +381,6 @@ async function checkEnv() {
 }
 
 async function loadAiJobs() {
-  const { data } = await api.get('/ai/jobs')
-  aiJobs.value = data
   const workbench = await api.get('/ai/workbench')
   aiWorkbench.value = workbench.data
 }
@@ -475,13 +443,8 @@ async function loadMessageWorkbench(silent = false) {
 }
 
 async function loadTrafficShell() {
-  // 引流页顶部栏只取轻量运行态，列表详情仍由当前子页面自己加载。
-  const [runsResult, envResult] = await Promise.allSettled([
-    api.get('/traffic/runs'),
-    api.get('/traffic/environment-check'),
-  ])
-  if (runsResult.status === 'fulfilled') trafficRuns.value = runsResult.value.data
-  if (envResult.status === 'fulfilled') trafficEnv.value = envResult.value.data
+  const { data } = await api.get('/traffic/environment-check')
+  trafficEnv.value = data
 }
 
 async function loadTable(library: string, silent = false) {
@@ -489,8 +452,6 @@ async function loadTable(library: string, silent = false) {
   try {
     const { data } = await api.get(`/tables/${library}`, { params: { status: tableStatus.value, keyword: tableKeyword.value } })
     tableRows.value = data.rows
-    if (library === 'lead_customers') leadRows.value = data.rows
-    if (library === 'competitor_candidates') competitorRows.value = data.rows
   } finally {
     if (!silent) tableLoading.value = false
   }
@@ -512,10 +473,6 @@ async function refreshSelectedTask() {
   }
 }
 
-function isActiveStatus(status: unknown) {
-  return ['pending', 'running'].includes(String(status || ''))
-}
-
 function compactCount(value: unknown) {
   const count = Number(value || 0)
   if (!Number.isFinite(count)) return '0'
@@ -524,28 +481,43 @@ function compactCount(value: unknown) {
   return String(count)
 }
 
-async function syncCurrentView(_reason: AutoSyncReason) {
-  const loaders = new Map<string, () => Promise<unknown>>()
-  // 任务和 AI job 是全局运行态来源，当前页面之外的异步变化也要持续感知。
-  loaders.set('tasks', loadTasks)
-  loaders.set('ai', loadAiJobs)
-  if (isTrafficView.value) loaders.set('traffic-shell', loadTrafficShell)
-  if (isContentView.value) loaders.set('content-shell', loadContentShell)
+function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
+  const loaders: Array<() => Promise<unknown>> = []
+  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && includeStatic) loaders.push(checkEnv)
 
-  if (activeView.value === 'logs') loaders.set('selected-task', refreshSelectedTask)
-  if (activeView.value === 'overview') loaders.set('overview', loadOverview)
-  if (activeView.value === 'message-workbench') loaders.set('message-workbench', () => loadMessageWorkbench(true))
-  if (activeView.value === 'automation-plans') loaders.set('automation-plans', async () => { automationRefreshSeq.value += 1 })
-  if (activeView.value === 'tables') loaders.set('table', () => loadTable(activeLibrary.value, true))
-  if (activeView.value === 'settings') {
-    // 设置页有未保存草稿时，不用后台刷新覆盖本地输入。
-    if (!settingsDraftDirty.value) loaders.set('settings', loadSettings)
-    loaders.set('env', checkEnv)
-    loaders.set('tombstones-summary', loadTombstoneSummary)
-    loaders.set('tombstones', () => loadTombstones())
+  if (activeView.value === 'tasks') {
+    loaders.push(loadTasks)
+    if (includeStatic) loaders.push(loadSettings)
+  } else if (activeView.value === 'logs') {
+    loaders.push(async () => { await loadTasks(); await refreshSelectedTask() })
+  } else if (activeView.value === 'overview') {
+    loaders.push(loadOverview)
+  } else if (activeView.value === 'ai') {
+    loaders.push(loadAiJobs)
+  } else if (activeView.value === 'message-workbench') {
+    loaders.push(() => loadMessageWorkbench(true))
+    if (includeStatic) loaders.push(loadSettings)
+  } else if (activeView.value === 'tables') {
+    loaders.push(() => loadTable(activeLibrary.value, true))
+  } else if (activeView.value === 'settings') {
+    if (!settingsDraftDirty.value) loaders.push(loadSettings)
+    loaders.push(loadTombstoneSummary, () => loadTombstones())
+  } else if (isTrafficView.value) {
+    if (includeStatic) loaders.push(loadTrafficShell)
+    if (refreshChild) loaders.push(async () => { trafficRefreshSeq.value += 1 })
+  } else if (isContentView.value) {
+    if (includeStatic) loaders.push(loadContentShell)
+    if (refreshChild) loaders.push(async () => { contentRefreshSeq.value += 1 })
+  } else if (isAutomationView.value) {
+    if (includeStatic || refreshChild) loaders.push(async () => { automationRefreshSeq.value += 1 })
   }
+  return loaders
+}
 
-  await Promise.allSettled(Array.from(loaders.values()).map(loader => loader()))
+async function syncCurrentView(reason: AutoSyncReason) {
+  const includeStatic = reason === 'route'
+  const loaders = [loadWorkbenchStatus, ...currentViewLoaders(includeStatic, !isContentView.value)]
+  await Promise.allSettled(loaders.map(loader => loader()))
 }
 
 async function changeLibrary(library: string) {

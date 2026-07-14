@@ -10,10 +10,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
 export default defineComponent({
   props: {
-    workbench: { type: Object, default: () => ({}) },
-    jobs: { type: Array, default: () => [] },
-    leadRows: { type: Array, default: () => [] },
-    competitorRows: { type: Array, default: () => [] }
+    workbench: { type: Object, default: () => ({}) }
   },
   emits: ['create-job', 'create-batch-jobs', 'delete-non-competitors', 'delete-non-customers', 'retry-job', 'retry-jobs'],
   setup(props, { emit }) {

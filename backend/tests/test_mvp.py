@@ -5714,6 +5714,15 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
 
     client = TestClient(app)
     assert client.get("/api/health").json()["status"] == "ok"
+    status = client.get("/api/workbench/status", params={"scope": "lead"}).json()
+    assert status["scope"] == "lead"
+    assert status["metrics"]["active_tasks"] == 1
+    assert status["metrics"]["message_pending"] == 0
+    assert all(
+        client.get("/api/workbench/status", params={"scope": scope}).status_code == 200
+        for scope in ("traffic", "content", "automation")
+    )
+    assert client.get("/api/workbench/status", params={"scope": "unknown"}).status_code == 400
     task_response = client.get(f"/api/tasks/{task['id']}")
     assert task_response.status_code == 200
     assert task_response.json()["outcome"]["counts"]["leads"] == 1

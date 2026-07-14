@@ -104,6 +104,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`AutomationPlanPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts`、`TrafficWorkbenchPage.ts` 和 `ContentWorkbenchPage.ts`。内容工作台的四个路由共用同一个页面外壳，按当前路由渲染视频创作、内容资产、生成记录和内容设置。可复用控件放在 `frontend/src/components/ui/`，运行队列组件放在 `components/runtime/`，共享 API、类型和格式化工具放在 `frontend/src/shared/`。自动同步的并发保护、活跃/空闲节流、路由切换和可见性恢复已拆到 `frontend/src/composables/autoSync.ts`，避免定时器生命周期继续散落在应用壳。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
+顶部指标统一读取轻量 `/api/workbench/status`，只统计当前工作台和全局运行态。定时同步只刷新当前路由所需数据；设置、环境检查和非当前页面的大列表不再被每 3/12 秒全量请求。手动刷新同样限定在当前工作台，自动化计划页额外显示启用、运行和失败计数。
+
 前端构建链使用 Vite 8、Vue Test Utils 和 Vitest 4；测试文件与源码同目录使用 `*.test.ts`。当前测试覆盖共享格式化、自动同步调度和运行队列的加载/取消交互，`npm audit` 为 0 个已知漏洞。
 
 `App.vue` 会按当前路由只向页面组件传递其声明过的事件监听器，避免把全部跨页面动作透传给 fragment 根节点页面而触发 Vue `Extraneous non-emits event listeners` warning。
