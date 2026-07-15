@@ -4,27 +4,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.api_dependencies import require_license_for
-from app.schemas import LicenseUpdate, TrafficPlanCreate, TrafficSettingsUpdate
-from app.services import job_queue, license_service, traffic_workbench
+from app.schemas import TrafficPlanCreate, TrafficSettingsUpdate
+from app.services import job_queue, traffic_workbench
 
 
 router = APIRouter(prefix="/api/traffic", tags=["traffic"])
-
-
-@router.get("/license")
-def get_traffic_license() -> dict[str, object]:
-    return license_service.license_overview_for("traffic")
-
-
-@router.put("/license")
-def update_traffic_license(payload: LicenseUpdate) -> dict[str, object]:
-    return license_service.update_license_code_for("traffic", payload.license_code)
-
-
-@router.post("/license")
-@router.post("/license/check")
-def check_traffic_license(payload: LicenseUpdate) -> dict[str, object]:
-    return license_service.check_license_for("traffic", payload.license_code)
 
 
 @router.get("/plans")

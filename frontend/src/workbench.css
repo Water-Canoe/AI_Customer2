@@ -5681,6 +5681,71 @@ input[type='checkbox'] {
   background: transparent;
 }
 
+.sidebar-footer {
+  flex: 0 0 auto;
+  padding: 10px;
+  border-top: 1px solid var(--workbench-border);
+}
+
+.sidebar-license {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 54px;
+  padding: 9px 11px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 9px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-license:hover,
+.sidebar-license:focus-visible {
+  border-color: #8fc9bf;
+  background: #f2faf8;
+  outline: none;
+}
+
+.sidebar-license .el-icon {
+  flex: 0 0 auto;
+  color: var(--workbench-primary);
+  font-size: 18px;
+}
+
+.sidebar-license-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+
+.sidebar-license-copy strong {
+  font-size: 13px;
+}
+
+.sidebar-license-copy small {
+  color: #718096;
+  font-size: 11px;
+}
+
+.sidebar-license-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d6a743;
+}
+
+.sidebar-license.is-authorized .sidebar-license-dot {
+  background: #16a34a;
+}
+
+.sidebar-license.is-denied .sidebar-license-dot {
+  background: #dc2626;
+}
+
 .nav .el-menu-item {
   height: 42px;
   margin: 3px 0;

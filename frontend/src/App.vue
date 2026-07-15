@@ -36,6 +36,23 @@
           <el-menu-item index="content-settings"><el-icon><Setting /></el-icon><span>内容设置</span></el-menu-item>
         </el-sub-menu>
       </el-menu>
+      <div class="sidebar-footer">
+        <button
+          type="button"
+          class="sidebar-license"
+          :class="licenseStatusClass"
+          title="管理产品授权与设备"
+          aria-label="管理产品授权与设备"
+          @click="openLicenseDialog"
+        >
+          <el-icon><Key /></el-icon>
+          <span class="sidebar-license-copy">
+            <strong>授权与设备</strong>
+            <small>{{ licenseStatusLabel }}</small>
+          </span>
+          <i class="sidebar-license-dot" aria-hidden="true"></i>
+        </button>
+      </div>
     </el-aside>
 
     <el-container>
@@ -69,6 +86,18 @@
         </RouterView>
       </el-main>
     </el-container>
+    <LicenseDialog
+      :open="licenseDialogOpen"
+      :loading="licenseLoading"
+      :checking="licenseChecking"
+      :info="licenseInfo"
+      :code="licenseCodeDraft"
+      @update:code="licenseCodeDraft = $event"
+      @close="licenseDialogOpen = false"
+      @save="saveLicenseCode"
+      @check="checkLicense"
+      @copy-device="copyDeviceCode"
+    />
   </el-container>
 </template>
 
@@ -79,6 +108,7 @@ import {
   Collection,
   Clock,
   Grid,
+  Key,
   MagicStick,
   Message,
   Operation,
@@ -96,6 +126,7 @@ import { api } from './shared/api'
 import type { Dict } from './shared/types'
 import { competitorStatusLabel, platformName } from './shared/format'
 import { createAutoSyncController, type AutoSyncReason } from './composables/autoSync'
+import { LicenseDialog } from './components/ui/LicenseDialog'
 
 const router = useRouter()
 const route = useRoute()
@@ -127,6 +158,11 @@ const settingsDraftDirty = ref(false)
 const settingsSaving = ref(false)
 const settingsSaveRevision = ref(0)
 const env = ref<Dict>({})
+const licenseInfo = ref<Dict>({})
+const licenseDialogOpen = ref(false)
+const licenseLoading = ref(false)
+const licenseChecking = ref(false)
+const licenseCodeDraft = ref('')
 const messageKeywords = ref<Dict[]>([])
 const messageCustomers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const messageDetail = ref<Dict>({})
@@ -202,6 +238,14 @@ const dashboardInsights = computed(() => {
     { label: '待私信', value: compactCount(metrics.message_pending), tone: 'green' },
     { label: '失败待查', value: compactCount(Number(metrics.failed_tasks || 0) + Number(metrics.ai_failed || 0)), tone: 'red' },
   ]
+})
+const licenseStatusLabel = computed(() => {
+  if (licenseInfo.value.authorized) return '已授权'
+  return licenseInfo.value.status === 'failed' ? '未授权' : '待授权'
+})
+const licenseStatusClass = computed(() => {
+  if (licenseInfo.value.authorized) return 'is-authorized'
+  return licenseInfo.value.status === 'failed' ? 'is-denied' : 'is-pending'
 })
 
 const routeProps = computed(() => {
@@ -357,6 +401,65 @@ async function refreshAll() {
   // 手动刷新只请求当前工作台，避免每次刷新拉取所有业务大列表。
   await Promise.allSettled([loadWorkbenchStatus(), ...currentViewLoaders(true, true).map(loader => loader())])
   autoSync.markSynced()
+}
+
+async function loadLicense(silent = false) {
+  try {
+    const { data } = await api.get('/license')
+    licenseInfo.value = data
+    licenseCodeDraft.value = String(data.license_code || '')
+  } catch (error: any) {
+    if (!silent) ElMessage.error(error?.response?.data?.detail || '授权信息加载失败')
+  }
+}
+
+async function openLicenseDialog() {
+  licenseDialogOpen.value = true
+  licenseLoading.value = true
+  try {
+    await loadLicense()
+  } finally {
+    licenseLoading.value = false
+  }
+}
+
+async function saveLicenseCode() {
+  licenseChecking.value = true
+  try {
+    const { data } = await api.put('/license', { license_code: licenseCodeDraft.value })
+    licenseInfo.value = data
+    licenseCodeDraft.value = String(data.license_code || '')
+    ElMessage.success('授权码已保存')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '授权码保存失败')
+  } finally {
+    licenseChecking.value = false
+  }
+}
+
+async function checkLicense() {
+  licenseChecking.value = true
+  try {
+    const { data } = await api.post('/license/check', { license_code: licenseCodeDraft.value })
+    licenseInfo.value = data
+    licenseCodeDraft.value = String(data.license_code || '')
+    if (data.authorized) ElMessage.success(data.message || '授权校验通过')
+    else ElMessage.error(data.message || '授权校验失败')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.detail || '授权校验失败')
+  } finally {
+    licenseChecking.value = false
+  }
+}
+
+async function copyDeviceCode() {
+  const deviceCode = String(licenseInfo.value.device_code || '').trim()
+  if (!deviceCode) {
+    ElMessage.warning('当前没有可复制的设备码')
+    return
+  }
+  await navigator.clipboard.writeText(deviceCode)
+  ElMessage.success('设备码已复制')
 }
 
 async function loadWorkbenchStatus() {
@@ -1443,7 +1546,7 @@ watch(activeView, () => {
 })
 
 onMounted(async () => {
-  await refreshAll()
+  await Promise.all([refreshAll(), loadLicense(true)])
   autoSync.start()
 })
 

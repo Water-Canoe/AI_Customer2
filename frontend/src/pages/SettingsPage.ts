@@ -3,7 +3,6 @@ import { Check, DataAnalysis, Delete, Key, Monitor, Refresh, Setting, Tools, Use
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { api } from '../shared/api'
-import { LicenseDialog } from '../components/ui/LicenseDialog'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, splitTagText } from '../components/ui/TagInput'
 import { platformName } from '../shared/format'
@@ -90,79 +89,13 @@ export default defineComponent({
     const local = reactive<Dict>({})
     const settingsDirty = ref(false)
     const syncingFromProps = ref(false)
-    const licenseDialogOpen = ref(false)
-    const licenseLoading = ref(false)
-    const licenseChecking = ref(false)
     const loginOpening = ref('')
     const profileClosing = ref(false)
     const profileStatus = ref<Dict>({ interactive_active: false, interactive_platform: '', runtime_active: false })
-    const licenseInfo = ref<Dict>({})
-    const licenseCodeDraft = ref('')
     const backups = ref<Dict>({ items: [], total: 0, schema: {} })
     const backupLoading = ref(false)
     const backupCreating = ref(false)
     const backupRestoring = ref('')
-
-    async function openLicenseDialog() {
-      licenseDialogOpen.value = true
-      licenseLoading.value = true
-      try {
-        const { data } = await api.get('/license')
-        licenseInfo.value = data
-        licenseCodeDraft.value = String(data.license_code || '')
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '授权信息加载失败')
-      } finally {
-        licenseLoading.value = false
-      }
-    }
-
-    async function saveLicenseCode() {
-      licenseChecking.value = true
-      try {
-        const { data } = await api.put('/license', { license_code: licenseCodeDraft.value })
-        licenseInfo.value = data
-        licenseCodeDraft.value = String(data.license_code || '')
-        local.license_code = data.license_code || ''
-        local.device_code = data.device_code || ''
-        ElMessage.success('授权码已保存')
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '授权码保存失败')
-      } finally {
-        licenseChecking.value = false
-      }
-    }
-
-    async function checkLicense() {
-      licenseChecking.value = true
-      try {
-        const { data } = await api.post('/license/check', { license_code: licenseCodeDraft.value })
-        licenseInfo.value = data
-        licenseCodeDraft.value = String(data.license_code || '')
-        local.license_code = data.license_code || ''
-        local.device_code = data.device_code || ''
-        local.license_last_status = data.status || ''
-        local.license_last_reason = data.reason || ''
-        local.license_last_message = data.message || ''
-        local.license_last_checked_at = data.checked_at || ''
-        if (data.authorized) ElMessage.success(data.message || '授权校验通过')
-        else ElMessage.error(data.message || '授权校验失败')
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '授权校验失败')
-      } finally {
-        licenseChecking.value = false
-      }
-    }
-
-    async function copyDeviceCode() {
-      const code = String(licenseInfo.value.device_code || '').trim()
-      if (!code) {
-        ElMessage.warning('当前没有可复制的设备码')
-        return
-      }
-      await navigator.clipboard.writeText(code)
-      ElMessage.success('设备码已复制')
-    }
 
     async function openPlatformLogin(platform: string) {
       loginOpening.value = platform
@@ -286,21 +219,6 @@ export default defineComponent({
     })
     onUnmounted(() => window.clearInterval(profileTimer))
 
-    function renderLicenseDialog() {
-      return h(LicenseDialog, {
-        open: licenseDialogOpen.value,
-        loading: licenseLoading.value,
-        checking: licenseChecking.value,
-        info: licenseInfo.value,
-        code: licenseCodeDraft.value,
-        'onUpdate:code': (value: string) => licenseCodeDraft.value = value,
-        onClose: () => licenseDialogOpen.value = false,
-        onSave: saveLicenseCode,
-        onCheck: checkLicense,
-        onCopyDevice: copyDeviceCode,
-      })
-    }
-
     return () => {
       if (!local.icp_profile || typeof local.icp_profile !== 'object') {
         local.icp_profile = normalizeIcpProfile(local.icp_profile)
@@ -380,8 +298,7 @@ export default defineComponent({
             h('button', {
               class: 'primary-action',
               onClick: () => submitSettingsAfterDraft(() => ({ ...local, icp_profile: buildIcpPayload(icpProfile), own_accounts: buildOwnAccountsPayload(ownAccounts) }))
-            }, [h(Check, { class: 'inline-icon' }), '保存设置']),
-            h('button', { class: 'secondary-action', onClick: openLicenseDialog }, [h(Key, { class: 'inline-icon' }), '授权与设备'])
+            }, [h(Check, { class: 'inline-icon' }), '保存设置'])
           ])
         ])
         ],
@@ -399,8 +316,7 @@ export default defineComponent({
           ])
         ])
         ]
-      }),
-      renderLicenseDialog()
+      })
       ]
     }
   }

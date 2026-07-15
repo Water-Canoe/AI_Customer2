@@ -5926,7 +5926,7 @@ def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch:
             "version": 1,
             "licenseId": "license-test",
             "deviceId": device_code,
-            "entitlements": ["lead", "traffic"],
+            "entitlements": ["traffic"],
             "issuedAt": now.isoformat().replace("+00:00", "Z"),
             "expiresAt": (now + timedelta(hours=72)).isoformat().replace("+00:00", "Z"),
         }, separators=(",", ":"))
@@ -5949,7 +5949,9 @@ def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch:
     assert checked["authorized"] is True
     assert checked["reason"] == "LEASE_VALID"
     assert checked["max_devices"] == 3
-    assert checked["entitlements"] == ["lead", "traffic"]
+    assert checked["entitlements"] == ["traffic"]
+    assert license_service.license_overview_for("traffic")["authorized"] is True
+    assert license_service.license_overview_for("lead")["authorized"] is False
 
 
 

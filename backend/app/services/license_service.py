@@ -23,11 +23,14 @@ LEASE_RENEW_AFTER = timedelta(hours=6)
 
 
 def license_overview() -> dict[str, Any]:
-    return license_overview_for("lead")
+    return _license_overview(None)
 
 
 def license_overview_for(entitlement: str) -> dict[str, Any]:
-    entitlement = _normalize_entitlement(entitlement)
+    return _license_overview(_normalize_entitlement(entitlement))
+
+
+def _license_overview(entitlement: str | None) -> dict[str, Any]:
     with database.connect() as conn:
         device_code = _ensure_device_code(conn)
         license_code = database.get_setting(conn, "license_code").strip()
@@ -39,14 +42,14 @@ def license_overview_for(entitlement: str) -> dict[str, Any]:
         max_devices = _setting_int(conn, "license_max_devices")
         active_device_count = _setting_int(conn, "license_active_device_count")
 
-    authorized = bool(cached and entitlement in cached["entitlements"])
-    if cached and not authorized:
+    authorized = bool(cached and (entitlement is None or entitlement in cached["entitlements"]))
+    if cached and entitlement is not None and not authorized:
         status, reason, message = "failed", "ENTITLEMENT_NOT_INCLUDED", f"当前授权未包含{_entitlement_name(entitlement)}"
     elif authorized:
         status, reason = "authorized", "LEASE_VALID"
         message = "授权有效"
     return {
-        "scope": entitlement,
+        "scope": entitlement or "product",
         "license_code": license_code,
         "device_code": device_code,
         "authorized": authorized,
@@ -62,11 +65,14 @@ def license_overview_for(entitlement: str) -> dict[str, Any]:
 
 
 def update_license_code(license_code: str) -> dict[str, Any]:
-    return update_license_code_for("lead", license_code)
+    return _update_license_code(None, license_code)
 
 
 def update_license_code_for(entitlement: str, license_code: str) -> dict[str, Any]:
-    entitlement = _normalize_entitlement(entitlement)
+    return _update_license_code(_normalize_entitlement(entitlement), license_code)
+
+
+def _update_license_code(entitlement: str | None, license_code: str) -> dict[str, Any]:
     normalized = license_code.strip()
     with database.connect() as conn:
         _ensure_device_code(conn)
@@ -77,17 +83,20 @@ def update_license_code_for(entitlement: str, license_code: str) -> dict[str, An
         database.set_setting(conn, "license_last_reason", "")
         database.set_setting(conn, "license_last_message", "授权码已保存，尚未激活")
         database.set_setting(conn, "license_last_checked_at", "")
-    return license_overview_for(entitlement)
+    return _license_overview(entitlement)
 
 
 def check_license(license_code: str | None = None) -> dict[str, Any]:
-    return check_license_for("lead", license_code)
+    return _check_license(None, license_code)
 
 
 def check_license_for(entitlement: str, license_code: str | None = None) -> dict[str, Any]:
-    entitlement = _normalize_entitlement(entitlement)
+    return _check_license(_normalize_entitlement(entitlement), license_code)
+
+
+def _check_license(entitlement: str | None, license_code: str | None = None) -> dict[str, Any]:
     if license_code is not None:
-        update_license_code_for(entitlement, license_code)
+        _update_license_code(entitlement, license_code)
     with database.connect() as conn:
         device_code = _ensure_device_code(conn)
         saved_license_code = database.get_setting(conn, "license_code").strip()
@@ -96,7 +105,7 @@ def check_license_for(entitlement: str, license_code: str | None = None) -> dict
     try:
         remote = _request_license("activate", saved_license_code, device_code)
     except httpx.RequestError:
-        cached = license_overview_for(entitlement)
+        cached = _license_overview(entitlement)
         if cached.get("authorized"):
             return cached
         return _save_failure(entitlement, "failed", "LICENSE_SERVER_UNREACHABLE", "授权服务暂时不可用，请检查网络后重试")
@@ -169,7 +178,7 @@ def _request_license(action: str, license_code: str, device_code: str) -> dict[s
     return payload
 
 
-def _accept_remote(entitlement: str, remote: dict[str, Any], device_code: str) -> dict[str, Any]:
+def _accept_remote(entitlement: str | None, remote: dict[str, Any], device_code: str) -> dict[str, Any]:
     payload = remote.get("data") if isinstance(remote.get("data"), dict) else {}
     if not payload.get("permission"):
         reason = str(payload.get("reason") or "LICENSE_DENIED")
@@ -191,9 +200,9 @@ def _accept_remote(entitlement: str, remote: dict[str, Any], device_code: str) -
         database.set_setting(conn, "license_last_message", str(remote.get("message") or "授权有效"))
         database.set_setting(conn, "license_last_checked_at", _now_text())
 
-    if entitlement not in lease["entitlements"]:
+    if entitlement is not None and entitlement not in lease["entitlements"]:
         return _save_failure(entitlement, "failed", "ENTITLEMENT_NOT_INCLUDED", f"当前授权未包含{_entitlement_name(entitlement)}", clear_lease=False)
-    return license_overview_for(entitlement)
+    return _license_overview(entitlement)
 
 
 def _verify_lease(lease_text: Any, signature_text: Any, device_code: str) -> dict[str, Any]:
@@ -244,7 +253,7 @@ def _clear_lease(conn) -> None:
         database.set_setting(conn, key, "")
 
 
-def _save_failure(entitlement: str, status: str, reason: str, message: str, *, clear_lease: bool = True) -> dict[str, Any]:
+def _save_failure(entitlement: str | None, status: str, reason: str, message: str, *, clear_lease: bool = True) -> dict[str, Any]:
     with database.connect() as conn:
         if clear_lease:
             _clear_lease(conn)
@@ -252,7 +261,7 @@ def _save_failure(entitlement: str, status: str, reason: str, message: str, *, c
         database.set_setting(conn, "license_last_reason", reason)
         database.set_setting(conn, "license_last_message", message)
         database.set_setting(conn, "license_last_checked_at", _now_text())
-    return license_overview_for(entitlement)
+    return _license_overview(entitlement)
 
 
 def _ensure_device_code(conn) -> str:

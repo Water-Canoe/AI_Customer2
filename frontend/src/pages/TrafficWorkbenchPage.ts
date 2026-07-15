@@ -4,7 +4,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   DataLine,
   Delete,
-  Key,
   Monitor,
   Operation,
   Plus,
@@ -18,7 +17,6 @@ import {
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
-import { LicenseDialog } from '../components/ui/LicenseDialog'
 import { emptyState, metricTile, sectionTitle } from '../components/ui/Workbench'
 
 const defaultPlan = () => ({
@@ -56,11 +54,6 @@ export default defineComponent({
     const selectedRun = ref<Dict | null>(null)
     const records = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
     const settings = ref<Dict>({ values: {}, texts: [], images: [] })
-    const licenseInfo = ref<Dict>({})
-    const licenseOpen = ref(false)
-    const licenseLoading = ref(false)
-    const licenseChecking = ref(false)
-    const licenseCode = ref('')
     const keywords = ref<Dict[]>([])
     const videos = ref<Dict[]>([])
     const sourceVideoQuery = ref('')
@@ -129,7 +122,7 @@ export default defineComponent({
       if (view.value === 'traffic-plans') await Promise.all([loadPlans(), loadSources()])
       else if (view.value === 'traffic-monitor') await Promise.all([loadRuns()])
       else if (view.value === 'traffic-records') await loadRecords()
-      else if (view.value === 'traffic-settings') await Promise.all([loadSettings(), loadTrafficLicense(), loadTrafficEnvironment()])
+      else if (view.value === 'traffic-settings') await Promise.all([loadSettings(), loadTrafficEnvironment()])
     }
 
     async function loadPlans() {
@@ -180,12 +173,6 @@ export default defineComponent({
         enabled: materialEnabled(item.enabled),
         used_count: item.used_count || 0,
       }))
-    }
-
-    async function loadTrafficLicense() {
-      const { data } = await api.get('/traffic/license')
-      licenseInfo.value = data
-      licenseCode.value = String(data.license_code || '')
     }
 
     async function loadTrafficEnvironment() {
@@ -418,41 +405,6 @@ export default defineComponent({
       }
     }
 
-    async function openLicense() {
-      licenseOpen.value = true
-      licenseLoading.value = true
-      try {
-        await loadTrafficLicense()
-      } finally {
-        licenseLoading.value = false
-      }
-    }
-
-    async function saveLicense() {
-      licenseChecking.value = true
-      try {
-        const { data } = await api.put('/traffic/license', { license_code: licenseCode.value })
-        licenseInfo.value = data
-        licenseCode.value = String(data.license_code || '')
-        ElMessage.success('授权码已保存')
-      } finally {
-        licenseChecking.value = false
-      }
-    }
-
-    async function checkLicense() {
-      licenseChecking.value = true
-      try {
-        const { data } = await api.post('/traffic/license/check', { license_code: licenseCode.value })
-        licenseInfo.value = data
-        licenseCode.value = String(data.license_code || '')
-        if (data.authorized) ElMessage.success(data.message || '授权校验通过')
-        else ElMessage.error(data.message || '授权校验失败')
-      } finally {
-        licenseChecking.value = false
-      }
-    }
-
     function renderPlanPage() {
       return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-plans', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
         default: () => h('section', { class: 'pane content-pane traffic-split-main' }, [
@@ -593,9 +545,8 @@ export default defineComponent({
     function renderSettingsPage() {
       return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 320, minSideWidth: 280, maxSideWidth: 420 }, {
         default: () => h('section', { class: 'pane content-pane traffic-settings-pane traffic-split-main' }, [
-          sectionTitle({ title: '引流设置', subtitle: '授权、文案、图片、限额统一在这里维护', icon: Setting, tone: 'teal' }),
+          sectionTitle({ title: '引流设置', subtitle: '文案、图片和执行限额统一在这里维护', icon: Setting, tone: 'teal' }),
           h('div', { class: 'task-card-actions traffic-settings-actions' }, [
-            h('button', { class: 'secondary-action', onClick: openLicense }, [h(Key, { class: 'inline-icon' }), '授权与设备']),
             h('button', { class: 'primary-action', onClick: saveSettings }, '保存设置'),
           ]),
           h('div', { class: 'form-grid traffic-settings-form' }, [
@@ -612,15 +563,8 @@ export default defineComponent({
             renderTextManager(),
             renderImageManager(),
           ]),
-          renderLicenseDialog(),
         ]),
         side: () => h('aside', { class: 'pane side-pane traffic-settings-side traffic-split-side' }, [
-          sectionTitle({ title: '授权状态', subtitle: licenseInfo.value.message || '尚未读取', icon: Key, tone: licenseInfo.value.authorized ? 'green' : 'amber' }),
-          h('div', { class: ['license-status-card', licenseInfo.value.authorized ? 'authorized' : ''] }, [
-            h('strong', licenseInfo.value.authorized ? '授权通过' : '未授权'),
-            h('span', licenseInfo.value.message || '请填写引流授权码'),
-            h('small', `设备码：${licenseInfo.value.device_code || '-'}`),
-          ]),
           sectionTitle({ title: '抖音登录态', subtitle: '扫码后用于引流执行', icon: VideoPlay, tone: 'blue', compact: true }),
           h('p', { class: 'traffic-env-suggestion' }, '扫码后请保持登录窗口打开，确认登录稳定后再手动关闭。'),
           h('div', { class: 'task-card-actions traffic-login-actions' }, [
@@ -851,25 +795,6 @@ export default defineComponent({
           ]),
         ]))),
       ])
-    }
-
-    function renderLicenseDialog() {
-      return h(LicenseDialog, {
-        open: licenseOpen.value,
-        loading: licenseLoading.value,
-        checking: licenseChecking.value,
-        info: licenseInfo.value,
-        code: licenseCode.value,
-        placeholder: '输入产品授权码',
-        'onUpdate:code': (value: string) => licenseCode.value = value,
-        onClose: () => licenseOpen.value = false,
-        onSave: saveLicense,
-        onCheck: checkLicense,
-        onCopyDevice: async () => {
-          await navigator.clipboard.writeText(String(licenseInfo.value.device_code || ''))
-          ElMessage.success('设备码已复制')
-        },
-      })
     }
 
     function renderTrafficEnvironment() {
