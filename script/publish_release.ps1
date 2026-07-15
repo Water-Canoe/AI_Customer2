@@ -71,7 +71,7 @@ function Find-LatestRelease([string]$RootPath) {
 }
 
 function Get-SealosAdminToken([string]$KeyPath) {
-    $Existing = [string]$env:AI_CUSTOMER_UPDATE_ADMIN_TOKEN
+    $Existing = [string]$env:AI_CUSTOMER_ADMIN_TOKEN
     if ($Existing.Length -ge 32) {
         return $Existing
     }
@@ -81,7 +81,7 @@ function Get-SealosAdminToken([string]$KeyPath) {
     if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) {
         throw "ssh.exe is required to read the Sealos update management token"
     }
-    $TokenLines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_UPDATE_ADMIN_TOKEN=//p' /home/devbox/project/.env")
+    $TokenLines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_ADMIN_TOKEN=//p' /home/devbox/project/.env")
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to read the update management token through Sealos SSH"
     }
@@ -98,7 +98,7 @@ function Invoke-UpdateApi(
     [object]$Body,
     [string]$AdminToken
 ) {
-    $Headers = @{ "x-ai-customer-admin-token" = $AdminToken }
+    $Headers = @{ Authorization = "Bearer $AdminToken" }
     $Arguments = @{
         Uri = "$($ServerBaseUrl.TrimEnd('/'))$Path"
         Method = $Method

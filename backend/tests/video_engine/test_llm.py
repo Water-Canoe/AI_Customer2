@@ -1020,6 +1020,7 @@ class TestSocialMetadata(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from app.main import app
+        from app.services import license_service
 
         request_body = {
             "video_subject": "Tokyo coffee shops",
@@ -1033,7 +1034,7 @@ class TestSocialMetadata(unittest.TestCase):
             '"hashtags":["#Tokyo","#Coffee","#Shorts"]}'
         )
 
-        with patch.object(llm, "_generate_response", return_value=llm_response):
+        with patch.object(license_service, "ensure_authorized_for", return_value={"authorized": True}), patch.object(llm, "_generate_response", return_value=llm_response):
             response = TestClient(app).post(
                 "/api/content/social-metadata",
                 json=request_body,

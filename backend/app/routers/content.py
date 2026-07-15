@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
+from app.api_dependencies import require_license_for
 from app.schemas import (
     ContentAssetUpdate,
     ContentPublishAccountCreate,
@@ -28,6 +29,7 @@ router = APIRouter(prefix="/api/content", tags=["content"])
 
 @router.post("/assets/import")
 async def import_assets(files: list[UploadFile] = File(...), purpose: str = "") -> list[dict[str, object]]:
+    require_license_for("content")
     results = []
     for file in files:
         try:
@@ -106,6 +108,7 @@ def list_publish_accounts() -> list[dict[str, object]]:
 
 @router.post("/publish-accounts")
 def create_publish_account(payload: ContentPublishAccountCreate) -> dict[str, object]:
+    require_license_for("content")
     try:
         return content_publish.create_account(payload.platform, payload.name)
     except ValueError as exc:
@@ -132,6 +135,7 @@ def delete_publish_account(account_id: str) -> dict[str, object]:
 
 @router.post("/publish-accounts/{account_id}/login")
 def login_publish_account(account_id: str) -> dict[str, object]:
+    require_license_for("content")
     try:
         content_publish.get_account(account_id)
         return job_queue.enqueue_publish_account_job(account_id, "login")
@@ -141,6 +145,7 @@ def login_publish_account(account_id: str) -> dict[str, object]:
 
 @router.post("/publish-accounts/{account_id}/check")
 def check_publish_account(account_id: str) -> dict[str, object]:
+    require_license_for("content")
     try:
         content_publish.get_account(account_id)
         return job_queue.enqueue_publish_account_job(account_id, "check")
@@ -158,6 +163,7 @@ def publish_account_qrcode(account_id: str) -> FileResponse:
 
 @router.post("/publish-tasks/one-click")
 def one_click_publish(payload: ContentPublishOneClick) -> list[dict[str, object]]:
+    require_license_for("content")
     try:
         source = payload.source
         if source.type == "video_output":
@@ -181,6 +187,7 @@ def one_click_publish(payload: ContentPublishOneClick) -> list[dict[str, object]
 
 @router.post("/publish-tasks")
 def create_publish_tasks(payload: ContentPublishTaskCreate) -> list[dict[str, object]]:
+    require_license_for("content")
     try:
         values = payload.model_dump()
         source = values.pop("source")
@@ -224,6 +231,7 @@ def cancel_publish_task(task_id: str) -> dict[str, object]:
 
 @router.post("/publish-tasks/{task_id}/retry")
 def retry_publish_task(task_id: str) -> dict[str, object]:
+    require_license_for("content")
     try:
         return content_publish.retry_task(task_id)
     except ValueError as exc:
@@ -240,6 +248,7 @@ def mark_publish_task(task_id: str, payload: ContentPublishResultUpdate) -> dict
 
 @router.post("/video-jobs")
 def create_video_job(payload: ContentVideoJobCreate) -> dict[str, object]:
+    require_license_for("content")
     try:
         return content_workbench.create_video_job(
             payload.params,
@@ -295,6 +304,7 @@ def cancel_video_job(video_job_id: str) -> dict[str, object]:
 
 @router.post("/video-jobs/{video_job_id}/retry")
 def retry_video_job(video_job_id: str) -> dict[str, object]:
+    require_license_for("content")
     try:
         return content_workbench.retry_video_job(video_job_id)
     except ValueError as exc:
@@ -327,6 +337,7 @@ def get_video_file(video_job_id: str, filename: str) -> FileResponse:
 
 @router.post("/scripts")
 def generate_script(payload: ContentScriptRequest) -> dict[str, object]:
+    require_license_for("content")
     try:
         return content_workbench.generate_script(payload.model_dump())
     except RuntimeError as exc:
@@ -335,6 +346,7 @@ def generate_script(payload: ContentScriptRequest) -> dict[str, object]:
 
 @router.post("/terms")
 def generate_terms(payload: ContentTermsRequest) -> dict[str, object]:
+    require_license_for("content")
     try:
         return content_workbench.generate_terms(payload.model_dump())
     except RuntimeError as exc:
@@ -343,6 +355,7 @@ def generate_terms(payload: ContentTermsRequest) -> dict[str, object]:
 
 @router.post("/social-metadata")
 def generate_social_metadata(payload: ContentSocialMetadataRequest) -> dict[str, object]:
+    require_license_for("content")
     try:
         return content_workbench.generate_social_metadata(payload.model_dump())
     except RuntimeError as exc:
@@ -351,6 +364,7 @@ def generate_social_metadata(payload: ContentSocialMetadataRequest) -> dict[str,
 
 @router.post("/voice-reference-script")
 def generate_voice_reference_script() -> dict[str, object]:
+    require_license_for("content")
     try:
         return content_workbench.generate_voice_reference_script()
     except RuntimeError as exc:
@@ -372,6 +386,7 @@ def list_voice_profiles(provider: str = "") -> list[dict[str, object]]:
 
 @router.post("/voice-profiles")
 def create_voice_profile(payload: ContentVoiceProfileCreate) -> dict[str, object]:
+    require_license_for("content")
     try:
         return voice_profiles.create_profile(payload.model_dump())
     except ValueError as exc:

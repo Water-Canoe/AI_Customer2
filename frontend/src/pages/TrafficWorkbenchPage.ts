@@ -860,7 +860,7 @@ export default defineComponent({
         checking: licenseChecking.value,
         info: licenseInfo.value,
         code: licenseCode.value,
-        placeholder: '输入引流工作台授权码',
+        placeholder: '输入产品授权码',
         'onUpdate:code': (value: string) => licenseCode.value = value,
         onClose: () => licenseOpen.value = false,
         onSave: saveLicense,

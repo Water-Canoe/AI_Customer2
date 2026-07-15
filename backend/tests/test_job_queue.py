@@ -196,7 +196,10 @@ def test_shutdown_requeues_safe_ai_job(tmp_path: Path, monkeypatch: pytest.Monke
 
 def test_account_analysis_releases_browser_before_ai_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_queue(tmp_path, monkeypatch)
-    from app.services import account_actions, job_queue
+    from app.services import account_actions, job_queue, license_service
+
+    checked_entitlements: list[str] = []
+    monkeypatch.setattr(license_service, "ensure_authorized_for", lambda entitlement: checked_entitlements.append(entitlement) or {"authorized": True})
 
     captured: dict[str, object] = {}
     monkeypatch.setattr(
@@ -220,3 +223,4 @@ def test_account_analysis_releases_browser_before_ai_execution(tmp_path: Path, m
 
     assert captured == {"job_ids": ["ai-11", "ai-12"], "entity_id": "account-analysis:crawl-analysis"}
     assert result["ai_runtime_job"] == {"id": "runtime-ai"}
+    assert checked_entitlements == ["lead"]

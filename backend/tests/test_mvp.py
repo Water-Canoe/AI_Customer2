@@ -841,18 +841,18 @@ def test_task_preview_uses_same_parameter_normalization(tmp_path: Path) -> None:
     assert "必须填写关键词" in response.json()["detail"]
 
 
-def test_traffic_license_scope_is_independent(tmp_path: Path) -> None:
+def test_product_license_is_shared_across_workbenches(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.services import license_service
 
     lead = license_service.update_license_code_for("lead", "WATER_CANOE")
-    traffic = license_service.update_license_code_for("traffic", "CANOE_WATER")
+    traffic = license_service.update_license_code_for("traffic", "WATER_CANOE")
 
     assert lead["license_code"] == "WATER_CANOE"
-    assert traffic["license_code"] == "CANOE_WATER"
+    assert traffic["license_code"] == "WATER_CANOE"
     assert license_service.license_overview_for("lead")["license_code"] == "WATER_CANOE"
-    assert license_service.license_overview_for("traffic")["license_code"] == "CANOE_WATER"
-    assert license_service.license_overview_for("lead")["device_code"] != license_service.license_overview_for("traffic")["device_code"]
+    assert license_service.license_overview_for("traffic")["license_code"] == "WATER_CANOE"
+    assert license_service.license_overview_for("lead")["device_code"] == license_service.license_overview_for("traffic")["device_code"]
 
 
 def test_new_database_uses_current_traffic_run_schema(tmp_path: Path) -> None:
@@ -5907,28 +5907,50 @@ def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch:
     assert response.status_code == 200
     assert client.get("/api/license").json()["device_code"] == first["device_code"]
 
-    def fake_remote(server_url: str, license_code: str, device_code: str, scope: str) -> dict[str, object]:
-        assert server_url.endswith("/ai-customer")
+    import base64
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key = Ed25519PrivateKey.generate()
+    public_key = private_key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    monkeypatch.setattr(license_service.product_config, "license_public_key_pem", lambda: public_key)
+
+    def fake_remote(action: str, license_code: str, device_code: str) -> dict[str, object]:
+        assert action == "activate"
         assert license_code == "LIC-TEST"
         assert device_code == first["device_code"]
-        assert scope == "lead"
+        now = datetime.now(timezone.utc)
+        lease_text = json.dumps({
+            "version": 1,
+            "licenseId": "license-test",
+            "deviceId": device_code,
+            "entitlements": ["lead", "traffic"],
+            "issuedAt": now.isoformat().replace("+00:00", "Z"),
+            "expiresAt": (now + timedelta(hours=72)).isoformat().replace("+00:00", "Z"),
+        }, separators=(",", ":"))
         return {
             "code": 200,
             "message": "授权通过",
             "data": {
                 "permission": True,
-                "reason": "DEVICE_ALREADY_BOUND",
+                "reason": "DEVICE_ACTIVATED",
                 "maxDevices": 3,
                 "activeDeviceCount": 1,
-                "boundNewDevice": False,
+                "boundNewDevice": True,
+                "leaseText": lease_text,
+                "signature": base64.b64encode(private_key.sign(lease_text.encode("utf-8"))).decode("ascii"),
             },
         }
 
-    monkeypatch.setattr(license_service, "_request_license_check", fake_remote)
+    monkeypatch.setattr(license_service, "_request_license", fake_remote)
     checked = client.post("/api/license/check", json={"license_code": "LIC-TEST"}).json()
     assert checked["authorized"] is True
-    assert checked["reason"] == "DEVICE_ALREADY_BOUND"
+    assert checked["reason"] == "LEASE_VALID"
     assert checked["max_devices"] == 3
+    assert checked["entitlements"] == ["lead", "traffic"]
+
 
 
 def test_failed_task_without_imported_data_can_be_deleted(tmp_path: Path) -> None:

@@ -358,7 +358,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 当前实际执行支持抖音和快手；计划工作台仍展示抖音、快手、小红书平台入口，小红书点击后提示“正在开发”。快手第一版只支持 `随机推荐流`，动作支持点赞视频、收藏视频、关注作者和评论文案；快手 Web 端未发现图片评论上传控件，所以选择快手时前端会禁用“评论图片”，后端也会拒绝绕过前端提交的图片评论计划。创建计划时可留空计划名称，后端会按 `来源-计划ID前8位` 自动生成，例如 `拓客竞品视频-1a2b3c4d`，避免切换来源后仍沿用旧的随机推荐名称；每轮视频上限也随计划保存，批次执行时读取该计划自己的上限。动作组合包括点赞视频、收藏视频、关注作者、评论文案、评论图片；一个动作都不选时允许启动，表示“纯自动刷视频”，只随机停留、切换视频并写入“仅浏览”记录。文案和图片在引流设置页维护，文案库和图片库使用可增删改的表格编辑器，并支持启用/停用；执行时只从启用素材中随机抽取；同时启用评论文案和评论图片时，每次评论会在“仅文案 / 仅图片 / 文案加图片”三种形态中随机选择。引流设置页提供“操作执行概率”，默认 60%，每个已选择动作独立按该概率抽样执行；只有随机推荐流会先静默跳过前 3 条预热视频，关键词和竞品视频等定向来源从第一条命中视频开始执行，避免少量定向视频被预热逻辑全部跳过。没有产生真实互动动作的视频不计入每轮上限、不写操作记录、不写防重复账本。
 
-后端新增 `/api/traffic/*` 接口和 `traffic_*` 数据表，覆盖计划、批次、视频项、用户可读动作日志、操作记录、文案库、图片库和防重复账本。`traffic_plans` 和 `traffic_runs` 支持 `archived` 归档字段，默认列表隐藏已归档数据；计划和批次都提供归档、恢复和硬删除操作。硬删除计划或批次会级联删除关联批次、日志、视频明细、操作记录，并主动清理对应防重复账本，避免记录删除后仍被隐藏判重。引流设置里的“清除引流记录”是完整重置引流工作台运行数据：会删除计划列表、批次列表、日志、视频明细、操作记录、防重复账本和旧原型 campaign 数据，清空最近抖音视频运行态，并把素材使用次数归零；配置项、授权、文案内容和图片内容保留。引流授权独立于拓客授权，复用同一个 Sealos 授权服务和弹窗交互，但使用 `traffic` 业务字段：`traffic_license_code`、`traffic_device_code`、`traffic_license_last_status` 等；启动引流批次前会调用 `ensure_authorized_for("traffic")`，不会占用拓客工作台的 `lead` 授权码。
+后端新增 `/api/traffic/*` 接口和 `traffic_*` 数据表，覆盖计划、批次、视频项、用户可读动作日志、操作记录、文案库、图片库和防重复账本。`traffic_plans` 和 `traffic_runs` 支持 `archived` 归档字段，默认列表隐藏已归档数据；计划和批次都提供归档、恢复和硬删除操作。硬删除计划或批次会级联删除关联批次、日志、视频明细、操作记录，并主动清理对应防重复账本，避免记录删除后仍被隐藏判重。引流设置里的“清除引流记录”是完整重置引流工作台运行数据：会删除计划列表、批次列表、日志、视频明细、操作记录、防重复账本和旧原型 campaign 数据，清空最近抖音视频运行态，并把素材使用次数归零；配置项、产品授权、文案内容和图片内容保留。引流工作台与其它工作台共用一个授权码和一个设备码，启动引流批次时校验授权中的 `traffic` 权益。
 
 如果本地库曾运行过早期引流原型，`init_db()` 会为旧 `traffic_runs` 表补齐 `plan_id`、统计列和停机原因列，避免执行监控页因为旧表缺列返回 500。旧原型表还可能保留 `campaign_id NOT NULL` 和 `traffic_campaigns` 外键，新版创建批次会自动写入内部桥接 campaign，满足旧约束但不参与新版业务。引流分栏页面必须使用 `SplitPane` 的默认 slot 作为主区、`side` slot 作为右栏，否则主区会消失、右栏被压成竖排。
 
@@ -436,17 +436,15 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 ## 授权服务
 
-Sealos 后端的 AI拓客授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试地址为 `https://tfwqsfaegbdj.sealosbja.site`，接口详情见根目录 `sealos接口文档.md`。V1 只做授权码和绑定设备数限制，不做同时在线状态、心跳或强制下线。
+Sealos 授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试地址为 `https://tfwqsfaegbdj.sealosbja.site`，接口详情见根目录 `sealos接口文档.md`。授权模型为“一个客户一个产品授权码、一个安装实例一个设备码、授权内包含 `lead / traffic / content` 功能权益”，不再为拓客和引流分别创建授权码。
 
-授权服务使用 `AI_Customer-License` 保存授权码，使用 `AI_Customer-LicenseDevice` 保存绑定设备。`POST /ai-customer/add-license` 用于创建授权码，`maxDevices` 为空时默认最多 3 台设备；`POST /ai-customer/check-license` 用于校验授权码和自动绑定设备：同一设备重复请求会直接通过，未绑定设备会在 active 设备数未满时自动绑定，超过 `maxDevices` 时返回 `DEVICE_LIMIT_EXCEEDED`。设备解绑通过 `POST /ai-customer/revoke-license-device` 把设备状态改为 `revoked`，并释放 active 设备名额。
+`AI_Customer-License` 只保存授权码的 HMAC-SHA-256 摘要和可检索前缀，不保存或再次返回完整授权码；完整码由管理端创建时随机生成并只展示一次。`AI_Customer-LicenseDevice` 通过 `licenseId + deviceId` 唯一索引保存设备。设备名额在 MongoDB 事务内通过许可证计数器原子占用和释放，避免并发激活突破 `maxDevices`。
 
-本地 AI获客系统的“设置”页提供“授权与设备”按钮。点击后弹出授权信息窗口：授权码可编辑并保存，设备码由本机后端首次读取授权信息时生成，前端只读且只能复制，通用 `PUT /api/settings` 会忽略 `device_code` 和授权状态字段，避免误改设备码。弹窗提供“保存授权码”和“保存并校验”，校验会调用本地 `POST /api/license/check`，再由本地后端请求 Sealos `/ai-customer/check-license` 完成授权码和设备绑定校验。
+客户端通过 `POST /ai-customer/license/activate` 首次激活，通过 `POST /ai-customer/license/renew` 为已有设备续租。服务端返回 72 小时 Ed25519 签名租约，本地后端使用内置的独立授权公钥验签；任务开始前先做本地验签和权益校验，租约签发超过 6 小时才尝试续租，网络故障时可在未过期租约内继续运行。服务端明确返回停用、过期或设备撤销时会立即清除本地租约。该设计不使用心跳、WebSocket、同时在线状态或硬件指纹。
 
-本地后端新增 `GET /api/license`、`PUT /api/license`、`POST /api/license/check`。所有会创建采集任务或 AI 分析任务的入口都会在执行前调用授权校验，包括 `/api/tasks`、账号补资料、账号分析、找客户、关键词一键竞品分析、关键词一键找客户、客户意向分析、批量客户意向分析、AI分析创建和 AI 重试。授权失败时接口返回 `403`，页面只展示产品化原因；任务预览、查看、删除、设置保存和环境检查不需要授权。公共授权响应不返回服务地址，通用设置接口也不能覆盖服务地址。
+本地仍提供 `GET /api/license`、`PUT /api/license`、`POST /api/license/check`，引流设置中的授权入口也读写同一份产品授权。创建拓客、引流、内容生成和发布任务时校验对应权益；统一运行队列在真正执行 `lead / traffic / content` 任务前再次校验。授权到期后，已有数据的查看、导出、备份、取消和清理仍可用，只阻止创建或启动新的受控任务。
 
-当前实现保留旧 demo 接口 `/ai-customer/get-permission`、`/ai-customer/add-permission`、`/ai-customer/get-permission-list` 便于过渡测试，但正式授权接入应优先使用授权码接口。AI_Customer 路由代码位于 Sealos 服务器 `~/project/routers/AI_Customer/`；`~/project/routers/AI_Medician/` 属于另一个业务，不应在 AI拓客授权迭代中修改。
-
-根目录 `tools/license-admin.html` 是一个纯静态授权管理页，可直接在浏览器打开。默认连接 `https://tfwqsfaegbdj.sealosbja.site/ai-customer`，用于按 `lead / traffic` 业务新增/保存授权码、查询授权设备、手动绑定设备、解绑设备，并支持配置管理 Token 和接口路径。当前 Sealos 文档只明确提供设备解绑接口，授权码删除/停用需要后端提供对应接口；管理页不会用本地兜底方式伪造删除结果。该页面只应由管理员自用，不应打进交付给客户的本地软件包。
+管理接口统一位于 `/ai-customer/admin/licenses*`，全部使用 `Authorization: Bearer <AI_CUSTOMER_ADMIN_TOKEN>`，授权码不提供硬删除，停用使用 `PATCH /admin/licenses/{licenseId}`。根目录 `tools/license-admin.html` 可直接打开，用于创建授权、修改功能权益/设备数/过期时间、启停授权、查看和撤销设备；管理 Token 只保存在当前页面内存，不写入 `localStorage`。该页面只供管理员使用，不进入客户发布包。旧 `add-license / check-license / get-license-devices / revoke-license-device` 和三个 demo permission 接口已删除，不保留兼容层。
 
 Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并设置启用/强制更新/灰度比例。客户完成授权后，每次通过稳定启动器打开程序都会静默检查更新；只有已有 active 设备才会得到限时下载地址，客户端会先验证 Ed25519 签名、再校验 ZIP 的大小和 SHA-256，最后只复制清单声明的程序文件并启动新版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时保持当前版本正常启动。详细请求格式见根目录 `sealos接口文档.md`。
 

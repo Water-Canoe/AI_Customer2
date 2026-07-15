@@ -14,6 +14,22 @@ from app import database
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
 SAFE_RESUME_KINDS = {"ai_job", "ai_batch", "account_customer_intent", "automation_run"}
 RESOURCE_LIMITS = {"browser": 1, "ai": 1, "video": 1, "automation": 1, "default": 2}
+JOB_ENTITLEMENTS = {
+    "crawl_task": "lead",
+    "crawl_batch": "lead",
+    "account_analysis": "lead",
+    "keyword_account_analysis": "lead",
+    "account_customer_intent": "lead",
+    "message_batch": "lead",
+    "message_single": "lead",
+    "ai_job": "lead",
+    "ai_batch": "lead",
+    "traffic_run": "traffic",
+    "video_generation": "content",
+    "publish_account_login": "content",
+    "publish_account_check": "content",
+    "content_publish": "content",
+}
 HEARTBEAT_SECONDS = 3.0
 POLL_SECONDS = 0.5
 
@@ -612,10 +628,12 @@ def _run_job(job: dict[str, Any]) -> None:
 
 
 def _execute_job(job: dict[str, Any]) -> Any:
-    from app.services import account_actions, ai_service, automation_workbench, content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
+    from app.services import account_actions, ai_service, automation_workbench, content_publish, content_workbench, crawler_adapter, license_service, message_workbench, traffic_workbench
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
+    if entitlement := JOB_ENTITLEMENTS.get(kind):
+        license_service.ensure_authorized_for(entitlement)
     if kind == "crawl_task":
         return crawler_adapter.run_task(str(payload["task_id"]))
     if kind == "crawl_batch":

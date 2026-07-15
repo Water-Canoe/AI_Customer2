@@ -58,6 +58,12 @@ export const LicenseDialog = defineComponent({
                   : null,
                 props.info.max_devices
                   ? h('small', `设备数：${props.info.active_device_count || 0} / ${props.info.max_devices}`)
+                  : null,
+                Array.isArray(props.info.entitlements) && props.info.entitlements.length
+                  ? h('small', `已开通：${props.info.entitlements.map(entitlementName).join('、')}`)
+                  : null,
+                props.info.lease_expires_at
+                  ? h('small', `离线授权有效至：${new Date(String(props.info.lease_expires_at)).toLocaleString()}`)
                   : null
               ]),
               h('div', { class: 'license-actions' }, [
@@ -75,4 +81,9 @@ function licenseStatusText(status: string, authorized: boolean) {
   if (authorized || status === 'authorized') return '授权通过'
   if (status === 'failed') return '授权失败'
   return '未校验'
+}
+
+function entitlementName(value: string) {
+  const names: Record<string, string> = { lead: '拓客', traffic: '引流', content: '内容' }
+  return names[value] || value
 }

@@ -9,6 +9,10 @@ _LICENSE_ENDPOINT_BYTES = (
     88, 48, 1, 28, 25, 10, 31,
 )
 _LICENSE_ENDPOINT_KEY = b"AI-Customer-Desktop"
+_LICENSE_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAb+P18TfnmdEjCEaxr/rf4kZBK3DsJaGHXKJd6pS5aUQ=
+-----END PUBLIC KEY-----
+"""
 
 
 def license_endpoint() -> str:
@@ -20,3 +24,8 @@ def license_endpoint() -> str:
         for index, value in enumerate(_LICENSE_ENDPOINT_BYTES)
     )
     return decoded.decode("utf-8").rstrip("/")
+
+
+def license_public_key_pem() -> bytes:
+    """Return the embedded public key used to verify signed license leases."""
+    return _LICENSE_PUBLIC_KEY_PEM

@@ -119,7 +119,6 @@ def _request_update_offer(identity: tuple[str, str], current: str) -> dict[str, 
         {
             "licenseCode": license_code,
             "deviceId": device_code,
-            "business": "lead",
             "currentVersion": current,
             "updaterVersion": UPDATER_VERSION,
             "channel": "stable",

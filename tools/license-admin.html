@@ -2,796 +2,207 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI拓客授权管理</title>
   <style>
-    :root {
-      --bg: #f5f8f7;
-      --panel: #ffffff;
-      --line: #dbe7e4;
-      --text: #142033;
-      --muted: #64748b;
-      --brand: #0f766e;
-      --brand-weak: #e6f7f3;
-      --danger: #dc2626;
-      --danger-weak: #fff1f2;
-      --warn: #b45309;
-      --warn-weak: #fff7ed;
-      --ok: #15803d;
-      --ok-weak: #ecfdf3;
-      --shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
-      font-size: 14px;
-      line-height: 1.5;
-    }
-
-    button, input, textarea, select {
-      font: inherit;
-    }
-
-    button {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 9px 14px;
-      background: #fff;
-      color: var(--text);
-      cursor: pointer;
-    }
-
-    button:hover { border-color: #94a3b8; }
-    button:disabled { cursor: not-allowed; opacity: 0.55; }
-
-    .primary {
-      background: var(--brand);
-      border-color: var(--brand);
-      color: #fff;
-    }
-
-    .danger {
-      background: #fff;
-      border-color: #fecaca;
-      color: var(--danger);
-    }
-
-    .ghost {
-      background: #f8fafc;
-    }
-
-    .page {
-      max-width: 1280px;
-      margin: 0 auto;
-      padding: 28px;
-    }
-
-    .header {
-      display: flex;
-      justify-content: space-between;
-      gap: 18px;
-      align-items: flex-start;
-      margin-bottom: 18px;
-    }
-
-    h1 {
-      margin: 0 0 6px;
-      font-size: 26px;
-      letter-spacing: 0;
-    }
-
-    h2 {
-      margin: 0 0 14px;
-      font-size: 18px;
-    }
-
-    .sub {
-      margin: 0;
-      color: var(--muted);
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: minmax(360px, 430px) minmax(0, 1fr);
-      gap: 18px;
-      align-items: start;
-    }
-
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      box-shadow: var(--shadow);
-      padding: 18px;
-    }
-
-    .stack {
-      display: grid;
-      gap: 14px;
-    }
-
-    .row {
-      display: grid;
-      gap: 8px;
-    }
-
-    .two {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-
-    label {
-      color: #334155;
-      font-weight: 600;
-    }
-
-    input, textarea, select {
-      width: 100%;
-      border: 1px solid #cbd5e1;
-      border-radius: 8px;
-      padding: 10px 12px;
-      outline: none;
-      background: #fff;
-      color: var(--text);
-    }
-
-    input:focus, textarea:focus, select:focus {
-      border-color: var(--brand);
-      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
-    }
-
-    textarea {
-      min-height: 72px;
-      resize: vertical;
-    }
-
-    .actions {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .hint {
-      color: var(--muted);
-      font-size: 13px;
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      min-height: 24px;
-      border-radius: 999px;
-      padding: 2px 10px;
-      background: #eef2f7;
-      color: #475569;
-      font-weight: 600;
-      white-space: nowrap;
-    }
-
-    .badge.active {
-      background: var(--ok-weak);
-      color: var(--ok);
-    }
-
-    .badge.revoked {
-      background: var(--danger-weak);
-      color: var(--danger);
-    }
-
-    .badge.warn {
-      background: var(--warn-weak);
-      color: var(--warn);
-    }
-
-    .summary {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-      margin-bottom: 14px;
-    }
-
-    .metric {
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      padding: 12px;
-    }
-
-    .metric span {
-      display: block;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .metric strong {
-      display: block;
-      margin-top: 3px;
-      font-size: 20px;
-    }
-
-    .table-wrap {
-      overflow: auto;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      max-height: 480px;
-    }
-
-    table {
-      width: 100%;
-      min-width: 840px;
-      border-collapse: collapse;
-      background: #fff;
-    }
-
-    th, td {
-      padding: 12px;
-      border-bottom: 1px solid #e2e8f0;
-      text-align: left;
-      vertical-align: top;
-    }
-
-    th {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      background: #f8fafc;
-      color: #334155;
-      font-size: 13px;
-    }
-
-    td code {
-      word-break: break-all;
-      color: #0f766e;
-    }
-
-    .empty {
-      padding: 28px;
-      text-align: center;
-      color: var(--muted);
-    }
-
-    details {
-      border: 1px dashed #cbd5e1;
-      border-radius: 10px;
-      padding: 12px;
-      background: #fbfdff;
-    }
-
-    details summary {
-      cursor: pointer;
-      font-weight: 700;
-    }
-
-    .log {
-      margin-top: 18px;
-      max-height: 260px;
-      overflow: auto;
-      border-radius: 10px;
-      background: #0f172a;
-      color: #d1fae5;
-      padding: 14px;
-      white-space: pre-wrap;
-      font-family: Consolas, "SFMono-Regular", monospace;
-      font-size: 12px;
-    }
-
-    .notice {
-      padding: 12px;
-      border-radius: 10px;
-      border: 1px solid #fde68a;
-      background: #fffbeb;
-      color: #92400e;
-    }
-
-    @media (max-width: 960px) {
-      .page { padding: 18px; }
-      .header, .grid, .two { grid-template-columns: 1fr; display: grid; }
-      .summary { grid-template-columns: 1fr 1fr; }
-    }
+    :root { color-scheme: light; font-family: Inter,"Microsoft YaHei",sans-serif; color:#18332f; background:#f4f8f7 }
+    * { box-sizing:border-box }
+    body { margin:0; padding:24px }
+    main { max-width:1180px; margin:auto }
+    h1,h2 { margin:0 0 8px }
+    p { color:#647773; margin:0 0 16px }
+    .panel { background:#fff; border:1px solid #dce8e5; border-radius:14px; padding:18px; margin-bottom:16px; box-shadow:0 8px 28px rgba(19,70,61,.05) }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px }
+    label { display:grid; gap:6px; font-size:13px; color:#526864 }
+    input,select,textarea,button { font:inherit }
+    input,select,textarea { width:100%; padding:10px 12px; border:1px solid #cddbd8; border-radius:9px; background:#fff }
+    textarea { min-height:76px; resize:vertical }
+    button { border:0; border-radius:9px; padding:9px 14px; cursor:pointer; background:#e8f1ef; color:#173f38 }
+    button.primary { background:#087f6d; color:#fff }
+    button.danger { background:#fde9e9; color:#a32b2b }
+    button:disabled { opacity:.5; cursor:not-allowed }
+    .actions,.checks { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px }
+    .checks label { display:flex; align-items:center; gap:5px }
+    .checks input { width:auto }
+    table { width:100%; border-collapse:collapse; font-size:13px }
+    th,td { text-align:left; padding:10px 8px; border-bottom:1px solid #e7efed; vertical-align:top }
+    th { color:#637773 }
+    code { font-size:12px }
+    .scroll { overflow:auto }
+    .created { display:none; padding:12px; margin-top:12px; border-radius:9px; background:#ecfaf6 }
+    .created code { user-select:all; word-break:break-all }
+    .muted { color:#7a8d89 }
+    #log { white-space:pre-wrap; max-height:160px; overflow:auto; font-size:12px; background:#142522; color:#d7ebe6; padding:12px; border-radius:9px }
+    @media (max-width:760px) { body{padding:12px}.grid{grid-template-columns:1fr} }
   </style>
 </head>
 <body>
-  <main class="page">
-    <header class="header">
-      <div>
-        <h1>AI拓客授权管理</h1>
-        <p class="sub">用于管理 Sealos `/ai-customer` 授权码和绑定设备。页面为纯静态 HTML，不依赖项目后端。</p>
-      </div>
-      <div class="actions">
-        <button class="ghost" id="healthBtn">检查服务</button>
-        <button class="ghost" id="saveConfigBtn">保存连接配置</button>
-      </div>
-    </header>
-
-    <section class="panel stack" style="margin-bottom: 18px;">
-      <div class="two">
-        <div class="row">
-          <label for="apiBase">Sealos API Base</label>
-          <input id="apiBase" value="https://tfwqsfaegbdj.sealosbja.site/ai-customer">
-        </div>
-        <div class="row">
-          <label for="adminToken">管理 Token（可选）</label>
-          <input id="adminToken" type="password" placeholder="如果后端启用管理鉴权，则填写 Bearer Token">
-        </div>
-      </div>
-      <details>
-        <summary>接口路径配置</summary>
-        <div class="two" style="margin-top: 12px;">
-          <div class="row">
-            <label for="pathAddLicense">新增/修改授权码</label>
-            <input id="pathAddLicense" value="/add-license">
-          </div>
-          <div class="row">
-            <label for="pathGetDevices">查询授权和设备</label>
-            <input id="pathGetDevices" value="/get-license-devices">
-          </div>
-          <div class="row">
-            <label for="pathBindDevice">绑定设备</label>
-            <input id="pathBindDevice" value="/check-license">
-          </div>
-          <div class="row">
-            <label for="pathRevokeDevice">解绑设备</label>
-            <input id="pathRevokeDevice" value="/revoke-license-device">
-          </div>
-          <div class="row">
-            <label for="pathDeleteLicense">删除/停用授权码</label>
-            <input id="pathDeleteLicense" value="/delete-license">
-          </div>
-          <div class="row">
-            <label for="pathHealth">健康检查</label>
-            <input id="pathHealth" value="/db-health">
-          </div>
-        </div>
-        <p class="hint">当前文档已确认 `add-license`、`get-license-devices`、`check-license`、`revoke-license-device`。如果你的 Sealos 后端删除授权码接口名称不同，在这里改路径即可。</p>
-      </details>
-    </section>
-
+<main>
+  <section class="panel">
+    <h1>AI拓客授权管理</h1>
+    <p>一个客户使用一个产品授权码；功能通过权益开关控制，设备由客户端首次激活。</p>
     <div class="grid">
-      <section class="panel stack">
-        <div>
-          <h2>授权码</h2>
-          <p class="hint">保存会调用 `add-license`。查询会拉取授权码详情和设备列表。</p>
-        </div>
-
-        <div class="two">
-          <div class="row">
-            <label for="licenseCode">授权码</label>
-            <input id="licenseCode" placeholder="例如 WATER_CANOE">
-          </div>
-          <div class="row">
-            <label for="business">业务</label>
-            <select id="business">
-              <option value="lead">拓客工作台 lead</option>
-              <option value="traffic">引流工作台 traffic</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="two">
-          <div class="row">
-            <label for="maxDevices">最大设备数</label>
-            <input id="maxDevices" type="number" min="1" step="1" placeholder="默认 3">
-          </div>
-          <div class="row">
-            <label for="expireTime">过期时间</label>
-            <input id="expireTime" type="datetime-local">
-          </div>
-        </div>
-
-        <div class="row">
-          <label for="licenseRemark">备注</label>
-          <textarea id="licenseRemark" placeholder="客户名称、购买信息、交付备注等"></textarea>
-        </div>
-
-        <div class="actions">
-          <button class="primary" id="saveLicenseBtn">新增/保存授权码</button>
-          <button id="queryLicenseBtn">查询</button>
-          <button class="danger" id="deleteLicenseBtn">删除/停用授权码</button>
-          <button class="ghost" id="clearBtn">清空</button>
-        </div>
-
-        <div class="notice">
-          删除授权码需要 Sealos 后端提供对应接口。当前正式文档只确认“设备解绑”，页面不会用本地兜底方式假装删除。
-        </div>
-
-        <hr style="width: 100%; border: 0; border-top: 1px solid var(--line);">
-
-        <div>
-          <h2>手动绑定设备</h2>
-          <p class="hint">绑定设备会调用 `check-license`，和客户端校验授权时的绑定逻辑一致。</p>
-        </div>
-
-        <div class="row">
-          <label for="deviceId">设备码</label>
-          <input id="deviceId" placeholder="例如 AI-CUS-XXXXXXXX-XXXXXXXX">
-        </div>
-
-        <div class="two">
-          <div class="row">
-            <label for="deviceName">设备名</label>
-            <input id="deviceName" placeholder="例如 张三的电脑">
-          </div>
-          <div class="row">
-            <label for="deviceRemark">设备备注</label>
-            <input id="deviceRemark" placeholder="可选">
-          </div>
-        </div>
-
-        <div class="actions">
-          <button id="bindDeviceBtn" class="primary">绑定设备</button>
-          <button id="revokeDeviceBtn" class="danger">解绑设备</button>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="header" style="margin-bottom: 12px;">
-          <div>
-            <h2>授权详情</h2>
-            <p class="hint" id="currentHint">先输入授权码并查询。</p>
-          </div>
-          <span class="badge" id="licenseStatus">未查询</span>
-        </div>
-
-        <div class="summary">
-          <div class="metric">
-            <span>最大设备数</span>
-            <strong id="metricMax">-</strong>
-          </div>
-          <div class="metric">
-            <span>Active 设备</span>
-            <strong id="metricActive">-</strong>
-          </div>
-          <div class="metric">
-            <span>设备总数</span>
-            <strong id="metricTotal">-</strong>
-          </div>
-          <div class="metric">
-            <span>过期时间</span>
-            <strong id="metricExpire" style="font-size: 14px;">-</strong>
-          </div>
-        </div>
-
-        <div class="table-wrap" id="deviceTableWrap">
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 250px;">设备码</th>
-                <th>设备名</th>
-                <th>状态</th>
-                <th>最近校验</th>
-                <th>绑定时间</th>
-                <th style="width: 120px;">操作</th>
-              </tr>
-            </thead>
-            <tbody id="deviceRows"></tbody>
-          </table>
-        </div>
-        <div class="empty" id="emptyDevices">暂无设备数据</div>
-
-        <pre class="log" id="log">等待操作...</pre>
-      </section>
+      <label>Sealos API Base<input id="apiBase" value="https://tfwqsfaegbdj.sealosbja.site/ai-customer"></label>
+      <label>管理 Token（仅保存在当前页面内存）<input id="adminToken" type="password" autocomplete="off"></label>
     </div>
-  </main>
+    <div class="actions"><button class="primary" id="refreshBtn">连接并刷新</button><button id="healthBtn">健康检查</button></div>
+  </section>
 
-  <script>
-    const storeKey = 'ai-customer-license-admin-config';
-    const state = {
-      devices: [],
-      license: null
-    };
+  <section class="panel">
+    <h2>创建授权</h2>
+    <div class="checks">
+      <strong>开通功能：</strong>
+      <label><input type="checkbox" name="entitlement" value="lead" checked>拓客</label>
+      <label><input type="checkbox" name="entitlement" value="traffic" checked>引流</label>
+      <label><input type="checkbox" name="entitlement" value="content" checked>内容</label>
+    </div>
+    <div class="grid" style="margin-top:12px">
+      <label>最大设备数<input id="createMax" type="number" min="1" max="100" value="3"></label>
+      <label>过期时间（留空为长期）<input id="createExpiry" type="datetime-local"></label>
+    </div>
+    <label style="margin-top:12px">备注<textarea id="createRemark" placeholder="客户名称、订单号等"></textarea></label>
+    <div class="actions"><button class="primary" id="createBtn">创建授权</button></div>
+    <div class="created" id="createdBox">授权码只展示这一次：<code id="createdCode"></code> <button id="copyBtn">复制</button></div>
+  </section>
 
-    const fields = {
-      apiBase: document.querySelector('#apiBase'),
-      adminToken: document.querySelector('#adminToken'),
-      pathAddLicense: document.querySelector('#pathAddLicense'),
-      pathGetDevices: document.querySelector('#pathGetDevices'),
-      pathBindDevice: document.querySelector('#pathBindDevice'),
-      pathRevokeDevice: document.querySelector('#pathRevokeDevice'),
-      pathDeleteLicense: document.querySelector('#pathDeleteLicense'),
-      pathHealth: document.querySelector('#pathHealth'),
-      licenseCode: document.querySelector('#licenseCode'),
-      business: document.querySelector('#business'),
-      maxDevices: document.querySelector('#maxDevices'),
-      expireTime: document.querySelector('#expireTime'),
-      licenseRemark: document.querySelector('#licenseRemark'),
-      deviceId: document.querySelector('#deviceId'),
-      deviceName: document.querySelector('#deviceName'),
-      deviceRemark: document.querySelector('#deviceRemark')
-    };
+  <section class="panel">
+    <h2>授权列表</h2>
+    <div class="scroll"><table><thead><tr><th>前缀</th><th>状态</th><th>功能</th><th>设备</th><th>过期</th><th>备注</th><th>操作</th></tr></thead><tbody id="licenseRows"></tbody></table></div>
+  </section>
 
-    const els = {
-      log: document.querySelector('#log'),
-      status: document.querySelector('#licenseStatus'),
-      currentHint: document.querySelector('#currentHint'),
-      deviceRows: document.querySelector('#deviceRows'),
-      emptyDevices: document.querySelector('#emptyDevices'),
-      metricMax: document.querySelector('#metricMax'),
-      metricActive: document.querySelector('#metricActive'),
-      metricTotal: document.querySelector('#metricTotal'),
-      metricExpire: document.querySelector('#metricExpire')
-    };
+  <section class="panel" id="editor" hidden>
+    <h2>修改授权</h2>
+    <p id="selectedHint"></p>
+    <div class="grid">
+      <label>状态<select id="editStatus"><option value="active">启用</option><option value="disabled">停用</option></select></label>
+      <label>最大设备数<input id="editMax" type="number" min="1" max="100"></label>
+      <label>过期时间（留空为长期）<input id="editExpiry" type="datetime-local"></label>
+      <label>备注<input id="editRemark"></label>
+    </div>
+    <div class="checks">
+      <strong>功能：</strong>
+      <label><input type="checkbox" name="editEntitlement" value="lead">拓客</label>
+      <label><input type="checkbox" name="editEntitlement" value="traffic">引流</label>
+      <label><input type="checkbox" name="editEntitlement" value="content">内容</label>
+    </div>
+    <div class="actions"><button class="primary" id="saveBtn">保存修改</button><button id="loadDevicesBtn">刷新设备</button></div>
+    <div class="scroll" style="margin-top:12px"><table><thead><tr><th>设备码</th><th>设备名</th><th>版本</th><th>状态</th><th>最近续租</th><th>操作</th></tr></thead><tbody id="deviceRows"></tbody></table></div>
+  </section>
 
-    function log(message, data) {
-      const time = new Date().toLocaleString();
-      const body = data === undefined ? '' : '\n' + JSON.stringify(data, null, 2);
-      els.log.textContent = `[${time}] ${message}${body}\n\n${els.log.textContent}`;
+  <section class="panel"><h2>操作日志</h2><div id="log">等待操作</div></section>
+</main>
+<script>
+  const $ = selector => document.querySelector(selector)
+  const state = { licenses: [], selected: null }
+
+  function config() {
+    return { base: $('#apiBase').value.trim().replace(/\/$/, ''), token: $('#adminToken').value.trim() }
+  }
+
+  async function request(path, { method = 'GET', body } = {}) {
+    const { base, token } = config()
+    if (!base || !token) throw new Error('请先填写 API Base 和管理 Token')
+    const response = await fetch(base + path, {
+      method,
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    const result = await response.json().catch(() => null)
+    if (!response.ok) throw new Error(result?.message || `HTTP ${response.status}`)
+    return result
+  }
+
+  function run(action) {
+    return async () => {
+      try { await action() } catch (error) { log(`失败：${error.message}`); alert(error.message) }
     }
+  }
 
-    function readConfig() {
-      return {
-        apiBase: fields.apiBase.value.trim().replace(/\/$/, ''),
-        adminToken: fields.adminToken.value.trim(),
-        pathAddLicense: normalizePath(fields.pathAddLicense.value),
-        pathGetDevices: normalizePath(fields.pathGetDevices.value),
-        pathBindDevice: normalizePath(fields.pathBindDevice.value),
-        pathRevokeDevice: normalizePath(fields.pathRevokeDevice.value),
-        pathDeleteLicense: normalizePath(fields.pathDeleteLicense.value),
-        pathHealth: normalizePath(fields.pathHealth.value)
-      };
-    }
+  function log(message, data) {
+    $('#log').textContent = `[${new Date().toLocaleString()}] ${message}${data ? `\n${JSON.stringify(data, null, 2)}` : ''}\n\n${$('#log').textContent}`
+  }
 
-    function normalizePath(value) {
-      const path = String(value || '').trim();
-      if (!path) return '/';
-      return path.startsWith('/') ? path : `/${path}`;
-    }
+  function checked(name) {
+    return [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(item => item.value)
+  }
 
-    function saveConfig() {
-      const config = readConfig();
-      localStorage.setItem(storeKey, JSON.stringify(config));
-      log('连接配置已保存');
-    }
+  function localTime(value) {
+    if (!value) return ''
+    const date = new Date(value)
+    const offset = date.getTimezoneOffset() * 60000
+    return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+  }
 
-    function loadConfig() {
-      const raw = localStorage.getItem(storeKey);
-      if (!raw) return;
-      try {
-        const config = JSON.parse(raw);
-        Object.keys(config).forEach((key) => {
-          if (fields[key]) fields[key].value = config[key] || '';
-        });
-      } catch (error) {
-        log('读取本地连接配置失败', { error: error.message });
-      }
-    }
+  function iso(value) { return value ? new Date(value).toISOString() : null }
+  function displayTime(value) { return value ? new Date(value).toLocaleString() : '长期' }
+  function featureNames(values) { return (values || []).map(value => ({ lead:'拓客', traffic:'引流', content:'内容' }[value] || value)).join('、') }
 
-    async function request(path, payload, options = {}) {
-      const config = readConfig();
-      if (!config.apiBase) throw new Error('请先填写 Sealos API Base');
+  async function refresh() {
+    const result = await request('/admin/licenses')
+    state.licenses = result.data || []
+    $('#licenseRows').innerHTML = state.licenses.map(item => `<tr>
+      <td><code>${item.codePrefix}</code></td><td>${item.status}</td><td>${featureNames(item.entitlements)}</td>
+      <td>${item.activeDeviceCount}/${item.maxDevices}</td><td>${displayTime(item.expiresAt)}</td><td>${escapeHtml(item.remark || '-')}</td>
+      <td><button data-edit="${item.licenseId}">管理</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">暂无授权</td></tr>'
+    document.querySelectorAll('[data-edit]').forEach(button => button.addEventListener('click', () => select(button.dataset.edit)))
+    log('授权列表已刷新')
+  }
 
-      const headers = { Accept: 'application/json' };
-      if (!options.get) headers['Content-Type'] = 'application/json';
-      if (config.adminToken) headers.Authorization = `Bearer ${config.adminToken}`;
+  async function createLicense() {
+    const result = await request('/admin/licenses', { method:'POST', body:{
+      entitlements: checked('entitlement'), maxDevices: Number($('#createMax').value), expiresAt: iso($('#createExpiry').value), remark: $('#createRemark').value.trim(),
+    } })
+    $('#createdCode').textContent = result.data.licenseCode
+    $('#createdBox').style.display = 'block'
+    log('授权已创建；完整授权码不会再次从服务端返回', { licenseId: result.data.licenseId, codePrefix: result.data.codePrefix })
+    await refresh()
+  }
 
-      const response = await fetch(config.apiBase + path, {
-        method: options.get ? 'GET' : 'POST',
-        headers,
-        body: options.get ? undefined : JSON.stringify(payload || {})
-      });
-      let result = null;
-      const text = await response.text();
-      try {
-        result = text ? JSON.parse(text) : null;
-      } catch {
-        result = { raw: text };
-      }
-      if (!response.ok) {
-        const message = result?.message || result?.error || `HTTP ${response.status}`;
-        throw new Error(message);
-      }
-      return result;
-    }
+  async function select(id) {
+    state.selected = state.licenses.find(item => item.licenseId === id)
+    if (!state.selected) return
+    $('#editor').hidden = false
+    $('#selectedHint').textContent = `${state.selected.codePrefix} · ${state.selected.licenseId}`
+    $('#editStatus').value = state.selected.status === 'expired' ? 'active' : state.selected.status
+    $('#editMax').value = state.selected.maxDevices
+    $('#editExpiry').value = localTime(state.selected.expiresAt)
+    $('#editRemark').value = state.selected.remark || ''
+    document.querySelectorAll('input[name="editEntitlement"]').forEach(item => item.checked = state.selected.entitlements.includes(item.value))
+    await loadDevices()
+  }
 
-    function licenseCode() {
-      const value = fields.licenseCode.value.trim();
-      if (!value) throw new Error('请先填写授权码');
-      return value;
-    }
+  async function saveSelected() {
+    if (!state.selected) return
+    await request(`/admin/licenses/${state.selected.licenseId}`, { method:'PATCH', body:{
+      status: $('#editStatus').value, maxDevices: Number($('#editMax').value), expiresAt: iso($('#editExpiry').value), remark: $('#editRemark').value.trim(), entitlements: checked('editEntitlement'),
+    } })
+    log('授权已更新')
+    await refresh()
+    await select(state.selected.licenseId)
+  }
 
-    function toIsoFromLocal(value) {
-      if (!value) return null;
-      const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? null : date.toISOString();
-    }
+  async function loadDevices() {
+    if (!state.selected) return
+    const result = await request(`/admin/licenses/${state.selected.licenseId}/devices`)
+    $('#deviceRows').innerHTML = (result.data || []).map(item => `<tr><td><code>${escapeHtml(item.deviceId)}</code></td><td>${escapeHtml(item.deviceName || '-')}</td><td>${escapeHtml(item.appVersion || '-')}</td><td>${item.status}</td><td>${displayTime(item.lastRenewedAt)}</td><td>${item.status === 'active' ? `<button class="danger" data-revoke="${escapeHtml(item.deviceId)}">撤销</button>` : '-'}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">暂无设备</td></tr>'
+    document.querySelectorAll('[data-revoke]').forEach(button => button.addEventListener('click', run(() => revoke(button.dataset.revoke))))
+  }
 
-    function toLocalDateTime(value) {
-      if (!value) return '';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return '';
-      const pad = (num) => String(num).padStart(2, '0');
-      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-    }
+  async function revoke(deviceId) {
+    if (!confirm(`确认撤销设备 ${deviceId}？`)) return
+    await request(`/admin/licenses/${state.selected.licenseId}/devices/${encodeURIComponent(deviceId)}/revoke`, { method:'POST' })
+    log(`设备已撤销：${deviceId}`)
+    await loadDevices(); await refresh()
+  }
 
-    function formatTime(value) {
-      if (!value) return '-';
-      const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
-    }
+  function escapeHtml(value) { return String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])) }
 
-    function pickLicense(data) {
-      return data?.license || data?.licenseInfo || data?.licenseData || data?.data?.license || data?.data || {};
-    }
-
-    function pickDevices(data) {
-      const target = data?.data || data || {};
-      return target.devices || target.deviceList || target.licenseDevices || [];
-    }
-
-    function fillLicenseForm(license, rawData) {
-      if (!license || Array.isArray(license)) return;
-      fields.maxDevices.value = license.maxDevices ?? rawData?.data?.maxDevices ?? fields.maxDevices.value ?? '';
-      fields.expireTime.value = toLocalDateTime(license.expireTime || license.expiresAt || license.expireAt);
-      fields.licenseRemark.value = license.remark || fields.licenseRemark.value || '';
-    }
-
-    function render(data) {
-      const raw = data?.data || data || {};
-      const license = pickLicense(data);
-      const devices = pickDevices(data);
-      state.license = license;
-      state.devices = Array.isArray(devices) ? devices : [];
-      fillLicenseForm(license, raw);
-
-      const activeCount = raw.activeDeviceCount ?? state.devices.filter((device) => (device.status || 'active') === 'active').length;
-      const maxDevices = (license?.maxDevices ?? raw.maxDevices ?? fields.maxDevices.value) || '-';
-      const expireTime = license?.expireTime || license?.expiresAt || license?.expireAt || '';
-      const status = license?.status || raw.status || (fields.licenseCode.value ? 'active' : 'unknown');
-
-      els.metricMax.textContent = maxDevices || '-';
-      els.metricActive.textContent = activeCount ?? '-';
-      els.metricTotal.textContent = state.devices.length;
-      els.metricExpire.textContent = expireTime ? formatTime(expireTime) : '长期';
-      els.currentHint.textContent = fields.licenseCode.value ? `当前授权码：${fields.licenseCode.value}` : '先输入授权码并查询。';
-      if (license?.business && fields.business.querySelector(`option[value="${license.business}"]`)) {
-        fields.business.value = license.business;
-      } else if (raw.business && fields.business.querySelector(`option[value="${raw.business}"]`)) {
-        fields.business.value = raw.business;
-      }
-
-      els.status.textContent = status === 'active' ? 'active' : status;
-      els.status.className = `badge ${status === 'active' ? 'active' : status === 'revoked' || status === 'disabled' ? 'revoked' : 'warn'}`;
-
-      els.deviceRows.innerHTML = '';
-      state.devices.forEach((device) => {
-        const tr = document.createElement('tr');
-        const statusText = device.status || 'active';
-        const deviceId = device.deviceId || device.device_code || '';
-        tr.innerHTML = `
-          <td><code>${escapeHtml(deviceId)}</code></td>
-          <td>${escapeHtml(device.deviceName || device.name || '-')}</td>
-          <td><span class="badge ${statusText === 'active' ? 'active' : 'revoked'}">${escapeHtml(statusText)}</span></td>
-          <td>${escapeHtml(formatTime(device.lastSeenTime || device.lastSeenAt || device.updateTime))}</td>
-          <td>${escapeHtml(formatTime(device.createTime || device.boundTime || device.createdAt))}</td>
-          <td><button class="danger" data-revoke="${escapeHtml(deviceId)}">解绑</button></td>
-        `;
-        els.deviceRows.appendChild(tr);
-      });
-      els.emptyDevices.style.display = state.devices.length ? 'none' : 'block';
-    }
-
-    function escapeHtml(value) {
-      return String(value ?? '').replace(/[&<>"']/g, (char) => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-      }[char]));
-    }
-
-    async function healthCheck() {
-      const config = readConfig();
-      const result = await request(config.pathHealth, null, { get: true });
-      log('服务健康检查完成', result);
-    }
-
-    async function saveLicense() {
-      const config = readConfig();
-      const payload = {
-        licenseCode: licenseCode(),
-        business: fields.business.value,
-        maxDevices: fields.maxDevices.value ? Number(fields.maxDevices.value) : undefined,
-        expireTime: toIsoFromLocal(fields.expireTime.value),
-        remark: fields.licenseRemark.value.trim()
-      };
-      const result = await request(config.pathAddLicense, payload);
-      log('授权码已保存', result);
-      await queryLicense();
-    }
-
-    async function queryLicense() {
-      const config = readConfig();
-      const payload = { licenseCode: licenseCode(), business: fields.business.value };
-      const result = await request(config.pathGetDevices, payload);
-      log('授权码详情已查询', result);
-      render(result);
-    }
-
-    async function deleteLicense() {
-      const config = readConfig();
-      const code = licenseCode();
-      if (!confirm(`确认删除或停用授权码「${code}」？此操作取决于 Sealos 后端接口实现。`)) return;
-      const result = await request(config.pathDeleteLicense, { licenseCode: code, business: fields.business.value });
-      log('授权码删除/停用请求已提交', result);
-      render({ data: { devices: [] } });
-    }
-
-    async function bindDevice() {
-      const config = readConfig();
-      const deviceId = fields.deviceId.value.trim();
-      if (!deviceId) throw new Error('请先填写设备码');
-      const payload = {
-        licenseCode: licenseCode(),
-        business: fields.business.value,
-        deviceId,
-        deviceName: fields.deviceName.value.trim(),
-        remark: fields.deviceRemark.value.trim()
-      };
-      const result = await request(config.pathBindDevice, payload);
-      log('设备绑定请求已提交', result);
-      await queryLicense();
-    }
-
-    async function revokeDevice(deviceIdFromRow) {
-      const config = readConfig();
-      const deviceId = deviceIdFromRow || fields.deviceId.value.trim();
-      if (!deviceId) throw new Error('请先填写设备码，或点击设备表格中的解绑按钮');
-      if (!confirm(`确认解绑设备「${deviceId}」？`)) return;
-      const result = await request(config.pathRevokeDevice, {
-        licenseCode: licenseCode(),
-        business: fields.business.value,
-        deviceId
-      });
-      log('设备解绑请求已提交', result);
-      await queryLicense();
-    }
-
-    function clearForm() {
-      ['licenseCode', 'maxDevices', 'expireTime', 'licenseRemark', 'deviceId', 'deviceName', 'deviceRemark'].forEach((key) => {
-        fields[key].value = '';
-      });
-      fields.business.value = 'lead';
-      state.devices = [];
-      state.license = null;
-      render({ data: { devices: [] } });
-      els.status.textContent = '未查询';
-      els.status.className = 'badge';
-      log('表单已清空');
-    }
-
-    function run(action) {
-      return async () => {
-        try {
-          await action();
-        } catch (error) {
-          log('操作失败', { message: error.message });
-          alert(error.message);
-        }
-      };
-    }
-
-    document.querySelector('#healthBtn').addEventListener('click', run(healthCheck));
-    document.querySelector('#saveConfigBtn').addEventListener('click', saveConfig);
-    document.querySelector('#saveLicenseBtn').addEventListener('click', run(saveLicense));
-    document.querySelector('#queryLicenseBtn').addEventListener('click', run(queryLicense));
-    document.querySelector('#deleteLicenseBtn').addEventListener('click', run(deleteLicense));
-    document.querySelector('#bindDeviceBtn').addEventListener('click', run(bindDevice));
-    document.querySelector('#revokeDeviceBtn').addEventListener('click', run(() => revokeDevice()));
-    document.querySelector('#clearBtn').addEventListener('click', clearForm);
-    els.deviceRows.addEventListener('click', (event) => {
-      const target = event.target.closest('[data-revoke]');
-      if (!target) return;
-      run(() => revokeDevice(target.dataset.revoke))();
-    });
-
-    loadConfig();
-  </script>
+  $('#refreshBtn').addEventListener('click', run(refresh))
+  $('#healthBtn').addEventListener('click', run(async () => log('健康检查通过', await request('/healthz'))))
+  $('#createBtn').addEventListener('click', run(createLicense))
+  $('#saveBtn').addEventListener('click', run(saveSelected))
+  $('#loadDevicesBtn').addEventListener('click', run(loadDevices))
+  $('#copyBtn').addEventListener('click', run(async () => { await navigator.clipboard.writeText($('#createdCode').textContent); log('授权码已复制') }))
+</script>
 </body>
 </html>
