@@ -148,6 +148,12 @@ def build_command(task: dict[str, object], media_crawler_path: str) -> list[str]
 
 def _python_launcher() -> str:
     """Use an allowed Python executable instead of uv spawning python internally."""
+    packaged_python = os.getenv("AI_CUSTOMER_CRAWLER_PYTHON", "").strip()
+    if packaged_python:
+        path = Path(packaged_python)
+        if path.is_file():
+            return str(path)
+        raise RuntimeError("采集环境中的 Python 不存在，请重新解压完整环境包")
     current = Path(sys.executable)
     if current.name.lower() in {"python.exe", "python"}:
         return str(current)
@@ -975,6 +981,9 @@ def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, obje
     site_packages = media_dir / ".venv" / "Lib" / "site-packages" if media_dir else None
     if site_packages and site_packages.exists():
         pythonpath_items.append(str(site_packages))
+        playwright_driver = site_packages / "playwright" / "driver"
+        if playwright_driver.exists():
+            env["PATH"] = os.pathsep.join([str(playwright_driver), env.get("PATH", "")])
     existing_pythonpath = env.get("PYTHONPATH", "")
     if existing_pythonpath:
         pythonpath_items.append(existing_pythonpath)

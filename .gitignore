@@ -35,6 +35,7 @@ build/
 dist/
 release/
 output/
+/deliverables/
 *.spec
 *.zip
 *.7z

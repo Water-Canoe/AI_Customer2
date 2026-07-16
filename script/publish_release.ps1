@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Version = "",
-    [string]$ReleasePath = "",
+    [string]$ProgramZip = "",
     [string]$PrivateKeyPath = $env:AI_CUSTOMER_UPDATE_PRIVATE_KEY,
     [string]$PublicKeyPath = "",
     [string]$SshKeyPath = "",
@@ -29,11 +29,15 @@ $SemVerPattern = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Python = Join-Path $ProjectRoot "backend\.venv\Scripts\python.exe"
 $SigningTool = Join-Path $ProjectRoot "script\release_signing.py"
+$ProgramZipVerifier = Join-Path $ProjectRoot "script\verify_program_zip.py"
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw "Backend virtual environment not found: $Python"
 }
 if (-not (Test-Path -LiteralPath $SigningTool -PathType Leaf)) {
     throw "Release signing helper not found: $SigningTool"
+}
+if (-not (Test-Path -LiteralPath $ProgramZipVerifier -PathType Leaf)) {
+    throw "Program ZIP verifier not found: $ProgramZipVerifier"
 }
 if (-not $PublicKeyPath) {
     $PublicKeyPath = Join-Path $ProjectRoot "packaging\update_signing_public.pem"
@@ -57,15 +61,13 @@ function Write-Utf8NoBom([string]$Path, [string]$Content) {
     [System.IO.File]::WriteAllText($Path, $Content, $Encoding)
 }
 
-function Find-LatestRelease([string]$RootPath) {
+function Find-LatestProgramZip([string]$RootPath) {
     if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
-        throw "Release root not found: $RootPath"
+        throw "Delivery root not found: $RootPath"
     }
-    $Candidates = @(Get-ChildItem -LiteralPath $RootPath -Directory | Where-Object {
-        Test-Path -LiteralPath (Join-Path $_.FullName "release-manifest.json") -PathType Leaf
-    } | Sort-Object LastWriteTime -Descending)
+    $Candidates = @(Get-ChildItem -LiteralPath $RootPath -Recurse -File -Filter "AI_Customer_Program_*.zip" | Sort-Object LastWriteTime -Descending)
     if ($Candidates.Count -eq 0) {
-        throw "No completed release directory was found under $RootPath"
+        throw "No completed Program ZIP was found under $RootPath"
     }
     return $Candidates[0].FullName
 }
@@ -118,138 +120,25 @@ function Invoke-UpdateApi(
     }
 }
 
-function Read-Release([string]$Path, [string]$ExpectedVersion) {
-    $Release = Resolve-Path -LiteralPath $Path
-    # Use the Windows extended path prefix so declared files beyond MAX_PATH remain readable.
-    $AccessPath = if ($env:OS -eq "Windows_NT") { "\\?\$($Release.Path)" } else { $Release.Path }
-    $ManifestPath = [System.IO.Path]::Combine($AccessPath, "release-manifest.json")
-    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-        throw "release-manifest.json is missing"
-    }
-    $Manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding utf8 | ConvertFrom-Json
-    if ([int]$Manifest.format -ne 1 -or [string]$Manifest.product -ne "AI Customer Desktop") {
-        throw "Release manifest format or product is invalid"
-    }
-    if ($ExpectedVersion -and [string]$Manifest.version -ne $ExpectedVersion) {
-        throw "Release manifest version does not match -Version"
-    }
-    if (-not ([string]$Manifest.entrypoint -eq "app/AI_Customer.exe")) {
-        throw "Release manifest entrypoint is invalid"
-    }
-    $SchemaVersion = 0
-    if (-not [int]::TryParse([string]$Manifest.schema_version, [ref]$SchemaVersion) -or $SchemaVersion -lt 0) {
-        throw "Release schema version is invalid"
-    }
-
-    # The manifest is the archive allowlist; unrelated runtime files are never uploaded.
-    $Declared = @{}
-    foreach ($Item in @($Manifest.files)) {
-        $Relative = ([string]$Item.path).Replace('\', '/')
-        $Segments = @($Relative.Split('/'))
-        if (-not $Relative -or [System.IO.Path]::IsPathRooted($Relative) -or $Segments -contains ".." -or $Segments -contains "." -or $Segments -contains "") {
-            throw "Unsafe release path: $Relative"
-        }
-        if ($Declared.ContainsKey($Relative)) {
-            throw "Duplicate release path: $Relative"
-        }
-        $Declared[$Relative] = $Item
-    }
-    if ($Declared.Count -eq 0) {
-        throw "Release manifest does not contain files"
-    }
-    $ReleasePrefix = $AccessPath.TrimEnd('\') + '\'
-    $ActualFiles = @(Get-ChildItem -LiteralPath $AccessPath -Recurse -File -Force | Where-Object { $_.FullName -ne $ManifestPath })
-    foreach ($File in $ActualFiles) {
-        $Relative = $File.FullName.Substring($ReleasePrefix.Length).Replace('\', '/')
-        if (-not $Declared.ContainsKey($Relative)) {
-            Write-Warning "Ignoring undeclared runtime file: $Relative"
-        }
-    }
-    $ArchiveFiles = New-Object System.Collections.Generic.List[System.IO.FileInfo]
-    $ManifestFile = Get-Item -LiteralPath $ManifestPath
-    if (($ManifestFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Release manifest cannot be a reparse point"
-    }
-    $ArchiveFiles.Add($ManifestFile) | Out-Null
-    foreach ($Relative in $Declared.Keys) {
-        $Item = $Declared[$Relative]
-        $Source = [System.IO.Path]::Combine($AccessPath, $Relative.Replace('/', '\'))
-        if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
-            throw "Release file is missing: $Relative"
-        }
-        $File = Get-Item -LiteralPath $Source
-        if ($File.Length -ne [long]$Item.size) {
-            throw "Release file size mismatch: $Relative"
-        }
-        $Hash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($Hash -ne ([string]$Item.sha256).ToLowerInvariant()) {
-            throw "Release file hash mismatch: $Relative"
-        }
-        if (($File.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Declared release file cannot be a reparse point: $Relative"
-        }
-        $ArchiveFiles.Add($File) | Out-Null
-    }
-    return [pscustomobject]@{
-        Path = $Release.Path
-        AccessPath = $AccessPath
-        Manifest = $Manifest
-        ManifestPath = $ManifestPath
-        SchemaVersion = $SchemaVersion
-        ArchiveFiles = @($ArchiveFiles)
-    }
-}
-
-function New-ReleaseArchive([string]$SourcePath, [string]$DestinationPath, [object[]]$SourceFiles) {
-    Add-Type -AssemblyName System.IO.Compression
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $SourcePrefix = $SourcePath.TrimEnd('\') + '\'
-    $Files = @($SourceFiles | Sort-Object FullName)
-    $Stream = [System.IO.File]::Open(
-        $DestinationPath,
-        [System.IO.FileMode]::CreateNew,
-        [System.IO.FileAccess]::ReadWrite,
-        [System.IO.FileShare]::None
-    )
-    try {
-        $Archive = [System.IO.Compression.ZipArchive]::new(
-            $Stream,
-            [System.IO.Compression.ZipArchiveMode]::Create,
-            $false
-        )
-        try {
-            foreach ($File in $Files) {
-                if (($File.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                    throw "Release contains a reparse-point file: $($File.FullName)"
-                }
-                $EntryName = $File.FullName.Substring($SourcePrefix.Length).Replace('\', '/')
-                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-                    $Archive,
-                    $File.FullName,
-                    $EntryName,
-                    [System.IO.Compression.CompressionLevel]::Optimal
-                ) | Out-Null
-            }
-        }
-        finally {
-            $Archive.Dispose()
-        }
-    }
-    finally {
-        $Stream.Dispose()
-    }
-}
-
 $IsPrepareOnly = [bool]$PrepareOnly -or (-not $Upload -and -not $Enable)
 if ($PrepareOnly -and ($Upload -or $Enable)) {
     throw "-PrepareOnly cannot be combined with -Upload or -Enable"
 }
-if (-not $ReleasePath) {
-    $ReleasePath = Find-LatestRelease (Join-Path $ProjectRoot "dist\releases")
+if (-not $ProgramZip) {
+    $ProgramZip = Find-LatestProgramZip (Join-Path $ProjectRoot "deliverables")
 }
-$Release = Read-Release $ReleasePath $Version
+$ResolvedProgramZip = Resolve-Path -LiteralPath $ProgramZip
+$VerifyArguments = @($ProgramZipVerifier, $ResolvedProgramZip.Path)
+if ($Version) {
+    $VerifyArguments += @("--version", $Version)
+}
+$VerifyOutput = @(& $Python @VerifyArguments)
+if ($LASTEXITCODE -ne 0) {
+    throw "Program ZIP verification failed"
+}
+$Release = ($VerifyOutput -join "") | ConvertFrom-Json
 if (-not $Version) {
-    $Version = [string]$Release.Manifest.version
+    $Version = [string]$Release.version
 }
 Assert-SemVer $Version "Version"
 Assert-SemVer $MinUpdaterVersion "MinUpdaterVersion"
@@ -284,7 +173,7 @@ if ($PrivateKey.Path.StartsWith($ProjectPrefix, [System.StringComparison]::Ordin
 if (-not $SshKeyPath) {
     $SshKeyPath = Join-Path $HOME ".ssh\sealos\bja.sealos.run_ns-0lgzvp7r_medician-ai-back"
 }
-Write-Host "Selected release: $($Release.Path)"
+Write-Host "Selected Program ZIP: $($ResolvedProgramZip.Path)"
 Write-Host "Selected version: $Version"
 
 if (-not $IsPrepareOnly) {
@@ -305,15 +194,14 @@ if (Test-Path -LiteralPath $PublishDir) {
     throw "Unique publish workspace already exists; wait one second and retry"
 }
 New-Item -ItemType Directory -Path $PublishDir | Out-Null
-$ArchivePath = Join-Path $PublishDir "AI_Customer_${Version}_${Platform}_${Arch}.zip"
+$ArchivePath = $ResolvedProgramZip.Path
 $ManifestOutput = Join-Path $PublishDir "update-manifest.json"
 $SignatureOutput = Join-Path $PublishDir "update-manifest.sig"
 $ResultOutput = Join-Path $PublishDir "publish-result.json"
 
-Write-Host "Valid release verified. Creating archive..."
-New-ReleaseArchive $Release.AccessPath $ArchivePath @($Release.ArchiveFiles)
+Write-Host "Valid Program ZIP verified. The exact customer file will be signed and uploaded."
 $Archive = Get-Item -LiteralPath $ArchivePath
-$ArchiveHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$ArchiveHash = [string]$Release.sha256
 
 if ($IsPrepareOnly) {
     $ObjectKey = "releases/$Version/AI_Customer_${Version}_${Platform}_${Arch}.zip"
@@ -406,7 +294,8 @@ $UpdateManifest = [ordered]@{
     version = $Version
     platform = $Platform
     arch = $Arch
-    schema_version = $Release.SchemaVersion
+    schema_version = [int]$Release.schema_version
+    environment_version = [string]$Release.environment_version
     min_updater_version = $MinUpdaterVersion
     published_at = (Get-Date).ToUniversalTime().ToString("o")
     package = [ordered]@{

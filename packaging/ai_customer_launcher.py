@@ -21,21 +21,18 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def install_root(base_dir: Path) -> Path:
-    """Return the stable install folder outside versions/<version>/."""
-    if base_dir.parent.name.lower() == "versions":
-        return base_dir.parent.parent
-    return base_dir
-
-
 def configure_environment(base_dir: Path) -> None:
-    """Point mutable data outside the versioned app folder."""
-    root_dir = install_root(base_dir)
+    """Point the portable app at its data and reusable environment folders."""
+    root_dir = base_dir
     data_dir = Path(os.environ.get("AI_CUSTOMER_DATA_DIR", str(root_dir / "data")))
-    runtime_dir = Path(os.environ.get("AI_CUSTOMER_RUNTIME_DIR", str(root_dir / "runtimes")))
-    frontend_dist = base_dir / "frontend_dist"
-    media_crawler_dir = root_dir / "MyCrawler"
-    cloakbrowser_binary = base_dir / "r" / "cloakbrowser_browser" / "chrome.exe"
+    packaged = bool(getattr(sys, "frozen", False))
+    environment_dir = root_dir / "runtime" if packaged else root_dir
+    runtime_dir = Path(os.environ.get("AI_CUSTOMER_RUNTIME_DIR", str(environment_dir / "components" if packaged else root_dir / "runtimes")))
+    frontend_dist = environment_dir / "frontend_dist" if packaged else base_dir / "frontend_dist"
+    media_crawler_dir = environment_dir / "MyCrawler" if packaged else root_dir / "MyCrawler"
+    cloakbrowser_binary = environment_dir / "cloakbrowser_browser" / "chrome.exe" if packaged else base_dir / "r" / "cloakbrowser_browser" / "chrome.exe"
+    crawler_python = environment_dir / "python" / "python.exe"
+    voice_models = environment_dir / "models"
 
     data_dir.mkdir(parents=True, exist_ok=True)
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -43,11 +40,15 @@ def configure_environment(base_dir: Path) -> None:
     os.environ.setdefault("AI_CUSTOMER_DATA_DIR", str(data_dir))
     os.environ.setdefault("AI_CUSTOMER_DB", str(data_dir / "ai_customer.sqlite3"))
     os.environ.setdefault("AI_CUSTOMER_RUNTIME_DIR", str(runtime_dir))
+    if packaged:
+        os.environ.setdefault("AI_CUSTOMER_VOICE_MODELS_DIR", str(voice_models))
     if frontend_dist.exists():
         os.environ.setdefault("AI_CUSTOMER_FRONTEND_DIST", str(frontend_dist))
     if media_crawler_dir.exists():
         os.environ.setdefault("AI_CUSTOMER_MEDIA_CRAWLER_PATH", str(media_crawler_dir))
         os.environ.setdefault("AI_CUSTOMER_MEDIA_CRAWLER_DB", str(media_crawler_dir / "database" / "sqlite_tables.db"))
+    if crawler_python.is_file():
+        os.environ.setdefault("AI_CUSTOMER_CRAWLER_PYTHON", str(crawler_python))
     if cloakbrowser_binary.is_file():
         os.environ.setdefault("CLOAKBROWSER_BINARY_PATH", str(cloakbrowser_binary))
 

@@ -49,7 +49,7 @@ def get_social_publish_root() -> Path:
 
 def get_voice_models_root() -> Path:
     """Return the shared model folder used by video and future avatar features."""
-    return get_data_root() / "voice_models"
+    return Path(os.getenv("AI_CUSTOMER_VOICE_MODELS_DIR", str(get_data_root() / "voice_models")))
 
 
 def get_runtime_root() -> Path:

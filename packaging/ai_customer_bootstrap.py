@@ -12,7 +12,6 @@ import sys
 import urllib.error
 import urllib.request
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -26,6 +25,7 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MANIFEST_NAME = "release-manifest.json"
 PRODUCT_NAME = "AI Customer Desktop"
 UPDATER_VERSION = "1.0.0"
+MAX_EXTRACTED_SIZE = 8 * 1024 * 1024 * 1024
 UPDATE_CHECK_ENDPOINT = "https://tfwqsfaegbdj.sealosbja.site/ai-customer/update/check"
 TRUSTED_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEA2OKYXun9fsGm/ymzAdD7n9hhzusRKVvPS87myTqkdvg=
@@ -55,7 +55,14 @@ def _read_verified_release(release_root: Path) -> tuple[str, dict[str, dict[str,
         raise RuntimeError("发布包缺少 release-manifest.json")
     payload = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     version = str(payload.get("version") or "").strip()
-    if payload.get("format") != 1 or payload.get("product") != PRODUCT_NAME or not VERSION_PATTERN.fullmatch(version):
+    environment_version = str(payload.get("environment_version") or "").strip()
+    if (
+        payload.get("format") != 1
+        or payload.get("product") != PRODUCT_NAME
+        or payload.get("entrypoint") != "AI_Customer_App.exe"
+        or not VERSION_PATTERN.fullmatch(version)
+        or not VERSION_PATTERN.fullmatch(environment_version)
+    ):
         raise RuntimeError("发布包版本信息无效")
 
     raw_files = payload.get("files")
@@ -67,6 +74,8 @@ def _read_verified_release(release_root: Path) -> tuple[str, dict[str, dict[str,
         if not isinstance(item, dict):
             raise RuntimeError("发布包清单格式无效")
         relative_path = _safe_release_path(item.get("path"))
+        if not _is_program_owned_path(relative_path):
+            raise RuntimeError(f"发布包包含非程序文件：{relative_path}")
         size = item.get("size")
         sha256 = str(item.get("sha256") or "").lower()
         if relative_path in files or not isinstance(size, int) or size < 0 or not SHA256_PATTERN.fullmatch(sha256):
@@ -78,9 +87,16 @@ def _read_verified_release(release_root: Path) -> tuple[str, dict[str, dict[str,
             raise RuntimeError(f"发布包校验失败：{relative_path}")
         files[relative_path] = {"source": source}
 
-    if "AI_Customer.exe" not in files or "app/AI_Customer.exe" not in files:
-        raise RuntimeError("发布包缺少启动程序")
+    if "AI_Customer_App.exe" not in files:
+        raise RuntimeError("程序包缺少 AI_Customer_App.exe")
     return version, files
+
+
+def _is_program_owned_path(relative_path: str) -> bool:
+    """Keep remote updates away from customer data and dependency files."""
+    if relative_path in {"AI_Customer.exe", "AI_Customer_App.exe", "README.txt"}:
+        return True
+    return relative_path.startswith(("runtime/frontend_dist/", "runtime/app/"))
 
 
 def _is_newer_version(candidate: str, current: str) -> bool:
@@ -136,7 +152,7 @@ def _request_update_offer(identity: tuple[str, str], current: str) -> dict[str, 
     return data if isinstance(data, dict) else None
 
 
-def _validate_update_offer(offer: dict[str, Any], current: str) -> dict[str, Any] | None:
+def _validate_update_offer(offer: dict[str, Any], current: str, environment_version: str) -> dict[str, Any] | None:
     if not offer.get("available") or not offer.get("downloadAllowed"):
         return None
     manifest_text = offer.get("manifestText")
@@ -160,6 +176,7 @@ def _validate_update_offer(offer: dict[str, Any], current: str) -> dict[str, Any
         or manifest.get("platform") != "windows"
         or manifest.get("arch") != "x64"
         or str(manifest.get("min_updater_version") or "") != UPDATER_VERSION
+        or str(manifest.get("environment_version") or "") != environment_version
         or str(offer.get("version") or "") != version
         or not _is_newer_version(version, current)
     ):
@@ -200,13 +217,19 @@ def _extract_update(archive_path: Path, install_root: Path, version: str) -> Pat
         return release_root
     with zipfile.ZipFile(archive_path) as archive:
         names: set[str] = set()
+        files: list[tuple[zipfile.ZipInfo, str]] = []
+        total_size = 0
         for item in archive.infolist():
             if item.is_dir():
                 continue
             relative_path = _safe_release_path(item.filename)
-            if relative_path in names:
-                raise RuntimeError("更新包包含重复文件")
+            unix_mode = (item.external_attr >> 16) & 0o170000
+            total_size += int(item.file_size)
+            if relative_path in names or unix_mode == 0o120000 or total_size > MAX_EXTRACTED_SIZE:
+                raise RuntimeError("更新包包含重复链接或解压体积异常")
             names.add(relative_path)
+            files.append((item, relative_path))
+        for item, relative_path in files:
             destination = release_root / Path(*PurePosixPath(relative_path).parts)
             destination.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(item) as source, destination.open("wb") as output:
@@ -218,96 +241,105 @@ def apply_remote_update(install_root: Path) -> bool:
     """Check, verify, and stage a newer authorized release before app startup."""
     try:
         current = current_version(install_root)
+        environment_version = validate_environment(install_root)
         identity = _read_update_identity(install_root)
         if not identity:
             return False
         offer = _request_update_offer(identity, current)
         if not offer:
             return False
-        update = _validate_update_offer(offer, current)
+        update = _validate_update_offer(offer, current, environment_version)
         if not update:
             return False
         archive_path = _download_update(update, install_root)
         release_root = _extract_update(archive_path, install_root, str(update["version"]))
-        install_release(release_root, install_root, replace_launcher=False)
+        apply_release(release_root, install_root)
         return True
     except (InvalidSignature, OSError, RuntimeError, ValueError, sqlite3.Error, urllib.error.URLError, zipfile.BadZipFile):
         return False
 
 
 def current_version(install_root: Path) -> str:
-    manifest_path = install_root / "current-version.json"
+    manifest_path = install_root / MANIFEST_NAME
     if not manifest_path.is_file():
-        raise RuntimeError("未找到当前版本信息，请双击发布包根目录的 AI_Customer.exe 安装")
+        raise RuntimeError("程序目录缺少 release-manifest.json，请重新解压完整程序包")
     payload = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     version = str(payload.get("version") or "").strip()
-    if not VERSION_PATTERN.fullmatch(version):
+    environment_version = str(payload.get("environment_version") or "").strip()
+    if (
+        payload.get("format") != 1
+        or payload.get("product") != PRODUCT_NAME
+        or payload.get("entrypoint") != "AI_Customer_App.exe"
+        or not VERSION_PATTERN.fullmatch(version)
+        or not VERSION_PATTERN.fullmatch(environment_version)
+    ):
         raise RuntimeError("当前版本信息格式不正确")
     return version
 
 
-def version_executable(install_root: Path, version: str) -> Path:
-    executable = install_root / "versions" / version / "AI_Customer.exe"
+def application_executable(install_root: Path) -> Path:
+    executable = install_root / "AI_Customer_App.exe"
     if not executable.is_file():
-        raise RuntimeError(f"版本 {version} 的程序文件不完整，请重新安装该版本")
+        raise RuntimeError("程序目录缺少 AI_Customer_App.exe，请重新解压完整程序包")
     return executable
 
 
-def default_install_root() -> Path:
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        raise RuntimeError("未找到 Windows 本地应用数据目录")
-    return Path(local_app_data) / "AI_Customer"
-
-
-def install_release(release_root: Path, install_root: Path, *, replace_launcher: bool = True) -> str:
-    """Install only manifest-declared payload files and retain persistent data."""
+def apply_release(release_root: Path, install_root: Path) -> str:
+    """Replace only program-owned files inside the portable directory."""
     release_root = release_root.resolve()
     version, files = _read_verified_release(release_root)
-    versions_root = install_root / "versions"
-    target_version = versions_root / version
     install_root.mkdir(parents=True, exist_ok=True)
     (install_root / "data").mkdir(exist_ok=True)
-    versions_root.mkdir(exist_ok=True)
+    for relative_path, item in sorted(files.items(), key=lambda value: value[0] == "AI_Customer_App.exe"):
+        if relative_path == "AI_Customer.exe":
+            continue
+        destination = install_root / Path(*PurePosixPath(relative_path).parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(f"{destination.name}.next-{os.getpid()}")
+        shutil.copy2(item["source"], temporary)
+        temporary.replace(destination)
+    manifest_source = release_root / MANIFEST_NAME
+    manifest_temporary = install_root / f"{MANIFEST_NAME}.next-{os.getpid()}"
+    shutil.copy2(manifest_source, manifest_temporary)
+    manifest_temporary.replace(install_root / MANIFEST_NAME)
+    return version
 
-    if target_version.exists():
-        version_executable(install_root, version)
-    else:
-        staging_version = versions_root / f"{version}.staging-{os.getpid()}"
-        if staging_version.exists():
-            raise RuntimeError("发现未完成的安装目录，请关闭程序后重试")
-        for relative_path, item in files.items():
-            if not relative_path.startswith("app/"):
-                continue
-            destination = staging_version / Path(*PurePosixPath(relative_path).parts[1:])
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item["source"], destination)
-        if not (staging_version / "AI_Customer.exe").is_file():
-            raise RuntimeError("发布包缺少应用程序")
-        staging_version.replace(target_version)
 
-    # The running stable launcher is only replaced by a manually opened release package.
-    if replace_launcher:
-        temporary_launcher = install_root / "AI_Customer.next.exe"
-        shutil.copy2(files["AI_Customer.exe"]["source"], temporary_launcher)
-        temporary_launcher.replace(install_root / "AI_Customer.exe")
-    current = {
-        "version": version,
-        "switched_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-    }
-    temporary_current = install_root / "current-version.next.json"
-    temporary_current.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary_current.replace(install_root / "current-version.json")
+def validate_environment(install_root: Path) -> str:
+    program = json.loads((install_root / MANIFEST_NAME).read_text(encoding="utf-8-sig"))
+    expected = str(program.get("environment_version") or "")
+    manifest_path = install_root / "runtime" / "environment-manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError("运行环境未安装，请把环境 ZIP 中的 runtime 文件夹解压到程序目录")
+    environment = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    if environment.get("format") != 1 or environment.get("product") != "AI Customer Environment":
+        raise RuntimeError("环境包清单无效，请重新解压完整环境包")
+    version = str(environment.get("version") or "")
+    if not VERSION_PATTERN.fullmatch(version) or version != expected:
+        raise RuntimeError(f"程序需要环境包 {expected}，当前环境包为 {version or '未知版本'}")
+    required_paths = environment.get("required_paths")
+    if not isinstance(required_paths, list) or not required_paths:
+        raise RuntimeError("环境包清单缺少必需文件列表")
+    seen: set[str] = set()
+    for value in required_paths:
+        relative = _safe_release_path(value)
+        if relative in seen:
+            raise RuntimeError(f"环境包清单包含重复路径：{relative}")
+        seen.add(relative)
+        if not (install_root / "runtime" / Path(*PurePosixPath(relative).parts)).is_file():
+            raise RuntimeError(f"环境包文件不完整：runtime/{relative}")
     return version
 
 
 def launch_current(install_root: Path) -> Path:
-    executable = version_executable(install_root, current_version(install_root))
-    subprocess.Popen(
+    current_version(install_root)
+    executable = application_executable(install_root)
+    process = subprocess.Popen(
         [str(executable)],
-        cwd=str(executable.parent),
+        cwd=str(install_root),
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
+    process.wait()
     return executable
 
 
@@ -323,12 +355,11 @@ def _show_error(message: str) -> None:
 def main() -> None:
     source_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
     try:
-        if (source_root / MANIFEST_NAME).is_file():
-            install_release(source_root, default_install_root())
-            launch_current(default_install_root())
-        else:
-            apply_remote_update(source_root)
-            launch_current(source_root)
+        current_version(source_root)
+        validate_environment(source_root)
+        apply_remote_update(source_root)
+        validate_environment(source_root)
+        launch_current(source_root)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         _show_error(str(exc))
         raise SystemExit(1) from exc

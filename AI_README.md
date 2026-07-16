@@ -405,8 +405,8 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `data/video_generation/cache_videos`：图片转视频和在线素材缓存，不在原始资产旁写派生文件。
 - `data/video_generation/models`：按需下载的Whisper模型；默认模型为 `large-v3`，发布包不预装。
 - `data/video_generation/tasks/<job-id>/attempt-N`：单次生成脚本、音频、字幕、中间视频和最终视频。
-- `data/voice_models/VoxCPM2`：视频与后续数字人共用的VoxCPM2模型缓存，不随程序更新删除。
-- `runtimes/voxcpm2`：按需安装的音色克隆推理组件、断点下载文件和当前组件指针；位于安装根目录但不进入业务数据备份。
+- `runtime/models/VoxCPM2`：便携交付中的VoxCPM2模型；来自环境 ZIP，不随程序更新删除。源码开发环境仍使用 `data/voice_models/VoxCPM2`。
+- `runtime/components/voxcpm2`：便携交付中的音色克隆推理组件、后续断点下载文件和当前组件指针；来自环境 ZIP，不进入业务数据备份。源码开发环境仍使用根目录 `runtimes/voxcpm2`。
 - `data/social_publish/accounts`：平台登录状态文件，数据库和API只保存/返回账号业务信息，不返回Cookie内容或路径。
 - `data/social_publish/qrcode`：扫码登录二维码；`data/social_publish/tasks/<task-id>` 保存当次失败截图和诊断文件。
 
@@ -414,9 +414,9 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 克隆音色采用独立的 `voice_profiles` 业务实体，不隶属于视频任务。通用入口 `backend/app/services/voice_synthesis.py::synthesize_profile()` 只接收音色ID、文字、输出路径、语速和音量；视频引擎通过 `voxcpm2:<profile-id>` 调用，后续数字人模块直接复用同一入口，不重复实现声音克隆。VoxCPM2使用官方 `voxcpm==2.0.3` Python API，但PyTorch、CUDA DLL和VoxCPM代码不再加载进主程序：`VoxCPM_Runtime.exe --serve` 使用逐行JSON协议提供本地推理，第一次合成时加载模型并在独立进程内缓存；组件退出、无效响应和15分钟超时都会返回明确错误。
 
-开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。`script/build_voxcpm_component.ps1` 单独生成组件，`script/publish_voxcpm_component.ps1` 负责压缩、Ed25519签名、上传和登记；普通客户在“内容设置 → 内容环境”点击“安装”即可。下载任务进入统一队列，支持进度、取消、HTTP Range断点续传、大小/SHA-256校验、签名清单校验、安全解压和原子切换；组件安装后，模型权重仍在第一次实际合成时下载。
+开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。`script/build_voxcpm_component.ps1` 单独生成组件，`script/publish_voxcpm_component.ps1` 仍可用于以后更新组件；新的 Environment ZIP 会直接预置当前已构建组件和模型，因此普通客户首次使用不再点击下载依赖。
 
-版本 `1.2.0` 的既有正式发布目录为 `dist/releases/AI_Customer_1.2.0_20260711_190154`，schema为7。该历史包仍使用Patchright Chromium并把VoxCPM2/PyTorch打进主程序；从 `1.2.1` 起主包改为CloakBrowser加官方Playwright驱动，音色克隆改为可选运行组件。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；模型权重仍保存在稳定 `data/voice_models/VoxCPM2`，不重复塞入程序版本或组件包。
+版本 `1.2.0` 的 `dist/releases/AI_Customer_1.2.0_20260711_190154` 仅是旧架构历史产物，不再用于新客户交付或远程更新。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；新架构把对应组件和模型统一放入 Environment ZIP。
 
 背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
 
@@ -450,7 +450,7 @@ Sealos 授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试
 
 Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存主程序版本状态，使用 `AI_Customer-ComponentRelease` 保存可选组件版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并修改启用状态。主程序更新继续支持强制更新和灰度比例；音色克隆组件只向已有active设备且授权包含`content`权益的客户端下发，不做自动安装。客户端会验证Ed25519签名、ZIP大小和SHA-256，组件还会限制产品名、组件名、平台、架构和最低主程序版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时不会改变已安装版本。发布脚本在Windows下使用扩展长路径读取发布文件，超过传统`MAX_PATH`的运行库也能归档。详细请求格式见根目录 `sealos接口文档.md`。
 
-发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本会自动选择最新完成的发布目录，从清单读取版本，使用本机仓库外正式私钥，并在需要远端发布时通过已有 SSH 私钥读取 Sealos 管理 Token。无参数运行只做本地校验、压缩、签名和验签；`-Upload` 上传并登记但保持禁用；`-Enable` 自动上传、登记并按默认 10% 灰度启用。归档严格以 `release-manifest.json` 为文件白名单，发布目录里运行程序产生的未声明数据库或日志只会提示并排除，不会进入更新包。同版本对象已存在时，脚本会查询发布登记：若版本、大小和 SHA-256 一致则报告“已发布”且不重复上传；不一致则拒绝覆盖并要求递增版本号。高级场景才需要覆盖发布目录、版本、通道、密钥路径或灰度比例。所有产物写入唯一的 `output/release_publish_<版本>_<时间>/`，不会覆盖旧产物。
+发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本默认从 `deliverables/` 选择最新的 `AI_Customer_Program_<版本>.zip`，校验 ZIP 内清单、文件白名单、大小和 SHA-256 后，直接签名并上传这一个客户程序 ZIP，不再从中间发布目录重复压缩。无参数运行只做本地校验、签名和验签；`-Upload` 上传并登记但保持禁用；`-Enable` 自动上传、登记并按默认 10% 灰度启用；需要指定文件时使用 `-ProgramZip <完整路径>`。同版本对象已存在时，脚本会查询发布登记：若版本、大小和 SHA-256 一致则报告“已发布”且不重复上传；不一致则拒绝覆盖并要求递增版本号。签名记录写入唯一的 `output/release_publish_<版本>_<时间>/`，真正对外交付的 ZIP 始终只在 `deliverables/<版本>/`。
 
 音色克隆组件的发布命令与主程序一致：先运行 `script/build_voxcpm_component.ps1 -Version 1.0.0`，再运行 `script/publish_voxcpm_component.ps1`。无参数只准备本地签名产物，`-Upload` 上传登记但保持禁用，`-Enable` 才允许客户端安装。组件版本独立于主程序版本；已存在但内容不同的版本禁止覆盖，必须递增组件版本。
 
@@ -485,38 +485,39 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - 普通代码修改只执行与改动范围相称的源码测试、类型检查或生产前端构建；生产前端构建不等于 Windows 安装包构建。
 - 只有用户明确要求打包时才递增发布版本并执行完整打包链路；用户只要求修改代码时，不因修改完成而自动生成新版本安装包。
 
-### `output/` 目录说明
+### 唯一交付目录
 
-`output/` 是被 Git 忽略的本地构建工作区，不是源码目录，也不保存客户业务数据。`b_*` 和 `package_build_*` 是 PyInstaller 构建缓存，`release_publish_*` 是主程序签名 ZIP，`voxcpm_*` 是音色组件构建、签名或依赖下载缓存，`smoke_*`、`probe_*` 和日志属于测试诊断产物。一次主程序发布可能同时在 `output/b_*/dist`、`dist/releases/*` 和 `output/release_publish_*` 保留构建目录、正式发布目录和压缩包三份内容；包含 PyTorch 的历史构建占用会更大。长期反复打包而不清理会快速占用数十 GiB。
+`deliverables/<程序版本>/` 是唯一可以发给客户或上传的目录，只包含四项：`AI_Customer_Program_<程序版本>.zip`、`AI_Customer_Environment_<环境版本>.zip`、`SHA256.txt` 和 `README.txt`。`dist/releases/` 和 `output/` 中的历史文件都不是新架构交付物。`output/` 仍是被 Git 忽略的 PyInstaller、组装、签名和测试中间工作区；脚本不自动删除历史文件，维护人员需要清理时必须逐个确认明确目录。
 
-构建完成后，PyInstaller 工作目录、旧版构建缓存、旧版签名包和测试诊断产物均可由维护人员手动清理，不影响源码、已安装程序或 `%LOCALAPPDATA%/AI_Customer/data`。尚未上传的最新 `release_publish_*`、最新 `voxcpm_publish_*` 应保留；`voxcpm_downloads` 可删除，但后续安装或构建需要重新下载依赖。打包脚本自身不自动清理历史目录，避免误删仍需交付或追溯的发布产物。
+当前产品版本唯一地定义在 `backend/app/version.py`，本轮仍为 `1.2.3`；`-Version` 省略时自动读取该值，显式传入不同值时构建会停止，避免 EXE 内版本与发布清单不一致。环境版本由构建参数独立管理，初始为 `1.0.0`。只有明确要求正式打包时才执行：
 
-当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.3`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.3` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、上游许可证和全部字体，不再收集VoxCPM2、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。构建后会拒绝任何`r/patchright`目录，并要求官方`r/playwright/driver/node.exe`真实存在。每次使用带版本和时间戳的新目录，不删除旧构建。
+```powershell
+# 生成程序 ZIP 和环境 ZIP；程序版本默认读取 backend/app/version.py。
+.\script\build_package.ps1 -Version 1.2.3 -EnvironmentVersion 1.0.0
+```
 
-远程更新测试使用重新构建的 `dist/releases/AI_Customer_1.2.1_20260716_225733` 作为本机基线，未压缩1.67 GiB，已安装到稳定目录并完成许可证激活。更新目标为 `dist/releases/AI_Customer_1.2.2_20260716_230855`，未压缩1.67 GiB；签名ZIP为687233909字节，SHA-256为`f85bb168a04a85b21c01fa22389bb99994d562a234cbde8c71739be641e230e3`，已登记到Sealos `stable` 通道并启用100%灰度。测试机已通过稳定启动器完整下载、校验、安装并从 `1.2.1` 原子切换到 `1.2.2`，`/api/health`返回200和版本`1.2.2`；授权身份、稳定数据目录及旧版可执行文件均保留。两次构建均通过15项前端测试和394项后端测试。独立组件仍为 `dist/components/AI_Customer_VoxCPM2_1.0.0_20260716_210013`，未压缩4.94 GiB、签名ZIP 2.93 GiB；本轮主程序更新测试不重新发布该组件。
+脚本先执行前端测试与生产构建、完整后端测试，再使用 PyInstaller 生成 `AI_Customer_App.exe` 和稳定入口 `AI_Customer.exe`，最后由 `script/assemble_delivery.py` 按所有权拆成两个 ZIP。缺少 PyInstaller、CloakBrowser、MyCrawler 虚拟环境、VoxCPM2 组件或模型时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
 
-多标签页修复版本为 `dist/releases/AI_Customer_1.2.3_20260716_234533`，本地签名产物位于 `output/release_publish_1.2.3_20260716_235446`，尚未上传或启用远程下发。该版本通过396项后端测试、15项前端测试和生产构建；真实EXE已验证内部登录参数直接进入登录子进程，无工作台启动，Windows单实例锁也已通过重复获取烟雾测试。
+程序 ZIP 保存经常变化并允许远程更新的文件：`AI_Customer.exe`、`AI_Customer_App.exe`、`runtime/frontend_dist/`、`runtime/app/`、说明和发布清单。环境 ZIP 保存体积大且较少变化的依赖：PyInstaller Python 运行库、Playwright、CloakBrowser 浏览器、便携 Python、MyCrawler 源码及其 site-packages、VoxCPM2/PyTorch/CUDA 推理组件和模型。MyCrawler 上游 `LICENSE` 随环境包保留；本项目作者已在本次构建改造中明确确认其为 MyCrawler 作者并授权随本产品打包。
 
-前端 `package.json` 与 `package-lock.json` 的应用版本同步为 `1.2.3`，但产品发布仍只以 `backend/app/version.py` 和发布清单为准，避免三个版本源分别驱动打包逻辑。
+开发环境不改成便携结构：后端继续使用 `backend/.venv`，前端继续使用 `frontend/node_modules`，MyCrawler 继续使用 `MyCrawler/.venv`，本地运行仍从源码目录启动。根目录 `runtime/` 只属于客户解压后的便携版本，不要求开发者手工维护。
 
-发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。客户只需双击发布包根目录的 `AI_Customer.exe`：它先校验清单中声明文件的大小和 SHA-256，只复制声明的应用文件到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`，再替换稳定启动器并原子切换 `current-version.json`，最后自动启动工作台。发布包因运行而产生的数据库等额外文件会被忽略，避免阻断安装；它们也不会进入版本目录。旧版本和稳定 `data/` 都保留。`script/install_release.ps1` 与 `script/switch_installed_version.ps1` 仅作为维护人员的手动安装、回滚工具，不要求客户使用。
-
-版本应用的业务库、备份、引流图片、内容资产、Whisper模型、VoxCPM模型、视频生成结果和浏览器登录状态始终放在安装根目录的 `data/`，不会写进 `versions/`。可重新下载的独立推理程序放在安装根目录的 `runtimes/`，不会进入业务备份。启动器会注入这两个稳定目录和预置采集组件路径，并在每次数据库初始化时更新内部路径设置，因此从旧版本升级后不会继续使用旧版本目录；客户设置页不再提供路径编辑入口。
+客户首次使用时先解压 Program ZIP，再把 Environment ZIP 解压到同一目录并合并 `runtime/`，最后只双击最外层 `AI_Customer.exe`。业务库、备份、引流图片、内容资产、视频结果和浏览器登录状态统一保存在同目录的 `data/`；程序更新只覆盖程序清单声明的文件，不覆盖 `data/`，也不覆盖环境依赖。环境版本不匹配或文件缺失时，稳定入口会明确提示重新解压指定环境包。
 
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。打包环境中的平台登录子进程使用 `--internal-platform-login` 内部入口，不再把 `AI_Customer.exe` 当作 Python 执行；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
-稳定启动器已经实现授权身份读取、远端更新检查、限时下载、Ed25519验签、大小/SHA-256校验、清单白名单解压和版本切换。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把ZIP手工放入对象存储。数据库schema升级前仍会按迁移规则备份；如果需要回到无法读取新schema的旧程序，必须同时恢复对应迁移前备份。
+稳定启动器已经实现授权身份读取、远端更新检查、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；只有稳定启动器自身发生变更时，才重新手动交付整个 Program ZIP。签名更新清单同时声明环境版本，客户端只自动安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。数据库 schema 升级前仍按迁移规则备份；如果需要回到无法读取新 schema 的旧程序，必须同时恢复对应迁移前备份。
 
 公共 `GET /api/settings` 会屏蔽采集路径、采集库路径、授权服务地址和 AI API Key，只返回 `ai_api_key_configured`；提交空 API Key 表示保留原值。`PUT /api/settings` 使用显式白名单，不能写入任意内部设置。环境检查只返回“采集组件/采集存储正常或待处理”和业务质量，不返回绝对路径、原始表名或列名。授权端点集中在 `product_config.py` 并做轻量字符串隐藏，可降低直接 strings 扫描得到地址的概率，但这不是密码学安全边界。
 
-发布包不包含 AI_Customer 的 Python/Vue 源文件，优化字节码和内部配置收口只能增加静态分析成本，不能让本地客户端绝对不可逆向。真正的授权与设备限制仍由远端服务执行；AI Key 也不通过 API 回传。当前发布包不自动包含约 1GB 的采集组件和其上游源码，正式分发前需由发布方按许可边界决定是否预置。
+程序 ZIP 不包含 AI_Customer 的 Python/Vue 源文件，优化字节码和内部配置收口只能增加静态分析成本，不能让本地客户端绝对不可逆向。真正的授权与设备限制仍由远端服务执行；AI Key 也不通过 API 回传。环境 ZIP 明确包含 MyCrawler 源码和上游许可证，这是已授权的交付选择，不应把环境 ZIP 当作源码保密边界。
 
 打包脚本显式收集CloakBrowser、Playwright、OpenCV、QR编码库、发布引擎脚本和许可说明，并把开发环境已安装的CloakBrowser专用内核复制到应用目录。稳定启动器通过 `CLOAKBROWSER_BINARY_PATH` 指向该内核，客户无需另装Python或浏览器。环境检查验证CloakBrowser、二维码依赖和专用内核路径。
 
 ## 已知限制
 
 - 抖音、快手和小红书发布依赖平台当前创作者页面、账号权限和风控策略；平台改版后可能需要更新选择器。自动测试只使用模拟页面，真实扫码和发布验收必须由获得授权的测试账号完成。
-- MyCrawler 仓库许可证声明为非商业学习使用，本项目按本地自用验证处理。
+- MyCrawler 仓库文件中仍保留非商业学习许可证文本；打包授权依据为用户以 MyCrawler 作者身份在本次任务中的明确授权，正式商业交付前仍建议留存独立书面授权凭证。
 - 首版只覆盖文档要求的平台：抖音、小红书、快手。
 - 自动测试默认使用模拟 MyCrawler SQLite，不会触发真实采集。
 - 当前运行时固定为 Python 3.11；Pydub 仍依赖标准库中已弃用的 `audioop`，因此升级到 Python 3.13 前必须先替换或升级该音频处理链路。

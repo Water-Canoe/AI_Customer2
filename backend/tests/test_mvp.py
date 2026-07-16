@@ -99,29 +99,39 @@ def test_browser_queue_serializes_shared_browser_access() -> None:
     assert any(event.startswith("second:等待浏览器资源") for event in events)
 
 
-def test_packaged_launcher_keeps_data_outside_version_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_packaged_launcher_uses_portable_program_and_environment_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     launcher_path = BACKEND_ROOT.parent / "packaging" / "ai_customer_launcher.py"
     spec = importlib.util.spec_from_file_location("ai_customer_launcher_test", launcher_path)
     assert spec and spec.loader
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
 
-    version_dir = tmp_path / "versions" / "1.0.1"
-    version_dir.mkdir(parents=True)
-    cloakbrowser_binary = version_dir / "r" / "cloakbrowser_browser" / "chrome.exe"
+    runtime_dir = tmp_path / "runtime"
+    cloakbrowser_binary = runtime_dir / "cloakbrowser_browser" / "chrome.exe"
     cloakbrowser_binary.parent.mkdir(parents=True)
     cloakbrowser_binary.touch()
-    (tmp_path / "MyCrawler").mkdir()
+    (runtime_dir / "MyCrawler").mkdir()
+    crawler_python = runtime_dir / "python" / "python.exe"
+    crawler_python.parent.mkdir()
+    crawler_python.touch()
+    (runtime_dir / "models").mkdir()
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.delenv("AI_CUSTOMER_DATA_DIR", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_DB", raising=False)
+    monkeypatch.delenv("AI_CUSTOMER_RUNTIME_DIR", raising=False)
+    monkeypatch.delenv("AI_CUSTOMER_VOICE_MODELS_DIR", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", raising=False)
+    monkeypatch.delenv("AI_CUSTOMER_CRAWLER_PYTHON", raising=False)
     monkeypatch.delenv("CLOAKBROWSER_BINARY_PATH", raising=False)
 
-    launcher.configure_environment(version_dir)
+    launcher.configure_environment(tmp_path)
 
     assert os.environ["AI_CUSTOMER_DATA_DIR"] == str(tmp_path / "data")
     assert os.environ["AI_CUSTOMER_DB"] == str(tmp_path / "data" / "ai_customer.sqlite3")
-    assert os.environ["AI_CUSTOMER_MEDIA_CRAWLER_PATH"] == str(tmp_path / "MyCrawler")
+    assert os.environ["AI_CUSTOMER_RUNTIME_DIR"] == str(runtime_dir / "components")
+    assert os.environ["AI_CUSTOMER_VOICE_MODELS_DIR"] == str(runtime_dir / "models")
+    assert os.environ["AI_CUSTOMER_MEDIA_CRAWLER_PATH"] == str(runtime_dir / "MyCrawler")
+    assert os.environ["AI_CUSTOMER_CRAWLER_PYTHON"] == str(crawler_python)
     assert os.environ["CLOAKBROWSER_BINARY_PATH"] == str(cloakbrowser_binary)
 
 
@@ -3640,6 +3650,25 @@ def test_account_analysis_subprocess_env_limits_douyin_creator_videos(tmp_path: 
     refreshed_task = crawler_adapter.get_task(str(customer_task["id"]))
     skip_env = crawler_adapter._media_crawler_subprocess_env({}, refreshed_task or {})
     assert skip_env["AI_CUSTOMER_SKIP_CONTENT_IDS"] == "10001,10002"
+
+
+def test_packaged_crawler_uses_portable_python_and_playwright_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import crawler_adapter
+
+    crawler_python = tmp_path / "runtime" / "python" / "python.exe"
+    crawler_python.parent.mkdir(parents=True)
+    crawler_python.touch()
+    media_dir = tmp_path / "runtime" / "MyCrawler"
+    driver = media_dir / ".venv" / "Lib" / "site-packages" / "playwright" / "driver"
+    driver.mkdir(parents=True)
+    monkeypatch.setenv("AI_CUSTOMER_CRAWLER_PYTHON", str(crawler_python))
+
+    env = crawler_adapter._media_crawler_subprocess_env({"PATH": "system-path"}, {}, media_dir)
+
+    assert crawler_adapter._python_launcher() == str(crawler_python)
+    assert env["PATH"].split(os.pathsep)[0] == str(driver)
+    assert str(media_dir / ".venv" / "Lib" / "site-packages") in env["PYTHONPATH"]
 
 
 def test_content_cutoff_subprocess_env_applies_without_comment_collection(tmp_path: Path) -> None:

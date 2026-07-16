@@ -1,18 +1,22 @@
-AI拓客工具发布包
+AI拓客工具（便携版）
 
-给客户的唯一操作：
+首次使用只有三步：
 
-1. 双击本目录最外层的 AI_Customer.exe。
-2. 首次使用会自动安装；完成授权后，之后正常双击已安装程序即可自动检查、下载并安装新版本。
+1. 解压 AI_Customer_Program_<版本>.zip。
+2. 把 AI_Customer_Environment_<版本>.zip 解压到同一个目录；看到 runtime 文件夹时选择合并。
+3. 双击最外层 AI_Customer.exe。
 
-请勿运行 app 目录里的 AI_Customer.exe，也不需要运行任何 PowerShell 脚本。
+以后打开和关闭：
 
-程序会安装到当前 Windows 用户的本地应用目录。业务数据、登录状态、内容资产、视频成品、Whisper模型和备份会保留在 data 目录中，更新程序不会覆盖这些数据。
+- 打开：只双击 AI_Customer.exe，不要直接运行 AI_Customer_App.exe。
+- 关闭：关闭 AI_Customer_App 的运行窗口；稳定启动器会随之退出，不会保留旧服务进程。
+
+目录说明：
+
+- data：业务数据库、登录状态、内容资产、视频成品和备份，更新不会覆盖。
+- runtime：统一运行环境，来自环境 ZIP；不需要安装 Python、Playwright、CloakBrowser、MyCrawler 或 VoxCPM2。
+- updates：自动更新下载的临时文件。
+
+自动更新只替换程序 ZIP 所属文件，不覆盖 data，也不覆盖环境依赖。若新程序明确要求新版环境，启动时会直接提示所需环境版本。
 
 首次打开后，请进入“设置” > “授权与设备”，填写产品授权码并校验。
-
-技术说明（仅供维护人员）：
-
-- install-release.ps1 是手动安装工具，通常不需要使用。
-- switch-version.ps1 可切换到已安装的旧版本，不会修改业务数据。
-- 发布包会在自动安装前校验清单中声明文件的大小和 SHA-256；拷贝过程中出现的运行时数据库文件会被忽略，不会阻断安装。

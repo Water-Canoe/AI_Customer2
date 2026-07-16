@@ -30,49 +30,96 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_bootstrap_resolves_only_valid_installed_version(tmp_path: Path) -> None:
+def test_bootstrap_resolves_only_valid_portable_version(tmp_path: Path) -> None:
     ai_customer_bootstrap = _bootstrap_module()
-    version_dir = tmp_path / "versions" / "1.1.0"
-    version_dir.mkdir(parents=True)
-    executable = version_dir / "AI_Customer.exe"
+    executable = tmp_path / "AI_Customer_App.exe"
     executable.write_bytes(b"test")
-    (tmp_path / "current-version.json").write_text(json.dumps({"version": "1.1.0"}), encoding="utf-8")
+    current_manifest = {
+        "format": 1,
+        "product": "AI Customer Desktop",
+        "version": "1.1.0",
+        "environment_version": "1.0.0",
+        "entrypoint": "AI_Customer_App.exe",
+    }
+    (tmp_path / "release-manifest.json").write_text(json.dumps(current_manifest), encoding="utf-8")
 
     assert ai_customer_bootstrap.current_version(tmp_path) == "1.1.0"
-    assert ai_customer_bootstrap.version_executable(tmp_path, "1.1.0") == executable
+    assert ai_customer_bootstrap.application_executable(tmp_path) == executable
 
-    (tmp_path / "current-version.json").write_text(json.dumps({"version": "../unsafe"}), encoding="utf-8")
+    current_manifest["version"] = "../unsafe"
+    (tmp_path / "release-manifest.json").write_text(json.dumps(current_manifest), encoding="utf-8")
     with pytest.raises(RuntimeError, match="格式不正确"):
         ai_customer_bootstrap.current_version(tmp_path)
 
 
-def test_release_install_uses_manifest_allowlist_and_preserves_extra_runtime_files(tmp_path: Path) -> None:
+def test_release_update_replaces_program_files_and_preserves_environment_and_data(tmp_path: Path) -> None:
     ai_customer_bootstrap = _bootstrap_module()
     release = tmp_path / "release"
-    app = release / "app"
-    app.mkdir(parents=True)
+    frontend = release / "runtime" / "frontend_dist"
+    frontend.mkdir(parents=True)
     (release / "AI_Customer.exe").write_bytes(b"launcher")
-    (app / "AI_Customer.exe").write_bytes(b"application")
-    extra_database = app / "data" / "ai_customer.sqlite3"
-    extra_database.parent.mkdir()
-    extra_database.write_bytes(b"runtime-data")
-    declared = ["AI_Customer.exe", "app/AI_Customer.exe"]
+    (release / "AI_Customer_App.exe").write_bytes(b"application-new")
+    (frontend / "index.html").write_bytes(b"frontend-new")
+    declared = ["AI_Customer_App.exe", "runtime/frontend_dist/index.html"]
     files = [
         {"path": relative, "size": (release / relative).stat().st_size, "sha256": _sha256(release / relative)}
         for relative in declared
     ]
     (release / "release-manifest.json").write_text(
-        json.dumps({"format": 1, "product": "AI Customer Desktop", "version": "1.1.1", "files": files}),
+        json.dumps(
+            {
+                "format": 1,
+                "product": "AI Customer Desktop",
+                "version": "1.1.1",
+                "environment_version": "1.0.0",
+                "entrypoint": "AI_Customer_App.exe",
+                "files": files,
+            }
+        ),
         encoding="utf-8",
     )
 
     install_root = tmp_path / "installed"
-    assert ai_customer_bootstrap.install_release(release, install_root) == "1.1.1"
+    (install_root / "runtime" / "python").mkdir(parents=True)
+    (install_root / "runtime" / "python" / "python.exe").write_bytes(b"environment")
+    (install_root / "data").mkdir()
+    (install_root / "data" / "ai_customer.sqlite3").write_bytes(b"customer-data")
+    (install_root / "AI_Customer.exe").write_bytes(b"stable-running-launcher")
 
-    assert (install_root / "AI_Customer.exe").read_bytes() == b"launcher"
-    assert (install_root / "versions" / "1.1.1" / "AI_Customer.exe").read_bytes() == b"application"
-    assert not (install_root / "versions" / "1.1.1" / "data" / "ai_customer.sqlite3").exists()
-    assert json.loads((install_root / "current-version.json").read_text(encoding="utf-8"))["version"] == "1.1.1"
+    assert ai_customer_bootstrap.apply_release(release, install_root) == "1.1.1"
+
+    assert (install_root / "AI_Customer.exe").read_bytes() == b"stable-running-launcher"
+    assert (install_root / "AI_Customer_App.exe").read_bytes() == b"application-new"
+    assert (install_root / "runtime" / "frontend_dist" / "index.html").read_bytes() == b"frontend-new"
+    assert (install_root / "runtime" / "python" / "python.exe").read_bytes() == b"environment"
+    assert (install_root / "data" / "ai_customer.sqlite3").read_bytes() == b"customer-data"
+    assert json.loads((install_root / "release-manifest.json").read_text(encoding="utf-8"))["version"] == "1.1.1"
+
+
+def test_environment_manifest_requires_matching_version_and_files(tmp_path: Path) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+    (tmp_path / "release-manifest.json").write_text(
+        json.dumps({"version": "1.1.1", "environment_version": "1.0.0"}), encoding="utf-8"
+    )
+    runtime = tmp_path / "runtime"
+    (runtime / "python").mkdir(parents=True)
+    (runtime / "python" / "python.exe").write_bytes(b"python")
+    (runtime / "environment-manifest.json").write_text(
+        json.dumps(
+            {
+                "format": 1,
+                "product": "AI Customer Environment",
+                "version": "1.0.0",
+                "required_paths": ["python/python.exe"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert ai_customer_bootstrap.validate_environment(tmp_path) == "1.0.0"
+    (runtime / "python" / "python.exe").unlink()
+    with pytest.raises(RuntimeError, match="环境包文件不完整"):
+        ai_customer_bootstrap.validate_environment(tmp_path)
 
 
 def test_remote_update_offer_requires_a_valid_signature(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,6 +140,7 @@ def test_remote_update_offer_requires_a_valid_signature(monkeypatch: pytest.Monk
             "version": "1.1.2",
             "platform": "windows",
             "arch": "x64",
+            "environment_version": "1.0.0",
             "min_updater_version": ai_customer_bootstrap.UPDATER_VERSION,
             "package": {"size": 123, "sha256": "a" * 64},
         },
@@ -107,13 +155,15 @@ def test_remote_update_offer_requires_a_valid_signature(monkeypatch: pytest.Monk
         "downloadUrl": "https://example.test/AI_Customer_1.1.2.zip",
     }
 
-    assert ai_customer_bootstrap._validate_update_offer(offer, "1.1.1") == {
+    assert ai_customer_bootstrap._validate_update_offer(offer, "1.1.1", "1.0.0") == {
         "version": "1.1.2",
         "size": 123,
         "sha256": "a" * 64,
         "download_url": "https://example.test/AI_Customer_1.1.2.zip",
     }
+    with pytest.raises(RuntimeError, match="不适用于当前程序"):
+        ai_customer_bootstrap._validate_update_offer(offer, "1.1.1", "2.0.0")
 
     offer["signature"] = base64.b64encode(b"0" * 64).decode("ascii")
     with pytest.raises(InvalidSignature):
-        ai_customer_bootstrap._validate_update_offer(offer, "1.1.1")
+        ai_customer_bootstrap._validate_update_offer(offer, "1.1.1", "1.0.0")

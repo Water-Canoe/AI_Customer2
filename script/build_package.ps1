@@ -1,23 +1,34 @@
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [string]$EnvironmentVersion = "1.0.0",
+    [string]$VoxComponentPath = "",
+    [string]$VoiceModelsPath = ""
 )
 
 $ErrorActionPreference = "Stop"
+$SemVerPattern = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
 
-# Resolve every build path from the repository root.
-$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+# 所有路径都从仓库根目录计算，避免在不同终端目录执行时打包错文件。
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendDir = Join-Path $ProjectRoot "backend"
 $FrontendDir = Join-Path $ProjectRoot "frontend"
+$CrawlerRoot = Join-Path $ProjectRoot "MyCrawler"
 $AppLauncher = Join-Path $ProjectRoot "packaging\ai_customer_launcher.py"
 $StableLauncher = Join-Path $ProjectRoot "packaging\ai_customer_bootstrap.py"
+$DeliveryAssembler = Join-Path $ProjectRoot "script\assemble_delivery.py"
 $Readme = Join-Path $ProjectRoot "packaging\PACKAGE_README.txt"
-$Installer = Join-Path $ProjectRoot "script\install_release.ps1"
-$Switcher = Join-Path $ProjectRoot "script\switch_installed_version.ps1"
 $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
+$CrawlerPython = Join-Path $CrawlerRoot ".venv\Scripts\python.exe"
+$CrawlerSitePackages = Join-Path $CrawlerRoot ".venv\Lib\site-packages"
 
-# Stop when required local dependencies are missing; packaging never installs them implicitly.
-if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
-    throw "Backend virtual environment not found: $Python"
+# 构建脚本只校验依赖，不会在用户不知情的情况下联网安装。
+foreach ($RequiredFile in @($Python, $CrawlerPython, $AppLauncher, $StableLauncher, $DeliveryAssembler, $Readme)) {
+    if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
+        throw "Required build file is missing: $RequiredFile"
+    }
+}
+if (-not (Test-Path -LiteralPath $CrawlerSitePackages -PathType Container)) {
+    throw "MyCrawler virtual environment is incomplete: $CrawlerSitePackages"
 }
 & $Python -c "import PyInstaller"
 if ($LASTEXITCODE -ne 0) {
@@ -25,45 +36,66 @@ if ($LASTEXITCODE -ne 0) {
 }
 $CloakBrowserPath = (& $Python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())").Trim()
 if (-not (Test-Path -LiteralPath $CloakBrowserPath -PathType Leaf)) {
-    throw "CloakBrowser binary is missing. Run backend/.venv/Scripts/python.exe -m cloakbrowser install before packaging."
+    throw "CloakBrowser is missing. Run backend/.venv/Scripts/python.exe -m cloakbrowser install first."
 }
 $CloakBrowserDir = Split-Path -Parent $CloakBrowserPath
+$CrawlerPythonRoot = (& $CrawlerPython -c "import sys; print(sys.base_prefix)").Trim()
+if (-not (Test-Path -LiteralPath (Join-Path $CrawlerPythonRoot "python.exe") -PathType Leaf)) {
+    throw "MyCrawler base Python is missing: $CrawlerPythonRoot"
+}
 
-# Read the product version from source unless the caller supplied one.
+# 程序版本只有一个来源，避免 EXE 内版本与发布清单不一致。
+$SourceVersion = (& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.version import APP_VERSION; print(APP_VERSION)").Trim()
 if (-not $Version) {
-    $Version = (& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.version import APP_VERSION; print(APP_VERSION)").Trim()
+    $Version = $SourceVersion
 }
-if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
-    throw "Version must use semantic version format, for example 1.1.0"
+elseif ($Version -ne $SourceVersion) {
+    throw "Version must match backend/app/version.py ($SourceVersion)"
+}
+if ($Version -notmatch $SemVerPattern -or $EnvironmentVersion -notmatch $SemVerPattern) {
+    throw "Version and EnvironmentVersion must use semantic version format, for example 1.2.3"
+}
+if (-not $VoiceModelsPath) {
+    $VoiceModelsPath = Join-Path $ProjectRoot "data\voice_models"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $VoiceModelsPath "VoxCPM2") -PathType Container)) {
+    throw "VoxCPM2 model files are missing: $VoiceModelsPath\VoxCPM2"
+}
+if (-not $VoxComponentPath) {
+    $ComponentRoot = Join-Path $ProjectRoot "dist\components"
+    $VoxComponentPath = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+        (Test-Path -LiteralPath (Join-Path $_.FullName "component-info.json") -PathType Leaf) -and
+        (Test-Path -LiteralPath (Join-Path $_.FullName "VoxCPM_Runtime.exe") -PathType Leaf)
+    } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0].FullName
+}
+if (-not $VoxComponentPath -or -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath "VoxCPM_Runtime.exe") -PathType Leaf)) {
+    throw "A completed VoxCPM2 component is required through -VoxComponentPath"
 }
 
-# Use unique build and release folders so the script never deletes an older package.
+# 中间目录带时间戳且从不删除；客户只看 deliverables/<版本>。
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$BuildRoot = Join-Path $ProjectRoot "output\b_${Version}_$Stamp"
+$BuildRoot = Join-Path $ProjectRoot "output\build_${Version}_$Stamp"
 $BuildDist = Join-Path $BuildRoot "dist"
 $BuildWork = Join-Path $BuildRoot "work"
 $BuildSpec = Join-Path $BuildRoot "spec"
-$ReleaseDir = Join-Path $ProjectRoot "dist\releases\AI_Customer_${Version}_$Stamp"
-if ((Test-Path -LiteralPath $BuildRoot) -or (Test-Path -LiteralPath $ReleaseDir)) {
-    throw "Unique build output already exists; wait one second and retry."
+$StagingRoot = Join-Path $BuildRoot "delivery-staging"
+$DeliveryRoot = Join-Path $ProjectRoot "deliverables\$Version"
+if ((Test-Path -LiteralPath $BuildRoot) -or (Test-Path -LiteralPath $DeliveryRoot)) {
+    throw "Build or delivery output already exists. Increase the product version before rebuilding."
 }
-New-Item -ItemType Directory -Path $BuildDist, $BuildWork, $BuildSpec, $ReleaseDir | Out-Null
+New-Item -ItemType Directory -Path $BuildDist, $BuildWork, $BuildSpec | Out-Null
 
-# Run frontend tests before producing release assets.
+# 先通过现有前后端测试，确保交付物来自已验证源码。
 Push-Location $FrontendDir
 try {
     & npm test
     if ($LASTEXITCODE -ne 0) { throw "Frontend tests failed" }
-
-    # Build the production frontend after type checking.
     & npm run build
     if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
 }
 finally {
     Pop-Location
 }
-
-# Run the full backend suite against the same source that will be packaged.
 Push-Location $ProjectRoot
 try {
     $env:PYTHONPATH = $BackendDir
@@ -74,12 +106,12 @@ finally {
     Pop-Location
 }
 
-# Build the versioned application folder with optimized bytecode and no source files.
+# 主程序只保留自身代码和前端资源；依赖文件统一落入 runtime。
 & $Python -m PyInstaller `
-    --name "AI_Customer" `
+    --name "AI_Customer_App" `
     --onedir `
     --optimize 2 `
-    --contents-directory "r" `
+    --contents-directory "runtime" `
     --distpath $BuildDist `
     --workpath (Join-Path $BuildWork "app") `
     --specpath $BuildSpec `
@@ -118,22 +150,22 @@ finally {
     --collect-all pydub `
     $AppLauncher
 if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
-$PackagedApp = Join-Path $BuildDist "AI_Customer"
-if (Test-Path -LiteralPath (Join-Path $PackagedApp "r\patchright")) {
+$PackagedApp = Join-Path $BuildDist "AI_Customer_App"
+if (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\patchright")) {
     throw "Patchright leaked into the main package; inspect PyInstaller hooks."
 }
 foreach ($OptionalRuntime in @("torch", "torchaudio", "torchcodec", "transformers", "safetensors", "voxcpm")) {
-    if (Test-Path -LiteralPath (Join-Path $PackagedApp "r\$OptionalRuntime")) {
-        throw "$OptionalRuntime leaked into the main package; keep it in the optional voice component."
+    if (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\$OptionalRuntime")) {
+        throw "$OptionalRuntime leaked into the main package; keep it in the environment package."
     }
 }
-if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "r\playwright\driver\node.exe") -PathType Leaf)) {
-    throw "Playwright driver is missing from the main package."
+if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\playwright\driver\node.exe") -PathType Leaf)) {
+    throw "Playwright driver is missing from the packaged runtime."
 }
 
-# Build a small stable launcher that selects versions through current-version.json.
+# 稳定入口只负责更新、环境校验和启动主程序。
 & $Python -m PyInstaller `
-    --name "AI_Customer_Launcher" `
+    --name "AI_Customer" `
     --onefile `
     --windowed `
     --optimize 2 `
@@ -143,45 +175,27 @@ if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "r\playwright\driver\no
     $StableLauncher
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 
-# Assemble the immutable release payload.
-$AppSource = $PackagedApp
-$AppDestination = Join-Path $ReleaseDir "app"
-$BundledCloakBrowser = Join-Path $AppSource "r\cloakbrowser_browser"
-& robocopy $CloakBrowserDir $BundledCloakBrowser "/E" "/R:2" "/W:1" "/NFL" "/NDL" "/NJH" "/NJS" "/NC" "/NS" | Out-Null
-if ($LASTEXITCODE -gt 7) { throw "CloakBrowser payload copy failed with robocopy exit code $LASTEXITCODE" }
-$RobocopyArgs = @($AppSource, $AppDestination, "/E", "/R:2", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NC", "/NS")
-& robocopy @RobocopyArgs | Out-Null
-if ($LASTEXITCODE -gt 7) { throw "Application payload copy failed with robocopy exit code $LASTEXITCODE" }
-Copy-Item -LiteralPath (Join-Path $BuildDist "AI_Customer_Launcher.exe") -Destination (Join-Path $ReleaseDir "AI_Customer.exe")
-Copy-Item -LiteralPath $Readme -Destination (Join-Path $ReleaseDir "README.txt")
-Copy-Item -LiteralPath $Installer -Destination (Join-Path $ReleaseDir "install-release.ps1")
-Copy-Item -LiteralPath $Switcher -Destination (Join-Path $ReleaseDir "switch-version.ps1")
-
-# Record every release file hash before writing the manifest itself.
-$ReleaseScanRoot = if ($IsWindows -or $env:OS -eq "Windows_NT") { "\\?\$ReleaseDir" } else { $ReleaseDir }
-$ReleasePrefix = $ReleaseScanRoot.TrimEnd('\') + '\'
-$Files = Get-ChildItem -LiteralPath $ReleaseScanRoot -Recurse -File | ForEach-Object {
-    $RelativePath = $_.FullName.Substring($ReleasePrefix.Length).Replace('\', '/')
-    [ordered]@{
-        path = $RelativePath
-        size = $_.Length
-        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-}
+# 组装唯一的两个客户 ZIP，程序 ZIP 可远程更新，环境 ZIP 只需首次交付。
 $SchemaVersion = [int](& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.migrations import latest_version; print(latest_version())")
-$Manifest = [ordered]@{
-    format = 1
-    product = "AI Customer Desktop"
-    version = $Version
-    schema_version = $SchemaVersion
-    built_at = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
-    entrypoint = "app/AI_Customer.exe"
-    files = $Files
-}
-$Manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $ReleaseDir "release-manifest.json") -Encoding utf8
+$AssemblyOutput = @(& $Python $DeliveryAssembler `
+    --packaged-app $PackagedApp `
+    --stable-launcher (Join-Path $BuildDist "AI_Customer.exe") `
+    --staging-root $StagingRoot `
+    --delivery-root $DeliveryRoot `
+    --version $Version `
+    --environment-version $EnvironmentVersion `
+    --schema-version $SchemaVersion `
+    --crawler-python-root $CrawlerPythonRoot `
+    --crawler-root $CrawlerRoot `
+    --cloakbrowser-root $CloakBrowserDir `
+    --vox-component-root $VoxComponentPath `
+    --voice-models-root $VoiceModelsPath `
+    --readme $Readme)
+if ($LASTEXITCODE -ne 0) { throw "Portable delivery assembly failed" }
+$Assembly = ($AssemblyOutput -join "") | ConvertFrom-Json
 
-Write-Host "Release created:"
-Write-Host "  $ReleaseDir"
-Write-Host "Customer use: double-click AI_Customer.exe in this release folder."
-Write-Host "Prepare or publish remotely with:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ProjectRoot\script\publish_release.ps1`" -ReleasePath `"$ReleaseDir`""
+Write-Host "Two-ZIP delivery created:"
+Write-Host "  Program: $($Assembly.program_zip)"
+Write-Host "  Environment: $($Assembly.environment_zip)"
+Write-Host "Customer steps: extract Program ZIP, merge Environment ZIP into it, then double-click AI_Customer.exe."
+Write-Host "Remote publishing uses the Program ZIP only."
