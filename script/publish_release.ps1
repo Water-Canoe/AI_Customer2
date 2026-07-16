@@ -120,7 +120,9 @@ function Invoke-UpdateApi(
 
 function Read-Release([string]$Path, [string]$ExpectedVersion) {
     $Release = Resolve-Path -LiteralPath $Path
-    $ManifestPath = Join-Path $Release.Path "release-manifest.json"
+    # Use the Windows extended path prefix so declared files beyond MAX_PATH remain readable.
+    $AccessPath = if ($env:OS -eq "Windows_NT") { "\\?\$($Release.Path)" } else { $Release.Path }
+    $ManifestPath = [System.IO.Path]::Combine($AccessPath, "release-manifest.json")
     if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
         throw "release-manifest.json is missing"
     }
@@ -155,8 +157,8 @@ function Read-Release([string]$Path, [string]$ExpectedVersion) {
     if ($Declared.Count -eq 0) {
         throw "Release manifest does not contain files"
     }
-    $ReleasePrefix = $Release.Path.TrimEnd('\') + '\'
-    $ActualFiles = @(Get-ChildItem -LiteralPath $Release.Path -Recurse -File -Force | Where-Object { $_.FullName -ne $ManifestPath })
+    $ReleasePrefix = $AccessPath.TrimEnd('\') + '\'
+    $ActualFiles = @(Get-ChildItem -LiteralPath $AccessPath -Recurse -File -Force | Where-Object { $_.FullName -ne $ManifestPath })
     foreach ($File in $ActualFiles) {
         $Relative = $File.FullName.Substring($ReleasePrefix.Length).Replace('\', '/')
         if (-not $Declared.ContainsKey($Relative)) {
@@ -171,7 +173,7 @@ function Read-Release([string]$Path, [string]$ExpectedVersion) {
     $ArchiveFiles.Add($ManifestFile) | Out-Null
     foreach ($Relative in $Declared.Keys) {
         $Item = $Declared[$Relative]
-        $Source = Join-Path $Release.Path ($Relative.Replace('/', '\'))
+        $Source = [System.IO.Path]::Combine($AccessPath, $Relative.Replace('/', '\'))
         if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
             throw "Release file is missing: $Relative"
         }
@@ -190,6 +192,7 @@ function Read-Release([string]$Path, [string]$ExpectedVersion) {
     }
     return [pscustomobject]@{
         Path = $Release.Path
+        AccessPath = $AccessPath
         Manifest = $Manifest
         ManifestPath = $ManifestPath
         SchemaVersion = $SchemaVersion
@@ -308,7 +311,7 @@ $SignatureOutput = Join-Path $PublishDir "update-manifest.sig"
 $ResultOutput = Join-Path $PublishDir "publish-result.json"
 
 Write-Host "Valid release verified. Creating archive..."
-New-ReleaseArchive $Release.Path $ArchivePath @($Release.ArchiveFiles)
+New-ReleaseArchive $Release.AccessPath $ArchivePath @($Release.ArchiveFiles)
 $Archive = Get-Item -LiteralPath $ArchivePath
 $ArchiveHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 

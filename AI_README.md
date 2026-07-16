@@ -447,7 +447,7 @@ Sealos 授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试
 
 管理接口统一位于 `/ai-customer/admin/licenses*`，全部使用 `Authorization: Bearer <AI_CUSTOMER_ADMIN_TOKEN>`，授权码不提供硬删除，停用使用 `PATCH /admin/licenses/{licenseId}`。根目录 `tools/license-admin.html` 可直接打开，用于创建授权、修改功能权益/设备数/过期时间、启停授权、查看和撤销设备；管理 Token 只保存在当前页面内存，不写入 `localStorage`。该页面只供管理员使用，不进入客户发布包。旧 `add-license / check-license / get-license-devices / revoke-license-device` 和三个 demo permission 接口已删除，不保留兼容层。
 
-Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并设置启用/强制更新/灰度比例。客户完成授权后，每次通过稳定启动器打开程序都会静默检查更新；只有已有 active 设备才会得到限时下载地址，客户端会先验证 Ed25519 签名、再校验 ZIP 的大小和 SHA-256，最后只复制清单声明的程序文件并启动新版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时保持当前版本正常启动。详细请求格式见根目录 `sealos接口文档.md`。
+Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并设置启用/强制更新/灰度比例。客户完成授权后，每次通过稳定启动器打开程序都会静默检查更新；只有已有 active 设备才会得到限时下载地址，客户端会先验证 Ed25519 签名、再校验 ZIP 的大小和 SHA-256，最后只复制清单声明的程序文件并启动新版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时保持当前版本正常启动。发布脚本在 Windows 下使用扩展长路径读取发布清单文件，超过传统 `MAX_PATH` 的浏览器资源也会正常校验并归档。详细请求格式见根目录 `sealos接口文档.md`。
 
 发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本会自动选择最新完成的发布目录，从清单读取版本，使用本机仓库外正式私钥，并在需要远端发布时通过已有 SSH 私钥读取 Sealos 管理 Token。无参数运行只做本地校验、压缩、签名和验签；`-Upload` 上传并登记但保持禁用；`-Enable` 自动上传、登记并按默认 10% 灰度启用。归档严格以 `release-manifest.json` 为文件白名单，发布目录里运行程序产生的未声明数据库或日志只会提示并排除，不会进入更新包。同版本对象已存在时，脚本会查询发布登记：若版本、大小和 SHA-256 一致则报告“已发布”且不重复上传；不一致则拒绝覆盖并要求递增版本号。高级场景才需要覆盖发布目录、版本、通道、密钥路径或灰度比例。所有产物写入唯一的 `output/release_publish_<版本>_<时间>/`，不会覆盖旧产物。
 
