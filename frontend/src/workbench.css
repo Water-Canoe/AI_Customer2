@@ -641,7 +641,9 @@ input[type='checkbox'] {
 }
 
 .primary-action,
-.wide-action {
+.wide-action,
+button.filter-button,
+.message-search button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -652,6 +654,7 @@ input[type='checkbox'] {
   border-radius: 6px;
   color: #ffffff;
   background: #0f766e;
+  cursor: pointer;
 }
 
 .secondary-action {
@@ -6085,7 +6088,9 @@ input[type='checkbox'] {
 }
 
 .primary-action,
-.wide-action {
+.wide-action,
+button.filter-button,
+.message-search button {
   border: 1px solid var(--workbench-primary);
   border-radius: 8px;
   background: var(--workbench-primary);
@@ -6095,7 +6100,9 @@ input[type='checkbox'] {
 }
 
 .primary-action:hover,
-.wide-action:hover {
+.wide-action:hover,
+button.filter-button:hover,
+.message-search button:hover {
   border-color: var(--workbench-primary-strong);
   background: var(--workbench-primary-strong);
 }
@@ -7182,4 +7189,11 @@ input[type='checkbox'] {
   .automation-type-picker {
     grid-template-columns: 1fr;
   }
+}
+
+/* 搜索提交按钮复用主操作按钮，并保留清晰的键盘焦点。 */
+button.filter-button:focus-visible,
+.message-search button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.2);
+  outline-offset: 2px;
 }
