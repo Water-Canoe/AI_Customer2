@@ -23,10 +23,6 @@ if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller is missing from backend/.venv. Install it explicitly before packaging."
 }
-& $Python -c "import torch, voxcpm; assert torch.cuda.is_available()"
-if ($LASTEXITCODE -ne 0) {
-    throw "VoxCPM2 CUDA runtime is missing. Run script/install_voxcpm.ps1 before packaging."
-}
 $CloakBrowserPath = (& $Python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())").Trim()
 if (-not (Test-Path -LiteralPath $CloakBrowserPath -PathType Leaf)) {
     throw "CloakBrowser binary is missing. Run backend/.venv/Scripts/python.exe -m cloakbrowser install before packaging."
@@ -90,6 +86,13 @@ finally {
     --paths $BackendDir `
     --paths $ProjectRoot `
     --additional-hooks-dir (Join-Path $ProjectRoot "packaging\hooks") `
+    --exclude-module patchright `
+    --exclude-module torch `
+    --exclude-module torchaudio `
+    --exclude-module torchcodec `
+    --exclude-module transformers `
+    --exclude-module safetensors `
+    --exclude-module voxcpm `
     --add-data "$FrontendDir\dist;frontend_dist" `
     --add-data "$BackendDir\app\video_engine\resource;app/video_engine/resource" `
     --add-data "$BackendDir\app\video_engine\services\data;app/video_engine/services/data" `
@@ -113,16 +116,20 @@ finally {
     --collect-all azure.cognitiveservices.speech `
     --collect-all twelvelabs `
     --collect-all pydub `
-    --collect-all voxcpm `
-    --collect-all torch `
-    --collect-all torchaudio `
-    --collect-all torchcodec `
-    --collect-all transformers `
-    --collect-all safetensors `
-    --collect-all soundfile `
-    --copy-metadata voxcpm `
     $AppLauncher
 if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
+$PackagedApp = Join-Path $BuildDist "AI_Customer"
+if (Test-Path -LiteralPath (Join-Path $PackagedApp "r\patchright")) {
+    throw "Patchright leaked into the main package; inspect PyInstaller hooks."
+}
+foreach ($OptionalRuntime in @("torch", "torchaudio", "torchcodec", "transformers", "safetensors", "voxcpm")) {
+    if (Test-Path -LiteralPath (Join-Path $PackagedApp "r\$OptionalRuntime")) {
+        throw "$OptionalRuntime leaked into the main package; keep it in the optional voice component."
+    }
+}
+if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "r\playwright\driver\node.exe") -PathType Leaf)) {
+    throw "Playwright driver is missing from the main package."
+}
 
 # Build a small stable launcher that selects versions through current-version.json.
 & $Python -m PyInstaller `
@@ -137,7 +144,7 @@ if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 
 # Assemble the immutable release payload.
-$AppSource = Join-Path $BuildDist "AI_Customer"
+$AppSource = $PackagedApp
 $AppDestination = Join-Path $ReleaseDir "app"
 $BundledCloakBrowser = Join-Path $AppSource "r\cloakbrowser_browser"
 & robocopy $CloakBrowserDir $BundledCloakBrowser "/E" "/R:2" "/W:1" "/NFL" "/NDL" "/NJH" "/NJS" "/NC" "/NS" | Out-Null

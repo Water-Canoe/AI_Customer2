@@ -191,20 +191,16 @@ def test_voxcpm2_adapter_uses_reference_and_prompt(tmp_path, monkeypatch: pytest
 
     calls: dict[str, object] = {}
 
-    class FakeModel:
-        tts_model = SimpleNamespace(sample_rate=16000)
-
-        def generate(self, **kwargs):
-            import numpy as np
-
-            calls.update(kwargs)
-            return np.zeros(1600, dtype=np.float32)
+    def fake_request(payload):
+        calls.update(payload)
+        Path(str(payload["output"])).write_bytes(_wav_bytes())
+        return {"ok": True}
 
     def fake_run(command, **_kwargs):
         Path(command[-1]).write_bytes(b"fake-mp3")
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
-    monkeypatch.setattr(voice_synthesis, "_load_voxcpm2", lambda: FakeModel())
+    monkeypatch.setattr(voice_synthesis, "_request_worker", fake_request)
     monkeypatch.setattr(voice_synthesis.subprocess, "run", fake_run)
     monkeypatch.setattr(voice_synthesis.utils, "get_ffmpeg_binary", lambda: "ffmpeg")
     reference = tmp_path / "reference.webm"
@@ -221,8 +217,7 @@ def test_voxcpm2_adapter_uses_reference_and_prompt(tmp_path, monkeypatch: pytest
     )
 
     prepared_reference = output.with_suffix(".reference.wav")
-    assert calls["reference_wav_path"] == str(prepared_reference)
-    assert calls["prompt_wav_path"] == str(prepared_reference)
+    assert calls["reference"] == str(prepared_reference)
     assert calls["prompt_text"] == "参考文字"
     assert calls["text"] == "(温和自然)生成文字"
     assert output.is_file()

@@ -42,7 +42,7 @@ AI_CUSTOMER_LICENSE_PRIVATE_KEY=<Ed25519 PKCS8 DER 的 Base64>
   "licenseCode": "AIC-...",
   "deviceId": "AI-CUS-XXXXXXXX-XXXXXXXX",
   "deviceName": "办公室电脑",
-  "appVersion": "1.2.0"
+  "appVersion": "1.2.1"
 }
 ```
 
@@ -183,6 +183,51 @@ Token 不允许放在 URL，不应写入浏览器 `localStorage` 或日志。
 5. 修改 `enabled` 与 `rolloutPercent` 后开始下发。
 
 同一版本对象和版本元数据都不可覆盖；修正安装包必须递增版本号。`stable` 不接受预发布版本，`beta` 可使用 `1.2.0-beta.1`。服务端使用 `AI_Customer-Release` 保存版本元数据，停用版本使用状态接口，不提供远程删除。
+
+### 可选运行组件
+
+音色克隆运行库不进入主程序包。已激活且授权包含 `content` 权益的客户端可检查组件：
+
+`POST /ai-customer/update/component/check`
+
+```json
+{
+  "licenseCode": "AIC-...",
+  "deviceId": "AI-CUS-XXXXXXXX-XXXXXXXX",
+  "component": "voxcpm2",
+  "currentVersion": "0.0.0",
+  "appVersion": "1.2.1",
+  "platform": "windows",
+  "arch": "x64"
+}
+```
+
+服务端只支持 `voxcpm2`，返回签名清单、限时下载地址和最低主程序版本。组件不会随主程序自动安装，必须由用户在内容设置页点击安装。
+
+组件管理接口：
+
+- `POST /ai-customer/update/admin/component-upload-url`：生成不可覆盖的组件上传地址。
+- `POST /ai-customer/update/admin/components`：登记组件签名元数据，默认禁用。
+- `GET /ai-customer/update/admin/components`：查询组件版本。
+- `PUT /ai-customer/update/admin/component-status`：启用或停用组件版本。
+
+日常组件发布使用：
+
+```powershell
+# 生成独立VoxCPM2/PyTorch运行组件，不生成模型权重。
+.\script\build_voxcpm_component.ps1 -Version 1.0.0
+
+# 只在本地压缩、签名和验签。
+.\script\publish_voxcpm_component.ps1
+
+# 上传并登记，但暂不允许客户安装。
+.\script\publish_voxcpm_component.ps1 -Upload
+
+# 上传、登记并允许客户安装。
+.\script\publish_voxcpm_component.ps1 -Enable
+```
+
+组件使用独立版本号和 `AI_Customer-ComponentRelease` 集合。同一组件版本不可覆盖；组件包只包含推理程序和依赖，模型权重仍由首次合成下载到稳定数据目录。
 
 ## 已删除接口
 

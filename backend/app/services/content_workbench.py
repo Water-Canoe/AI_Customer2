@@ -430,7 +430,11 @@ def environment_check() -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=True)
     usage = shutil.disk_usage(root)
     model_root = database.get_video_generation_root() / "models"
-    from app.services import voice_synthesis
+    from app.services import job_queue, voice_synthesis
+
+    voice_status = voice_synthesis.model_status()
+    install_jobs = job_queue.list_jobs(kind="voice_runtime_install", page=1, page_size=1)["items"]
+    voice_status["install_job"] = install_jobs[0] if install_jobs else None
 
     publish_browser = ""
     try:
@@ -451,7 +455,7 @@ def environment_check() -> dict[str, Any]:
             "downloaded": model_root.exists() and any(model_root.iterdir()),
             "path": str(model_root),
         },
-        "voice_models": {"voxcpm2": voice_synthesis.model_status()},
+        "voice_models": {"voxcpm2": voice_status},
         "social_publish": {"ok": publish_ok, "browser_path": publish_browser},
         "disk": {"free": usage.free, "total": usage.total},
     }

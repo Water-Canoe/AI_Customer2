@@ -5585,6 +5585,27 @@ button.filter-button,
   font-size: 12px;
 }
 
+.content-runtime-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.content-runtime-summary {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.content-runtime-install {
+  min-height: 32px;
+  padding: 6px 14px;
+}
+
+.content-runtime-progress {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
 .content-asset-placeholder {
   color: #94a3b8;
   font-size: 34px;

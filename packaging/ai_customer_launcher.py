@@ -29,14 +29,17 @@ def configure_environment(base_dir: Path) -> None:
     """Point mutable data outside the versioned app folder."""
     root_dir = install_root(base_dir)
     data_dir = Path(os.environ.get("AI_CUSTOMER_DATA_DIR", str(root_dir / "data")))
+    runtime_dir = Path(os.environ.get("AI_CUSTOMER_RUNTIME_DIR", str(root_dir / "runtimes")))
     frontend_dist = base_dir / "frontend_dist"
     media_crawler_dir = root_dir / "MyCrawler"
     cloakbrowser_binary = base_dir / "r" / "cloakbrowser_browser" / "chrome.exe"
 
     data_dir.mkdir(parents=True, exist_ok=True)
+    runtime_dir.mkdir(parents=True, exist_ok=True)
 
     os.environ.setdefault("AI_CUSTOMER_DATA_DIR", str(data_dir))
     os.environ.setdefault("AI_CUSTOMER_DB", str(data_dir / "ai_customer.sqlite3"))
+    os.environ.setdefault("AI_CUSTOMER_RUNTIME_DIR", str(runtime_dir))
     if frontend_dist.exists():
         os.environ.setdefault("AI_CUSTOMER_FRONTEND_DIST", str(frontend_dist))
     if media_crawler_dir.exists():

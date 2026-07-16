@@ -12,7 +12,7 @@ from app import database
 
 
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
-SAFE_RESUME_KINDS = {"ai_job", "ai_batch", "account_customer_intent", "automation_run"}
+SAFE_RESUME_KINDS = {"ai_job", "ai_batch", "account_customer_intent", "automation_run", "voice_runtime_install"}
 RESOURCE_LIMITS = {"browser": 1, "ai": 1, "video": 1, "automation": 1, "default": 2}
 JOB_ENTITLEMENTS = {
     "crawl_task": "lead",
@@ -29,6 +29,7 @@ JOB_ENTITLEMENTS = {
     "publish_account_login": "content",
     "publish_account_check": "content",
     "content_publish": "content",
+    "voice_runtime_install": "content",
 }
 HEARTBEAT_SECONDS = 3.0
 POLL_SECONDS = 0.5
@@ -275,6 +276,16 @@ def enqueue_video_job(video_job_id: str) -> dict[str, Any]:
     )
 
 
+def enqueue_voice_runtime_install() -> dict[str, Any]:
+    return enqueue(
+        "voice_runtime_install",
+        entity_id="voxcpm2",
+        resource="default",
+        priority=100,
+        max_attempts=3,
+    )
+
+
 def enqueue_publish_account_job(account_id: str, action: str) -> dict[str, Any]:
     if action not in {"login", "check"}:
         raise ValueError("发布账号任务只支持登录或检查")
@@ -304,6 +315,15 @@ def get_job(job_id: str) -> dict[str, Any]:
     if not row:
         raise ValueError("运行任务不存在")
     return _format_job(row)
+
+
+def update_job_result(job_id: str, result: dict[str, Any]) -> None:
+    """Persist live progress for long-running runtime jobs."""
+    with database.connect() as conn:
+        conn.execute(
+            "UPDATE runtime_jobs SET result = ?, updated_at = datetime('now', 'localtime') WHERE id = ? AND status = 'running'",
+            (json.dumps(_json_safe(result), ensure_ascii=False), job_id),
+        )
 
 
 def list_jobs(
@@ -617,8 +637,11 @@ def _run_job(job: dict[str, Any]) -> None:
         final_status = "cancelled" if _cancel_requested(job_id) or outcome["status"] == "cancelled" else "succeeded"
         _finish_job(job_id, final_status, result=result)
     except Exception as exc:
-        _mark_video_domain_failed(job, str(exc))
-        _finish_job(job_id, "failed", error=str(exc))
+        if _cancel_requested(job_id):
+            _finish_job(job_id, "cancelled", error=str(exc))
+        else:
+            _mark_video_domain_failed(job, str(exc))
+            _finish_job(job_id, "failed", error=str(exc))
     finally:
         if str(job["resource"]) == "browser":
             profile_manager.release_runtime(job_id)
@@ -628,7 +651,7 @@ def _run_job(job: dict[str, Any]) -> None:
 
 
 def _execute_job(job: dict[str, Any]) -> Any:
-    from app.services import account_actions, ai_service, automation_workbench, content_publish, content_workbench, crawler_adapter, license_service, message_workbench, traffic_workbench
+    from app.services import account_actions, ai_service, automation_workbench, content_publish, content_workbench, crawler_adapter, license_service, message_workbench, traffic_workbench, voice_runtime
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
@@ -683,6 +706,12 @@ def _execute_job(job: dict[str, Any]) -> Any:
         return content_publish.run_account_check(str(payload["account_id"]))
     if kind == "content_publish":
         return content_publish.run_publish_task(str(payload["publish_task_id"]))
+    if kind == "voice_runtime_install":
+        job_id = str(job["id"])
+        return voice_runtime.install(
+            progress=lambda value: update_job_result(job_id, value),
+            cancelled=lambda: _cancel_requested(job_id),
+        )
     raise ValueError(f"不支持的运行任务类型：{kind}")
 
 

@@ -228,6 +228,9 @@ export default defineComponent({
       .map(id => materialAssets.value.find(item => item.id === id))
       .filter(Boolean) as Dict[])
     const activeJobs = computed(() => (jobs.value.items || []).filter((job: Dict) => ['queued', 'running'].includes(String(job.status))))
+    const voiceRuntime = computed(() => environment.value.voice_models?.voxcpm2 || {})
+    const voiceRuntimeJob = computed(() => voiceRuntime.value.install_job || {})
+    const voiceRuntimeInstalling = computed(() => ['queued', 'running'].includes(String(voiceRuntimeJob.value.status || '')))
     const generatedItems = computed(() => {
       const query = recordSearch.value.trim().toLowerCase()
       return (jobs.value.items || []).flatMap((job: Dict) => (job.outputs || []).map((output: Dict) => ({ job, output })))
@@ -239,6 +242,7 @@ export default defineComponent({
       refreshTimer = window.setInterval(() => {
         if (activeJobs.value.length && ['content-create', 'content-records'].includes(view.value)) void loadJobs(false)
         if (view.value === 'content-records') void loadPublishTasks()
+        if (view.value === 'content-settings' && voiceRuntimeInstalling.value) void loadEnvironment()
       }, 3000)
     })
     onUnmounted(() => {
@@ -301,6 +305,28 @@ export default defineComponent({
     async function loadEnvironment() {
       const { data } = await api.get('/content/environment-check')
       environment.value = data
+    }
+
+    async function installVoiceRuntime() {
+      try {
+        await api.post('/content/voice-runtime/install')
+        ElMessage.success('音色克隆组件已加入下载队列')
+        await loadEnvironment()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '音色克隆组件安装失败')
+      }
+    }
+
+    async function cancelVoiceRuntimeInstall() {
+      const jobId = String(voiceRuntimeJob.value.id || '')
+      if (!jobId) return
+      try {
+        await api.post(`/runtime/jobs/${jobId}/cancel`)
+        ElMessage.success('已请求取消组件安装')
+        await loadEnvironment()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '取消安装失败')
+      }
     }
 
     async function loadVoices() {
@@ -1088,7 +1114,7 @@ export default defineComponent({
         environmentRow('FFmpeg', environment.value.ffmpeg?.ok, environment.value.ffmpeg?.path || '未找到'),
         environmentRow('字幕字体', environment.value.fonts?.ok, `${environment.value.fonts?.count || 0} 个`),
         environmentRow('Whisper模型', environment.value.whisper?.downloaded, environment.value.whisper?.downloaded ? '已下载' : '首次使用时自动下载'),
-        environmentRow('VoxCPM2', environment.value.voice_models?.voxcpm2?.installed && environment.value.voice_models?.voxcpm2?.downloaded, environment.value.voice_models?.voxcpm2?.downloaded ? '模型已就绪' : '依赖或模型未安装'),
+        renderVoiceRuntimeEnvironment(),
         ...Object.entries(deps).map(([name, ok]) => environmentRow(name, Boolean(ok), ok ? '已安装' : '缺失')),
         h('div', { class: 'content-disk-info' }, `可用磁盘：${formatBytes(environment.value.disk?.free || 0)}`),
       ])
@@ -1096,6 +1122,25 @@ export default defineComponent({
 
     function environmentRow(label: string, ok: boolean, detail: string) {
       return h('div', { class: ['content-env-row', ok ? 'ok' : 'warn'] }, [h('strong', label), h('span', detail)])
+    }
+
+    function renderVoiceRuntimeEnvironment() {
+      const runtime = voiceRuntime.value
+      const job = voiceRuntimeJob.value
+      const progress = Number(job.result?.percent || 0)
+      const detail = runtime.installed
+        ? `组件 ${runtime.version || ''} 已安装${runtime.downloaded ? '，模型已就绪' : '，模型将在首次使用时下载'}`
+        : String(job.error || job.result?.message || '可按需下载安装，不占用主程序下载体积')
+      const action = voiceRuntimeInstalling.value
+        ? h('button', { type: 'button', class: 'ghost-button', onClick: cancelVoiceRuntimeInstall }, '取消')
+        : h('button', { type: 'button', class: runtime.installed ? 'ghost-button' : 'primary-action content-runtime-install', onClick: installVoiceRuntime }, runtime.installed ? '检查更新' : '安装')
+      return h('div', { class: ['content-env-row', 'content-runtime-row', runtime.installed ? 'ok' : 'warn'] }, [
+        h('div', { class: 'content-runtime-summary' }, [h('strong', '音色克隆'), h('span', detail)]),
+        action,
+        voiceRuntimeInstalling.value
+          ? h('div', { class: 'content-job-progress content-runtime-progress' }, [h('span', { style: { width: `${Math.max(2, progress)}%` } })])
+          : null,
+      ])
     }
 
     function renderAssetPreview(asset: Dict) {

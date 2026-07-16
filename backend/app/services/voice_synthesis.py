@@ -1,20 +1,21 @@
 from __future__ import annotations
 
+import atexit
+import json
 import os
 import subprocess
 import threading
-import wave
 from pathlib import Path
 from typing import Any
 
 from app import database
-from app.services import content_assets, voice_profiles
+from app.services import content_assets, voice_profiles, voice_runtime
 from app.video_engine.utils import utils
 
 
-_MODEL_ID = "openbmb/VoxCPM2"
-_model: Any = None
-_model_lock = threading.RLock()
+_worker: subprocess.Popen[str] | None = None
+_worker_log: Any = None
+_worker_lock = threading.RLock()
 
 
 def synthesize_profile(
@@ -35,40 +36,15 @@ def synthesize_profile(
 def model_status() -> dict[str, Any]:
     root = database.get_voice_models_root() / "VoxCPM2"
     snapshots = root / "models--openbmb--VoxCPM2" / "snapshots"
-    try:
-        import importlib.util
-
-        installed = bool(importlib.util.find_spec("voxcpm"))
-    except (ImportError, ValueError):
-        installed = False
-    return {
-        "provider": "voxcpm2",
-        "installed": installed,
-        "downloaded": snapshots.is_dir() and any(snapshots.iterdir()),
-        "path": str(root),
-    }
-
-
-def _load_voxcpm2() -> Any:
-    global _model
-    # 大模型只在首次实际合成时加载，避免普通工作台启动就占满显存。
-    with _model_lock:
-        if _model is not None:
-            return _model
-        try:
-            from voxcpm import VoxCPM
-        except ImportError as exc:
-            raise RuntimeError("缺少VoxCPM2依赖，请重新安装当前版本的软件") from exc
-        model_root = database.get_voice_models_root() / "VoxCPM2"
-        model_root.mkdir(parents=True, exist_ok=True)
-        _model = VoxCPM.from_pretrained(
-            _MODEL_ID,
-            cache_dir=str(model_root),
-            load_denoiser=False,
-            device="auto",
-            optimize=os.name != "nt",
-        )
-        return _model
+    value = voice_runtime.status()
+    value.update(
+        {
+            "provider": "voxcpm2",
+            "downloaded": snapshots.is_dir() and any(snapshots.iterdir()),
+            "model_path": str(root),
+        }
+    )
+    return value
 
 
 def _synthesize_voxcpm2(
@@ -86,22 +62,17 @@ def _synthesize_voxcpm2(
     target_text = f"({style}){text}" if style else text
     prompt_text = str(profile.get("prompt_text") or "").strip()
     prepared_reference, remove_reference = _prepare_reference_audio(reference, output)
-    try:
-        model = _load_voxcpm2()
-        # VoxCPM推理不是线程安全的，视频和未来数字人任务共用同一把模型锁。
-        with _model_lock:
-            wav = model.generate(
-                text=target_text,
-                reference_wav_path=str(prepared_reference),
-                prompt_wav_path=str(prepared_reference) if prompt_text else None,
-                prompt_text=prompt_text or None,
-            )
-    finally:
-        if remove_reference:
-            prepared_reference.unlink(missing_ok=True)
     temp_wav = output.with_suffix(".voxcpm.wav")
     try:
-        _write_pcm_wav(temp_wav, wav, int(model.tts_model.sample_rate))
+        _request_worker(
+            {
+                "model_root": str(database.get_voice_models_root() / "VoxCPM2"),
+                "reference": str(prepared_reference),
+                "text": target_text,
+                "prompt_text": prompt_text,
+                "output": str(temp_wav),
+            }
+        )
         command = [
             utils.get_ffmpeg_binary(), "-y", "-i", str(temp_wav),
             "-filter:a", f"atempo={max(0.5, min(2.0, float(voice_rate or 1.0))):.3f},volume={max(0.0, float(voice_volume if voice_volume is not None else 1.0)):.3f}",
@@ -112,6 +83,80 @@ def _synthesize_voxcpm2(
             raise RuntimeError(f"VoxCPM2音频转换失败：{(result.stderr or result.stdout or '').strip()}")
     finally:
         temp_wav.unlink(missing_ok=True)
+        if remove_reference:
+            prepared_reference.unlink(missing_ok=True)
+
+
+def _request_worker(payload: dict[str, Any]) -> dict[str, Any]:
+    with _worker_lock:
+        worker = _ensure_worker()
+        if worker.stdin is None or worker.stdout is None:
+            raise RuntimeError("音色克隆组件通信通道不可用")
+        worker.stdin.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        worker.stdin.flush()
+        received: list[str] = []
+
+        # readline单独等待，超时后终止异常的推理进程。
+        reader = threading.Thread(target=lambda: received.append(worker.stdout.readline()), daemon=True)
+        reader.start()
+        reader.join(timeout=900)
+        if reader.is_alive():
+            _stop_worker()
+            raise RuntimeError("音色克隆组件响应超时")
+        if not received or not received[0]:
+            _stop_worker()
+            raise RuntimeError("音色克隆组件意外退出")
+        try:
+            response = json.loads(received[0])
+        except ValueError as exc:
+            _stop_worker()
+            raise RuntimeError("音色克隆组件返回了无效数据") from exc
+        if not isinstance(response, dict) or not response.get("ok"):
+            raise RuntimeError(str(response.get("error") or "音色克隆失败") if isinstance(response, dict) else "音色克隆失败")
+        return response
+
+
+def _ensure_worker() -> subprocess.Popen[str]:
+    global _worker, _worker_log
+    if _worker is not None and _worker.poll() is None:
+        return _worker
+    _stop_worker()
+    executable = voice_runtime.worker_executable()
+    if executable is None:
+        raise RuntimeError("音色克隆组件未安装")
+    log_path = database.get_data_root() / "voxcpm_runtime.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    _worker_log = log_path.open("a", encoding="utf-8")
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        _worker = subprocess.Popen(
+            [str(executable), "--serve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=_worker_log,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+            creationflags=creation_flags,
+        )
+    except OSError as exc:
+        _stop_worker()
+        raise RuntimeError("音色克隆组件启动失败，请重新安装组件") from exc
+    return _worker
+
+
+def _stop_worker() -> None:
+    global _worker, _worker_log
+    worker, _worker = _worker, None
+    if worker is not None and worker.poll() is None:
+        worker.terminate()
+        try:
+            worker.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            worker.kill()
+    if _worker_log is not None:
+        _worker_log.close()
+        _worker_log = None
 
 
 def _prepare_reference_audio(reference: Path, output: Path) -> tuple[Path, bool]:
@@ -129,12 +174,4 @@ def _prepare_reference_audio(reference: Path, output: Path) -> tuple[Path, bool]
     return prepared, True
 
 
-def _write_pcm_wav(path: Path, samples: Any, sample_rate: int) -> None:
-    import numpy as np
-
-    pcm = (np.clip(np.asarray(samples).reshape(-1), -1.0, 1.0) * 32767).astype(np.int16)
-    with wave.open(str(path), "wb") as target:
-        target.setnchannels(1)
-        target.setsampwidth(2)
-        target.setframerate(sample_rate)
-        target.writeframes(pcm.tobytes())
+atexit.register(_stop_worker)

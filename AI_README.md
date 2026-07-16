@@ -406,16 +406,17 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `data/video_generation/models`：按需下载的Whisper模型；默认模型为 `large-v3`，发布包不预装。
 - `data/video_generation/tasks/<job-id>/attempt-N`：单次生成脚本、音频、字幕、中间视频和最终视频。
 - `data/voice_models/VoxCPM2`：视频与后续数字人共用的VoxCPM2模型缓存，不随程序更新删除。
+- `runtimes/voxcpm2`：按需安装的音色克隆推理组件、断点下载文件和当前组件指针；位于安装根目录但不进入业务数据备份。
 - `data/social_publish/accounts`：平台登录状态文件，数据库和API只保存/返回账号业务信息，不返回Cookie内容或路径。
 - `data/social_publish/qrcode`：扫码登录二维码；`data/social_publish/tasks/<task-id>` 保存当次失败截图和诊断文件。
 
 国内发布引擎基于 `dreammis/social-auto-upload` 固定提交 `0d3f93e8ac6ad9089b4a356bd2ede717c6248aca` 移植，仅引入抖音、快手、小红书视频和多图图文发布器，不启动上游Web、CLI、数据库或额外服务。代码位于 `backend/app/publish_engine/`，保留MIT许可说明和固定来源提交。登录与发布共用 `browser` 资源，并发始终为1，优先级为登录 > 发布 > 普通浏览器任务。一次多平台操作按“每个账号一条任务”拆分，单平台失败不影响其他平台。只有捕获明确成功提示才记为 `succeeded`；点击发布后无法确认结果则记为 `review_required`，不自动重试，避免重复发布。定时发布使用平台自身能力，时间已过期时明确失败，不降级为立即发布。
 
-克隆音色采用独立的 `voice_profiles` 业务实体，不隶属于视频任务。通用入口 `backend/app/services/voice_synthesis.py::synthesize_profile()` 只接收音色ID、文字、输出路径、语速和音量；视频引擎通过 `voxcpm2:<profile-id>` 调用，后续数字人模块直接复用同一入口，不重复实现声音克隆。VoxCPM2使用官方 `voxcpm==2.0.3` Python API，Windows禁用容易产生Triton兼容问题的 `torch.compile`，模型在首次进程调用时加载并缓存。
+克隆音色采用独立的 `voice_profiles` 业务实体，不隶属于视频任务。通用入口 `backend/app/services/voice_synthesis.py::synthesize_profile()` 只接收音色ID、文字、输出路径、语速和音量；视频引擎通过 `voxcpm2:<profile-id>` 调用，后续数字人模块直接复用同一入口，不重复实现声音克隆。VoxCPM2使用官方 `voxcpm==2.0.3` Python API，但PyTorch、CUDA DLL和VoxCPM代码不再加载进主程序：`VoxCPM_Runtime.exe --serve` 使用逐行JSON协议提供本地推理，第一次合成时加载模型并在独立进程内缓存；组件退出、无效响应和15分钟超时都会返回明确错误。
 
-开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。正式打包前 `script/build_package.ps1` 会检查VoxCPM和CUDA是否可用，并收集VoxCPM、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。
+开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。`script/build_voxcpm_component.ps1` 单独生成组件，`script/publish_voxcpm_component.ps1` 负责压缩、Ed25519签名、上传和登记；普通客户在“内容设置 → 内容环境”点击“安装”即可。下载任务进入统一队列，支持进度、取消、HTTP Range断点续传、大小/SHA-256校验、签名清单校验、安全解压和原子切换；组件安装后，模型权重仍在第一次实际合成时下载。
 
-版本 `1.2.0` 的既有正式发布目录为 `dist/releases/AI_Customer_1.2.0_20260711_190154`，schema为7。该历史包仍使用Patchright Chromium；当前源码已经切换为CloakBrowser，必须重新生成发布包后才能交付本次浏览器统一改造。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；模型权重仍保存在稳定 `data/voice_models/VoxCPM2`，不重复塞入每个版本目录。
+版本 `1.2.0` 的既有正式发布目录为 `dist/releases/AI_Customer_1.2.0_20260711_190154`，schema为7。该历史包仍使用Patchright Chromium并把VoxCPM2/PyTorch打进主程序；从 `1.2.1` 起主包改为CloakBrowser加官方Playwright驱动，音色克隆改为可选运行组件。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；模型权重仍保存在稳定 `data/voice_models/VoxCPM2`，不重复塞入程序版本或组件包。
 
 背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
 
@@ -428,12 +429,12 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/voice-profiles`：克隆音色列表、创建、修改和删除；音色记录引用托管音频资产并保存授权确认。
 - `/api/content/voice-reference-script`：使用内容工作台独立AI配置生成声音克隆朗读文案；未配置供应商时明确返回错误，不使用固定文案兜底。
 - `/api/content/scripts`、`/api/content/terms`、`/api/content/social-metadata`：独立视频AI生成能力。
-- `/api/content/voices`、`/api/content/settings`、`/api/content/environment-check`：音色、完整独立配置和环境检查。
+- `/api/content/voices`、`/api/content/settings`、`/api/content/environment-check`：音色、完整独立配置和环境检查；`POST /api/content/voice-runtime/install` 创建音色克隆组件安装任务，取消复用 `/api/runtime/jobs/{job_id}/cancel`。
 - `/api/content/publish-accounts`：发布账号列表、新增、修改和软删除；`/{id}/login`、`/{id}/check`、`/{id}/qrcode` 负责扫码登录、有效性检查和二维码展示。
 - `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
 `backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。视频引擎的数据模型统一使用 Pydantic 2 的 `ConfigDict`，不再保留已经弃用的类式 `Config`；Gemini 测试使用新 SDK 的模拟 Client，验证文本、语音和自定义地址参数，不连接收费接口。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
-本轮完整后端回归为391项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布或真实用户私信。前端为4个测试文件、15项测试通过，并完成类型检查和生产构建。
+本轮完整后端回归为394项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布或真实用户私信。前端为4个测试文件、15项测试通过，并完成类型检查和生产构建。
 
 ## 授权服务
 
@@ -447,9 +448,11 @@ Sealos 授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试
 
 管理接口统一位于 `/ai-customer/admin/licenses*`，全部使用 `Authorization: Bearer <AI_CUSTOMER_ADMIN_TOKEN>`，授权码不提供硬删除，停用使用 `PATCH /admin/licenses/{licenseId}`。根目录 `tools/license-admin.html` 可直接打开，用于创建授权、修改功能权益/设备数/过期时间、启停授权、查看和撤销设备；管理 Token 只保存在当前页面内存，不写入 `localStorage`。该页面只供管理员使用，不进入客户发布包。旧 `add-license / check-license / get-license-devices / revoke-license-device` 和三个 demo permission 接口已删除，不保留兼容层。
 
-Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并设置启用/强制更新/灰度比例。客户完成授权后，每次通过稳定启动器打开程序都会静默检查更新；只有已有 active 设备才会得到限时下载地址，客户端会先验证 Ed25519 签名、再校验 ZIP 的大小和 SHA-256，最后只复制清单声明的程序文件并启动新版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时保持当前版本正常启动。发布脚本在 Windows 下使用扩展长路径读取发布清单文件，超过传统 `MAX_PATH` 的浏览器资源也会正常校验并归档。详细请求格式见根目录 `sealos接口文档.md`。
+Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存主程序版本状态，使用 `AI_Customer-ComponentRelease` 保存可选组件版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并修改启用状态。主程序更新继续支持强制更新和灰度比例；音色克隆组件只向已有active设备且授权包含`content`权益的客户端下发，不做自动安装。客户端会验证Ed25519签名、ZIP大小和SHA-256，组件还会限制产品名、组件名、平台、架构和最低主程序版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时不会改变已安装版本。发布脚本在Windows下使用扩展长路径读取发布文件，超过传统`MAX_PATH`的运行库也能归档。详细请求格式见根目录 `sealos接口文档.md`。
 
 发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本会自动选择最新完成的发布目录，从清单读取版本，使用本机仓库外正式私钥，并在需要远端发布时通过已有 SSH 私钥读取 Sealos 管理 Token。无参数运行只做本地校验、压缩、签名和验签；`-Upload` 上传并登记但保持禁用；`-Enable` 自动上传、登记并按默认 10% 灰度启用。归档严格以 `release-manifest.json` 为文件白名单，发布目录里运行程序产生的未声明数据库或日志只会提示并排除，不会进入更新包。同版本对象已存在时，脚本会查询发布登记：若版本、大小和 SHA-256 一致则报告“已发布”且不重复上传；不一致则拒绝覆盖并要求递增版本号。高级场景才需要覆盖发布目录、版本、通道、密钥路径或灰度比例。所有产物写入唯一的 `output/release_publish_<版本>_<时间>/`，不会覆盖旧产物。
+
+音色克隆组件的发布命令与主程序一致：先运行 `script/build_voxcpm_component.ps1 -Version 1.0.0`，再运行 `script/publish_voxcpm_component.ps1`。无参数只准备本地签名产物，`-Upload` 上传登记但保持禁用，`-Enable` 才允许客户端安装。组件版本独立于主程序版本；已存在但内容不同的版本禁止覆盖，必须递增组件版本。
 
 正式 Ed25519 公钥保存在 `packaging/update_signing_public.pem`，SHA-256 指纹为 `187b00ee49f5ba2666b4722a3a569ec119bd3f6731300a2abb8e536abc0499f3`；对应私钥仅保存在本机 `%USERPROFILE%/.ssh/sealos/ai_customer_update_signing_private.pem`，已限制为当前 Windows 用户访问。发布脚本会在上传前用仓库公钥复验签名，防止误用其它私钥。私钥丢失或更换意味着需要发布包含新公钥的客户端信任根更新，不能临时重新生成后继续推送。
 
@@ -476,13 +479,15 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 本地打包
 
-当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.0`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.0` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、VoxCPM2运行库、视频引擎配置、上游许可证和全部字体。每次使用带版本和时间戳的新目录，不删除旧构建。
+当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.1`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.1` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、上游许可证和全部字体，不再收集VoxCPM2、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。构建后会拒绝任何`r/patchright`目录，并要求官方`r/playwright/driver/node.exe`真实存在。每次使用带版本和时间戳的新目录，不删除旧构建。
 
-前端 `package.json` 与 `package-lock.json` 的应用版本同步为 `1.2.0`，但产品发布仍只以 `backend/app/version.py` 和发布清单为准，避免三个版本源分别驱动打包逻辑。
+本轮通过验收的主程序目录是 `dist/releases/AI_Customer_1.2.1_20260716_203500`：未压缩1.67 GiB，本地签名更新ZIP为655.3 MiB；此前包含PyTorch的同版本诊断目录不是交付包。主程序已完成独立数据目录启动烟雾测试，`/api/health`返回200，CloakBrowser和官方Playwright驱动存在，Patchright及六个音色运行库目录均不存在。独立组件目录是 `dist/components/AI_Customer_VoxCPM2_1.0.0_20260716_210013`，未压缩4.94 GiB、签名ZIP 2.93 GiB；它已使用现有模型缓存完成一次真实JSON协议推理并生成368684字节WAV。主程序和组件当前都只完成本地发布准备，尚未启用远程下发。
+
+前端 `package.json` 与 `package-lock.json` 的应用版本同步为 `1.2.1`，但产品发布仍只以 `backend/app/version.py` 和发布清单为准，避免三个版本源分别驱动打包逻辑。
 
 发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。客户只需双击发布包根目录的 `AI_Customer.exe`：它先校验清单中声明文件的大小和 SHA-256，只复制声明的应用文件到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`，再替换稳定启动器并原子切换 `current-version.json`，最后自动启动工作台。发布包因运行而产生的数据库等额外文件会被忽略，避免阻断安装；它们也不会进入版本目录。旧版本和稳定 `data/` 都保留。`script/install_release.ps1` 与 `script/switch_installed_version.ps1` 仅作为维护人员的手动安装、回滚工具，不要求客户使用。
 
-版本应用的业务库、备份、引流图片、内容资产、Whisper模型、视频生成结果和浏览器登录状态始终放在安装根目录的 `data/`，不会写进 `versions/`。启动器会把安装根目录下预置的采集组件路径注入后端，并在每次数据库初始化时更新内部路径设置，因此从旧版本升级后不会继续使用旧版本目录；客户设置页不再提供路径编辑入口。
+版本应用的业务库、备份、引流图片、内容资产、Whisper模型、VoxCPM模型、视频生成结果和浏览器登录状态始终放在安装根目录的 `data/`，不会写进 `versions/`。可重新下载的独立推理程序放在安装根目录的 `runtimes/`，不会进入业务备份。启动器会注入这两个稳定目录和预置采集组件路径，并在每次数据库初始化时更新内部路径设置，因此从旧版本升级后不会继续使用旧版本目录；客户设置页不再提供路径编辑入口。
 
 稳定启动器已经实现授权身份读取、远端更新检查、限时下载、Ed25519验签、大小/SHA-256校验、清单白名单解压和版本切换。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把ZIP手工放入对象存储。数据库schema升级前仍会按迁移规则备份；如果需要回到无法读取新schema的旧程序，必须同时恢复对应迁移前备份。
 

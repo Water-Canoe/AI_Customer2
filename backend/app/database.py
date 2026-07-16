@@ -52,6 +52,12 @@ def get_voice_models_root() -> Path:
     return get_data_root() / "voice_models"
 
 
+def get_runtime_root() -> Path:
+    """Return optional runtimes outside both app versions and data backups."""
+    default_root = get_data_root().parent / "runtimes"
+    return Path(os.getenv("AI_CUSTOMER_RUNTIME_DIR", str(default_root)))
+
+
 def get_backup_root(db_path: Path | None = None) -> Path:
     """Return the backup folder beside the persistent business database."""
     return (db_path or get_db_path()).parent / "backups"

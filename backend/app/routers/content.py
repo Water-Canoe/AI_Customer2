@@ -426,6 +426,12 @@ def content_environment_check() -> dict[str, object]:
     return content_workbench.environment_check()
 
 
+@router.post("/voice-runtime/install")
+def install_voice_runtime() -> dict[str, object]:
+    require_license_for("content")
+    return job_queue.enqueue_voice_runtime_install()
+
+
 def _asset_or_404(asset_id: str) -> dict[str, object]:
     try:
         return content_assets.get_asset(asset_id)
