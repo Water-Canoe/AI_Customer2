@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $SemVerPattern = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
 
-# 所有路径都从仓库根目录计算，避免在不同终端目录执行时打包错文件。
+# Resolve all paths from the repository root so the caller's location cannot change the build.
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendDir = Join-Path $ProjectRoot "backend"
 $FrontendDir = Join-Path $ProjectRoot "frontend"
@@ -21,7 +21,7 @@ $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
 $CrawlerPython = Join-Path $CrawlerRoot ".venv\Scripts\python.exe"
 $CrawlerSitePackages = Join-Path $CrawlerRoot ".venv\Lib\site-packages"
 
-# 构建脚本只校验依赖，不会在用户不知情的情况下联网安装。
+# Validate local dependencies only; this script never installs missing packages implicitly.
 foreach ($RequiredFile in @($Python, $CrawlerPython, $AppLauncher, $StableLauncher, $DeliveryAssembler, $Readme)) {
     if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
         throw "Required build file is missing: $RequiredFile"
@@ -44,7 +44,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $CrawlerPythonRoot "python.exe") -Pa
     throw "MyCrawler base Python is missing: $CrawlerPythonRoot"
 }
 
-# 程序版本只有一个来源，避免 EXE 内版本与发布清单不一致。
+# Keep one version source so the EXE and release manifest cannot disagree.
 $SourceVersion = (& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.version import APP_VERSION; print(APP_VERSION)").Trim()
 if (-not $Version) {
     $Version = $SourceVersion
@@ -72,20 +72,20 @@ if (-not $VoxComponentPath -or -not (Test-Path -LiteralPath (Join-Path $VoxCompo
     throw "A completed VoxCPM2 component is required through -VoxComponentPath"
 }
 
-# 中间目录带时间戳且从不删除；客户只看 deliverables/<版本>。
+# Keep timestamped intermediate files; customers only receive deliverables/<version>.
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $BuildRoot = Join-Path $ProjectRoot "output\build_${Version}_$Stamp"
 $BuildDist = Join-Path $BuildRoot "dist"
 $BuildWork = Join-Path $BuildRoot "work"
 $BuildSpec = Join-Path $BuildRoot "spec"
-$StagingRoot = Join-Path $BuildRoot "delivery-staging"
+$StagingRoot = Join-Path $ProjectRoot "output\stage_$Stamp"
 $DeliveryRoot = Join-Path $ProjectRoot "deliverables\$Version"
 if ((Test-Path -LiteralPath $BuildRoot) -or (Test-Path -LiteralPath $DeliveryRoot)) {
     throw "Build or delivery output already exists. Increase the product version before rebuilding."
 }
 New-Item -ItemType Directory -Path $BuildDist, $BuildWork, $BuildSpec | Out-Null
 
-# 先通过现有前后端测试，确保交付物来自已验证源码。
+# Run the existing frontend and backend checks before packaging verified source.
 Push-Location $FrontendDir
 try {
     & npm test
@@ -106,7 +106,7 @@ finally {
     Pop-Location
 }
 
-# 主程序只保留自身代码和前端资源；依赖文件统一落入 runtime。
+# Keep application code and frontend assets in the program payload; dependencies live in runtime.
 & $Python -m PyInstaller `
     --name "AI_Customer_App" `
     --onedir `
@@ -163,7 +163,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\playwright\dri
     throw "Playwright driver is missing from the packaged runtime."
 }
 
-# 稳定入口只负责更新、环境校验和启动主程序。
+# The stable entrypoint only updates, validates the environment, and starts the application.
 & $Python -m PyInstaller `
     --name "AI_Customer" `
     --onefile `
@@ -175,7 +175,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\playwright\dri
     $StableLauncher
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 
-# 组装唯一的两个客户 ZIP，程序 ZIP 可远程更新，环境 ZIP 只需首次交付。
+# Assemble the two customer ZIPs: remotely updated program and one-time environment.
 $SchemaVersion = [int](& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.migrations import latest_version; print(latest_version())")
 $AssemblyOutput = @(& $Python $DeliveryAssembler `
     --packaged-app $PackagedApp `

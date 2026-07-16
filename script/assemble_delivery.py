@@ -115,9 +115,10 @@ def assemble(
         raise RuntimeError("程序版本、环境版本或数据库版本无效")
     if delivery_root.exists():
         raise RuntimeError(f"交付目录已存在，请先提升版本号：{delivery_root}")
-    program_root = staging_root / "program"
-    environment_root = staging_root / "environment"
-    artifact_root = staging_root / "artifacts"
+    # Short staging names keep deeply nested PyTorch headers below Windows MAX_PATH.
+    program_root = staging_root / "p"
+    environment_root = staging_root / "e"
+    artifact_root = staging_root / "a"
     program_runtime = program_root / "runtime"
     environment_runtime = environment_root / "runtime"
     for path in (program_root, environment_root, artifact_root):
