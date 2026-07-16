@@ -102,7 +102,7 @@ def test_active_jobs_covers_runtime_content_and_pending_work(tmp_path: Path, mon
         conn.execute("INSERT INTO video_jobs(id, subject) VALUES('video-1', '测试视频')")
         conn.execute("INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES('account-1', 'dy', '测试账号', 'accounts/account-1.json')")
         conn.execute("INSERT INTO publish_tasks(id, batch_id, account_id, source_type, content_type, title) VALUES('publish-1', 'batch-1', 'account-1', 'asset_video', 'video', '测试发布')")
-        conn.execute("INSERT INTO analysis_jobs(id, target_type, target_id) VALUES('analysis-1', 'lead', 1)")
+        conn.execute("INSERT INTO analysis_jobs(id, target_type, target_id, status) VALUES('analysis-1', 'lead', 1, 'running')")
 
     assert {item["table"] for item in data_management.active_jobs()} >= {
         "runtime_jobs",
@@ -113,6 +113,18 @@ def test_active_jobs_covers_runtime_content_and_pending_work(tmp_path: Path, mon
     with pytest.raises(ValueError, match="不能创建备份"):
         data_management.create_backup("active_jobs")
     assert data_management.maintenance_active() is False
+
+
+def test_pending_analysis_without_runtime_job_does_not_block_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_database(tmp_path, monkeypatch)
+    from app import database
+    from app.services import data_management
+
+    with database.connect() as conn:
+        conn.execute("INSERT INTO analysis_jobs(id, target_type, target_id) VALUES('orphan-analysis', 'lead', 1)")
+
+    assert data_management.active_jobs() == []
+    assert data_management.create_backup("orphan_analysis")["reason"] == "orphan_analysis"
 
 
 def test_maintenance_window_pauses_scheduler_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

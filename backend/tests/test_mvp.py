@@ -204,6 +204,9 @@ def test_task_command_mapping_and_import(tmp_path: Path) -> None:
     from app.services.importer import import_for_task
     from app import database, views
 
+    with database.connect() as conn:
+        database.set_setting(conn, "auto_analyze_leads", "true")
+
     task = crawler_adapter.create_task(
         TaskCreate(
             mode="competitor_crawl",
@@ -234,6 +237,7 @@ def test_task_command_mapping_and_import(tmp_path: Path) -> None:
     assert leads[0]["nickname"] == "准备采购的老板"
 
     with database.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM analysis_jobs").fetchone()[0] == 0
         account_id = conn.execute(
             "SELECT id FROM user_accounts WHERE platform = 'dy' AND platform_user_id = 'creator-1'"
         ).fetchone()["id"]

@@ -14,7 +14,7 @@ ACTIVE_JOB_QUERIES = (
     ("runtime_jobs", "status IN ('queued', 'running')"),
     ("automation_runs", "status IN ('queued', 'running')"),
     ("crawl_jobs", "status IN ('pending', 'running')"),
-    ("analysis_jobs", "status IN ('pending', 'running')"),
+    ("analysis_jobs", "status = 'running'"),
     ("message_batches", "status IN ('pending', 'running')"),
     ("traffic_runs", "status IN ('queued', 'running')"),
     ("video_jobs", "status IN ('queued', 'running')"),

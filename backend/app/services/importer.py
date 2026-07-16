@@ -151,7 +151,6 @@ def _import_with_connections(raw_conn: sqlite3.Connection, task_id: str) -> dict
         if task["mode"] != "profile_enrichment" and task["collect_comments"]:
             _import_comments(raw_conn, conn, platform, task, counts)
         counts["competitor_candidates"] += _refresh_competitor_candidates_from_profiles(conn)
-        _enqueue_auto_analysis(conn, task)
     return counts
 
 
@@ -861,33 +860,3 @@ def _ensure_lead(conn: sqlite3.Connection, account_id: int) -> int:
     )
     row = conn.execute("SELECT id FROM lead_user_accounts WHERE account_id = ?", (account_id,)).fetchone()
     return int(row["id"])
-
-
-def _enqueue_auto_analysis(conn: sqlite3.Connection, task: sqlite3.Row) -> None:
-    # 线索自动分析仍是纯 AI 队列；竞品自动分析需要先跑 creator 补资料，由 crawler_adapter 接管。
-    auto_lead = database.get_setting(conn, "auto_analyze_leads", "false") == "true"
-    if auto_lead and task["mode"] in ("competitor_crawl", "own_account", "demand_content"):
-        rows = conn.execute("SELECT id FROM lead_user_accounts WHERE follow_status = '待筛选'").fetchall()
-        for row in rows:
-            _insert_analysis_job(conn, "lead", int(row["id"]))
-
-
-def _insert_analysis_job(conn: sqlite3.Connection, target_type: str, target_id: int) -> None:
-    existing = conn.execute(
-        """
-        SELECT 1
-        FROM analysis_jobs
-        WHERE target_type = ?
-          AND target_id = ?
-          AND status IN ('pending', 'running')
-        LIMIT 1
-        """,
-        (target_type, target_id),
-    ).fetchone()
-    if existing:
-        return
-    job_id = f"{target_type}-{target_id}-{int(__import__('time').time() * 1000)}"
-    conn.execute(
-        "INSERT OR IGNORE INTO analysis_jobs(id, target_type, target_id) VALUES(?, ?, ?)",
-        (job_id, target_type, target_id),
-    )
