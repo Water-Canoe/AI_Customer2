@@ -46,6 +46,12 @@ def list_backups() -> dict[str, Any]:
     }
 
 
+def delete_backup(backup_id: str) -> dict[str, Any]:
+    # 与创建和恢复共用锁，避免同一备份正在写入或读取时被删除。
+    with _MAINTENANCE_LOCK:
+        return data_lifecycle.delete_backup(database.get_backup_root(), backup_id)
+
+
 def restore_backup(backup_id: str, confirm: str) -> dict[str, Any]:
     if confirm != RESTORE_CONFIRM_TEXT:
         raise ValueError(f"确认文本不正确，请输入：{RESTORE_CONFIRM_TEXT}")

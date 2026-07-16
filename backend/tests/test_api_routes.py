@@ -41,6 +41,7 @@ def test_api_routes_have_unique_method_paths_and_business_owners() -> None:
         ("POST", "/api/traffic/plans"): "app.routers.traffic",
         ("GET", "/api/automation/plans"): "app.routers.automation",
         ("GET", "/api/system/backups"): "app.routers.system",
+        ("DELETE", "/api/system/backups/{backup_id}"): "app.routers.system",
     }
     for key, module in expected_owners.items():
         assert key in routes

@@ -3076,6 +3076,13 @@ input[type='checkbox'] {
   min-width: 0;
 }
 
+.backup-list article > .backup-item-actions {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  gap: 6px;
+}
+
 .backup-list article strong,
 .backup-list article span,
 .backup-list article small {

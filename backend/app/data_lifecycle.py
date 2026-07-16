@@ -77,6 +77,13 @@ def list_backups(backup_root: Path) -> list[dict[str, Any]]:
     return sorted(results, key=lambda item: str(item.get("id") or ""), reverse=True)
 
 
+def delete_backup(backup_root: Path, backup_id: str) -> dict[str, Any]:
+    # 先复用恢复入口的路径与完整性校验，再删除唯一备份目录。
+    manifest, backup_dir, _ = load_backup(backup_root, backup_id)
+    shutil.rmtree(backup_dir)
+    return {"ok": True, "id": str(manifest["id"])}
+
+
 def restore_backup(
     backup_root: Path,
     backup_id: str,

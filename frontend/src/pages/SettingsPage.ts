@@ -96,6 +96,7 @@ export default defineComponent({
     const backupLoading = ref(false)
     const backupCreating = ref(false)
     const backupRestoring = ref('')
+    const backupDeleting = ref('')
 
     async function openPlatformLogin(platform: string) {
       loginOpening.value = platform
@@ -177,6 +178,28 @@ export default defineComponent({
         ElMessage.error(error?.response?.data?.detail || '恢复备份失败')
       } finally {
         backupRestoring.value = ''
+      }
+    }
+
+    async function deleteBackup(item: Dict) {
+      const backupId = String(item.id || '')
+      if (!backupId) return
+      try {
+        // 备份删除不可恢复，必须由用户单独确认。
+        await ElMessageBox.confirm('删除后无法恢复，确认删除这份备份？', '删除数据备份', {
+          confirmButtonText: '确认删除',
+          cancelButtonText: '取消',
+          type: 'warning'
+        })
+        backupDeleting.value = backupId
+        await api.delete(`/system/backups/${encodeURIComponent(backupId)}`)
+        ElMessage.success('备份已删除')
+        await loadBackups()
+      } catch (error: any) {
+        if (error === 'cancel' || error?.toString?.() === 'cancel') return
+        ElMessage.error(error?.response?.data?.detail || '删除备份失败')
+      } finally {
+        backupDeleting.value = ''
       }
     }
 
@@ -307,7 +330,7 @@ export default defineComponent({
           sectionTitle({ title: '环境状态', subtitle: '运行前先检查', icon: Monitor, tone: 'green' }),
           renderEnv(props.env),
           h('button', { class: 'wide-action', onClick: () => emit('check-env') }, [h(Refresh, { class: 'inline-icon' }), '重新检查']),
-          renderBackups(backups.value, backupLoading.value, backupCreating.value, backupRestoring.value, createBackup, loadBackups, restoreBackup),
+          renderBackups(backups.value, backupLoading.value, backupCreating.value, backupRestoring.value, backupDeleting.value, createBackup, loadBackups, restoreBackup, deleteBackup),
           renderTombstones(props.tombstoneSummary as Dict, props.tombstones as Dict, props.tombstoneFilters as Dict, filters => emit('load-tombstones', filters)),
           h('div', { class: 'danger-zone' }, [
             sectionTitle({ title: '危险操作', subtitle: '执行前自动备份', icon: Warning, tone: 'red', compact: true }),
@@ -523,9 +546,11 @@ function renderBackups(
   loading: boolean,
   creating: boolean,
   restoring: string,
+  deleting: string,
   create: () => void,
   reload: () => void,
-  restore: (item: Dict) => void
+  restore: (item: Dict) => void,
+  remove: (item: Dict) => void
 ) {
   const items = (value.items || []).slice(0, 5)
   const schema = value.schema || {}
@@ -542,11 +567,18 @@ function renderBackups(
             h('span', `${formatFileSize(item.database_size)} + ${formatFileSize(item.data_size)} · ${item.file_count || 0} 个文件`)
           ]),
           h('small', backupReasonLabel(item.reason)),
-          h('button', {
-            class: 'text-icon-button',
-            disabled: Boolean(restoring),
-            onClick: () => restore(item)
-          }, restoring === String(item.id || '') ? '恢复中...' : '恢复此备份')
+          h('div', { class: 'backup-item-actions' }, [
+            h('button', {
+              class: 'text-icon-button',
+              disabled: Boolean(restoring) || Boolean(deleting),
+              onClick: () => restore(item)
+            }, restoring === String(item.id || '') ? '恢复中...' : '恢复'),
+            h('button', {
+              class: 'text-icon-button danger',
+              disabled: Boolean(restoring) || Boolean(deleting),
+              onClick: () => remove(item)
+            }, deleting === String(item.id || '') ? '删除中...' : '删除')
+          ])
         ])))
       : h('div', { class: 'diagnostic-empty' }, loading ? '正在读取备份...' : '暂无可恢复备份')
   ])

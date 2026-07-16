@@ -77,6 +77,14 @@ def create_system_backup(payload: BackupCreateRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete("/system/backups/{backup_id}")
+def delete_system_backup(backup_id: str) -> dict[str, object]:
+    try:
+        return data_management.delete_backup(backup_id)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/system/backups/{backup_id}/restore")
 def restore_system_backup(backup_id: str, payload: BackupRestoreRequest) -> dict[str, object]:
     try:

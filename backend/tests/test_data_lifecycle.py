@@ -127,6 +127,20 @@ def test_pending_analysis_without_runtime_job_does_not_block_backup(tmp_path: Pa
     assert data_management.create_backup("orphan_analysis")["reason"] == "orphan_analysis"
 
 
+def test_backup_can_be_deleted_safely(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_database(tmp_path, monkeypatch)
+    from app.services import data_management
+
+    backup = data_management.create_backup("delete_test")
+    backup_dir = tmp_path / "backups" / str(backup["id"])
+
+    assert backup_dir.is_dir()
+    assert data_management.delete_backup(str(backup["id"])) == {"ok": True, "id": backup["id"]}
+    assert not backup_dir.exists()
+    with pytest.raises(ValueError, match="备份标识不合法"):
+        data_management.delete_backup("../outside")
+
+
 def test_maintenance_window_pauses_scheduler_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_database(tmp_path, monkeypatch)
     from app.services import automation_workbench, data_management
