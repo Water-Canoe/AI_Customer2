@@ -448,7 +448,7 @@ Sealos 授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试
 
 管理接口统一位于 `/ai-customer/admin/licenses*`，全部使用 `Authorization: Bearer <AI_CUSTOMER_ADMIN_TOKEN>`，授权码不提供硬删除，停用使用 `PATCH /admin/licenses/{licenseId}`。根目录 `tools/license-admin.html` 可直接打开，用于创建授权、修改功能权益/设备数/过期时间、启停授权、查看和撤销设备；管理 Token 只保存在当前页面内存，不写入 `localStorage`。该页面只供管理员使用，不进入客户发布包。旧 `add-license / check-license / get-license-devices / revoke-license-device` 和三个 demo permission 接口已删除，不保留兼容层。
 
-Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存主程序版本状态，使用 `AI_Customer-ComponentRelease` 保存可选组件版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并修改启用状态。主程序更新继续支持强制更新和灰度比例；音色克隆组件只向已有active设备且授权包含`content`权益的客户端下发，不做自动安装。客户端会验证Ed25519签名、ZIP大小和SHA-256，组件还会限制产品名、组件名、平台、架构和最低主程序版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时不会改变已安装版本。发布脚本在Windows下使用扩展长路径读取发布文件，超过传统`MAX_PATH`的运行库也能归档。详细请求格式见根目录 `sealos接口文档.md`。
+Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存主程序版本状态，使用 `AI_Customer-ComponentRelease` 保存可选组件版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并修改启用状态。主程序更新支持强制更新和灰度比例；客户端启动时自动检查，但普通版本必须由用户确认后才下载，强制版本显示说明后直接进入更新。独立更新窗口展示版本、大小、更新说明、实时下载量以及下载、校验、解压、安装阶段的0-100%进度，完成后自动启动工作台。音色克隆组件只向已有active设备且授权包含`content`权益的客户端下发，不做自动安装。客户端会验证Ed25519签名、ZIP大小和SHA-256，组件还会限制产品名、组件名、平台、架构和最低主程序版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时不会改变已安装版本；普通更新在用户确认后失败会明确提示并继续使用当前版本，强制更新失败则停止启动。发布脚本在Windows下使用扩展长路径读取发布文件，超过传统`MAX_PATH`的运行库也能归档。Sealos 当前接口已核对会返回 `mandatory` 和 `notes`；本轮源码回归为401项后端测试通过、8项联网测试跳过。详细请求格式见根目录 `sealos接口文档.md`。
 
 发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本默认从 `deliverables/` 选择最新的 `AI_Customer_Program_<版本>.zip`，校验 ZIP 内清单、文件白名单、大小和 SHA-256 后，直接签名并上传这一个客户程序 ZIP，不再从中间发布目录重复压缩。无参数运行只做本地校验、签名和验签；`-Upload` 上传并登记但保持禁用；`-Enable` 自动上传、登记并按默认 10% 灰度启用；需要指定文件时使用 `-ProgramZip <完整路径>`。同版本对象已存在时，脚本会查询发布登记：若版本、大小和 SHA-256 一致则报告“已发布”且不重复上传；不一致则拒绝覆盖并要求递增版本号。签名记录写入唯一的 `output/release_publish_<版本>_<时间>/`，真正对外交付的 ZIP 始终只在 `deliverables/<版本>/`。
 
@@ -508,7 +508,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。打包环境中的平台登录子进程使用 `--internal-platform-login` 内部入口，不再把 `AI_Customer.exe` 当作 Python 执行；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
-稳定启动器已经实现授权身份读取、远端更新检查、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；只有稳定启动器自身发生变更时，才重新手动交付整个 Program ZIP。签名更新清单同时声明环境版本，客户端只自动安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。数据库 schema 升级前仍按迁移规则备份；如果需要回到无法读取新 schema 的旧程序，必须同时恢复对应迁移前备份。
+稳定启动器已经实现授权身份读取、远端更新检查、用户确认、可视化进度、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；本次确认和进度功能本身位于稳定启动器，因此首次交付该能力必须重新手动发送包含新 `AI_Customer.exe` 的 Program ZIP，不能由旧启动器自我更新。签名更新清单同时声明环境版本，客户端只安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。数据库 schema 升级前仍按迁移规则备份；如果需要回到无法读取新 schema 的旧程序，必须同时恢复对应迁移前备份。
 
 公共 `GET /api/settings` 会屏蔽采集路径、采集库路径、授权服务地址和 AI API Key，只返回 `ai_api_key_configured`；提交空 API Key 表示保留原值。`PUT /api/settings` 使用显式白名单，不能写入任意内部设置。环境检查只返回“采集组件/采集存储正常或待处理”和业务质量，不返回绝对路径、原始表名或列名。授权端点集中在 `product_config.py` 并做轻量字符串隐藏，可降低直接 strings 扫描得到地址的概率，但这不是密码学安全边界。
 

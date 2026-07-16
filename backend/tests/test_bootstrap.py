@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
@@ -160,6 +161,8 @@ def test_remote_update_offer_requires_a_valid_signature(monkeypatch: pytest.Monk
         "size": 123,
         "sha256": "a" * 64,
         "download_url": "https://example.test/AI_Customer_1.1.2.zip",
+        "mandatory": False,
+        "notes": "",
     }
     with pytest.raises(RuntimeError, match="不适用于当前程序"):
         ai_customer_bootstrap._validate_update_offer(offer, "1.1.1", "2.0.0")
@@ -167,3 +170,61 @@ def test_remote_update_offer_requires_a_valid_signature(monkeypatch: pytest.Monk
     offer["signature"] = base64.b64encode(b"0" * 64).decode("ascii")
     with pytest.raises(InvalidSignature):
         ai_customer_bootstrap._validate_update_offer(offer, "1.1.1", "1.0.0")
+
+
+def test_remote_update_waits_for_confirmation_and_forwards_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+    update = {"version": "1.1.2", "size": 10, "sha256": "a" * 64, "download_url": "https://example.test/update.zip"}
+    events: list[tuple[str, int]] = []
+    calls: list[str] = []
+    monkeypatch.setattr(ai_customer_bootstrap, "current_version", lambda _: "1.1.1")
+    monkeypatch.setattr(ai_customer_bootstrap, "validate_environment", lambda _: "1.0.0")
+    monkeypatch.setattr(ai_customer_bootstrap, "_read_update_identity", lambda _: ("license", "device"))
+    monkeypatch.setattr(ai_customer_bootstrap, "_request_update_offer", lambda *_: {"available": True})
+    monkeypatch.setattr(ai_customer_bootstrap, "_validate_update_offer", lambda *_: update)
+
+    def download(_: dict[str, object], __: Path, progress) -> Path:
+        calls.append("download")
+        progress("正在下载", 50)
+        return tmp_path / "update.zip"
+
+    monkeypatch.setattr(ai_customer_bootstrap, "_download_update", download)
+    monkeypatch.setattr(ai_customer_bootstrap, "_extract_update", lambda *_: tmp_path / "release")
+    monkeypatch.setattr(ai_customer_bootstrap, "apply_release", lambda *_: "1.1.2")
+
+    assert ai_customer_bootstrap.apply_remote_update(tmp_path, confirm=lambda _: False, progress=lambda *item: events.append(item)) is False
+    assert calls == []
+    assert ai_customer_bootstrap.apply_remote_update(tmp_path, confirm=lambda _: True, progress=lambda *item: events.append(item)) is True
+    assert calls == ["download"]
+    assert events == [("正在下载", 50)]
+
+    update["mandatory"] = True
+    def fail_download(*_: object) -> Path:
+        raise RuntimeError("network")
+
+    monkeypatch.setattr(ai_customer_bootstrap, "_download_update", fail_download)
+    with pytest.raises(RuntimeError, match="必须更新失败"):
+        ai_customer_bootstrap.apply_remote_update(tmp_path, confirm=lambda _: True)
+
+
+def test_update_download_reports_real_byte_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+    payload = b"program-update"
+    events: list[tuple[str, int]] = []
+    monkeypatch.setattr(ai_customer_bootstrap.urllib.request, "urlopen", lambda *_args, **_kwargs: io.BytesIO(payload))
+
+    archive = ai_customer_bootstrap._download_update(
+        {
+            "version": "1.1.2",
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "download_url": "https://example.test/update.zip",
+        },
+        tmp_path,
+        lambda *item: events.append(item),
+    )
+
+    assert archive.read_bytes() == payload
+    assert events[0] == ("正在下载程序更新", 0)
+    assert events[-1] == ("更新包下载完成，正在校验", 82)
+    assert any(percent == 80 for _, percent in events)

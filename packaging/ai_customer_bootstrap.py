@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -189,16 +189,29 @@ def _validate_update_offer(offer: dict[str, Any], current: str, environment_vers
     download_url = str(offer.get("downloadUrl") or "")
     if not isinstance(size, int) or size <= 0 or not SHA256_PATTERN.fullmatch(sha256) or not download_url.startswith("https://"):
         raise RuntimeError("更新包信息无效")
-    return {"version": version, "size": size, "sha256": sha256, "download_url": download_url}
+    return {
+        "version": version,
+        "size": size,
+        "sha256": sha256,
+        "download_url": download_url,
+        "mandatory": bool(offer.get("mandatory")),
+        "notes": str(offer.get("notes") or "").strip()[:1000],
+    }
 
 
-def _download_update(update: dict[str, Any], install_root: Path) -> Path:
+def _download_update(
+    update: dict[str, Any],
+    install_root: Path,
+    progress: Callable[[str, int], None] | None = None,
+) -> Path:
     updates_root = install_root / "updates"
     updates_root.mkdir(exist_ok=True)
     archive_path = updates_root / f"{str(update.get('version'))}.zip"
     request = urllib.request.Request(str(update["download_url"]), headers={"Accept": "application/zip"})
     digest = hashlib.sha256()
     received = 0
+    if progress:
+        progress("正在下载程序更新", 0)
     with urllib.request.urlopen(request, timeout=30) as response, archive_path.open("wb") as output:
         for block in iter(lambda: response.read(1024 * 1024), b""):
             received += len(block)
@@ -206,14 +219,25 @@ def _download_update(update: dict[str, Any], install_root: Path) -> Path:
                 raise RuntimeError("下载的更新包大小异常")
             digest.update(block)
             output.write(block)
+            if progress:
+                progress(f"正在下载程序更新  {received / 1024 / 1024:.1f} / {int(update['size']) / 1024 / 1024:.1f} MB", min(80, int(received * 80 / int(update["size"]))))
     if received != int(update["size"]) or digest.hexdigest() != update["sha256"]:
         raise RuntimeError("下载的更新包校验失败")
+    if progress:
+        progress("更新包下载完成，正在校验", 82)
     return archive_path
 
 
-def _extract_update(archive_path: Path, install_root: Path, version: str) -> Path:
+def _extract_update(
+    archive_path: Path,
+    install_root: Path,
+    version: str,
+    progress: Callable[[str, int], None] | None = None,
+) -> Path:
     release_root = install_root / "updates" / version
     if release_root.is_dir():
+        if progress:
+            progress("正在检查已下载的程序文件", 95)
         return release_root
     with zipfile.ZipFile(archive_path) as archive:
         names: set[str] = set()
@@ -229,16 +253,28 @@ def _extract_update(archive_path: Path, install_root: Path, version: str) -> Pat
                 raise RuntimeError("更新包包含重复链接或解压体积异常")
             names.add(relative_path)
             files.append((item, relative_path))
+        extracted = 0
         for item, relative_path in files:
             destination = release_root / Path(*PurePosixPath(relative_path).parts)
             destination.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(item) as source, destination.open("wb") as output:
                 shutil.copyfileobj(source, output)
+            extracted += int(item.file_size)
+            if progress:
+                progress("正在解压程序更新", 82 + min(13, int(extracted * 13 / max(total_size, 1))))
     return release_root
 
 
-def apply_remote_update(install_root: Path) -> bool:
-    """Check, verify, and stage a newer authorized release before app startup."""
+def apply_remote_update(
+    install_root: Path,
+    *,
+    confirm: Callable[[dict[str, Any]], bool] | None = None,
+    progress: Callable[[str, int], None] | None = None,
+    on_error: Callable[[str], None] | None = None,
+) -> bool:
+    """Check automatically, then update only after explicit user confirmation."""
+    confirmed = False
+    update: dict[str, Any] | None = None
     try:
         current = current_version(install_root)
         environment_version = validate_environment(install_root)
@@ -251,11 +287,18 @@ def apply_remote_update(install_root: Path) -> bool:
         update = _validate_update_offer(offer, current, environment_version)
         if not update:
             return False
-        archive_path = _download_update(update, install_root)
-        release_root = _extract_update(archive_path, install_root, str(update["version"]))
-        apply_release(release_root, install_root)
+        if confirm and not confirm(update):
+            return False
+        confirmed = True
+        archive_path = _download_update(update, install_root, progress)
+        release_root = _extract_update(archive_path, install_root, str(update["version"]), progress)
+        apply_release(release_root, install_root, progress)
         return True
-    except (InvalidSignature, OSError, RuntimeError, ValueError, sqlite3.Error, urllib.error.URLError, zipfile.BadZipFile):
+    except (InvalidSignature, OSError, RuntimeError, ValueError, sqlite3.Error, urllib.error.URLError, zipfile.BadZipFile) as exc:
+        if confirmed and update and update.get("mandatory"):
+            raise RuntimeError(f"必须更新失败，无法继续启动。\n\n{exc}") from exc
+        if confirmed and on_error:
+            on_error(str(exc))
         return False
 
 
@@ -284,13 +327,18 @@ def application_executable(install_root: Path) -> Path:
     return executable
 
 
-def apply_release(release_root: Path, install_root: Path) -> str:
+def apply_release(
+    release_root: Path,
+    install_root: Path,
+    progress: Callable[[str, int], None] | None = None,
+) -> str:
     """Replace only program-owned files inside the portable directory."""
     release_root = release_root.resolve()
     version, files = _read_verified_release(release_root)
     install_root.mkdir(parents=True, exist_ok=True)
     (install_root / "data").mkdir(exist_ok=True)
-    for relative_path, item in sorted(files.items(), key=lambda value: value[0] == "AI_Customer_App.exe"):
+    ordered_files = sorted(files.items(), key=lambda value: value[0] == "AI_Customer_App.exe")
+    for index, (relative_path, item) in enumerate(ordered_files, start=1):
         if relative_path == "AI_Customer.exe":
             continue
         destination = install_root / Path(*PurePosixPath(relative_path).parts)
@@ -298,10 +346,14 @@ def apply_release(release_root: Path, install_root: Path) -> str:
         temporary = destination.with_name(f"{destination.name}.next-{os.getpid()}")
         shutil.copy2(item["source"], temporary)
         temporary.replace(destination)
+        if progress:
+            progress("正在安装程序更新", 95 + min(4, int(index * 4 / len(ordered_files))))
     manifest_source = release_root / MANIFEST_NAME
     manifest_temporary = install_root / f"{MANIFEST_NAME}.next-{os.getpid()}"
     shutil.copy2(manifest_source, manifest_temporary)
     manifest_temporary.replace(install_root / MANIFEST_NAME)
+    if progress:
+        progress("更新完成，即将启动", 100)
     return version
 
 
@@ -343,6 +395,52 @@ def launch_current(install_root: Path) -> Path:
     return executable
 
 
+def _confirm_update(update: dict[str, Any]) -> bool:
+    size_mb = int(update["size"]) / 1024 / 1024
+    notes = str(update.get("notes") or "")
+    details = f"\n\n更新内容：\n{notes}" if notes else ""
+    message = f"发现新版本 {update['version']}（{size_mb:.1f} MB）。{details}\n\n更新完成后会自动启动，更新期间请勿关闭程序。"
+    import ctypes
+
+    if update.get("mandatory"):
+        ctypes.windll.user32.MessageBoxW(None, message, "必须更新", 0x40)
+        return True
+    message += "\n\n是否立即更新？"
+    return ctypes.windll.user32.MessageBoxW(None, message, "发现新版本", 0x44) == 6
+
+
+class _UpdateProgressWindow:
+    """Small independent window that remains available while app files are replaced."""
+
+    def __init__(self) -> None:
+        import tkinter as tk
+        from tkinter import ttk
+
+        self.root = tk.Tk()
+        self.root.title("AI拓客工具更新")
+        self.root.geometry("440x150")
+        self.root.resizable(False, False)
+        self.root.protocol("WM_DELETE_WINDOW", lambda: None)
+        self.message = tk.StringVar(value="正在准备更新")
+        self.percent = tk.StringVar(value="0%")
+        self.value = tk.IntVar(value=0)
+        ttk.Label(self.root, textvariable=self.message, anchor="w").pack(fill="x", padx=24, pady=(24, 10))
+        ttk.Progressbar(self.root, maximum=100, variable=self.value).pack(fill="x", padx=24)
+        ttk.Label(self.root, textvariable=self.percent, anchor="e").pack(fill="x", padx=24, pady=(8, 0))
+        self.root.update()
+
+    def update(self, message: str, percent: int) -> None:
+        value = max(0, min(100, int(percent)))
+        self.message.set(message)
+        self.percent.set(f"{value}%")
+        self.value.set(value)
+        self.root.update_idletasks()
+        self.root.update()
+
+    def close(self) -> None:
+        self.root.destroy()
+
+
 def _show_error(message: str) -> None:
     try:
         import ctypes
@@ -354,15 +452,34 @@ def _show_error(message: str) -> None:
 
 def main() -> None:
     source_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+    progress_window: _UpdateProgressWindow | None = None
+
+    def show_progress(message: str, percent: int) -> None:
+        nonlocal progress_window
+        if progress_window is None:
+            progress_window = _UpdateProgressWindow()
+        progress_window.update(message, percent)
+
     try:
         current_version(source_root)
         validate_environment(source_root)
-        apply_remote_update(source_root)
+        apply_remote_update(
+            source_root,
+            confirm=_confirm_update,
+            progress=show_progress,
+            on_error=lambda message: _show_error(f"程序更新失败，已继续使用当前版本。\n\n{message}"),
+        )
+        if progress_window is not None:
+            progress_window.close()
+            progress_window = None
         validate_environment(source_root)
         launch_current(source_root)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         _show_error(str(exc))
         raise SystemExit(1) from exc
+    finally:
+        if progress_window is not None:
+            progress_window.close()
 
 
 if __name__ == "__main__":
