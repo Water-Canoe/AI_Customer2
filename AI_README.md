@@ -481,7 +481,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.2`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.2` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、上游许可证和全部字体，不再收集VoxCPM2、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。构建后会拒绝任何`r/patchright`目录，并要求官方`r/playwright/driver/node.exe`真实存在。每次使用带版本和时间戳的新目录，不删除旧构建。
 
-本轮通过验收的主程序目录是 `dist/releases/AI_Customer_1.2.1_20260716_203500`：未压缩1.67 GiB，本地签名更新ZIP为655.3 MiB；此前包含PyTorch的同版本诊断目录不是交付包。主程序已完成独立数据目录启动烟雾测试，`/api/health`返回200，CloakBrowser和官方Playwright驱动存在，Patchright及六个音色运行库目录均不存在。独立组件目录是 `dist/components/AI_Customer_VoxCPM2_1.0.0_20260716_210013`，未压缩4.94 GiB、签名ZIP 2.93 GiB；它已使用现有模型缓存完成一次真实JSON协议推理并生成368684字节WAV。主程序和组件当前都只完成本地发布准备，尚未启用远程下发。
+远程更新测试使用重新构建的 `dist/releases/AI_Customer_1.2.1_20260716_225733` 作为本机基线，未压缩1.67 GiB，已安装到稳定目录但尚未激活许可证。更新目标为 `dist/releases/AI_Customer_1.2.2_20260716_230855`，未压缩1.67 GiB；签名ZIP为687233909字节，SHA-256为`f85bb168a04a85b21c01fa22389bb99994d562a234cbde8c71739be641e230e3`，已登记到Sealos `stable` 通道并保持禁用、灰度0%。两次构建均通过15项前端测试和394项后端测试。独立组件仍为 `dist/components/AI_Customer_VoxCPM2_1.0.0_20260716_210013`，未压缩4.94 GiB、签名ZIP 2.93 GiB；本轮主程序更新测试不重新发布该组件。
 
 前端 `package.json` 与 `package-lock.json` 的应用版本同步为 `1.2.2`，但产品发布仍只以 `backend/app/version.py` 和发布清单为准，避免三个版本源分别驱动打包逻辑。
 
