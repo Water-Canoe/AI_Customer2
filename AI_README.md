@@ -479,11 +479,11 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 本地打包
 
-当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.1`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.1` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、上游许可证和全部字体，不再收集VoxCPM2、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。构建后会拒绝任何`r/patchright`目录，并要求官方`r/playwright/driver/node.exe`真实存在。每次使用带版本和时间戳的新目录，不删除旧构建。
+当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.2`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.2` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、上游许可证和全部字体，不再收集VoxCPM2、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。构建后会拒绝任何`r/patchright`目录，并要求官方`r/playwright/driver/node.exe`真实存在。每次使用带版本和时间戳的新目录，不删除旧构建。
 
 本轮通过验收的主程序目录是 `dist/releases/AI_Customer_1.2.1_20260716_203500`：未压缩1.67 GiB，本地签名更新ZIP为655.3 MiB；此前包含PyTorch的同版本诊断目录不是交付包。主程序已完成独立数据目录启动烟雾测试，`/api/health`返回200，CloakBrowser和官方Playwright驱动存在，Patchright及六个音色运行库目录均不存在。独立组件目录是 `dist/components/AI_Customer_VoxCPM2_1.0.0_20260716_210013`，未压缩4.94 GiB、签名ZIP 2.93 GiB；它已使用现有模型缓存完成一次真实JSON协议推理并生成368684字节WAV。主程序和组件当前都只完成本地发布准备，尚未启用远程下发。
 
-前端 `package.json` 与 `package-lock.json` 的应用版本同步为 `1.2.1`，但产品发布仍只以 `backend/app/version.py` 和发布清单为准，避免三个版本源分别驱动打包逻辑。
+前端 `package.json` 与 `package-lock.json` 的应用版本同步为 `1.2.2`，但产品发布仍只以 `backend/app/version.py` 和发布清单为准，避免三个版本源分别驱动打包逻辑。
 
 发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。客户只需双击发布包根目录的 `AI_Customer.exe`：它先校验清单中声明文件的大小和 SHA-256，只复制声明的应用文件到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`，再替换稳定启动器并原子切换 `current-version.json`，最后自动启动工作台。发布包因运行而产生的数据库等额外文件会被忽略，避免阻断安装；它们也不会进入版本目录。旧版本和稳定 `data/` 都保留。`script/install_release.ps1` 与 `script/switch_installed_version.ps1` 仅作为维护人员的手动安装、回滚工具，不要求客户使用。
 
