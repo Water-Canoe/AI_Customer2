@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
+import { paginateBackups } from './pages/SettingsPage'
 import {
   automationPlanTypes,
   movePlan,
@@ -80,5 +81,12 @@ describe('工作台路由', () => {
     expect(filterMaterialAssets(assets, 'video')).toHaveLength(3)
     expect(filterMaterialAssets(assets, 'image')).toHaveLength(7)
     expect(paginateMaterialAssets(assets, 2, 8).map(asset => asset.id)).toEqual(['8', '9'])
+  })
+
+  it('备份列表分页并在删除末页后校正页码', () => {
+    const backups = Array.from({ length: 6 }, (_, index) => ({ id: String(index) }))
+
+    expect(paginateBackups(backups, 2, 5).items.map(item => item.id)).toEqual(['5'])
+    expect(paginateBackups(backups.slice(0, 5), 2, 5).page).toBe(1)
   })
 })

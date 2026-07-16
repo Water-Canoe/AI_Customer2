@@ -3083,6 +3083,11 @@ input[type='checkbox'] {
   gap: 6px;
 }
 
+.backup-pages {
+  justify-content: center;
+  padding-top: 2px;
+}
+
 .backup-list article strong,
 .backup-list article span,
 .backup-list article small {

@@ -30,6 +30,7 @@ const commentCutoffOptions = [
   { value: 0, label: '不限' }
 ]
 const ownAccountPlatforms = ['dy', 'xhs', 'ks']
+const BACKUP_PAGE_SIZE = 5
 
 function defaultIcpProfile() {
   return Object.fromEntries(icpFields.map(field => [field.key, '']))
@@ -97,6 +98,7 @@ export default defineComponent({
     const backupCreating = ref(false)
     const backupRestoring = ref('')
     const backupDeleting = ref('')
+    const backupPage = ref(1)
 
     async function openPlatformLogin(platform: string) {
       loginOpening.value = platform
@@ -138,6 +140,7 @@ export default defineComponent({
       try {
         const { data } = await api.get('/system/backups')
         backups.value = data
+        backupPage.value = paginateBackups(data.items || [], backupPage.value, BACKUP_PAGE_SIZE).page
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '备份列表加载失败')
       } finally {
@@ -150,6 +153,7 @@ export default defineComponent({
       try {
         await api.post('/system/backups', { reason: 'manual' })
         ElMessage.success('业务数据库、内容资产和成品文件已备份')
+        backupPage.value = 1
         await loadBackups()
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '创建备份失败')
@@ -330,7 +334,7 @@ export default defineComponent({
           sectionTitle({ title: '环境状态', subtitle: '运行前先检查', icon: Monitor, tone: 'green' }),
           renderEnv(props.env),
           h('button', { class: 'wide-action', onClick: () => emit('check-env') }, [h(Refresh, { class: 'inline-icon' }), '重新检查']),
-          renderBackups(backups.value, backupLoading.value, backupCreating.value, backupRestoring.value, backupDeleting.value, createBackup, loadBackups, restoreBackup, deleteBackup),
+          renderBackups(backups.value, backupPage.value, page => backupPage.value = page, backupLoading.value, backupCreating.value, backupRestoring.value, backupDeleting.value, createBackup, loadBackups, restoreBackup, deleteBackup),
           renderTombstones(props.tombstoneSummary as Dict, props.tombstones as Dict, props.tombstoneFilters as Dict, filters => emit('load-tombstones', filters)),
           h('div', { class: 'danger-zone' }, [
             sectionTitle({ title: '危险操作', subtitle: '执行前自动备份', icon: Warning, tone: 'red', compact: true }),
@@ -543,6 +547,8 @@ function renderTombstones(summary: Dict, tombstones: Dict, filters: Dict, load: 
 
 function renderBackups(
   value: Dict,
+  requestedPage: number,
+  changePage: (page: number) => void,
   loading: boolean,
   creating: boolean,
   restoring: string,
@@ -552,7 +558,7 @@ function renderBackups(
   restore: (item: Dict) => void,
   remove: (item: Dict) => void
 ) {
-  const items = (value.items || []).slice(0, 5)
+  const backups = paginateBackups(value.items || [], requestedPage, BACKUP_PAGE_SIZE)
   const schema = value.schema || {}
   return h('div', { class: 'data-lifecycle-panel' }, [
     sectionTitle({ title: '数据保护', subtitle: `数据库版本 ${schema.current || 0}/${schema.latest || 0}`, icon: DataAnalysis, tone: 'blue', compact: true }),
@@ -560,8 +566,8 @@ function renderBackups(
       h('button', { class: 'secondary-action', disabled: creating, onClick: create }, creating ? '备份中...' : '立即备份'),
       h('button', { class: 'secondary-action', disabled: loading, onClick: reload }, loading ? '刷新中...' : '刷新列表')
     ]),
-    items.length
-      ? h('div', { class: 'backup-list' }, items.map((item: Dict) => h('article', [
+    backups.items.length
+      ? h('div', { class: 'backup-list' }, backups.items.map((item: Dict) => h('article', [
           h('div', [
             h('strong', item.created_at || item.id),
             h('span', `${formatFileSize(item.database_size)} + ${formatFileSize(item.data_size)} · ${item.file_count || 0} 个文件`)
@@ -580,8 +586,21 @@ function renderBackups(
             }, deleting === String(item.id || '') ? '删除中...' : '删除')
           ])
         ])))
-      : h('div', { class: 'diagnostic-empty' }, loading ? '正在读取备份...' : '暂无可恢复备份')
+      : h('div', { class: 'diagnostic-empty' }, loading ? '正在读取备份...' : '暂无可恢复备份'),
+    backups.totalPages > 1 ? h('div', { class: 'table-page-controls backup-pages' }, [
+      h('button', { disabled: backups.page <= 1, onClick: () => changePage(backups.page - 1) }, '上一页'),
+      h('span', `${backups.page} / ${backups.totalPages}`),
+      h('button', { disabled: backups.page >= backups.totalPages, onClick: () => changePage(backups.page + 1) }, '下一页')
+    ]) : null
   ])
+}
+
+export function paginateBackups(items: Dict[], page: number, pageSize: number) {
+  // 删除末页最后一条后自动回到仍然存在的最后一页。
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize))
+  const currentPage = Math.min(Math.max(1, page), totalPages)
+  const start = (currentPage - 1) * pageSize
+  return { items: items.slice(start, start + pageSize), page: currentPage, totalPages }
 }
 
 function formatFileSize(value: unknown) {
