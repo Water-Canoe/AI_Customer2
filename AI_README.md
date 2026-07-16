@@ -479,6 +479,18 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 本地打包
 
+### 打包执行约束
+
+- 除非用户明确要求“打包”“生成安装包”“生成发布包”或“发布远程更新”，日常功能修改、缺陷修复、测试和文档更新完成后不得运行 `script/build_package.ps1`、`script/build_voxcpm_component.ps1`、`script/publish_release.ps1` 或 `script/publish_voxcpm_component.ps1`，也不得仅为了验证代码而生成 EXE、发布目录或签名 ZIP。
+- 普通代码修改只执行与改动范围相称的源码测试、类型检查或生产前端构建；生产前端构建不等于 Windows 安装包构建。
+- 只有用户明确要求打包时才递增发布版本并执行完整打包链路；用户只要求修改代码时，不因修改完成而自动生成新版本安装包。
+
+### `output/` 目录说明
+
+`output/` 是被 Git 忽略的本地构建工作区，不是源码目录，也不保存客户业务数据。`b_*` 和 `package_build_*` 是 PyInstaller 构建缓存，`release_publish_*` 是主程序签名 ZIP，`voxcpm_*` 是音色组件构建、签名或依赖下载缓存，`smoke_*`、`probe_*` 和日志属于测试诊断产物。一次主程序发布可能同时在 `output/b_*/dist`、`dist/releases/*` 和 `output/release_publish_*` 保留构建目录、正式发布目录和压缩包三份内容；包含 PyTorch 的历史构建占用会更大。长期反复打包而不清理会快速占用数十 GiB。
+
+构建完成后，PyInstaller 工作目录、旧版构建缓存、旧版签名包和测试诊断产物均可由维护人员手动清理，不影响源码、已安装程序或 `%LOCALAPPDATA%/AI_Customer/data`。尚未上传的最新 `release_publish_*`、最新 `voxcpm_publish_*` 应保留；`voxcpm_downloads` 可删除，但后续安装或构建需要重新下载依赖。打包脚本自身不自动清理历史目录，避免误删仍需交付或追溯的发布产物。
+
 当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.3`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.3` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、上游许可证和全部字体，不再收集VoxCPM2、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。构建后会拒绝任何`r/patchright`目录，并要求官方`r/playwright/driver/node.exe`真实存在。每次使用带版本和时间戳的新目录，不删除旧构建。
 
 远程更新测试使用重新构建的 `dist/releases/AI_Customer_1.2.1_20260716_225733` 作为本机基线，未压缩1.67 GiB，已安装到稳定目录并完成许可证激活。更新目标为 `dist/releases/AI_Customer_1.2.2_20260716_230855`，未压缩1.67 GiB；签名ZIP为687233909字节，SHA-256为`f85bb168a04a85b21c01fa22389bb99994d562a234cbde8c71739be641e230e3`，已登记到Sealos `stable` 通道并启用100%灰度。测试机已通过稳定启动器完整下载、校验、安装并从 `1.2.1` 原子切换到 `1.2.2`，`/api/health`返回200和版本`1.2.2`；授权身份、稳定数据目录及旧版可执行文件均保留。两次构建均通过15项前端测试和394项后端测试。独立组件仍为 `dist/components/AI_Customer_VoxCPM2_1.0.0_20260716_210013`，未压缩4.94 GiB、签名ZIP 2.93 GiB；本轮主程序更新测试不重新发布该组件。
