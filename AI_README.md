@@ -479,15 +479,19 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 本地打包
 
-当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.2`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.2` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、上游许可证和全部字体，不再收集VoxCPM2、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。构建后会拒绝任何`r/patchright`目录，并要求官方`r/playwright/driver/node.exe`真实存在。每次使用带版本和时间戳的新目录，不删除旧构建。
+当前产品版本定义在 `backend/app/version.py`，本轮为 `1.2.3`。Windows 发布包通过 `script/build_package.ps1 -Version 1.2.3` 生成。脚本不会自动安装缺失依赖，会依次执行前端测试、前端类型检查/构建、完整后端测试，再使用 PyInstaller 6 的 `--optimize 2` 生成应用目录和独立稳定启动器。主程序会显式收集MoviePy、内置FFmpeg、Edge TTS、Faster Whisper、CTranslate2、OpenAI、Gemini、DashScope、Azure、LiteLLM、TwelveLabs、Pydub、视频引擎配置、上游许可证和全部字体，不再收集VoxCPM2、PyTorch、Torchaudio、TorchCodec、Transformers、Safetensors和SoundFile。构建后会拒绝任何`r/patchright`目录，并要求官方`r/playwright/driver/node.exe`真实存在。每次使用带版本和时间戳的新目录，不删除旧构建。
 
 远程更新测试使用重新构建的 `dist/releases/AI_Customer_1.2.1_20260716_225733` 作为本机基线，未压缩1.67 GiB，已安装到稳定目录并完成许可证激活。更新目标为 `dist/releases/AI_Customer_1.2.2_20260716_230855`，未压缩1.67 GiB；签名ZIP为687233909字节，SHA-256为`f85bb168a04a85b21c01fa22389bb99994d562a234cbde8c71739be641e230e3`，已登记到Sealos `stable` 通道并启用100%灰度。测试机已通过稳定启动器完整下载、校验、安装并从 `1.2.1` 原子切换到 `1.2.2`，`/api/health`返回200和版本`1.2.2`；授权身份、稳定数据目录及旧版可执行文件均保留。两次构建均通过15项前端测试和394项后端测试。独立组件仍为 `dist/components/AI_Customer_VoxCPM2_1.0.0_20260716_210013`，未压缩4.94 GiB、签名ZIP 2.93 GiB；本轮主程序更新测试不重新发布该组件。
 
-前端 `package.json` 与 `package-lock.json` 的应用版本同步为 `1.2.2`，但产品发布仍只以 `backend/app/version.py` 和发布清单为准，避免三个版本源分别驱动打包逻辑。
+多标签页修复版本为 `dist/releases/AI_Customer_1.2.3_20260716_234533`，本地签名产物位于 `output/release_publish_1.2.3_20260716_235446`，尚未上传或启用远程下发。该版本通过396项后端测试、15项前端测试和生产构建；真实EXE已验证内部登录参数直接进入登录子进程，无工作台启动，Windows单实例锁也已通过重复获取烟雾测试。
+
+前端 `package.json` 与 `package-lock.json` 的应用版本同步为 `1.2.3`，但产品发布仍只以 `backend/app/version.py` 和发布清单为准，避免三个版本源分别驱动打包逻辑。
 
 发布目录包含 `app/`、稳定入口 `AI_Customer.exe`、安装/切换脚本、使用说明和 `release-manifest.json`。客户只需双击发布包根目录的 `AI_Customer.exe`：它先校验清单中声明文件的大小和 SHA-256，只复制声明的应用文件到 `%LOCALAPPDATA%/AI_Customer/versions/<版本>/`，再替换稳定启动器并原子切换 `current-version.json`，最后自动启动工作台。发布包因运行而产生的数据库等额外文件会被忽略，避免阻断安装；它们也不会进入版本目录。旧版本和稳定 `data/` 都保留。`script/install_release.ps1` 与 `script/switch_installed_version.ps1` 仅作为维护人员的手动安装、回滚工具，不要求客户使用。
 
 版本应用的业务库、备份、引流图片、内容资产、Whisper模型、VoxCPM模型、视频生成结果和浏览器登录状态始终放在安装根目录的 `data/`，不会写进 `versions/`。可重新下载的独立推理程序放在安装根目录的 `runtimes/`，不会进入业务备份。启动器会注入这两个稳定目录和预置采集组件路径，并在每次数据库初始化时更新内部路径设置，因此从旧版本升级后不会继续使用旧版本目录；客户设置页不再提供路径编辑入口。
+
+打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。打包环境中的平台登录子进程使用 `--internal-platform-login` 内部入口，不再把 `AI_Customer.exe` 当作 Python 执行；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
 稳定启动器已经实现授权身份读取、远端更新检查、限时下载、Ed25519验签、大小/SHA-256校验、清单白名单解压和版本切换。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把ZIP手工放入对象存储。数据库schema升级前仍会按迁移规则备份；如果需要回到无法读取新schema的旧程序，必须同时恢复对应迁移前备份。
 

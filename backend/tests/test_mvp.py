@@ -125,6 +125,22 @@ def test_packaged_launcher_keeps_data_outside_version_dir(tmp_path: Path, monkey
     assert os.environ["CLOAKBROWSER_BINARY_PATH"] == str(cloakbrowser_binary)
 
 
+def test_packaged_launcher_routes_internal_login_without_starting_workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher_path = BACKEND_ROOT.parent / "packaging" / "ai_customer_launcher.py"
+    spec = importlib.util.spec_from_file_location("ai_customer_launcher_internal_test", launcher_path)
+    assert spec and spec.loader
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+    from app.services import traffic_workbench
+
+    calls: list[str] = []
+    monkeypatch.setattr(sys, "argv", ["AI_Customer.exe", "--internal-platform-login", "dy"])
+    monkeypatch.setattr(traffic_workbench, "_hold_platform_login_window", calls.append)
+
+    assert launcher.run_internal_mode(tmp_path) is True
+    assert calls == ["dy"]
+
+
 def create_raw_db(raw_db: Path) -> None:
     conn = sqlite3.connect(raw_db)
     try:
@@ -2010,6 +2026,40 @@ def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypat
         "-c",
         "from app.services.traffic_workbench import _hold_platform_login_window; _hold_platform_login_window('dy')",
     ]
+
+
+def test_packaged_traffic_checks_do_not_restart_main_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_project(tmp_path)
+    from app.services import profile_manager, traffic_workbench
+
+    binary = tmp_path / "cloakbrowser" / "chrome.exe"
+    binary.parent.mkdir()
+    binary.touch()
+    calls: dict[str, object] = {}
+
+    class Proc:
+        pid = 104
+
+        def poll(self) -> None:
+            return None
+
+    def fake_popen(command: list[str], **_kwargs: object) -> Proc:
+        calls["command"] = command
+        return Proc()
+
+    monkeypatch.setattr(traffic_workbench.sys, "frozen", True, raising=False)
+    monkeypatch.setenv("CLOAKBROWSER_BINARY_PATH", str(binary))
+    monkeypatch.setattr(traffic_workbench.importlib.util, "find_spec", lambda _: object())
+    monkeypatch.setattr(traffic_workbench.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("不应启动主程序"))
+    monkeypatch.setattr(profile_manager.time, "sleep", lambda _: None)
+    monkeypatch.setattr(profile_manager.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(profile_manager, "_terminate_process_tree", lambda process, timeout_seconds=5.0: None)
+    profile_manager.shutdown()
+
+    assert traffic_workbench.install_environment()["ok"] is True
+    assert traffic_workbench.open_douyin_login_window()["ok"] is True
+    profile_manager.close_interactive()
+    assert calls["command"] == [sys.executable, "--internal-platform-login", "dy"]
 
 
 def test_settings_platform_login_route_supports_xhs_and_kuaishou(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

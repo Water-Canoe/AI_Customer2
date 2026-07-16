@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import random
 import re
 import subprocess
@@ -633,6 +634,13 @@ def environment_check() -> dict[str, Any]:
 
 
 def install_environment() -> dict[str, Any]:
+    if getattr(sys, "frozen", False):
+        check = environment_check()
+        return {
+            "ok": check["ok"],
+            "steps": [{"command": "内置运行环境", "ok": check["ok"], "output": "打包版本已内置依赖，无需在线安装"}],
+            "check": check,
+        }
     steps = [
         _run_install_step([sys.executable, "-m", "pip", "install", "-r", str(database.BACKEND_ROOT / "requirements.txt")]),
         _run_install_step([sys.executable, "-m", "cloakbrowser", "install"]),
@@ -659,11 +667,16 @@ def open_platform_login_window(platform: str) -> dict[str, Any]:
     runtime_dir = database.get_data_root()
     runtime_dir.mkdir(parents=True, exist_ok=True)
     log_path = runtime_dir / f"platform_{platform}_login.log"
-    command = [
-        sys.executable,
-        "-c",
-        f"from app.services.traffic_workbench import _hold_platform_login_window; _hold_platform_login_window('{platform}')",
-    ]
+    # 打包后 sys.executable 是主程序本身，只能通过内部参数启动登录子进程。
+    command = (
+        [sys.executable, "--internal-platform-login", platform]
+        if getattr(sys, "frozen", False)
+        else [
+            sys.executable,
+            "-c",
+            f"from app.services.traffic_workbench import _hold_platform_login_window; _hold_platform_login_window('{platform}')",
+        ]
+    )
     result = profile_manager.launch_interactive(
         platform,
         command,
@@ -3041,6 +3054,11 @@ def _env_item(ok: bool, message: str) -> dict[str, Any]:
 
 
 def _check_cloakbrowser_binary() -> dict[str, Any]:
+    if getattr(sys, "frozen", False):
+        bundled_binary = Path(os.environ.get("CLOAKBROWSER_BINARY_PATH", ""))
+        if bundled_binary.is_file():
+            return _env_item(True, str(bundled_binary))
+        return _env_item(False, "打包内置的 CloakBrowser 浏览器不存在")
     try:
         # Windows 下 chrome --version 偶发卡住，这里只检查 CloakBrowser 内核是否已安装。
         result = subprocess.run(

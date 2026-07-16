@@ -11,6 +11,9 @@ from pathlib import Path
 import uvicorn
 
 
+_INSTANCE_MUTEX: int | None = None
+
+
 def app_dir() -> Path:
     """Return the folder that owns the packaged runtime files."""
     if getattr(sys, "frozen", False):
@@ -65,8 +68,44 @@ def open_browser_later(url: str) -> None:
     webbrowser.open(url)
 
 
+def run_internal_mode(base_dir: Path) -> bool:
+    if len(sys.argv) != 3 or sys.argv[1] != "--internal-platform-login":
+        return False
+    configure_environment(base_dir)
+    from app.services.traffic_workbench import _hold_platform_login_window
+
+    _hold_platform_login_window(sys.argv[2])
+    return True
+
+
+def another_instance_running() -> bool:
+    """Keep one packaged workbench process on Windows."""
+    global _INSTANCE_MUTEX
+    if os.name != "nt" or not getattr(sys, "frozen", False):
+        return False
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    ctypes.set_last_error(0)
+    handle = kernel32.CreateMutexW(None, False, "Local\\AI_Customer_Workbench")
+    if not handle:
+        raise OSError(ctypes.get_last_error(), "无法创建应用单实例锁")
+    if ctypes.get_last_error() == 183:
+        kernel32.CloseHandle(handle)
+        return True
+    _INSTANCE_MUTEX = int(handle)
+    return False
+
+
 def main() -> None:
     base_dir = app_dir()
+    if run_internal_mode(base_dir):
+        return
+    if another_instance_running():
+        return
     configure_environment(base_dir)
     from app.main import app
 
