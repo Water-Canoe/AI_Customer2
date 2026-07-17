@@ -515,7 +515,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 2026-07-17 已生成修复后的 `deliverables/1.2.6/`：Program ZIP 为 139,616,185 字节（SHA-256 `f1e177234145c374b03ca8b4b2b3ead731db4355aaf962de6b2dac762ba7a7de`），Environment ZIP `1.0.1` 为 7,865,808,775 字节（SHA-256 `ebfce0849d3f558f27455b1f3024121bf75ee18b40e26cb0536ed791b987d9e8`）。定向组装测试 2 项通过，完整构建前回归为前端 15 项通过、后端 402 项通过且 8 项联网测试跳过。最终 Environment ZIP 共 39,786 个文件，包含 `runtime/MyCrawler/cache/__init__.py` 和 `runtime/MyCrawler/cache/abs_cache.py`，不包含 `runtime/MyCrawler/database/sqlite_tables.db`。合并解压两个真实交付 ZIP 后，便携 Python 成功执行数据库初始化并生成 `sqlite_tables.db`；复用本机已授权登录态执行抖音关键词“AI获客”真实搜索，成功写入 14 条 `douyin_aweme`，未再出现 `ModuleNotFoundError`。
 
-2026-07-17 已使用 `-ProgramOnly` 生成远程更新版本 `deliverables/1.2.7/AI_Customer_Program_1.2.7.zip`：大小 139,616,340 字节，SHA-256 为 `9aca5cbc23525c95bef5815c3e59af72697ae1269c33cf05220108747ec34781`，schema 为 10，要求 Environment `1.0.1`。构建前回归为前端 15 项通过、后端 402 项通过且 8 项联网测试跳过；Program ZIP 已通过白名单、文件哈希、Ed25519 签名和远端重复登记校验，Sealos `stable` 当前已启用、非强制、灰度 10%。
+2026-07-17 已使用 `-ProgramOnly` 生成远程更新版本 `deliverables/1.2.7/AI_Customer_Program_1.2.7.zip`：大小 139,616,340 字节，SHA-256 为 `9aca5cbc23525c95bef5815c3e59af72697ae1269c33cf05220108747ec34781`，schema 为 10，要求 Environment `1.0.1`。构建前回归为前端 15 项通过、后端 402 项通过且 8 项联网测试跳过；Program ZIP 已通过白名单、文件哈希、Ed25519 签名和远端重复登记校验，Sealos `stable` 当前已启用、非强制、灰度 100%。
 
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。打包环境中的平台登录子进程使用 `--internal-platform-login` 内部入口，不再把 `AI_Customer.exe` 当作 Python 执行；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
