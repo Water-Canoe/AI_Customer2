@@ -507,6 +507,8 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 2026-07-17 已实际生成 `deliverables/1.2.3/`：Program ZIP 为 136,712,791 字节（SHA-256 `f6e5a075fc8b36d2a479cf0a6ed04bf73206187c374f0df321ba78c170880e64`），Environment ZIP 为 7,865,802,695 字节（SHA-256 `f9c41cb48d3bf515923d2b66f8a5a490e701f5055a322aa915a5087e2b772be3`）。Program ZIP 已通过完整白名单、大小和文件哈希验证；Environment ZIP 包含 39,781 个文件，环境版本和 9 个必需路径均通过清单验证。构建前回归为 15 项前端测试和 399 项后端测试通过、8 项联网测试跳过。VoxCPM2 深层头文件会超过传统 Windows 长路径限制，因此组装脚本使用 `output/stage_<时间>/p|e|a` 短中间目录，最终 ZIP 内目录结构不受影响。
 
+2026-07-17 使用 `-ProgramOnly` 重新构建基线版本 `deliverables/1.2.4/AI_Customer_Program_1.2.4.zip`：大小139,614,536字节，SHA-256为`e9bde39c66637437555eba17f0e4fa134090343fde19bfb4d9e92666d53247f2`，schema为10，要求Environment `1.0.0`。该目录只包含Program ZIP、`SHA256.txt`和`README.txt`，未生成或复制Environment ZIP；构建前回归为15项前端测试和402项后端测试通过、8项联网测试跳过。
+
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。打包环境中的平台登录子进程使用 `--internal-platform-login` 内部入口，不再把 `AI_Customer.exe` 当作 Python 执行；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
 稳定启动器已经实现授权身份读取、远端更新检查、用户确认、可视化进度、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；本次确认和进度功能本身位于稳定启动器，因此首次交付该能力必须重新手动发送包含新 `AI_Customer.exe` 的 Program ZIP，不能由旧启动器自我更新。签名更新清单同时声明环境版本，客户端只安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。数据库 schema 升级前仍按迁移规则备份；如果需要回到无法读取新 schema 的旧程序，必须同时恢复对应迁移前备份。
