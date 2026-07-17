@@ -109,3 +109,33 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     verified = _verifier_module().verify(str(program_zip), "1.2.3")
     assert verified["version"] == "1.2.3"
     assert verified["environment_version"] == "1.0.0"
+
+
+def test_program_only_delivery_skips_environment_sources(tmp_path: Path) -> None:
+    assembler = _module()
+    packaged = tmp_path / "packaged"
+    _file(packaged / "AI_Customer_App.exe")
+    _file(packaged / "runtime" / "frontend_dist" / "index.html")
+    _file(packaged / "runtime" / "app" / "resource.txt")
+
+    program_zip, environment_zip = assembler.assemble(
+        packaged_app=packaged,
+        stable_launcher=_file(tmp_path / "AI_Customer.exe"),
+        staging_root=tmp_path / "staging",
+        delivery_root=tmp_path / "deliverables" / "1.2.4",
+        version="1.2.4",
+        environment_version="1.0.0",
+        schema_version=7,
+        crawler_python_root=None,
+        crawler_root=None,
+        cloakbrowser_root=None,
+        vox_component_root=None,
+        voice_models_root=None,
+        readme=_file(tmp_path / "PACKAGE_README.txt"),
+        program_only=True,
+    )
+
+    assert environment_zip is None
+    assert program_zip.is_file()
+    assert not any(path.name.startswith("AI_Customer_Environment_") for path in program_zip.parent.iterdir())
+    assert _verifier_module().verify(str(program_zip), "1.2.4")["environment_version"] == "1.0.0"

@@ -484,6 +484,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - 除非用户明确要求“打包”“生成安装包”“生成发布包”或“发布远程更新”，日常功能修改、缺陷修复、测试和文档更新完成后不得运行 `script/build_package.ps1`、`script/build_voxcpm_component.ps1`、`script/publish_release.ps1` 或 `script/publish_voxcpm_component.ps1`，也不得仅为了验证代码而生成 EXE、发布目录或签名 ZIP。
 - 普通代码修改只执行与改动范围相称的源码测试、类型检查或生产前端构建；生产前端构建不等于 Windows 安装包构建。
 - 只有用户明确要求打包时才递增发布版本并执行完整打包链路；用户只要求修改代码时，不因修改完成而自动生成新版本安装包。
+- 用户只需要主程序且已有匹配环境包时，使用 `script/build_package.ps1 -ProgramOnly`。该模式仍执行完整源码测试并重新构建主程序与稳定启动器，但只生成 Program ZIP，不检查、复制或压缩MyCrawler、浏览器、VoxCPM2和模型等环境依赖；Program ZIP仍声明所需环境版本，不能脱离对应Environment ZIP单独运行。
 
 ### 唯一交付目录
 

@@ -103,13 +103,14 @@ def assemble(
     version: str,
     environment_version: str,
     schema_version: int,
-    crawler_python_root: Path,
-    crawler_root: Path,
-    cloakbrowser_root: Path,
-    vox_component_root: Path,
-    voice_models_root: Path,
+    crawler_python_root: Path | None,
+    crawler_root: Path | None,
+    cloakbrowser_root: Path | None,
+    vox_component_root: Path | None,
+    voice_models_root: Path | None,
     readme: Path,
-) -> tuple[Path, Path]:
+    program_only: bool = False,
+) -> tuple[Path, Path | None]:
     """Assemble the one frequently updated ZIP and the one reusable environment ZIP."""
     if not VERSION_PATTERN.fullmatch(version) or not VERSION_PATTERN.fullmatch(environment_version) or schema_version < 0:
         raise RuntimeError("程序版本、环境版本或数据库版本无效")
@@ -133,6 +134,23 @@ def assemble(
         if not source.is_dir():
             raise RuntimeError(f"程序资源缺失：{source}")
         _copy_tree(source, program_runtime / name)
+
+    # Program-only deliveries reuse an existing matching environment ZIP.
+    if program_only:
+        _write_json(program_root / "release-manifest.json", _program_manifest(program_root, version, environment_version, schema_version))
+        program_zip = artifact_root / f"AI_Customer_Program_{version}.zip"
+        _zip_directory(program_root, program_zip)
+        (artifact_root / "SHA256.txt").write_text(f"{_hash(program_zip)}  {program_zip.name}\n", encoding="ascii")
+        (artifact_root / "README.txt").write_text(
+            f"本目录仅包含程序 ZIP，运行时需要已安装 Environment {environment_version}。\n",
+            encoding="utf-8-sig",
+        )
+        delivery_root.parent.mkdir(parents=True, exist_ok=True)
+        artifact_root.replace(delivery_root)
+        return delivery_root / program_zip.name, None
+
+    if any(path is None for path in (crawler_python_root, crawler_root, cloakbrowser_root, vox_component_root, voice_models_root)):
+        raise RuntimeError("生成环境 ZIP 时必须提供全部环境来源")
 
     for source in sorted(packaged_runtime.iterdir()):
         if source.name in PROGRAM_RUNTIME_DIRS:
@@ -223,24 +241,28 @@ def _arguments() -> argparse.Namespace:
         "stable-launcher",
         "staging-root",
         "delivery-root",
+        "readme",
+    ):
+        parser.add_argument("--" + name, type=Path, required=True)
+    for name in (
         "crawler-python-root",
         "crawler-root",
         "cloakbrowser-root",
         "vox-component-root",
         "voice-models-root",
-        "readme",
     ):
-        parser.add_argument("--" + name, type=Path, required=True)
+        parser.add_argument("--" + name, type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--environment-version", required=True)
     parser.add_argument("--schema-version", type=int, required=True)
+    parser.add_argument("--program-only", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = vars(_arguments())
     program_zip, environment_zip = assemble(**{key.replace("-", "_"): value for key, value in args.items()})
-    print(json.dumps({"program_zip": str(program_zip), "environment_zip": str(environment_zip)}, ensure_ascii=False))
+    print(json.dumps({"program_zip": str(program_zip), "environment_zip": str(environment_zip) if environment_zip else None}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@ param(
     [string]$Version = "",
     [string]$EnvironmentVersion = "1.0.0",
     [string]$VoxComponentPath = "",
-    [string]$VoiceModelsPath = ""
+    [string]$VoiceModelsPath = "",
+    [switch]$ProgramOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -177,25 +178,42 @@ if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 
 # Assemble the two customer ZIPs: remotely updated program and one-time environment.
 $SchemaVersion = [int](& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.migrations import latest_version; print(latest_version())")
-$AssemblyOutput = @(& $Python $DeliveryAssembler `
-    --packaged-app $PackagedApp `
-    --stable-launcher (Join-Path $BuildDist "AI_Customer.exe") `
-    --staging-root $StagingRoot `
-    --delivery-root $DeliveryRoot `
-    --version $Version `
-    --environment-version $EnvironmentVersion `
-    --schema-version $SchemaVersion `
-    --crawler-python-root $CrawlerPythonRoot `
-    --crawler-root $CrawlerRoot `
-    --cloakbrowser-root $CloakBrowserDir `
-    --vox-component-root $VoxComponentPath `
-    --voice-models-root $VoiceModelsPath `
-    --readme $Readme)
+$AssemblyArguments = @(
+    $DeliveryAssembler,
+    "--packaged-app", $PackagedApp,
+    "--stable-launcher", (Join-Path $BuildDist "AI_Customer.exe"),
+    "--staging-root", $StagingRoot,
+    "--delivery-root", $DeliveryRoot,
+    "--version", $Version,
+    "--environment-version", $EnvironmentVersion,
+    "--schema-version", $SchemaVersion,
+    "--readme", $Readme
+)
+if ($ProgramOnly) {
+    $AssemblyArguments += "--program-only"
+}
+else {
+    $AssemblyArguments += @(
+        "--crawler-python-root", $CrawlerPythonRoot,
+        "--crawler-root", $CrawlerRoot,
+        "--cloakbrowser-root", $CloakBrowserDir,
+        "--vox-component-root", $VoxComponentPath,
+        "--voice-models-root", $VoiceModelsPath
+    )
+}
+$AssemblyOutput = @(& $Python @AssemblyArguments)
 if ($LASTEXITCODE -ne 0) { throw "Portable delivery assembly failed" }
 $Assembly = ($AssemblyOutput -join "") | ConvertFrom-Json
 
-Write-Host "Two-ZIP delivery created:"
-Write-Host "  Program: $($Assembly.program_zip)"
-Write-Host "  Environment: $($Assembly.environment_zip)"
-Write-Host "Customer steps: extract Program ZIP, merge Environment ZIP into it, then double-click AI_Customer.exe."
-Write-Host "Remote publishing uses the Program ZIP only."
+if ($ProgramOnly) {
+    Write-Host "Program-only delivery created:"
+    Write-Host "  Program: $($Assembly.program_zip)"
+    Write-Host "Run it with the existing Environment $EnvironmentVersion files."
+}
+else {
+    Write-Host "Two-ZIP delivery created:"
+    Write-Host "  Program: $($Assembly.program_zip)"
+    Write-Host "  Environment: $($Assembly.environment_zip)"
+    Write-Host "Customer steps: extract Program ZIP, merge Environment ZIP into it, then double-click AI_Customer.exe."
+    Write-Host "Remote publishing uses the Program ZIP only."
+}
