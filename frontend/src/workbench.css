@@ -5785,6 +5785,11 @@ button.filter-button,
   background: #16a34a;
 }
 
+.sidebar-version {
+  color: #94a3b8;
+  text-align: center;
+}
+
 .sidebar-license.is-denied .sidebar-license-dot {
   background: #dc2626;
 }

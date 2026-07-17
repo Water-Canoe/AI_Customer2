@@ -66,6 +66,7 @@
           </span>
           <i class="sidebar-license-dot" aria-hidden="true"></i>
         </button>
+        <small v-if="appVersion" class="sidebar-version">版本 v{{ appVersion }}</small>
       </div>
     </el-aside>
 
@@ -178,6 +179,7 @@ const licenseLoading = ref(false)
 const licenseChecking = ref(false)
 const licenseCodeDraft = ref('')
 const updateChecking = ref(false)
+const appVersion = ref('')
 const messageKeywords = ref<Dict[]>([])
 const messageCustomers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const messageDetail = ref<Dict>({})
@@ -1579,7 +1581,9 @@ watch(activeView, () => {
 })
 
 onMounted(async () => {
-  await Promise.all([refreshAll(), loadLicense(true)])
+  // 版本在当前进程内不会变化，只需在页面启动时读取一次。
+  const versionRequest = api.get('/health').then(({ data }) => appVersion.value = String(data.version || '')).catch(() => undefined)
+  await Promise.all([refreshAll(), loadLicense(true), versionRequest])
   autoSync.start()
 })
 
