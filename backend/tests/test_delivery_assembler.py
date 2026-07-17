@@ -46,6 +46,8 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     crawler = tmp_path / "MyCrawler"
     _file(crawler / "main.py")
     _file(crawler / "LICENSE")
+    _file(crawler / "cache" / "__init__.py")
+    _file(crawler / "cache" / "abs_cache.py")
     _file(crawler / "database" / "sqlite_tables.db", b"generated")
     _file(crawler / ".venv" / "Lib" / "site-packages" / "playwright" / "driver" / "node.exe")
     python_root = tmp_path / "python"
@@ -103,6 +105,8 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     assert "runtime/library.zip" in environment_names
     assert "runtime/python/python.exe" in environment_names
     assert "runtime/MyCrawler/main.py" in environment_names
+    assert "runtime/MyCrawler/cache/__init__.py" in environment_names
+    assert "runtime/MyCrawler/cache/abs_cache.py" in environment_names
     assert "runtime/MyCrawler/database/sqlite_tables.db" not in environment_names
     assert "runtime/frontend_dist/index.html" not in environment_names
 

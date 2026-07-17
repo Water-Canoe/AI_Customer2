@@ -490,16 +490,18 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 `deliverables/<程序版本>/` 是唯一可以发给客户或上传的目录，只包含四项：`AI_Customer_Program_<程序版本>.zip`、`AI_Customer_Environment_<环境版本>.zip`、`SHA256.txt` 和 `README.txt`。`dist/releases/` 和 `output/` 中的历史文件都不是新架构交付物。`output/` 仍是被 Git 忽略的 PyInstaller、组装、签名和测试中间工作区；脚本不自动删除历史文件，维护人员需要清理时必须逐个确认明确目录。
 
-当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.5`；`-Version` 省略时自动读取该值，显式传入不同值时构建会停止，避免 EXE 内版本与发布清单不一致。环境版本由构建参数独立管理，初始为 `1.0.0`。只有明确要求正式打包时才执行：
+当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.6`；`-Version` 省略时自动读取该值，显式传入不同值时构建会停止，避免 EXE 内版本与发布清单不一致。环境版本由构建参数独立管理，本轮为 `1.0.1`。只有明确要求正式打包时才执行：
 
 ```powershell
 # 生成程序 ZIP 和环境 ZIP；程序版本默认读取 backend/app/version.py。
-.\script\build_package.ps1 -Version 1.2.5 -EnvironmentVersion 1.0.0
+.\script\build_package.ps1 -Version 1.2.6 -EnvironmentVersion 1.0.1
 ```
 
 脚本先执行前端测试与生产构建、完整后端测试，再使用 PyInstaller 生成 `AI_Customer_App.exe` 和稳定入口 `AI_Customer.exe`，最后由 `script/assemble_delivery.py` 按所有权拆成两个 ZIP。缺少 PyInstaller、CloakBrowser、MyCrawler 虚拟环境、VoxCPM2 组件或模型时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
 
 程序 ZIP 保存经常变化并允许远程更新的文件：`AI_Customer.exe`、`AI_Customer_App.exe`、`runtime/frontend_dist/`、`runtime/app/`、说明和发布清单。环境 ZIP 保存体积大且较少变化的依赖：PyInstaller Python 运行库、Playwright、CloakBrowser 浏览器、便携 Python、MyCrawler 源码及其 site-packages、VoxCPM2/PyTorch/CUDA 推理组件和模型。MyCrawler 上游 `LICENSE` 随环境包保留；本项目作者已在本次构建改造中明确确认其为 MyCrawler 作者并授权随本产品打包。
+
+`MyCrawler/cache/` 是采集器的缓存源码模块，必须随 MyCrawler 源码进入环境 ZIP；目录名虽然是 `cache`，但不是可删除的运行缓存。`MyCrawler/database/sqlite_tables.db` 属于运行数据，仍由首次采集任务执行 `python main.py --init_db sqlite` 初始化，`*.db`、`*.sqlite`、`*.sqlite3` 及其派生文件继续被组装规则排除，不进入环境包。
 
 开发环境不改成便携结构：后端继续使用 `backend/.venv`，前端继续使用 `frontend/node_modules`，MyCrawler 继续使用 `MyCrawler/.venv`，本地运行仍从源码目录启动。根目录 `runtime/` 只属于客户解压后的便携版本，不要求开发者手工维护。
 
@@ -510,6 +512,8 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 2026-07-17 使用 `-ProgramOnly` 重新构建基线版本 `deliverables/1.2.4/AI_Customer_Program_1.2.4.zip`：大小139,614,536字节，SHA-256为`e9bde39c66637437555eba17f0e4fa134090343fde19bfb4d9e92666d53247f2`，schema为10，要求Environment `1.0.0`。该目录只包含Program ZIP、`SHA256.txt`和`README.txt`，未生成或复制Environment ZIP；构建前回归为15项前端测试和402项后端测试通过、8项联网测试跳过。
 
 远程更新目标版本为 `deliverables/1.2.5/AI_Customer_Program_1.2.5.zip`：大小139,615,296字节，SHA-256为`04e38edcd4a9acebef89fd17bcd0d1681d12d6159575ee756e5d7b0727de5f9b`，schema为10，要求Environment `1.0.0`。该Program ZIP已完成白名单、文件哈希、Ed25519签名和远端登记校验；Sealos `stable` 当前保持禁用、非强制、灰度0%，等待基线 `1.2.4` 准备完成后再启用。
+
+2026-07-17 已生成修复后的 `deliverables/1.2.6/`：Program ZIP 为 139,616,185 字节（SHA-256 `f1e177234145c374b03ca8b4b2b3ead731db4355aaf962de6b2dac762ba7a7de`），Environment ZIP `1.0.1` 为 7,865,808,775 字节（SHA-256 `ebfce0849d3f558f27455b1f3024121bf75ee18b40e26cb0536ed791b987d9e8`）。定向组装测试 2 项通过，完整构建前回归为前端 15 项通过、后端 402 项通过且 8 项联网测试跳过。最终 Environment ZIP 共 39,786 个文件，包含 `runtime/MyCrawler/cache/__init__.py` 和 `runtime/MyCrawler/cache/abs_cache.py`，不包含 `runtime/MyCrawler/database/sqlite_tables.db`。合并解压两个真实交付 ZIP 后，便携 Python 成功执行数据库初始化并生成 `sqlite_tables.db`；复用本机已授权登录态执行抖音关键词“AI获客”真实搜索，成功写入 14 条 `douyin_aweme`，未再出现 `ModuleNotFoundError`。
 
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。打包环境中的平台登录子进程使用 `--internal-platform-login` 内部入口，不再把 `AI_Customer.exe` 当作 Python 执行；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 

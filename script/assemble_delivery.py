@@ -21,7 +21,6 @@ CRAWLER_IGNORED_DIRS = {
     ".ruff_cache",
     "__pycache__",
     "browser_data",
-    "cache",
     "docs",
     "node_modules",
     "test",
