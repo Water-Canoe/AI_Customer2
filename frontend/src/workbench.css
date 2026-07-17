@@ -5718,7 +5718,9 @@ button.filter-button,
 }
 
 .sidebar-footer {
+  display: grid;
   flex: 0 0 auto;
+  gap: 8px;
   padding: 10px;
   border-top: 1px solid var(--workbench-border);
 }
@@ -5743,6 +5745,11 @@ button.filter-button,
   border-color: #8fc9bf;
   background: #f2faf8;
   outline: none;
+}
+
+.sidebar-license:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .sidebar-license .el-icon {

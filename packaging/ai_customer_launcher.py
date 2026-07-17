@@ -115,7 +115,9 @@ def main() -> None:
     threading.Thread(target=open_browser_later, args=(url,), daemon=True).start()
     print(f"AI拓客工具已启动：{url}")
     print("关闭这个窗口即可停止本地服务。")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info"))
+    app.state.uvicorn_server = server
+    server.run()
 
 
 if __name__ == "__main__":

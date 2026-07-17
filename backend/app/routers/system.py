@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from app import views
 from app.schemas import BackupCreateRequest, BackupRestoreRequest, ClearDataRequest, LicenseUpdate, SettingsUpdate
@@ -62,6 +66,39 @@ def update_settings(payload: SettingsUpdate) -> dict[str, object]:
 @router.get("/settings/env-check")
 def env_check() -> dict[str, object]:
     return views.environment_check()
+
+
+def _start_manual_update_launcher() -> None:
+    if not getattr(sys, "frozen", False):
+        raise RuntimeError("检查更新仅支持打包版，请通过 AI_Customer.exe 启动软件")
+    install_root = Path(sys.executable).resolve().parent
+    launcher = install_root / "AI_Customer.exe"
+    if not launcher.is_file():
+        raise RuntimeError("程序目录缺少 AI_Customer.exe，无法检查更新")
+    subprocess.Popen(
+        [str(launcher), "--wait-for-pid", str(os.getpid())],
+        cwd=str(install_root),
+        close_fds=True,
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+
+
+@router.post("/system/check-update")
+def check_for_update(request: Request, background_tasks: BackgroundTasks) -> dict[str, object]:
+    server = getattr(request.app.state, "uvicorn_server", None)
+    if server is None:
+        raise HTTPException(status_code=400, detail="检查更新仅支持打包版，请通过 AI_Customer.exe 启动软件")
+    if getattr(request.app.state, "update_restart_requested", False):
+        raise HTTPException(status_code=409, detail="应用正在重启并检查更新")
+    try:
+        data_management.ensure_idle("检查更新")
+        _start_manual_update_launcher()
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    request.app.state.update_restart_requested = True
+    # 响应发出后让 Uvicorn 正常执行 lifespan 清理，再由稳定启动器检查更新。
+    background_tasks.add_task(setattr, server, "should_exit", True)
+    return {"ok": True, "message": "应用正在重启并检查更新"}
 
 
 @router.get("/system/backups")

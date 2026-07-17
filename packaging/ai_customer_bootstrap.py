@@ -271,6 +271,7 @@ def apply_remote_update(
     confirm: Callable[[dict[str, Any]], bool] | None = None,
     progress: Callable[[str, int], None] | None = None,
     on_error: Callable[[str], None] | None = None,
+    check_feedback: Callable[[str], None] | None = None,
 ) -> bool:
     """Check automatically, then update only after explicit user confirmation."""
     confirmed = False
@@ -280,12 +281,18 @@ def apply_remote_update(
         environment_version = validate_environment(install_root)
         identity = _read_update_identity(install_root)
         if not identity:
+            if check_feedback:
+                check_feedback("请先完成产品授权，再检查更新。")
             return False
         offer = _request_update_offer(identity, current)
         if not offer:
+            if check_feedback:
+                check_feedback("更新服务未返回有效结果，请稍后重试。")
             return False
         update = _validate_update_offer(offer, current, environment_version)
         if not update:
+            if check_feedback:
+                check_feedback("当前已是最新版本。")
             return False
         if confirm and not confirm(update):
             return False
@@ -299,6 +306,8 @@ def apply_remote_update(
             raise RuntimeError(f"必须更新失败，无法继续启动。\n\n{exc}") from exc
         if confirmed and on_error:
             on_error(str(exc))
+        elif check_feedback:
+            check_feedback(f"检查更新失败，请稍后重试。\n\n{exc}")
         return False
 
 
@@ -450,6 +459,55 @@ def _show_error(message: str) -> None:
         print(message)
 
 
+def _show_info(message: str) -> None:
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, "AI拓客工具", 0x40)
+    except Exception:
+        print(message)
+
+
+def _manual_update_parent_pid(argv: list[str] | None = None) -> int | None:
+    args = list(sys.argv if argv is None else argv)
+    if len(args) == 1:
+        return None
+    if len(args) != 3 or args[1] != "--wait-for-pid":
+        raise RuntimeError("检查更新启动参数无效")
+    try:
+        pid = int(args[2])
+    except ValueError as exc:
+        raise RuntimeError("检查更新进程编号无效") from exc
+    if pid <= 0 or pid == os.getpid():
+        raise RuntimeError("检查更新进程编号无效")
+    return pid
+
+
+def _wait_for_process_exit(pid: int, timeout_ms: int = 120_000) -> None:
+    """Wait for the running workbench to close before replacing its executable."""
+    if os.name != "nt":
+        raise RuntimeError("手动检查更新仅支持 Windows 打包版")
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.WaitForSingleObject.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+    kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    handle = kernel32.OpenProcess(0x00100000, False, pid)
+    if not handle:
+        return
+    try:
+        result = kernel32.WaitForSingleObject(handle, timeout_ms)
+    finally:
+        kernel32.CloseHandle(handle)
+    if result == 0x00000102:
+        raise RuntimeError("应用关闭超时，无法开始检查更新")
+    if result != 0:
+        raise RuntimeError("等待应用关闭失败，无法开始检查更新")
+
+
 def main() -> None:
     source_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
     progress_window: _UpdateProgressWindow | None = None
@@ -461,6 +519,9 @@ def main() -> None:
         progress_window.update(message, percent)
 
     try:
+        parent_pid = _manual_update_parent_pid()
+        if parent_pid is not None:
+            _wait_for_process_exit(parent_pid)
         current_version(source_root)
         validate_environment(source_root)
         apply_remote_update(
@@ -468,6 +529,7 @@ def main() -> None:
             confirm=_confirm_update,
             progress=show_progress,
             on_error=lambda message: _show_error(f"程序更新失败，已继续使用当前版本。\n\n{message}"),
+            check_feedback=_show_info if parent_pid is not None else None,
         )
         if progress_window is not None:
             progress_window.close()

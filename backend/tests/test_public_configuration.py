@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -46,3 +47,14 @@ def test_public_settings_mask_secrets_and_reject_internal_overrides(tmp_path: Pa
         assert database.get_setting(conn, "ai_api_key") == "private-key"
         assert database.get_setting(conn, "media_crawler_path") == "C:/internal/collector"
         assert database.get_setting(conn, "license_server_url") == "https://should-not-be-used.invalid"
+
+    from app.routers import system
+
+    server = SimpleNamespace(should_exit=False)
+    app.state.uvicorn_server = server
+    started: list[bool] = []
+    monkeypatch.setattr(system, "_start_manual_update_launcher", lambda: started.append(True))
+    response = client.post("/api/system/check-update")
+    assert response.status_code == 200
+    assert started == [True]
+    assert server.should_exit is True

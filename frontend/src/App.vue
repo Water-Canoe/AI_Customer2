@@ -39,6 +39,20 @@
       <div class="sidebar-footer">
         <button
           type="button"
+          class="sidebar-license sidebar-update"
+          title="关闭并重新启动应用后检查新版本"
+          aria-label="检查软件更新"
+          :disabled="updateChecking"
+          @click="checkForUpdates"
+        >
+          <el-icon><Refresh /></el-icon>
+          <span class="sidebar-license-copy">
+            <strong>检查更新</strong>
+            <small>{{ updateChecking ? '正在重启并检查' : '重启后检查新版本' }}</small>
+          </span>
+        </button>
+        <button
+          type="button"
           class="sidebar-license"
           :class="licenseStatusClass"
           title="管理产品授权与设备"
@@ -163,6 +177,7 @@ const licenseDialogOpen = ref(false)
 const licenseLoading = ref(false)
 const licenseChecking = ref(false)
 const licenseCodeDraft = ref('')
+const updateChecking = ref(false)
 const messageKeywords = ref<Dict[]>([])
 const messageCustomers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const messageDetail = ref<Dict>({})
@@ -420,6 +435,24 @@ async function openLicenseDialog() {
     await loadLicense()
   } finally {
     licenseLoading.value = false
+  }
+}
+
+async function checkForUpdates() {
+  // 打包版先正常关闭本地服务，再由稳定启动器执行签名更新流程。
+  try {
+    await ElMessageBox.confirm('检查更新需要关闭并重新启动应用；如果仍有排队或运行中的任务，系统会阻止重启。确认继续？', '检查更新', { type: 'warning' })
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    throw error
+  }
+  updateChecking.value = true
+  try {
+    const { data } = await api.post('/system/check-update')
+    ElMessage.success(data.message || '应用正在重启并检查更新')
+  } catch (error: any) {
+    updateChecking.value = false
+    ElMessage.error(error?.response?.data?.detail || '无法启动更新检查')
   }
 }
 

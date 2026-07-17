@@ -207,6 +207,22 @@ def test_remote_update_waits_for_confirmation_and_forwards_progress(tmp_path: Pa
         ai_customer_bootstrap.apply_remote_update(tmp_path, confirm=lambda _: True)
 
 
+def test_manual_update_reports_latest_and_validates_wait_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+    messages: list[str] = []
+    monkeypatch.setattr(ai_customer_bootstrap, "current_version", lambda _: "1.1.1")
+    monkeypatch.setattr(ai_customer_bootstrap, "validate_environment", lambda _: "1.0.0")
+    monkeypatch.setattr(ai_customer_bootstrap, "_read_update_identity", lambda _: ("license", "device"))
+    monkeypatch.setattr(ai_customer_bootstrap, "_request_update_offer", lambda *_: {"available": False})
+
+    assert ai_customer_bootstrap.apply_remote_update(tmp_path, check_feedback=messages.append) is False
+    assert messages == ["当前已是最新版本。"]
+    assert ai_customer_bootstrap._manual_update_parent_pid(["AI_Customer.exe"]) is None
+    assert ai_customer_bootstrap._manual_update_parent_pid(["AI_Customer.exe", "--wait-for-pid", "123"]) == 123
+    with pytest.raises(RuntimeError, match="进程编号无效"):
+        ai_customer_bootstrap._manual_update_parent_pid(["AI_Customer.exe", "--wait-for-pid", "invalid"])
+
+
 def test_update_download_reports_real_byte_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ai_customer_bootstrap = _bootstrap_module()
     payload = b"program-update"
