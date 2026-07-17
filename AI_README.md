@@ -490,11 +490,11 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 `deliverables/<程序版本>/` 是唯一可以发给客户或上传的目录，只包含四项：`AI_Customer_Program_<程序版本>.zip`、`AI_Customer_Environment_<环境版本>.zip`、`SHA256.txt` 和 `README.txt`。`dist/releases/` 和 `output/` 中的历史文件都不是新架构交付物。`output/` 仍是被 Git 忽略的 PyInstaller、组装、签名和测试中间工作区；脚本不自动删除历史文件，维护人员需要清理时必须逐个确认明确目录。
 
-当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.6`；`-Version` 省略时自动读取该值，显式传入不同值时构建会停止，避免 EXE 内版本与发布清单不一致。环境版本由构建参数独立管理，本轮为 `1.0.1`。只有明确要求正式打包时才执行：
+当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.7`；`-Version` 省略时自动读取该值，显式传入不同值时构建会停止，避免 EXE 内版本与发布清单不一致。环境版本由构建参数独立管理，本轮为 `1.0.1`。只有明确要求正式打包时才执行：
 
 ```powershell
 # 生成程序 ZIP 和环境 ZIP；程序版本默认读取 backend/app/version.py。
-.\script\build_package.ps1 -Version 1.2.6 -EnvironmentVersion 1.0.1
+.\script\build_package.ps1 -Version 1.2.7 -EnvironmentVersion 1.0.1
 ```
 
 脚本先执行前端测试与生产构建、完整后端测试，再使用 PyInstaller 生成 `AI_Customer_App.exe` 和稳定入口 `AI_Customer.exe`，最后由 `script/assemble_delivery.py` 按所有权拆成两个 ZIP。缺少 PyInstaller、CloakBrowser、MyCrawler 虚拟环境、VoxCPM2 组件或模型时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
