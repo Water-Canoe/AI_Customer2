@@ -484,7 +484,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - 除非用户明确要求“打包”“生成安装包”“生成发布包”或“发布远程更新”，日常功能修改、缺陷修复、测试和文档更新完成后不得运行 `script/build_package.ps1`、`script/build_voxcpm_component.ps1`、`script/publish_release.ps1` 或 `script/publish_voxcpm_component.ps1`，也不得仅为了验证代码而生成 EXE、发布目录或签名 ZIP。
 - 普通代码修改只执行与改动范围相称的源码测试、类型检查或生产前端构建；生产前端构建不等于 Windows 安装包构建。
 - 只有用户明确要求打包时才递增发布版本并执行完整打包链路；用户只要求修改代码时，不因修改完成而自动生成新版本安装包。
-- 用户只需要主程序且已有匹配环境包时，使用 `script/build_package.ps1 -ProgramOnly`。该模式仍执行完整源码测试并重新构建主程序与稳定启动器，但只生成 Program ZIP，不检查、复制或压缩MyCrawler、浏览器、VoxCPM2和模型等环境依赖；Program ZIP仍声明所需环境版本，不能脱离对应Environment ZIP单独运行。
+- 用户只需要主程序且已有匹配环境包时，使用 `script/build_package.ps1 -ProgramOnly`。该模式仍执行完整源码测试并重新构建主程序与稳定启动器，但只生成 Program ZIP，不复制或压缩MyCrawler、浏览器、VoxCPM2和模型等环境依赖；Program ZIP仍声明所需环境版本，不能脱离对应Environment ZIP单独运行。
 
 ### 唯一交付目录
 
@@ -508,6 +508,8 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 2026-07-17 已实际生成 `deliverables/1.2.3/`：Program ZIP 为 136,712,791 字节（SHA-256 `f6e5a075fc8b36d2a479cf0a6ed04bf73206187c374f0df321ba78c170880e64`），Environment ZIP 为 7,865,802,695 字节（SHA-256 `f9c41cb48d3bf515923d2b66f8a5a490e701f5055a322aa915a5087e2b772be3`）。Program ZIP 已通过完整白名单、大小和文件哈希验证；Environment ZIP 包含 39,781 个文件，环境版本和 9 个必需路径均通过清单验证。构建前回归为 15 项前端测试和 399 项后端测试通过、8 项联网测试跳过。VoxCPM2 深层头文件会超过传统 Windows 长路径限制，因此组装脚本使用 `output/stage_<时间>/p|e|a` 短中间目录，最终 ZIP 内目录结构不受影响。
 
 2026-07-17 使用 `-ProgramOnly` 重新构建基线版本 `deliverables/1.2.4/AI_Customer_Program_1.2.4.zip`：大小139,614,536字节，SHA-256为`e9bde39c66637437555eba17f0e4fa134090343fde19bfb4d9e92666d53247f2`，schema为10，要求Environment `1.0.0`。该目录只包含Program ZIP、`SHA256.txt`和`README.txt`，未生成或复制Environment ZIP；构建前回归为15项前端测试和402项后端测试通过、8项联网测试跳过。
+
+远程更新目标版本为 `deliverables/1.2.5/AI_Customer_Program_1.2.5.zip`：大小139,615,296字节，SHA-256为`04e38edcd4a9acebef89fd17bcd0d1681d12d6159575ee756e5d7b0727de5f9b`，schema为10，要求Environment `1.0.0`。该Program ZIP已完成白名单、文件哈希、Ed25519签名和远端登记校验；Sealos `stable` 当前保持禁用、非强制、灰度0%，等待基线 `1.2.4` 准备完成后再启用。
 
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。打包环境中的平台登录子进程使用 `--internal-platform-login` 内部入口，不再把 `AI_Customer.exe` 当作 Python 执行；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
