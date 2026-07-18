@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app import views
 from app.api_dependencies import require_license
-from app.schemas import BulkActionPreview, CustomerFollowStatusUpdate, TableUpdate
-from app.services import account_actions, bulk_actions, deletion, job_queue, ops_visibility
+from app.schemas import CustomerFollowStatusUpdate
+from app.services import account_actions, deletion, job_queue
 
 
 router = APIRouter(prefix="/api", tags=["overview"])
@@ -63,34 +63,6 @@ def delete_overview_account_non_customers(account_id: int) -> dict[str, object]:
         return account_actions.delete_account_non_customers(account_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/tables/{library}")
-def list_table(
-    library: str,
-    status: str = Query(default=""),
-    keyword: str = Query(default=""),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-) -> dict[str, object]:
-    try:
-        return views.list_library(library, status=status, keyword=keyword, page=page, page_size=page_size)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="未知数据表") from exc
-
-
-@router.patch("/tables/{library}/{row_id}")
-def update_table_row(library: str, row_id: int, payload: TableUpdate) -> dict[str, object]:
-    return views.update_library_row(library, row_id, payload.values)
-
-
-@router.delete("/tables/{library}/{row_id}")
-def delete_table_row(
-    library: str,
-    row_id: int,
-    hard: bool | None = Query(default=None),
-) -> dict[str, object]:
-    return deletion.delete_library_row(library, row_id, hard)
 
 
 @router.get("/overview/tree")
@@ -178,35 +150,6 @@ def delete_overview_customer(
 @router.get("/workbench/actions")
 def workbench_actions() -> dict[str, object]:
     return views.workbench_actions()
-
-
-@router.get("/tombstones/summary")
-def get_tombstone_summary() -> dict[str, object]:
-    return ops_visibility.tombstone_summary()
-
-
-@router.get("/tombstones")
-def get_tombstones(
-    entity_type: str = Query(default=""),
-    platform: str = Query(default=""),
-    source: str = Query(default=""),
-    query: str = Query(default=""),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-) -> dict[str, object]:
-    return ops_visibility.list_tombstones(
-        entity_type=entity_type,
-        platform=platform,
-        source=source,
-        query=query,
-        page=page,
-        page_size=page_size,
-    )
-
-
-@router.post("/bulk-actions/preview")
-def bulk_action_preview(payload: BulkActionPreview) -> dict[str, object]:
-    return bulk_actions.preview_bulk_action(payload)
 
 
 @router.get("/platform-capabilities")

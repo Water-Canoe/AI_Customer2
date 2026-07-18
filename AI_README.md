@@ -106,7 +106,7 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 ## 后端 API 结构
 
-`backend/app/main.py` 只负责 FastAPI 生命周期、中间件、业务路由装配和前端静态文件托管。共享授权校验及“自家账号”默认参数位于 `api_dependencies.py`；接口按业务域拆到 `backend/app/routers/`：`system.py`、`traffic.py`、`automation.py`、`content.py`、`tasks.py`、`overview.py`、`message.py`、`ai.py`、`runtime.py`。业务计算继续放在 `services/`，路由只负责参数、授权、错误码和任务入队，新增接口时不得重新堆回 `main.py`。
+`backend/app/main.py` 只负责 FastAPI 生命周期、中间件、业务路由装配和前端静态文件托管。共享授权校验及“自家账号”默认参数位于 `api_dependencies.py`；接口按业务域拆到 `backend/app/routers/`：`system.py`、`traffic.py`、`automation.py`、`content.py`、`tasks.py`、`lead_accounts.py`、`libraries.py`、`overview.py`、`data_governance.py`、`message.py`、`ai.py` 和 `runtime.py`。其中采集任务、采集账号动作、业务数据表、业务总览以及墓碑/批量预览分别由独立路由承载，URL 保持不变，避免再次把不同数据域堆进 `tasks.py` 或 `overview.py`。业务计算继续放在 `services/`，路由只负责参数、授权、错误码和任务入队，新增接口时不得重新堆回 `main.py`。
 
 `backend/tests/test_api_routes.py` 校验接口方法/路径不重复，并检查关键接口由正确业务路由拥有；其余服务和接口行为由现有后端测试覆盖。
 
@@ -374,7 +374,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 引流计划在创建时固定一个已绑定“引流”用途的账号，计划和运行批次都保存账号 ID 快照。账号登录、重新登录和状态检查只在账号中心完成；没有可用默认账号时，创建或运行计划会直接提示先配置账号。抖音随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频；快手随机引流批次直接进入 `https://www.kuaishou.com/new-reco`。
 
-执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并使用运行批次保存的账号独立 Profile，避免不同账号 Cookie 混用。可见窗口默认最大化；Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
+执行器位于 `backend/app/services/traffic_workbench.py`，只负责计划批次、浏览器执行、动作确认和运行记录；引流设置、评论素材、环境检查以及拓客来源查询集中在 `backend/app/services/traffic_resources.py`，避免文件管理和依赖安装继续混入浏览器算法。执行器通过 CloakBrowser 启动专用 Chromium，并使用运行批次保存的账号独立 Profile，避免不同账号 Cookie 混用。可见窗口默认最大化；Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
 
 来源之间严格隔离：`随机推荐流` 只从抖音首页/精选页当前可见视频卡片进入，不读取拓客项目库；`手动搜索关键词 / 已采集关键词` 都会打开抖音关键词搜索页，从可见搜索结果逐条进入视频，处理下一条时重新回到同一关键词结果，且不会回退项目库；`拓客竞品视频` 只读取拓客库中已判定为竞品账号的抖音视频。竞品视频列表不再限制前 100 条或前 8 条，前端支持搜索、分页、复选和每页批量选择，计划字段按每行一个链接/ID保存多条视频；显式选择多条视频时按视频去重，不再用同作者冷却阻止同一竞品账号下的其它已选视频，未显式选择时仍按作者冷却分散执行。
 

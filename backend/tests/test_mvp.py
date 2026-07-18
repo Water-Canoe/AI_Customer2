@@ -1201,17 +1201,17 @@ def test_traffic_comment_actions_require_materials(tmp_path: Path) -> None:
 
 def test_traffic_action_probability_default_is_sixty(tmp_path: Path) -> None:
     prepare_project(tmp_path)
-    from app.services import traffic_workbench
+    from app.services import traffic_resources
 
-    assert traffic_workbench.get_settings()["values"]["traffic_action_probability"] == "60"
+    assert traffic_resources.get_settings()["values"]["traffic_action_probability"] == "60"
 
 
 def test_traffic_material_settings_preserve_enabled_state(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.schemas import TrafficSettingsUpdate
-    from app.services import traffic_workbench
+    from app.services import traffic_resources
 
-    settings = traffic_workbench.update_settings(TrafficSettingsUpdate(
+    settings = traffic_resources.update_settings(TrafficSettingsUpdate(
         texts=[{"text": "不错！", "enabled": False}],
         images=[{"path": "C:/tmp/a.png", "enabled": False}],
     ))
@@ -1922,14 +1922,14 @@ def test_traffic_records_filter_actions_and_image_preview(tmp_path: Path) -> Non
     prepare_project(tmp_path)
     from app import database
     from app.schemas import TrafficPlanCreate
-    from app.services import traffic_workbench
+    from app.services import traffic_resources, traffic_workbench
 
     auto_plan = traffic_workbench.create_plan(TrafficPlanCreate(name="", platform="dy", source_mode="collected_keyword", source_value="AI客服"))
     assert auto_plan["name"] == f"已采集关键词-{auto_plan['id'][:8]}"
 
     plan = traffic_workbench.create_plan(TrafficPlanCreate(name="记录筛选", platform="dy"))
     run = traffic_workbench.create_run(plan["id"])
-    image = traffic_workbench.save_material_image("record.png", b"\x89PNG\r\n\x1a\nrecord")
+    image = traffic_resources.save_material_image("record.png", b"\x89PNG\r\n\x1a\nrecord")
     with database.connect() as conn:
         conn.execute("UPDATE traffic_runs SET status = 'completed' WHERE id = ?", (run["id"],))
         conn.execute(
@@ -1970,7 +1970,7 @@ def test_traffic_records_filter_actions_and_image_preview(tmp_path: Path) -> Non
 
 def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
-    from app.services import traffic_workbench
+    from app.services import traffic_resources
 
     calls: list[list[str]] = []
 
@@ -1992,14 +1992,14 @@ def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, mo
         return result
 
     # 安装测试只校验命令编排，不真实联网下载依赖。
-    monkeypatch.setattr(traffic_workbench.subprocess, "run", fake_run)
+    monkeypatch.setattr(traffic_resources.subprocess, "run", fake_run)
     monkeypatch.setattr(
-        traffic_workbench.importlib.util,
+        traffic_resources.importlib.util,
         "find_spec",
         lambda name: object() if name in {"playwright", "cloakbrowser"} else None,
     )
 
-    result = traffic_workbench.install_environment()
+    result = traffic_resources.install_environment()
 
     assert result["ok"] is True
     assert result["check"]["ok"] is True

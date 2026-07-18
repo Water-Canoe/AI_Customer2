@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 
 from app.api_dependencies import require_license_for
 from app.schemas import TrafficPlanCreate, TrafficSettingsUpdate
-from app.services import job_queue, traffic_workbench
+from app.services import job_queue, traffic_resources, traffic_workbench
 
 
 router = APIRouter(prefix="/api/traffic", tags=["traffic"])
@@ -140,28 +140,28 @@ def clear_traffic_records() -> dict[str, object]:
 
 @router.get("/settings")
 def get_traffic_settings() -> dict[str, object]:
-    return traffic_workbench.get_settings()
+    return traffic_resources.get_settings()
 
 
 @router.put("/settings")
 def update_traffic_settings(payload: TrafficSettingsUpdate) -> dict[str, object]:
-    return traffic_workbench.update_settings(payload)
+    return traffic_resources.update_settings(payload)
 
 
 @router.get("/environment-check")
 def traffic_environment_check() -> dict[str, object]:
-    return traffic_workbench.environment_check()
+    return traffic_resources.environment_check()
 
 
 @router.post("/environment-install")
 def traffic_environment_install() -> dict[str, object]:
-    return traffic_workbench.install_environment()
+    return traffic_resources.install_environment()
 
 
 @router.post("/material-images")
 async def upload_traffic_material_image(request: Request, filename: str = Query(default="")) -> dict[str, object]:
     try:
-        return traffic_workbench.save_material_image(filename, await request.body())
+        return traffic_resources.save_material_image(filename, await request.body())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -169,16 +169,16 @@ async def upload_traffic_material_image(request: Request, filename: str = Query(
 @router.get("/material-images/{name}")
 def preview_traffic_material_image(name: str) -> FileResponse:
     try:
-        return FileResponse(traffic_workbench.material_image_path(name))
+        return FileResponse(traffic_resources.material_image_path(name))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/source-keywords")
 def list_traffic_source_keywords() -> list[dict[str, object]]:
-    return traffic_workbench.source_keywords()
+    return traffic_resources.source_keywords()
 
 
 @router.get("/source-competitor-videos")
 def list_traffic_source_competitor_videos() -> list[dict[str, object]]:
-    return traffic_workbench.source_competitor_videos()
+    return traffic_resources.source_competitor_videos()
