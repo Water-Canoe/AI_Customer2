@@ -9,6 +9,7 @@ const PublishCenterPage = () => import('./pages/PublishCenterPage')
 const RuntimeCenterPage = () => import('./pages/RuntimeCenterPage')
 const LogsPage = () => import('./pages/LogsPage')
 const MessageWorkbenchPage = () => import('./pages/MessageWorkbenchPage')
+const MessageSettingsPage = () => import('./pages/MessageSettingsPage')
 const OverviewPage = () => import('./pages/OverviewPage')
 const SettingsPage = () => import('./pages/SettingsPage')
 const TablesPage = () => import('./pages/TablesPage')
@@ -63,6 +64,12 @@ export const routes = [
     meta: { title: '私信工作台', subtitle: '按关键词推进客户私信、回访和成交状态。', hint: '把客户变成可执行跟进队列' },
   },
   {
+    path: '/message-settings',
+    name: 'message-settings',
+    component: MessageSettingsPage,
+    meta: { title: '私信设置', subtitle: '统一管理话术来源、人工确认、未回复提醒和发送频率额度。', hint: '所有私信入口共用同一套规则' },
+  },
+  {
     path: '/logs',
     name: 'logs',
     component: LogsPage,
@@ -78,7 +85,7 @@ export const routes = [
     path: '/settings',
     name: 'settings',
     component: SettingsPage,
-    meta: { title: '设置', subtitle: '配置 AI 模型、自动化规则和 ICP 画像。', hint: '开始前先把基础环境配好' },
+    meta: { title: '拓客设置', subtitle: '配置拓客 AI、采集参数、自动筛选规则和 ICP 画像。', hint: '开始拓客前先把基础环境配好' },
   },
   {
     path: '/traffic-plans',

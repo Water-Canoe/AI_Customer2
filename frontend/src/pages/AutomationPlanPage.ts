@@ -111,8 +111,6 @@ export default defineComponent({
     const runs = ref<Dict[]>([])
     const summary = ref<Dict>({})
     const accounts = ref<Dict[]>([])
-    const limits = ref<Dict>({})
-    const limitDraft = reactive({ daily_limit: 100, hourly_limit: 40 })
     const typePickerOpen = ref(false)
     const editorOpen = ref(false)
     const runDetailOpen = ref(false)
@@ -139,19 +137,15 @@ export default defineComponent({
 
     async function loadAll() {
       try {
-        const [planResponse, runResponse, limitResponse, accountResponse] = await Promise.all([
+        const [planResponse, runResponse, accountResponse] = await Promise.all([
           api.get('/automation/plans'),
           api.get('/automation/runs', { params: { page: 1, page_size: 50 } }),
-          api.get('/automation/message-limits'),
           api.get('/accounts'),
         ])
         plans.value = planResponse.data.items || []
         summary.value = planResponse.data.summary || {}
         runs.value = runResponse.data.items || []
-        limits.value = limitResponse.data || {}
         accounts.value = accountResponse.data || []
-        limitDraft.daily_limit = Number(limits.value.daily_limit || 100)
-        limitDraft.hourly_limit = Number(limits.value.hourly_limit || 40)
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '自动化计划加载失败')
       }
@@ -365,16 +359,6 @@ export default defineComponent({
       }
     }
 
-    async function saveLimits() {
-      try {
-        const { data } = await api.put('/automation/message-limits', limitDraft)
-        limits.value = data
-        ElMessage.success('私信额度已保存')
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '私信额度保存失败')
-      }
-    }
-
     function metric(label: string, value: unknown, tone = '') {
       return h('div', { class: ['automation-metric', tone] }, [h('span', label), h('strong', String(value ?? '—'))])
     }
@@ -408,33 +392,6 @@ export default defineComponent({
           ]),
           h(ElButton, { type: 'primary', onClick: () => openEditor('traffic') }, () => '新建引流计划'),
         ])),
-      ])
-    }
-
-    function renderLimits() {
-      const configured = Boolean(limits.value.configured)
-      return h(ElCard, { class: 'automation-section', shadow: 'never' }, () => [
-        h('div', { class: 'automation-section-head' }, [
-          h('div', [h('h2', '私信频率额度'), h('p', '单次、批量和定时私信共用；失败或结果不明确也会占用额度。')]),
-          h(ElButton, { type: 'primary', onClick: saveLimits }, () => '保存额度'),
-        ]),
-        h('div', { class: 'automation-limit-grid' }, [
-          h(ElFormItem, { label: '每日不同用户上限' }, () => h(ElInputNumber, {
-            modelValue: limitDraft.daily_limit, min: 1, max: 100,
-            'onUpdate:modelValue': (value: number | undefined) => { if (value !== undefined) limitDraft.daily_limit = value },
-          })),
-          h(ElFormItem, { label: '每小时不同用户上限' }, () => h(ElInputNumber, {
-            modelValue: limitDraft.hourly_limit, min: 1, max: 40,
-            'onUpdate:modelValue': (value: number | undefined) => { if (value !== undefined) limitDraft.hourly_limit = value },
-          })),
-          metric('本小时已占用 / 剩余', configured ? `${limits.value.used_hour} / ${limits.value.remaining_hour}` : '未配置', 'blue'),
-          metric('今日已占用 / 剩余', configured ? `${limits.value.used_today} / ${limits.value.remaining_today}` : '未配置', 'green'),
-        ]),
-        h(ElAlert, {
-          title: limits.value.notice || '仅统计本软件产生的私信，无法感知抖音 App 内手动发送数量。',
-          type: limits.value.fill_only ? 'error' : 'warning', showIcon: true, closable: false,
-          description: limits.value.fill_only ? '当前已开启“只填内容不发送”，自动私信计划不能启用或运行。' : '',
-        }),
       ])
     }
 
@@ -678,7 +635,6 @@ export default defineComponent({
         h('div', { class: 'automation-metrics' }, [metric('已启用计划', summary.value.enabled || 0, 'green'), metric('下一个计划', summary.value.next_run_at || '暂无', 'blue'), metric('正在运行', summary.value.running || 0, 'blue'), metric('今日失败', summary.value.failed_today || 0, 'red')]),
       ]),
       renderTaskCards(),
-      renderLimits(),
       renderPlans(),
       renderRuns(),
       renderTypePicker(),

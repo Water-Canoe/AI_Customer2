@@ -28,6 +28,13 @@ describe('工作台路由', () => {
     expect(logsRoute?.meta?.title).toBe('采集记录')
   })
 
+  it('私信工作台拥有独立设置页', () => {
+    const settingsRoute = routes.find(route => route.name === 'message-settings')
+
+    expect(settingsRoute?.path).toBe('/message-settings')
+    expect(settingsRoute?.meta?.title).toBe('私信设置')
+  })
+
   it('全局设置统一承载更新、授权和账号入口', () => {
     const globalSettingsRoute = routes.find(route => route.name === 'global-settings')
 

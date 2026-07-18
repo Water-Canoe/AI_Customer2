@@ -2970,6 +2970,47 @@ button.filter-button,
   padding-bottom: 28px;
 }
 
+.message-settings-page {
+  display: grid;
+  gap: 16px;
+  padding-bottom: 28px;
+}
+
+.message-settings-pane,
+.message-limit-pane {
+  display: grid;
+  gap: 18px;
+}
+
+.message-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.message-limit-control,
+.message-limit-metric {
+  display: grid;
+  gap: 8px;
+  min-height: 92px;
+  padding: 14px;
+  border: 1px solid #d9e7e1;
+  border-radius: 8px;
+  background: #f7faf9;
+}
+
+.message-limit-control span,
+.message-limit-metric span,
+.message-limit-metric small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.message-limit-metric strong {
+  color: #0f172a;
+  font-size: 24px;
+}
+
 .runtime-resource-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(110px, 1fr));
@@ -6914,19 +6955,22 @@ button.filter-button:hover,
 /* 长页面只滚动主工作区，保持左侧导航和顶部状态栏固定。 */
 .main.view-automation-plans,
 .main.view-runtime-center,
+.main.view-message-settings,
 .main.view-global-settings {
   overflow-y: auto;
 }
 
 @media (max-width: 900px) {
-  .runtime-resource-grid {
+  .runtime-resource-grid,
+  .message-limit-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 640px) {
   .runtime-resource-grid,
-  .runtime-queue-filters {
+  .runtime-queue-filters,
+  .message-limit-grid {
     grid-template-columns: 1fr;
   }
 }

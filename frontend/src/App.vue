@@ -18,9 +18,13 @@
           <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
           <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
           <el-menu-item index="tables"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
-          <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
+          <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>拓客设置</span></el-menu-item>
         </el-sub-menu>
-        <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>私信工作台</span></el-menu-item>
+        <el-sub-menu index="message-center">
+          <template #title><el-icon><Message /></el-icon><span>私信工作台</span></template>
+          <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>客户跟进</span></el-menu-item>
+          <el-menu-item index="message-settings"><el-icon><Setting /></el-icon><span>私信设置</span></el-menu-item>
+        </el-sub-menu>
         <el-sub-menu index="traffic-workbench">
           <template #title><el-icon><Promotion /></el-icon><span>引流工作台</span></template>
           <el-menu-item index="traffic-plans"><el-icon><Promotion /></el-icon><span>计划工作台</span></el-menu-item>
@@ -195,6 +199,7 @@ const trafficEnv = ref<Dict>({})
 const trafficRefreshSeq = ref(0)
 const automationRefreshSeq = ref(0)
 const runtimeRefreshSeq = ref(0)
+const messageSettingsRefreshSeq = ref(0)
 const globalSettingsRefreshSeq = ref(0)
 const contentEnv = ref<Dict>({})
 const contentRefreshSeq = ref(0)
@@ -207,7 +212,7 @@ let settingsMutationSeq = 0
 const activeView = computed(() => String(route.name || 'tasks'))
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
 const isRuntimeView = computed(() => activeView.value === 'runtime-center')
-const isMessageView = computed(() => activeView.value === 'message-workbench')
+const isMessageView = computed(() => activeView.value.startsWith('message-'))
 const isGlobalSettingsView = computed(() => activeView.value === 'global-settings')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
@@ -316,6 +321,13 @@ const routeProps = computed(() => {
       settings: settings.value,
     }
   }
+  if (activeView.value === 'message-settings') {
+    return {
+      settings: settings.value,
+      settingsSaveRevision: settingsSaveRevision.value,
+      refreshSeq: messageSettingsRefreshSeq.value,
+    }
+  }
   if (activeView.value === 'logs') {
     return {
       tasks: tasks.value,
@@ -414,6 +426,12 @@ const routeListeners = computed(() => {
       'delete-auto-message-batch': deleteMessageAutoBatch,
       'update-follow-status': updateMessageWorkbenchFollowStatus,
       'close-detail': closeMessageWorkbenchDetail,
+    }
+  }
+  if (activeView.value === 'message-settings') {
+    return {
+      save: saveSettings,
+      'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
     }
   }
   if (activeView.value === 'logs') {
@@ -786,6 +804,9 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
   } else if (activeView.value === 'message-workbench') {
     loaders.push(() => loadMessageWorkbench(true))
     if (includeStatic) loaders.push(loadSettings)
+  } else if (activeView.value === 'message-settings') {
+    if (!settingsDraftDirty.value) loaders.push(loadSettings)
+    if (includeStatic || refreshChild) loaders.push(async () => { messageSettingsRefreshSeq.value += 1 })
   } else if (activeView.value === 'tables') {
     loaders.push(() => loadTable(activeLibrary.value, true))
   } else if (activeView.value === 'settings') {

@@ -240,10 +240,6 @@ export default defineComponent({
               inputField(local, 'comment_recrawl_cooldown_hours', '评论复采间隔小时', 'number', '默认 24；填 0 表示每次找客户都复采已有内容评论', markSettingsDirty),
               inputField(local, 'account_analysis_content_count', '账号分析内容数', 'number', '', markSettingsDirty),
               inputField(local, 'ai_analysis_concurrency', 'AI分析并行数', 'number', '建议 1-5，过高容易触发模型限流', markSettingsDirty),
-              inputField(local, 'unreplied_reminder_days', '未回复提醒天数', 'number', '默认 3 天，填 0 表示不提醒', markSettingsDirty),
-              inputField(local, 'auto_dm_timeout_seconds', '自动私信等待秒数', 'number', '只填内容不发送时，窗口保留等待人工发送的秒数', markSettingsDirty),
-              dmScriptModeField(local, markSettingsDirty),
-              fixedDmScriptField(local, markSettingsDirty),
               inputField(local, 'douyin_detail_sleep_seconds', '抖音详情等待秒数', 'number', '建议 0.5-2，越小越快但越容易限流', markSettingsDirty),
               inputField(local, 'max_concurrency', '默认并发', 'number', '', markSettingsDirty)
             ]),
@@ -252,8 +248,7 @@ export default defineComponent({
               toggleField(local, 'auto_analyze_competitors', '自动分析竞品账号', markSettingsDirty),
               toggleField(local, 'auto_delete_non_competitors', '自动删除非竞品账号', markSettingsDirty),
               toggleField(local, 'auto_analyze_leads', '自动分析线索用户', markSettingsDirty),
-              toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty),
-              toggleField(local, 'auto_dm_fill_only', '自动私信只填内容不发送', markSettingsDirty)
+              toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty)
             ])
           ]),
           settingsFoldPanel({ title: '自家账号', subtitle: '同平台可多个，跨平台分任务运行', icon: User, tone: 'blue' }, [
@@ -358,7 +353,7 @@ function inputField(local: Dict, key: string, label: string, type = 'text', plac
   }
   if (type === 'number') {
     inputProps.step = key === 'douyin_detail_sleep_seconds' ? '0.1' : '1'
-    inputProps.min = ['douyin_detail_sleep_seconds', 'auto_dm_timeout_seconds'].includes(key) ? '0' : undefined
+    inputProps.min = key === 'douyin_detail_sleep_seconds' ? '0' : undefined
   }
   return h('label', [label, h('input', inputProps)])
 }
@@ -375,40 +370,6 @@ function selectField(local: Dict, key: string, label: string, options: { value: 
         markDirty?.()
       }
     }, options.map(option => h('option', { value: String(option.value) }, option.label)))
-  ])
-}
-
-function dmScriptModeField(local: Dict, markDirty?: () => void) {
-  return h('label', [
-    '私信话术来源',
-    h('select', {
-      value: String(local.dm_script_mode || 'ai'),
-      onFocus: markDirty,
-      onChange: (event: Event) => {
-        local.dm_script_mode = (event.target as HTMLSelectElement).value
-        markDirty?.()
-      }
-    }, [
-      h('option', { value: 'ai' }, '发送AI话术'),
-      h('option', { value: 'fixed' }, '发送固定话术')
-    ])
-  ])
-}
-
-function fixedDmScriptField(local: Dict, markDirty?: () => void) {
-  return h('label', { class: 'form-field field-full' }, [
-    '固定话术输入栏',
-    h('textarea', {
-      value: local.fixed_dm_script || '',
-      placeholder: '选择“发送固定话术”时，私信按钮复制这里的内容，AI一键私信也发送这里的内容。',
-      rows: 4,
-      onFocus: markDirty,
-      onCompositionstart: markDirty,
-      onInput: (event: Event) => {
-        local.fixed_dm_script = (event.target as HTMLTextAreaElement).value
-        markDirty?.()
-      }
-    })
   ])
 }
 
