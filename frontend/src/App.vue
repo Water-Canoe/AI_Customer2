@@ -17,10 +17,10 @@
           <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>采集记录</span></el-menu-item>
           <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
           <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
-          <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>私信工作台</span></el-menu-item>
           <el-menu-item index="tables"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
           <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
         </el-sub-menu>
+        <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>私信工作台</span></el-menu-item>
         <el-sub-menu index="traffic-workbench">
           <template #title><el-icon><Promotion /></el-icon><span>引流工作台</span></template>
           <el-menu-item index="traffic-plans"><el-icon><Promotion /></el-icon><span>计划工作台</span></el-menu-item>
@@ -93,7 +93,7 @@
         <div class="topbar-actions">
           <span class="topbar-env-tag" :class="topbarEnvClass">{{ topbarEnvLabel }}</span>
           <el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
-          <el-button v-if="!isGlobalSettingsView && !isRuntimeView" type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
+          <el-button v-if="!isGlobalSettingsView && !isRuntimeView && !isMessageView" type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
         </div>
       </el-header>
 
@@ -207,19 +207,21 @@ let settingsMutationSeq = 0
 const activeView = computed(() => String(route.name || 'tasks'))
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
 const isRuntimeView = computed(() => activeView.value === 'runtime-center')
+const isMessageView = computed(() => activeView.value === 'message-workbench')
 const isGlobalSettingsView = computed(() => activeView.value === 'global-settings')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
-const topbarKicker = computed(() => isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台')))))
+const topbarKicker = computed(() => isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isMessageView.value ? '私信工作台' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
-const topbarEnvOk = computed(() => isAutomationView.value || isRuntimeView.value || isGlobalSettingsView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
-const topbarEnvClass = computed(() => isAutomationView.value || isRuntimeView.value || isGlobalSettingsView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
+const topbarEnvOk = computed(() => isAutomationView.value || isRuntimeView.value || isMessageView.value || isGlobalSettingsView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
+const topbarEnvClass = computed(() => isAutomationView.value || isRuntimeView.value || isMessageView.value || isGlobalSettingsView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
 const topbarEnvLabel = computed(() => {
   if (isGlobalSettingsView.value) return licenseStatusLabel.value
   if (isRuntimeView.value) return '五类资源统一调度'
   if (isAutomationView.value) return '共用浏览器队列'
+  if (isMessageView.value) return '私信账号独立登录态'
   if (isContentView.value) return topbarEnvOk.value ? '视频环境正常' : '需要检查视频环境'
   if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
   return topbarEnvOk.value ? '环境就绪' : '需要检查环境'
@@ -239,6 +241,14 @@ const autoSync = createAutoSyncController({
 const dashboardInsights = computed(() => {
   const metrics = workbenchStatus.value?.metrics || {}
   if (isGlobalSettingsView.value) return []
+  if (isMessageView.value) {
+    return [
+      { label: '待私信', value: compactCount(metrics.pending_customers), tone: 'amber' },
+      { label: '待回复', value: compactCount(metrics.waiting_reply), tone: 'blue' },
+      { label: '运行批次', value: compactCount(metrics.active_batches), tone: 'green' },
+      { label: '失败批次', value: compactCount(metrics.failed_batches), tone: 'red' },
+    ]
+  }
   if (isRuntimeView.value) {
     return [
       { label: '排队中', value: compactCount(metrics.queued), tone: 'amber' },
@@ -272,7 +282,7 @@ const dashboardInsights = computed(() => {
   return [
     { label: '运行任务', value: compactCount(metrics.active_tasks), tone: 'blue' },
     { label: 'AI待处理', value: compactCount(metrics.ai_pending), tone: 'amber' },
-    { label: '待私信', value: compactCount(metrics.message_pending), tone: 'green' },
+    { label: '目标客户', value: compactCount(metrics.target_customers), tone: 'green' },
     { label: '失败待查', value: compactCount(Number(metrics.failed_tasks || 0) + Number(metrics.ai_failed || 0)), tone: 'red' },
   ]
 })
@@ -562,7 +572,7 @@ async function copyDeviceCode() {
 }
 
 async function loadWorkbenchStatus() {
-  const scope = isRuntimeView.value ? 'runtime' : (isAutomationView.value ? 'automation' : (isContentView.value ? 'content' : (isTrafficView.value ? 'traffic' : 'lead')))
+  const scope = isRuntimeView.value ? 'runtime' : (isAutomationView.value ? 'automation' : (isMessageView.value ? 'message' : (isContentView.value ? 'content' : (isTrafficView.value ? 'traffic' : 'lead'))))
   const { data } = await api.get('/workbench/status', { params: { scope } })
   workbenchStatus.value = data
 }
@@ -762,7 +772,7 @@ function compactCount(value: unknown) {
 
 function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
   const loaders: Array<() => Promise<unknown>> = []
-  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isRuntimeView.value && !isGlobalSettingsView.value && includeStatic) loaders.push(checkEnv)
+  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isRuntimeView.value && !isMessageView.value && !isGlobalSettingsView.value && includeStatic) loaders.push(checkEnv)
 
   if (activeView.value === 'tasks') {
     loaders.push(loadTasks)

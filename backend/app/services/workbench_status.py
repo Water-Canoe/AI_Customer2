@@ -6,7 +6,7 @@ from typing import Any
 from app import database
 
 
-SCOPES = {"lead", "traffic", "content", "automation", "runtime"}
+SCOPES = {"lead", "message", "traffic", "content", "automation", "runtime"}
 
 
 def get_status(scope: str) -> dict[str, Any]:
@@ -19,6 +19,7 @@ def get_status(scope: str) -> dict[str, Any]:
         active = _count(conn, "SELECT COUNT(*) FROM runtime_jobs WHERE status IN ('queued', 'running')") > 0
         metrics = {
             "lead": _lead_metrics,
+            "message": _message_metrics,
             "traffic": _traffic_metrics,
             "content": _content_metrics,
             "automation": _automation_metrics,
@@ -40,7 +41,21 @@ def _lead_metrics(conn: sqlite3.Connection) -> dict[str, int]:
             """,
         ),
         "ai_failed": _count(conn, "SELECT COUNT(*) FROM analysis_jobs WHERE status = 'failed'"),
-        "message_pending": _count(
+        "target_customers": _count(
+            conn,
+            """
+            SELECT COUNT(*)
+            FROM lead_user_accounts lua
+            WHERE lua.hidden = 0 AND lua.screening_status = '目标客户'
+              AND EXISTS (SELECT 1 FROM lead_sources ls WHERE ls.lead_account_id = lua.id AND ls.active = 1)
+            """,
+        ),
+    }
+
+
+def _message_metrics(conn: sqlite3.Connection) -> dict[str, int]:
+    return {
+        "pending_customers": _count(
             conn,
             """
             SELECT COUNT(*)
@@ -49,6 +64,17 @@ def _lead_metrics(conn: sqlite3.Connection) -> dict[str, int]:
               AND EXISTS (SELECT 1 FROM lead_sources ls WHERE ls.lead_account_id = lua.id AND ls.active = 1)
             """,
         ),
+        "waiting_reply": _count(
+            conn,
+            """
+            SELECT COUNT(*)
+            FROM lead_user_accounts lua
+            WHERE lua.hidden = 0 AND lua.follow_status IN ('已私信', '未回复')
+              AND EXISTS (SELECT 1 FROM lead_sources ls WHERE ls.lead_account_id = lua.id AND ls.active = 1)
+            """,
+        ),
+        "active_batches": _count(conn, "SELECT COUNT(*) FROM message_batches WHERE status IN ('pending', 'running')"),
+        "failed_batches": _count(conn, "SELECT COUNT(*) FROM message_batches WHERE status = 'failed'"),
     }
 
 
