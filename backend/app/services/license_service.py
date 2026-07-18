@@ -4,7 +4,6 @@ import base64
 import binascii
 import json
 import socket
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -13,7 +12,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from app import database, product_config
+from app import database, device_identity, product_config
 from app.version import APP_VERSION
 
 
@@ -265,11 +264,17 @@ def _save_failure(entitlement: str | None, status: str, reason: str, message: st
 
 
 def _ensure_device_code(conn) -> str:
-    device_code = database.get_setting(conn, "device_code").strip()
-    if device_code:
+    device_code = device_identity.get_device_code()
+    stored_code = database.get_setting(conn, "device_code").strip()
+    if stored_code == device_code:
         return device_code
-    # 设备码只在首次运行时生成，前端不能修改。
-    device_code = f"AI-CUS-{uuid.uuid4().hex[:8].upper()}-{uuid.uuid4().hex[:8].upper()}"
+    # 设备身份变化时保留授权码，但复制来的租约不能继续使用。
+    if stored_code:
+        _clear_lease(conn)
+        database.set_setting(conn, "license_last_status", "unconfigured")
+        database.set_setting(conn, "license_last_reason", "DEVICE_IDENTITY_CHANGED")
+        database.set_setting(conn, "license_last_message", "检测到新的 Windows 设备，请重新校验授权")
+        database.set_setting(conn, "license_last_checked_at", "")
     database.set_setting(conn, "device_code", device_code)
     return device_code
 

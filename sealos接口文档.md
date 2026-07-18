@@ -7,13 +7,14 @@ AI拓客接口统一使用 `/ai-customer` 前缀，服务端代码位于 Sealos 
 ## 授权模型
 
 - 一个客户使用一个产品授权码，不再按工作台拆分授权码。
-- 一个安装实例使用一个随机设备码。
+- 一个 Windows 安装使用一个机器设备码：客户端从 DPAPI 机器级身份派生，不信任可复制的业务数据库设备码。
 - 授权权益支持 `lead`（拓客）、`traffic`（引流）、`content`（内容）。
 - `AI_Customer-License` 只保存授权码 HMAC-SHA-256 摘要与前缀，完整授权码只在创建时返回一次。
 - `AI_Customer-LicenseDevice` 保存激活设备，`licenseId + deviceId` 唯一。
 - 设备名额在 MongoDB 事务内原子占用和释放。
 - 服务端签发 72 小时 Ed25519 租约；客户端本地验签，签发超过 6 小时才尝试续租。
-- 不使用心跳、WebSocket、同时在线检测或硬件指纹。
+- 不使用心跳、WebSocket 或同时在线检测，也不采集 CPU、主板等物理硬件序列号；设备边界由 Windows DPAPI 机器身份确定。
+- 旧版设备不自动换绑；管理员通过现有设备撤销接口释放旧设备名额，再由新版客户端重新激活。
 
 服务端 `.env` 必须配置以下秘密，实际值不得提交到 Git：
 
@@ -40,7 +41,7 @@ AI_CUSTOMER_LICENSE_PRIVATE_KEY=<Ed25519 PKCS8 DER 的 Base64>
 ```json
 {
   "licenseCode": "AIC-...",
-  "deviceId": "AI-CUS-XXXXXXXX-XXXXXXXX",
+  "deviceId": "AI-CUS-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX",
   "deviceName": "办公室电脑",
   "appVersion": "1.2.1"
 }

@@ -173,6 +173,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\playwright\dri
     --distpath $BuildDist `
     --workpath (Join-Path $BuildWork "bootstrap") `
     --specpath $BuildSpec `
+    --paths $BackendDir `
     $StableLauncher
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 

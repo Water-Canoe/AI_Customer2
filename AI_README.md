@@ -438,17 +438,21 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 ## 授权服务
 
-Sealos 授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试地址为 `https://tfwqsfaegbdj.sealosbja.site`，接口详情见根目录 `sealos接口文档.md`。授权模型为“一个客户一个产品授权码、一个安装实例一个设备码、授权内包含 `lead / traffic / content` 功能权益”，不再为拓客和引流分别创建授权码。
+Sealos 授权接口统一挂载在 `/ai-customer` 前缀下，当前公网调试地址为 `https://tfwqsfaegbdj.sealosbja.site`，接口详情见根目录 `sealos接口文档.md`。授权模型为“一个客户一个产品授权码、一个 Windows 设备一个设备码、授权内包含 `lead / traffic / content` 功能权益”，不再为拓客和引流分别创建授权码。
 
 `AI_Customer-License` 只保存授权码的 HMAC-SHA-256 摘要和可检索前缀，不保存或再次返回完整授权码；完整码由管理端创建时随机生成并只展示一次。`AI_Customer-LicenseDevice` 通过 `licenseId + deviceId` 唯一索引保存设备。设备名额在 MongoDB 事务内通过许可证计数器原子占用和释放，避免并发激活突破 `maxDevices`。
 
-客户端通过 `POST /ai-customer/license/activate` 首次激活，通过 `POST /ai-customer/license/renew` 为已有设备续租。服务端返回 72 小时 Ed25519 签名租约，本地后端使用内置的独立授权公钥验签；任务开始前先做本地验签和权益校验，租约签发超过 6 小时才尝试续租，网络故障时可在未过期租约内继续运行。服务端明确返回停用、过期或设备撤销时会立即清除本地租约。该设计不使用心跳、WebSocket、同时在线状态或硬件指纹。
+Windows 设备身份保存在 `%PROGRAMDATA%\AI_Customer\device_identity.bin`：首次运行生成 32 字节随机密钥，使用 Windows DPAPI 的机器级保护写入文件，每次运行解密后派生 `AI-CUS-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX` 格式的 128 位设备码。同一套 Windows 中的不同用户共用该身份；复制项目目录、业务数据库或备份不会复制有效设备身份。`settings.device_code` 只用于页面显示和启动器读取缓存，后端每次启动都以 DPAPI 设备身份覆盖不一致的缓存，同时清除旧租约和设备统计缓存，但保留授权码。身份文件不存在、损坏或无法在本机解密时会生成新身份并要求重新校验授权；重装 Windows 或手动删除身份文件同样视为新设备。
+
+客户端通过 `POST /ai-customer/license/activate` 首次激活，通过 `POST /ai-customer/license/renew` 为已有设备续租。FastAPI 启动顺序固定为“初始化数据库 → 提取机器设备码并自动校验授权 → 启动统一任务队列 → 启动定时调度器”，因此每次应用启动都会先向 Sealos 确认授权；联网时服务端停用、过期、撤销和设备超限结果立即生效并清除旧租约。服务端返回 72 小时 Ed25519 签名租约，本地后端使用内置的独立授权公钥验签；任务开始前仍会再次做本地验签和权益校验，租约签发超过 6 小时才尝试续租。仅当网络请求失败且租约属于当前机器、签名正确且未过期时才允许离线继续运行，过期租约或从其它机器复制来的租约不能使用。该设计不使用心跳、WebSocket 或同时在线状态，也不采集 CPU、主板等物理硬件序列号；设备边界由 Windows DPAPI 机器身份确定。
+
+稳定启动器检查更新时使用与后端相同的 DPAPI 设备码，不再从可复制的 SQLite 数据库信任设备身份；Program ZIP、Environment ZIP、业务备份和程序更新均不包含 `%PROGRAMDATA%` 中的身份文件。旧版本升级不自动换绑：管理员需要先在授权管理页面撤销旧设备码，新版首次启动后再使用保留的授权码校验；如果名额未释放，页面会显示设备数量超过限制。
 
 本地只提供产品级 `GET /api/license`、`PUT /api/license`、`POST /api/license/check`。左侧边栏底部是唯一的“授权与设备”入口，设置页和各工作台不再重复放置授权配置；入口展示整份产品授权状态，创建拓客、引流、内容生成和发布任务时仍分别校验对应权益，统一运行队列在真正执行 `lead / traffic / content` 任务前再次校验。授权到期后，已有数据的查看、导出、备份、取消和清理仍可用，只阻止创建或启动新的受控任务。
 
 管理接口统一位于 `/ai-customer/admin/licenses*`，全部使用 `Authorization: Bearer <AI_CUSTOMER_ADMIN_TOKEN>`，授权码不提供硬删除，停用使用 `PATCH /admin/licenses/{licenseId}`。根目录 `tools/license-admin.html` 可直接打开，用于创建授权、修改功能权益/设备数/过期时间、启停授权、查看和撤销设备；管理 Token 只保存在当前页面内存，不写入 `localStorage`。该页面只供管理员使用，不进入客户发布包。旧 `add-license / check-license / get-license-devices / revoke-license-device` 和三个 demo permission 接口已删除，不保留兼容层。
 
-Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存主程序版本状态，使用 `AI_Customer-ComponentRelease` 保存可选组件版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并修改启用状态。主程序更新支持强制更新和灰度比例；客户端启动时自动检查，但普通版本必须由用户确认后才下载，强制版本显示说明后直接进入更新。独立更新窗口展示版本、大小、更新说明、实时下载量以及下载、校验、解压、安装阶段的0-100%进度，完成后自动启动工作台。音色克隆组件只向已有active设备且授权包含`content`权益的客户端下发，不做自动安装。客户端会验证Ed25519签名、ZIP大小和SHA-256，组件还会限制产品名、组件名、平台、架构和最低主程序版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时不会改变已安装版本；普通更新在用户确认后失败会明确提示并继续使用当前版本，强制更新失败则停止启动。发布脚本在Windows下使用扩展长路径读取发布文件，超过传统`MAX_PATH`的运行库也能归档。Sealos 当前接口已核对会返回 `mandatory` 和 `notes`；本轮源码回归为401项后端测试通过、8项联网测试跳过。详细请求格式见根目录 `sealos接口文档.md`。
+Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存主程序版本状态，使用 `AI_Customer-ComponentRelease` 保存可选组件版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并修改启用状态。主程序更新支持强制更新和灰度比例；客户端启动时自动检查，但普通版本必须由用户确认后才下载，强制版本显示说明后直接进入更新。独立更新窗口展示版本、大小、更新说明、实时下载量以及下载、校验、解压、安装阶段的0-100%进度，完成后自动启动工作台。音色克隆组件只向已有active设备且授权包含`content`权益的客户端下发，不做自动安装。客户端会验证Ed25519签名、ZIP大小和SHA-256，组件还会限制产品名、组件名、平台、架构和最低主程序版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时不会改变已安装版本；普通更新在用户确认后失败会明确提示并继续使用当前版本，强制更新失败则停止启动。发布脚本在Windows下使用扩展长路径读取发布文件，超过传统`MAX_PATH`的运行库也能归档。Sealos 当前接口已核对会返回 `mandatory` 和 `notes`；本轮源码回归为410项后端测试通过、8项联网测试跳过。详细请求格式见根目录 `sealos接口文档.md`。
 
 发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本默认从 `deliverables/` 选择最新的 `AI_Customer_Program_<版本>.zip`，校验 ZIP 内清单、文件白名单、大小和 SHA-256 后，直接签名并上传这一个客户程序 ZIP，不再从中间发布目录重复压缩。无参数运行只做本地校验、签名和验签；`-Upload` 上传并登记但保持禁用；`-Enable` 自动上传、登记并按默认 10% 灰度启用；需要指定文件时使用 `-ProgramZip <完整路径>`。同版本对象已存在时，脚本会查询发布登记：若版本、大小和 SHA-256 一致则报告“已发布”且不重复上传；不一致则拒绝覆盖并要求递增版本号。签名记录写入唯一的 `output/release_publish_<版本>_<时间>/`，真正对外交付的 ZIP 始终只在 `deliverables/<版本>/`。
 

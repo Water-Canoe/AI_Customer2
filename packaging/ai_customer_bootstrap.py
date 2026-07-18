@@ -19,6 +19,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from app import device_identity
+
 
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -119,12 +121,12 @@ def _read_update_identity(install_root: Path) -> tuple[str, str] | None:
         return None
     with sqlite3.connect(f"file:{database_path.as_posix()}?mode=ro", uri=True) as connection:
         rows = connection.execute(
-            "SELECT key, value FROM settings WHERE key IN (?, ?)",
-            ("license_code", "device_code"),
+            "SELECT key, value FROM settings WHERE key = ?",
+            ("license_code",),
         ).fetchall()
     values = {str(key): str(value).strip() for key, value in rows}
     license_code = values.get("license_code", "")
-    device_code = values.get("device_code", "")
+    device_code = device_identity.get_device_code()
     return (license_code, device_code) if license_code and device_code else None
 
 

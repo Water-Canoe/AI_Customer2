@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -221,6 +222,22 @@ def test_manual_update_reports_latest_and_validates_wait_pid(tmp_path: Path, mon
     assert ai_customer_bootstrap._manual_update_parent_pid(["AI_Customer.exe", "--wait-for-pid", "123"]) == 123
     with pytest.raises(RuntimeError, match="进程编号无效"):
         ai_customer_bootstrap._manual_update_parent_pid(["AI_Customer.exe", "--wait-for-pid", "invalid"])
+
+
+def test_update_identity_uses_windows_bound_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    with sqlite3.connect(data_dir / "ai_customer.sqlite3") as connection:
+        connection.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.executemany(
+            "INSERT INTO settings(key, value) VALUES(?, ?)",
+            [("license_code", "LIC-TEST"), ("device_code", "AI-CUS-COPIED")],
+        )
+    machine_code = "AI-CUS-11111111-22222222-33333333-44444444"
+    monkeypatch.setattr(ai_customer_bootstrap.device_identity, "get_device_code", lambda: machine_code)
+
+    assert ai_customer_bootstrap._read_update_identity(tmp_path) == ("LIC-TEST", machine_code)
 
 
 def test_update_download_reports_real_byte_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

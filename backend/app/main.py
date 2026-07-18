@@ -11,13 +11,14 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app import database
 from app.routers import ai, automation, content, message, overview, runtime, system, tasks, traffic
-from app.services import automation_workbench, data_management, job_queue, profile_manager
+from app.services import automation_workbench, data_management, job_queue, license_service, profile_manager
 from app.version import APP_VERSION
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.init_db()
+    license_service.check_license()
     job_queue.start()
     automation_workbench.start_scheduler()
     try:
