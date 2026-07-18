@@ -338,7 +338,7 @@ def test_stable_launcher_finds_an_existing_workbench(monkeypatch: pytest.MonkeyP
     def fake_urlopen(request: object, **_: object):
         if "8010" not in str(request):
             raise ai_customer_bootstrap.urllib.error.URLError("closed")
-        return io.BytesIO(json.dumps({"status": "ok", "product": "ai-customer"}).encode())
+        return io.BytesIO(json.dumps({"status": "ok", "product": "ai-customer", "packaged": True}).encode())
 
     monkeypatch.setattr(ai_customer_bootstrap.urllib.request, "urlopen", fake_urlopen)
 

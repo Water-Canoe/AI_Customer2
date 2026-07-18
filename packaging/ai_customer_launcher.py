@@ -75,7 +75,12 @@ def workbench_url_if_ready(port: int, timeout: float = 0.5) -> str:
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, ValueError, urllib.error.URLError):
         return ""
-    return url if payload.get("status") == "ok" and payload.get("product") == "ai-customer" else ""
+    is_packaged_workbench = (
+        payload.get("status") == "ok"
+        and payload.get("product") == "ai-customer"
+        and payload.get("packaged") is True
+    )
+    return url if is_packaged_workbench else ""
 
 
 def existing_workbench_url() -> str:

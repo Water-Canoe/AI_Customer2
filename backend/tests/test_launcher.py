@@ -44,6 +44,19 @@ def test_launcher_health_rejects_other_local_services(monkeypatch) -> None:
     assert launcher.workbench_url_if_ready(8000) == ""
 
 
+def test_launcher_health_rejects_development_workbench(monkeypatch) -> None:
+    launcher = _launcher_module()
+    monkeypatch.setattr(
+        launcher.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: io.BytesIO(
+            json.dumps({"status": "ok", "product": "ai-customer", "packaged": False}).encode()
+        ),
+    )
+
+    assert launcher.workbench_url_if_ready(8000) == ""
+
+
 def test_packaged_launcher_writes_rotating_log(tmp_path: Path) -> None:
     launcher = _launcher_module()
     log_path = launcher.configure_persistent_logging(tmp_path)

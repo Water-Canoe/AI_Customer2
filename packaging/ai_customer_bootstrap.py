@@ -641,7 +641,11 @@ def _running_workbench_url() -> str:
                 payload = json.loads(response.read().decode("utf-8"))
         except (OSError, ValueError, urllib.error.URLError):
             continue
-        if payload.get("status") == "ok" and payload.get("product") == "ai-customer":
+        if (
+            payload.get("status") == "ok"
+            and payload.get("product") == "ai-customer"
+            and payload.get("packaged") is True
+        ):
             return url
     return ""
 
