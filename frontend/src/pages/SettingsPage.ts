@@ -152,7 +152,7 @@ export default defineComponent({
       backupCreating.value = true
       try {
         await api.post('/system/backups', { reason: 'manual' })
-        ElMessage.success('业务数据库、内容资产和成品文件已备份')
+        ElMessage.success('业务数据库、MyCrawler 原始库和业务文件已备份')
         backupPage.value = 1
         await loadBackups()
       } catch (error: any) {
@@ -570,7 +570,7 @@ function renderBackups(
       ? h('div', { class: 'backup-list' }, backups.items.map((item: Dict) => h('article', [
           h('div', [
             h('strong', item.created_at || item.id),
-            h('span', `${formatFileSize(item.database_size)} + ${formatFileSize(item.data_size)} · ${item.file_count || 0} 个文件`)
+            h('span', `项目库 ${formatFileSize(item.database_size)} · 原始库 ${item.media_crawler_database ? formatFileSize(item.media_crawler_database.size) : '未初始化'} · 文件 ${formatFileSize(item.data_size)} / ${item.file_count || 0} 个`)
           ]),
           h('small', backupReasonLabel(item.reason)),
           h('div', { class: 'backup-item-actions' }, [

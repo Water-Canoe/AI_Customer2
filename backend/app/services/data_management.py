@@ -28,12 +28,14 @@ def create_backup(reason: str = "manual") -> dict[str, Any]:
     with maintenance_window("创建备份"):
         path = database.get_db_path()
         with database.connect(path) as conn:
+            media_crawler_db = database.get_media_crawler_db_path(conn)
             return data_lifecycle.create_backup(
                 conn,
                 database.get_backup_root(path),
                 reason=reason,
                 schema_version=migrations.current_version(conn),
                 data_roots=database.get_backup_data_roots(),
+                media_crawler_db=media_crawler_db,
             )
 
 
@@ -58,11 +60,14 @@ def restore_backup(backup_id: str, confirm: str) -> dict[str, Any]:
     with maintenance_window("恢复备份"):
         safety_backup = create_backup(reason=f"pre_restore_{backup_id}")
         path = database.get_db_path()
+        with database.connect(path) as conn:
+            media_crawler_target = database.get_media_crawler_db_path(conn)
         restored = data_lifecycle.restore_backup(
             database.get_backup_root(path),
             backup_id,
             path,
             database.get_backup_data_roots(),
+            media_crawler_target,
         )
         database.init_db()
         return {

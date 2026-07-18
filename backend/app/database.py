@@ -27,6 +27,15 @@ def get_db_path() -> Path:
     return Path(os.getenv("AI_CUSTOMER_DB", str(get_data_root() / "ai_customer.sqlite3")))
 
 
+def get_media_crawler_db_path(conn: sqlite3.Connection | None = None) -> Path:
+    """Return the currently configured MyCrawler SQLite path."""
+    if conn is None:
+        with connect() as active_conn:
+            return get_media_crawler_db_path(active_conn)
+    value = get_setting(conn, "media_crawler_db_path", str(DEFAULT_MEDIA_CRAWLER_DB))
+    return Path(str(value).strip().strip('"').strip("'")).expanduser()
+
+
 def get_douyin_cloak_profile_dir() -> Path:
     """Return the shared Douyin CloakBrowser profile directory."""
     return get_data_root() / "douyin_cloak_profile"
@@ -638,7 +647,6 @@ def init_db() -> None:
                 get_backup_root(path),
                 reason=f"pre_migration_{pending[0].version}_{pending[-1].version}",
                 schema_version=migrations.current_version(conn),
-                data_roots=get_backup_data_roots(),
             )
         migrations.apply_migrations(conn, SCHEMA_SQL)
         for key, value in DEFAULT_SETTINGS.items():

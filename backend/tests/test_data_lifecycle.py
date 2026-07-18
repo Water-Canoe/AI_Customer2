@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -50,11 +51,14 @@ def test_schema_migrations_drop_removed_agent_tables(tmp_path: Path, monkeypatch
         assert "agent_run_events" not in tables
         assert migrations.current_version(conn) == migrations.latest_version()
         assert conn.execute("PRAGMA user_version").fetchone()[0] == migrations.latest_version()
-    assert any((tmp_path / "backups").iterdir())
+    backup_dir = next((tmp_path / "backups").iterdir())
+    manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["media_crawler_database"] is None
+    assert manifest["file_count"] == 0
 
 
 def test_backup_restore_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    prepare_database(tmp_path, monkeypatch)
+    _, raw_db = prepare_database(tmp_path, monkeypatch)
     from app import database
     from app.services import data_management
 
@@ -71,10 +75,16 @@ def test_backup_restore_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         database.set_setting(conn, "ai_model", "before-backup")
     backup = data_management.create_backup("test_round_trip")
     assert backup["file_count"] == 4
+    assert backup["media_crawler_database"]["file"] == "media_crawler.sqlite3"
+    assert all(item["tree_sha256"] for item in backup["data_directories"].values())
     with database.connect() as conn:
         database.set_setting(conn, "ai_model", "after-backup")
     for path in files:
         path.write_bytes(b"changed")
+    extra_file = database.get_backup_data_roots()["content_assets"] / "created-after-backup.txt"
+    extra_file.write_text("new", encoding="utf-8")
+    with sqlite3.connect(raw_db) as raw_conn:
+        raw_conn.execute("UPDATE raw_items SET value = 'changed'")
 
     result = data_management.restore_backup(str(backup["id"]), "恢复备份")
 
@@ -88,8 +98,26 @@ def test_backup_restore_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     }
     for path, content in files.items():
         assert path.read_bytes() == content
+    assert not extra_file.exists()
+    with sqlite3.connect(raw_db) as raw_conn:
+        assert raw_conn.execute("SELECT value FROM raw_items").fetchone()[0] == "test"
     with database.connect() as conn:
         assert database.get_setting(conn, "ai_model") == "before-backup"
+
+
+def test_restore_rejects_corrupt_media_crawler_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, raw_db = prepare_database(tmp_path, monkeypatch)
+    from app.services import data_management
+
+    backup = data_management.create_backup("corrupt_media")
+    backup_path = tmp_path / "backups" / str(backup["id"]) / "media_crawler.sqlite3"
+    backup_path.write_bytes(b"corrupt")
+
+    with pytest.raises(ValueError, match="MyCrawler 数据库校验失败"):
+        data_management.restore_backup(str(backup["id"]), data_management.RESTORE_CONFIRM_TEXT)
+
+    with sqlite3.connect(raw_db) as raw_conn:
+        assert raw_conn.execute("SELECT value FROM raw_items").fetchone()[0] == "test"
 
 
 def test_active_jobs_covers_runtime_content_and_pending_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

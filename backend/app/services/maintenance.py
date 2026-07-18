@@ -51,9 +51,7 @@ def clear_all_data(
         backup = data_management.create_backup("pre_clear_all_data") if create_backup else None
 
         with database.connect() as conn:
-            # 接受用户从设置页粘贴的带引号路径，但不放宽确认文本。
-            raw_db_value = str(database.get_setting(conn, "media_crawler_db_path", "")).strip().strip('"').strip("'")
-            raw_db_path = Path(raw_db_value).expanduser()
+            raw_db_path = database.get_media_crawler_db_path(conn)
             if include_crawler and not raw_db_path.exists():
                 raise ValueError(f"MyCrawler SQLite 不存在：{raw_db_path}")
             project_result = _clear_project_database(conn)
