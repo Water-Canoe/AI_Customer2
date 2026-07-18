@@ -16,7 +16,7 @@ def get_status(scope: str) -> dict[str, Any]:
 
     # 顶部栏只读取聚合计数，避免轮询业务明细列表。
     with database.connect() as conn:
-        active = _count(conn, "SELECT COUNT(*) FROM runtime_jobs WHERE status IN ('pending', 'running')") > 0
+        active = _count(conn, "SELECT COUNT(*) FROM runtime_jobs WHERE status IN ('queued', 'running')") > 0
         metrics = {
             "lead": _lead_metrics,
             "traffic": _traffic_metrics,

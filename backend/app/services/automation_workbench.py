@@ -53,14 +53,17 @@ def _scheduler_loop() -> None:
     # 仅补跑启动前十分钟，覆盖短暂重启且避免重放长时间停机任务。
     last_scan = _scheduler_scan_start(datetime.now())
     while not _SCHEDULER_STOP.wait(10.0):
-        now = datetime.now()
-        try:
-            trigger_due_plans(last_scan, now)
-        except Exception:
-            # 单次数据库或校验异常不能终止后续时刻的调度检查。
-            LOGGER.exception("自动化调度检查失败")
-        finally:
-            last_scan = now
+        last_scan = _scan_due_plans(last_scan, datetime.now())
+
+
+def _scan_due_plans(last_scan: datetime, now: datetime) -> datetime:
+    try:
+        trigger_due_plans(last_scan, now)
+    except Exception:
+        # 扫描失败时保留原游标，下一轮重新覆盖这个时间窗口。
+        LOGGER.exception("自动化调度检查失败")
+        return last_scan
+    return now
 
 
 def trigger_due_plans(start: datetime, end: datetime) -> list[dict[str, Any]]:

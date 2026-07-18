@@ -63,6 +63,15 @@ def test_runtime_queue_cancels_queued_job(tmp_path: Path, monkeypatch: pytest.Mo
     assert job_queue.delete_job(str(job["id"])) == {"ok": True, "id": job["id"]}
 
 
+def test_queued_runtime_job_marks_workbench_active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_queue(tmp_path, monkeypatch)
+    from app.services import job_queue, workbench_status
+
+    job_queue.enqueue("test_job", entity_id="queued-status")
+
+    assert workbench_status.get_status("lead")["active"] is True
+
+
 def test_cancelling_queued_runtime_job_updates_domain_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_queue(tmp_path, monkeypatch)
     from app import database

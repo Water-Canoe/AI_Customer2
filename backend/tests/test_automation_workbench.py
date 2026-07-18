@@ -181,6 +181,19 @@ def test_scheduler_start_only_catches_up_ten_minutes() -> None:
     assert automation_workbench._scheduler_scan_start(now) == datetime(2026, 7, 13, 8, 58, 30)
 
 
+def test_scheduler_keeps_scan_cursor_after_global_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import automation_workbench
+
+    start = datetime(2026, 7, 13, 8, 59, 50)
+    end = datetime(2026, 7, 13, 9, 0, 5)
+    monkeypatch.setattr(automation_workbench, "trigger_due_plans", lambda *_: (_ for _ in ()).throw(sqlite3.OperationalError("busy")))
+
+    assert automation_workbench._scan_due_plans(start, end) == start
+
+    monkeypatch.setattr(automation_workbench, "trigger_due_plans", lambda *_: [])
+    assert automation_workbench._scan_due_plans(start, end) == end
+
+
 def test_scheduled_plan_failure_does_not_block_later_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.services import automation_workbench, license_service

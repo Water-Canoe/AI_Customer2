@@ -35,7 +35,7 @@
 
 持久化表为 `automation_plans / automation_runs / automation_run_items`，其中 `automation_plans.sort_order` 同时控制页面顺序和运行优先级。运行记录保存计划配置快照、当前阶段和关联业务任务；关键词运行明细继续保存关键词、采集/AI结果和客户数，自动引流则直接在 `automation_runs.traffic_run_id / traffic_runtime_job_id` 保存关联批次和浏览器子任务，不创建伪关键词明细。调度器本身不执行浏览器、AI或引流操作，只创建 `automation_run` 编排任务；编排任务使用并发数为 1 的 `automation` 资源串行执行，再把采集、账号分析、AI、私信和引流子任务交给 `runtime_jobs` 对应资源队列。自动引流轮到执行时才按快照创建 ID 为 `automation:<automation_run_id>` 的内部 `traffic_plan` 和同 ID 的正常 `traffic_run`；内部计划不出现在引流“计划工作台”，但批次、日志、视频明细、操作记录和防重复账本仍复用现有 `traffic_*` 数据流并出现在“执行监控”和“操作记录”。停止父运行会同时取消浏览器子任务并停止关联引流批次。后端重启时复用已经持久化的关联子任务，不重放已经执行过的浏览器动作。
 
-调度器启动时只补查前 10 分钟的计划，足以覆盖正常升级和短暂重启，不会重放长时间停机期间的旧任务；`plan_id + scheduled_at` 唯一约束继续防止重复。单个到期计划触发异常会写入失败运行并继续处理同一时刻的后续计划，不会让一次异常吞掉整批调度。
+调度器启动时只补查前 10 分钟的计划，足以覆盖正常升级和短暂重启，不会重放长时间停机期间的旧任务；`plan_id + scheduled_at` 唯一约束继续防止重复。单个到期计划触发异常会写入失败运行并继续处理同一时刻的后续计划，不会让一次异常吞掉整批调度；如果整次数据库扫描失败，扫描游标保持不变，下一轮重新覆盖该时间窗口，避免恰好到点的任务被漏掉。
 
 关键词自动获客计划可分别选择“竞品分析后删除非竞品”“自动分析客户”“客户分析后删除非客户”。删除开关直接写入对应 AI 任务的 `auto_delete`，不开启时保留分析记录。竞品筛选仍固定执行，因为后续采评论需要先确定真实竞品；自动私信继续使用独立计划，同一时间安排并拖到关键词计划之后即可按自动化队列顺序衔接，避免把两套额度和话术配置重复塞进获客计划。
 
@@ -112,7 +112,7 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏、工作流条和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`AutomationPlanPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts`、`TrafficWorkbenchPage.ts` 和 `ContentWorkbenchPage.ts`。内容工作台的四个路由共用同一个页面外壳，按当前路由渲染视频创作、内容资产、生成记录和内容设置。可复用控件放在 `frontend/src/components/ui/`，运行队列组件放在 `components/runtime/`，共享 API、类型和格式化工具放在 `frontend/src/shared/`。自动同步的并发保护、活跃/空闲节流、路由切换和可见性恢复已拆到 `frontend/src/composables/autoSync.ts`，避免定时器生命周期继续散落在应用壳。全局业务样式集中在 `frontend/src/workbench.css`，基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
-顶部指标统一读取轻量 `/api/workbench/status`，只统计当前工作台和全局运行态。定时同步只刷新当前路由所需数据；设置、环境检查和非当前页面的大列表不再被每 3/12 秒全量请求。手动刷新同样限定在当前工作台，自动化计划页额外显示启用、运行和失败计数。
+顶部指标统一读取轻量 `/api/workbench/status`，只统计当前工作台和全局运行态；统一队列的 `queued` 和 `running` 都属于活跃状态，只有排队任务时也不会被误判为空闲。定时同步只刷新当前路由所需数据；设置、环境检查和非当前页面的大列表不再被每 3/12 秒全量请求。手动刷新同样限定在当前工作台，自动化计划页额外显示启用、运行和失败计数。
 
 数据表接口使用数据库级分页，参数为 `page / page_size`，响应包含 `total / total_pages`。前端切页和切换每页数量时只请求当前页，不再先读取最多 500 行后在浏览器内切片。
 
