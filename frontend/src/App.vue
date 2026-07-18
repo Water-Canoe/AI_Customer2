@@ -105,7 +105,7 @@
         </div>
         <div class="topbar-actions">
           <span class="topbar-env-tag" :class="topbarEnvClass">{{ topbarEnvLabel }}</span>
-          <el-button :icon="Refresh" @click="refreshAll">刷新</el-button>
+          <el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
           <el-button type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
         </div>
       </el-header>
@@ -432,10 +432,20 @@ function goToView(view: string) {
   router.push(`/${view}`)
 }
 
-async function refreshAll() {
+async function refreshAll(notifyFailure = false) {
   // 手动刷新只请求当前工作台，避免每次刷新拉取所有业务大列表。
-  await Promise.allSettled([loadWorkbenchStatus(), ...currentViewLoaders(true, true).map(loader => loader())])
+  const results = await Promise.allSettled([loadWorkbenchStatus(), ...currentViewLoaders(true, true).map(loader => loader())])
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+  if (failures.length > 0) {
+    if (notifyFailure) {
+      const reason: any = failures[0].reason
+      const detail = reason?.response?.data?.detail || reason?.message || '无法连接本地服务'
+      ElMessage.error(`刷新失败（${failures.length} 项）：${detail}`)
+    }
+    return false
+  }
   autoSync.markSynced()
+  return true
 }
 
 async function loadLicense(silent = false) {
@@ -1606,7 +1616,7 @@ async function clearAllData() {
     const { data } = await api.post('/settings/clear-data', { confirm: value })
     ElMessage.success(`已清空数据：项目 ${data.project?.rows || 0} 行，底层 ${data.media_crawler?.rows || 0} 行；清空前备份已保留`)
     selectedTask.value = null
-    await refreshAll()
+    await refreshAll(false)
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '清空业务记录失败')
   }
@@ -1622,7 +1632,7 @@ onMounted(async () => {
     appVersion.value = String(data.version || '')
     appPackaged.value = Boolean(data.packaged)
   }).catch(() => undefined)
-  await Promise.all([refreshAll(), loadLicense(true), versionRequest])
+  await Promise.all([refreshAll(false), loadLicense(true), versionRequest])
   autoSync.start()
 })
 

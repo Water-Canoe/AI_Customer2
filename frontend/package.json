@@ -1,6 +1,5 @@
 {
   "name": "ai-customer-workbench",
-  "version": "1.2.5",
   "private": true,
   "type": "module",
   "scripts": {
