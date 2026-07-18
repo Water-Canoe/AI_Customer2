@@ -6,7 +6,7 @@ from typing import Any
 from app import database
 
 
-SCOPES = {"lead", "traffic", "content", "automation"}
+SCOPES = {"lead", "traffic", "content", "automation", "runtime"}
 
 
 def get_status(scope: str) -> dict[str, Any]:
@@ -22,6 +22,7 @@ def get_status(scope: str) -> dict[str, Any]:
             "traffic": _traffic_metrics,
             "content": _content_metrics,
             "automation": _automation_metrics,
+            "runtime": _runtime_metrics,
         }[scope](conn)
     return {"scope": scope, "active": active, "metrics": metrics}
 
@@ -76,6 +77,13 @@ def _automation_metrics(conn: sqlite3.Connection) -> dict[str, int]:
     }
 
 
-def _count(conn: sqlite3.Connection, sql: str) -> int:
-    row = conn.execute(sql).fetchone()
+def _runtime_metrics(conn: sqlite3.Connection) -> dict[str, int]:
+    return {
+        status: _count(conn, "SELECT COUNT(*) FROM runtime_jobs WHERE status = ?", (status,))
+        for status in ("queued", "running", "failed", "interrupted")
+    }
+
+
+def _count(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> int:
+    row = conn.execute(sql, params).fetchone()
     return int(row[0] or 0) if row else 0

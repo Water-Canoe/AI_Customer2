@@ -5807,7 +5807,7 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
     assert status["metrics"]["message_pending"] == 0
     assert all(
         client.get("/api/workbench/status", params={"scope": scope}).status_code == 200
-        for scope in ("traffic", "content", "automation")
+        for scope in ("traffic", "content", "automation", "runtime")
     )
     assert client.get("/api/workbench/status", params={"scope": "unknown"}).status_code == 400
     task_response = client.get(f"/api/tasks/{task['id']}")

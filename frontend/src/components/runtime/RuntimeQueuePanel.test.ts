@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { runtimeJobSummary, runtimeKindLabel, runtimeStatusLabel } from './RuntimeQueuePanel'
+import { runtimeJobSummary, runtimeKindLabel, runtimeResourceLabel, runtimeStatusLabel } from './RuntimeQueuePanel'
 import { RuntimeQueuePanel } from './RuntimeQueuePanel'
 
 
@@ -32,6 +32,9 @@ describe('RuntimeQueuePanel formatters', () => {
   it('uses user-facing labels for queue kinds and statuses', () => {
     expect(runtimeKindLabel('message_batch')).toBe('批量自动私信')
     expect(runtimeStatusLabel('interrupted')).toBe('被中断')
+    expect(runtimeKindLabel('automation_run')).toBe('自动化计划')
+    expect(runtimeKindLabel('content_publish')).toBe('内容发布')
+    expect(runtimeResourceLabel('video')).toBe('视频')
     expect(runtimeKindLabel('custom_job')).toBe('custom_job')
   })
 

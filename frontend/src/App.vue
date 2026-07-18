@@ -10,10 +10,11 @@
       </div>
       <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench', 'content-workbench']" class="nav" @select="goToView">
         <el-menu-item index="automation-plans"><el-icon><Clock /></el-icon><span>自动化计划</span></el-menu-item>
+        <el-menu-item index="runtime-center"><el-icon><Monitor /></el-icon><span>运行中心</span></el-menu-item>
         <el-sub-menu index="lead-workbench">
           <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
           <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
-          <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>任务与日志</span></el-menu-item>
+          <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>采集记录</span></el-menu-item>
           <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
           <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
           <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>私信工作台</span></el-menu-item>
@@ -92,7 +93,7 @@
         <div class="topbar-actions">
           <span class="topbar-env-tag" :class="topbarEnvClass">{{ topbarEnvLabel }}</span>
           <el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
-          <el-button v-if="!isGlobalSettingsView" type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
+          <el-button v-if="!isGlobalSettingsView && !isRuntimeView" type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
         </div>
       </el-header>
 
@@ -126,6 +127,7 @@ import {
   Grid,
   MagicStick,
   Message,
+  Monitor,
   Operation,
   Plus,
   Promotion,
@@ -192,6 +194,7 @@ const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
 const trafficEnv = ref<Dict>({})
 const trafficRefreshSeq = ref(0)
 const automationRefreshSeq = ref(0)
+const runtimeRefreshSeq = ref(0)
 const globalSettingsRefreshSeq = ref(0)
 const contentEnv = ref<Dict>({})
 const contentRefreshSeq = ref(0)
@@ -203,17 +206,19 @@ let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
+const isRuntimeView = computed(() => activeView.value === 'runtime-center')
 const isGlobalSettingsView = computed(() => activeView.value === 'global-settings')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
-const topbarKicker = computed(() => isGlobalSettingsView.value ? '系统中心' : (isAutomationView.value ? '自动化中心' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))
+const topbarKicker = computed(() => isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台')))))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
-const topbarEnvOk = computed(() => isAutomationView.value || isGlobalSettingsView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
-const topbarEnvClass = computed(() => isAutomationView.value || isGlobalSettingsView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
+const topbarEnvOk = computed(() => isAutomationView.value || isRuntimeView.value || isGlobalSettingsView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
+const topbarEnvClass = computed(() => isAutomationView.value || isRuntimeView.value || isGlobalSettingsView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
 const topbarEnvLabel = computed(() => {
   if (isGlobalSettingsView.value) return licenseStatusLabel.value
+  if (isRuntimeView.value) return '五类资源统一调度'
   if (isAutomationView.value) return '共用浏览器队列'
   if (isContentView.value) return topbarEnvOk.value ? '视频环境正常' : '需要检查视频环境'
   if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
@@ -234,6 +239,14 @@ const autoSync = createAutoSyncController({
 const dashboardInsights = computed(() => {
   const metrics = workbenchStatus.value?.metrics || {}
   if (isGlobalSettingsView.value) return []
+  if (isRuntimeView.value) {
+    return [
+      { label: '排队中', value: compactCount(metrics.queued), tone: 'amber' },
+      { label: '执行中', value: compactCount(metrics.running), tone: 'blue' },
+      { label: '失败', value: compactCount(metrics.failed), tone: 'red' },
+      { label: '被中断', value: compactCount(metrics.interrupted), tone: 'red' },
+    ]
+  }
   if (isAutomationView.value) {
     return [
       { label: '启用计划', value: compactCount(metrics.enabled_plans), tone: 'green' },
@@ -330,6 +343,7 @@ const routeProps = computed(() => {
       updateChecking: updateChecking.value,
     }
   }
+  if (activeView.value === 'runtime-center') return { refreshSeq: runtimeRefreshSeq.value }
   if (activeView.value.startsWith('content-')) return { refreshSeq: contentRefreshSeq.value }
   return {
     settings: settings.value,
@@ -548,7 +562,7 @@ async function copyDeviceCode() {
 }
 
 async function loadWorkbenchStatus() {
-  const scope = isAutomationView.value ? 'automation' : (isContentView.value ? 'content' : (isTrafficView.value ? 'traffic' : 'lead'))
+  const scope = isRuntimeView.value ? 'runtime' : (isAutomationView.value ? 'automation' : (isContentView.value ? 'content' : (isTrafficView.value ? 'traffic' : 'lead')))
   const { data } = await api.get('/workbench/status', { params: { scope } })
   workbenchStatus.value = data
 }
@@ -748,7 +762,7 @@ function compactCount(value: unknown) {
 
 function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
   const loaders: Array<() => Promise<unknown>> = []
-  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isGlobalSettingsView.value && includeStatic) loaders.push(checkEnv)
+  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isRuntimeView.value && !isGlobalSettingsView.value && includeStatic) loaders.push(checkEnv)
 
   if (activeView.value === 'tasks') {
     loaders.push(loadTasks)
@@ -775,6 +789,8 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
     if (refreshChild) loaders.push(async () => { contentRefreshSeq.value += 1 })
   } else if (isAutomationView.value) {
     if (includeStatic || refreshChild) loaders.push(async () => { automationRefreshSeq.value += 1 })
+  } else if (isRuntimeView.value) {
+    if (includeStatic || refreshChild) loaders.push(async () => { runtimeRefreshSeq.value += 1 })
   } else if (isGlobalSettingsView.value) {
     loaders.push(() => loadLicense(true))
     if (includeStatic || refreshChild) loaders.push(async () => { globalSettingsRefreshSeq.value += 1 })

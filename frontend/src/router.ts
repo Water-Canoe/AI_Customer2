@@ -6,6 +6,7 @@ const GlobalSettingsPage = () => import('./pages/AccountCenterPage')
 const AutomationPlanPage = () => import('./pages/AutomationPlanPage')
 const ContentWorkbenchPage = () => import('./pages/ContentWorkbenchPage')
 const PublishCenterPage = () => import('./pages/PublishCenterPage')
+const RuntimeCenterPage = () => import('./pages/RuntimeCenterPage')
 const LogsPage = () => import('./pages/LogsPage')
 const MessageWorkbenchPage = () => import('./pages/MessageWorkbenchPage')
 const OverviewPage = () => import('./pages/OverviewPage')
@@ -30,6 +31,12 @@ export const routes = [
     name: 'automation-plans',
     component: AutomationPlanPage,
     meta: { title: '自动化计划', subtitle: '统一安排获客、私信和引流任务，并按列表顺序共用浏览器队列。', hint: '把跨工作台的重复工作交给固定计划' },
+  },
+  {
+    path: '/runtime',
+    name: 'runtime-center',
+    component: RuntimeCenterPage,
+    meta: { title: '运行中心', subtitle: '统一监控拓客、私信、引流、内容、AI和视频任务。', hint: '全局任务在这里排队和执行' },
   },
   {
     path: '/global-settings',
@@ -59,7 +66,7 @@ export const routes = [
     path: '/logs',
     name: 'logs',
     component: LogsPage,
-    meta: { title: '任务与日志', subtitle: '查看任务运行状态、控制台输出、归档和硬删除。', hint: '先确认任务是否正确完成' },
+    meta: { title: '采集记录', subtitle: '查看拓客采集产出、失败诊断、防重复记录和历史任务。', hint: '先确认采集结果再继续处理' },
   },
   {
     path: '/tables',

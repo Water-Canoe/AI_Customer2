@@ -19,6 +19,15 @@ describe('工作台路由', () => {
     expect(typeof automationRoute?.component).toBe('function')
   })
 
+  it('统一运行队列作为独立全局页面', () => {
+    const runtimeRoute = routes.find(route => route.name === 'runtime-center')
+    const logsRoute = routes.find(route => route.name === 'logs')
+
+    expect(runtimeRoute?.path).toBe('/runtime')
+    expect(runtimeRoute?.meta?.title).toBe('运行中心')
+    expect(logsRoute?.meta?.title).toBe('采集记录')
+  })
+
   it('全局设置统一承载更新、授权和账号入口', () => {
     const globalSettingsRoute = routes.find(route => route.name === 'global-settings')
 
