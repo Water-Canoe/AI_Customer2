@@ -163,20 +163,25 @@ export default defineComponent({
       return h('article', { class: 'pane account-center-card' }, [
         h('div', { class: 'account-card-head' }, [
           h('div', [h('strong', `${platformLabel(account.platform)} · ${account.name}`)]),
-          h('span', { class: `status-pill status-${account.status}` }, statusLabel(account.status)),
+          h('div', { class: 'account-card-head-actions' }, [
+            h('label', { class: 'account-enabled-toggle' }, [h('input', { type: 'checkbox', checked: account.enabled, onChange: (event: Event) => updateAccount(account, { enabled: (event.target as HTMLInputElement).checked }) }), '启用账号']),
+            h('span', { class: `status-pill status-${account.status}` }, statusLabel(account.status)),
+          ]),
         ]),
         account.qrcode_url ? h('img', { class: 'publish-qrcode', src: `${account.qrcode_url}?t=${Date.now()}`, alt: '登录二维码' }) : null,
         h('div', { class: 'account-identity-row' }, [
           h('input', { value: account.name || '', placeholder: '账号名称', onChange: (event: Event) => updateAccount(account, { name: (event.target as HTMLInputElement).value.trim() }) }),
           h('input', { value: account.platform_user_id || '', placeholder: '平台账号ID（可选，用于防止重复添加）', onChange: (event: Event) => updateAccount(account, { platform_user_id: (event.target as HTMLInputElement).value.trim() }) }),
           h('select', { value: account.role, onChange: (event: Event) => changeRole(account, (event.target as HTMLSelectElement).value) }, Object.keys(ROLE_FEATURES).map(role => h('option', { value: role }, roleLabel(role)))),
-          h('label', [h('input', { type: 'checkbox', checked: account.enabled, onChange: (event: Event) => updateAccount(account, { enabled: (event.target as HTMLInputElement).checked }) }), '启用账号']),
         ]),
-        h('div', { class: 'account-feature-list' }, FEATURES.map(feature => h('div', { class: ['account-feature-row', allowed.includes(feature) ? '' : 'is-disabled'] }, [
-          h('label', [h('input', { type: 'checkbox', disabled: !allowed.includes(feature), checked: account.features?.includes(feature), onChange: (event: Event) => toggleFeature(account, feature, (event.target as HTMLInputElement).checked) }), featureLabel(feature)]),
-          h('label', [h('input', { type: 'checkbox', disabled: !account.features?.includes(feature), checked: account.default_features?.includes(feature), onChange: (event: Event) => toggleDefault(account, feature, (event.target as HTMLInputElement).checked) }), '设为默认']),
-          h('small', featureStatusLabel(account.feature_status?.[feature]?.status)),
-        ]))),
+        h('div', { class: 'account-feature-list' }, [
+          h('div', { class: 'account-feature-head' }, [h('span', '功能权限'), h('span', '默认账号'), h('span', '登录状态')]),
+          ...FEATURES.map(feature => h('div', { class: ['account-feature-row', allowed.includes(feature) ? '' : 'is-disabled'] }, [
+            h('label', { class: 'account-feature-toggle' }, [h('input', { type: 'checkbox', disabled: !allowed.includes(feature), checked: account.features?.includes(feature), onChange: (event: Event) => toggleFeature(account, feature, (event.target as HTMLInputElement).checked) }), featureLabel(feature)]),
+            h('label', { class: 'account-feature-toggle' }, [h('input', { type: 'checkbox', disabled: !account.features?.includes(feature), checked: account.default_features?.includes(feature), onChange: (event: Event) => toggleDefault(account, feature, (event.target as HTMLInputElement).checked) }), '设为默认']),
+            h('small', { class: ['account-feature-status', `is-${account.feature_status?.[feature]?.status || 'unknown'}`] }, featureStatusLabel(account.feature_status?.[feature]?.status)),
+          ])),
+        ]),
         account.last_error ? h('p', { class: 'content-job-error' }, String(account.last_error)) : h('small', `最近检查：${account.last_checked_at || '尚未检查'}`),
         h('div', { class: 'task-card-actions' }, [
           h('button', { class: 'primary-soft', disabled: account.status === 'checking', onClick: () => accountAction(account, 'login') }, account.status === 'checking' ? '处理中...' : account.status === 'ready' ? '重新登录' : '扫码登录'),

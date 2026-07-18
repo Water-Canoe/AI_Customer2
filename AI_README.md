@@ -454,6 +454,7 @@ Windows 设备身份保存在 `%PROGRAMDATA%\AI_Customer\device_identity.bin`：
 本地只提供产品级 `GET /api/license`、`PUT /api/license`、`POST /api/license/check`。左侧边栏底部只保留一个“全局设置”入口，集中展示检查更新、授权与设备和账号中心；入口及页面内授权卡片都显示整份产品授权状态，创建拓客、引流、内容生成和发布任务时仍分别校验对应权益，统一运行队列在真正执行 `lead / traffic / content` 任务前再次校验。授权到期后，已有数据的查看、导出、备份、取消和清理仍可用，只阻止创建或启动新的受控任务。
 
 全局设置是长页面，由主工作区独立纵向滚动，不影响左侧导航和顶部状态栏固定显示。
+账号管理使用单行创建表单和纵向账号卡片；账号启用状态收口到卡片头部，功能权限、默认账号和登录状态按固定列对齐，窄屏自动切换为单列。
 
 管理接口统一位于 `/ai-customer/admin/licenses*`，全部使用 `Authorization: Bearer <AI_CUSTOMER_ADMIN_TOKEN>`，授权码不提供硬删除，停用使用 `PATCH /admin/licenses/{licenseId}`。根目录 `tools/license-admin.html` 可直接打开，提供服务健康检查、授权统计、创建后一次性保存授权码、搜索和筛选、CSV 导出、权益/设备数/有效期/状态编辑，以及设备搜索、撤销和恢复；页面只允许连接当前 Sealos 授权域名或本机调试地址，管理 Token 只保存在当前页面内存，不写入浏览器持久化存储，API 数据也不使用 `innerHTML` 渲染。恢复设备会在 MongoDB 事务中重新占用名额，仅允许恢复处于 `revoked` 状态的设备，并要求授权已启用、未过期且设备名额未满；修改设备上限时，服务端会原子拒绝低于当前已激活数量的设置。该页面只供管理员使用，不进入客户发布包。旧 `add-license / check-license / get-license-devices / revoke-license-device` 和三个 demo permission 接口已删除，不保留兼容层。本轮完整后端回归为 411 项通过、8 项联网测试跳过，并用 Playwright 内存接口完成撤销设备恢复、名额更新和恢复时间展示验收。
 

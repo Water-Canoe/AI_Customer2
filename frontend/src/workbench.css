@@ -7290,8 +7290,6 @@ button.filter-button:focus-visible,
   }
 }
 
-.account-create-row,
-.account-identity-row,
 .workbench-account-bar {
   display: flex;
   align-items: center;
@@ -7299,41 +7297,88 @@ button.filter-button:focus-visible,
   flex-wrap: wrap;
 }
 
-.account-create-row input {
-  min-width: 240px;
-  flex: 1;
+.account-create-row {
+  display: grid;
+  grid-template-columns: 140px 160px minmax(260px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.account-create-row input,
+.account-create-row select {
+  min-width: 0;
+}
+
+.account-create-row > button {
+  min-height: 38px;
+  white-space: nowrap;
 }
 
 .account-center-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 16px;
 }
 
 .account-center-card {
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  padding: 18px;
 }
 
 .account-card-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.account-card-head > div {
+.account-card-head > div:first-child {
   display: grid;
   gap: 4px;
 }
 
-.account-identity-row input {
-  min-width: 230px;
-  flex: 1;
+.account-card-head strong {
+  color: #172033;
+  font-size: 17px;
 }
 
+.account-card-head-actions,
+.account-enabled-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.account-enabled-toggle {
+  color: #475569;
+  cursor: pointer;
+}
+
+.account-card-head .status-ready {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.account-card-head .status-checking {
+  background: #fef3c7;
+  color: #a16207;
+}
+
+.account-card-head .status-expired,
+.account-card-head .status-error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.account-identity-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.4fr) 150px;
+  gap: 10px;
+}
+
+.account-identity-row input,
 .account-identity-row select {
-  min-width: 104px;
+  min-width: 0;
 }
 
 .account-feature-list {
@@ -7341,18 +7386,122 @@ button.filter-button:focus-visible,
   gap: 7px;
 }
 
+.account-feature-head,
 .account-feature-row {
   display: grid;
-  grid-template-columns: minmax(90px, 1fr) minmax(90px, 1fr) 64px;
+  grid-template-columns: minmax(160px, 1fr) minmax(170px, 1fr) 110px;
   align-items: center;
   gap: 10px;
+}
+
+.account-feature-head {
+  padding: 0 12px 2px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.account-feature-head span:last-child {
+  text-align: right;
+}
+
+.account-feature-row {
+  min-height: 48px;
   padding: 8px 10px;
   border: 1px solid #dbe7e2;
   border-radius: 10px;
+  background: #fbfdfc;
+}
+
+.account-feature-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #334155;
+  cursor: pointer;
 }
 
 .account-feature-row.is-disabled {
-  opacity: .48;
+  background: #f8fafc;
+  opacity: .55;
+}
+
+.account-feature-status {
+  justify-self: end;
+  min-width: 64px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  text-align: center;
+}
+
+.account-feature-status.is-ready {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.account-feature-status.is-checking {
+  background: #fffbeb;
+  color: #a16207;
+}
+
+.account-feature-status.is-expired,
+.account-feature-status.is-error {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.account-center-card > .task-card-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.account-center-card > .task-card-actions button {
+  min-width: 112px;
+  padding-inline: 16px;
+}
+
+@media (max-width: 960px) {
+  .account-create-row,
+  .account-identity-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-create-row input,
+  .account-create-row > button {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .account-create-row,
+  .account-identity-row,
+  .account-feature-head,
+  .account-feature-row {
+    grid-template-columns: 1fr;
+  }
+
+  .account-feature-head {
+    display: none;
+  }
+
+  .account-feature-status {
+    justify-self: start;
+  }
+
+  .account-card-head,
+  .account-card-head-actions {
+    align-items: flex-start;
+  }
+
+  .account-card-head {
+    flex-direction: column;
+  }
+
+  .account-center-card > .task-card-actions {
+    display: grid;
+  }
 }
 
 .workbench-account-bar {
