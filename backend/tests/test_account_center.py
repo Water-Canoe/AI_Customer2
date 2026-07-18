@@ -52,6 +52,16 @@ def test_changing_default_account_clears_previous_default(tmp_path: Path, monkey
     assert next(account for account in accounts if account["id"] == second["id"])["default_features"] == ["message"]
 
 
+def test_single_ready_feature_account_does_not_require_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _init(tmp_path, monkeypatch)
+    from app.services import account_center
+
+    account = account_center.create_account("dy", "唯一拓客账号", "operations", ["acquisition"], [])
+    account_center.set_feature_status(account["id"], "acquisition", "ready")
+
+    assert account_center.resolve_account_id("dy", "acquisition") == account["id"]
+
+
 def test_account_can_remove_all_feature_bindings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _init(tmp_path, monkeypatch)
     from app.services import account_center

@@ -2918,7 +2918,7 @@ def test_keyword_account_analysis_includes_kuaishou_accounts(tmp_path: Path) -> 
 def test_kuaishou_find_customer_creates_comment_crawl_task(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
-    from app.services import account_actions, crawler_adapter
+    from app.services import account_actions, account_center, crawler_adapter
 
     with database.connect() as conn:
         account_id = conn.execute(
@@ -2935,11 +2935,13 @@ def test_kuaishou_find_customer_creates_comment_crawl_task(tmp_path: Path) -> No
             (account_id,),
         )
 
+    execution_account_id = account_center.resolve_account_id("ks", "acquisition")
     result = account_actions.create_account_find_customer_task(int(account_id))
 
     assert result["created"] == 2
     tasks = [crawler_adapter.get_task(task_id) for task_id in result["task_ids"]]
     assert {task["platform"] for task in tasks if task} == {"ks"}
+    assert {task["account_id"] for task in tasks if task} == {execution_account_id}
     assert any(task and task["crawler_type"] == "detail" for task in tasks)
     assert any(task and task["crawler_type"] == "creator" for task in tasks)
 

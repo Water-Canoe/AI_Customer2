@@ -107,12 +107,16 @@ def resolve_account_id(platform: str, feature: str, account_id: str = "", *, req
         if account["platform"] != platform:
             raise ValueError("所选账号与任务平台不一致")
         return str(account["id"])
+    feature_accounts = list_accounts(feature=feature, platform=platform)
     candidates = [
-        account for account in list_accounts(feature=feature, platform=platform)
+        account for account in feature_accounts
         if feature in account["default_features"]
     ]
     if not candidates:
-        raise ValueError("该平台尚未配置此功能的默认账号，请先到账号中心设置")
+        if len(feature_accounts) == 1:
+            candidates = feature_accounts
+        else:
+            raise ValueError("该平台尚未配置此功能的默认账号，请先到账号中心设置")
     account = candidates[0]
     if require_ready:
         try:

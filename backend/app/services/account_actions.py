@@ -416,6 +416,10 @@ def _build_find_customer_task(
     }
     if not accounts:
         return result
+    if not execution_account_id:
+        from app.services import account_center
+
+        execution_account_id = account_center.resolve_account_id(platform, "acquisition")
 
     account_ids = [int(item["account_id"]) for item in accounts]
     with database.connect() as conn:
