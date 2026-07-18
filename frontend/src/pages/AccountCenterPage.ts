@@ -1,6 +1,6 @@
-import { defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
+import { defineComponent, h, onMounted, onUnmounted, ref, watch, type PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, User } from '@element-plus/icons-vue'
+import { Key, Plus, Refresh, User } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
@@ -16,9 +16,16 @@ const ROLE_FEATURES: Record<string, string[]> = {
 }
 
 export default defineComponent({
-  name: 'AccountCenterPage',
-  props: { refreshSeq: { type: Number, default: 0 } },
-  setup(props) {
+  name: 'GlobalSettingsPage',
+  props: {
+    refreshSeq: { type: Number, default: 0 },
+    licenseInfo: { type: Object as PropType<Dict>, default: () => ({}) },
+    appVersion: { type: String, default: '' },
+    appPackaged: { type: Boolean, default: false },
+    updateChecking: { type: Boolean, default: false },
+  },
+  emits: ['open-license', 'check-update'],
+  setup(props, { emit }) {
     const accounts = ref<Dict[]>([])
     const draft = ref<Dict>({ platform: 'dy', name: '', role: 'brand' })
     const loading = ref(false)
@@ -114,6 +121,26 @@ export default defineComponent({
     watch(() => props.refreshSeq, () => loadAccounts())
 
     return () => h('div', { class: 'account-center-page' }, [
+      h('section', { class: 'pane global-settings-pane' }, [
+        sectionTitle({ title: '系统与授权', subtitle: '软件更新、产品授权和设备信息集中管理', icon: Key, tone: 'blue' }),
+        h('div', { class: 'global-settings-grid' }, [
+          h('article', { class: 'global-setting-card' }, [
+            h('div', { class: 'global-setting-head' }, [
+              h('div', [h(Key), h('strong', '授权与设备')]),
+              h('i', { class: ['global-settings-dot', licenseStateClass(props.licenseInfo)], 'aria-label': licenseStatusText(props.licenseInfo) }),
+            ]),
+            h('p', licenseStatusText(props.licenseInfo)),
+            h('small', `设备码：${props.licenseInfo.device_code || '尚未生成'}`),
+            h('button', { class: 'primary-soft', onClick: () => emit('open-license') }, '管理授权与设备'),
+          ]),
+          h('article', { class: 'global-setting-card' }, [
+            h('div', { class: 'global-setting-head' }, [h('div', [h(Refresh), h('strong', '软件更新')])]),
+            h('p', props.appVersion ? `当前版本 v${props.appVersion}` : '正在读取当前版本'),
+            h('small', props.appPackaged ? '检查并安装已发布的新版本' : '开发环境仅验证入口，正式包执行更新'),
+            h('button', { class: 'primary-soft', disabled: props.updateChecking, onClick: () => emit('check-update') }, props.updateChecking ? '正在检查...' : '检查更新'),
+          ]),
+        ]),
+      ]),
       h('section', { class: 'pane account-create-pane' }, [
         sectionTitle({ title: '统一账号中心', subtitle: '一个账号对应一个独立登录态，所有工作台从这里选择', icon: User, tone: 'teal', aside: h('button', { class: 'secondary-action', onClick: () => loadAccounts() }, [h(Refresh, { class: 'inline-icon' }), '刷新']) }),
         h('div', { class: 'account-create-row' }, [
@@ -166,3 +193,5 @@ function roleLabel(value: string) { return ({ brand: '品牌号', service: '客�
 function featureLabel(value: string) { return ({ acquisition: '拓客', message: '私信', traffic: '引流', publish: '内容发布' } as Dict)[value] || value }
 function statusLabel(value: string) { return ({ login_required: '待登录', checking: '检查中', ready: '已登录', expired: '已失效', error: '异常' } as Dict)[value] || value }
 function featureStatusLabel(value: string) { return ({ ready: '可用', checking: '检查中', expired: '失效', error: '异常', unknown: '未检查' } as Dict)[value] || '未检查' }
+function licenseStatusText(info: Dict) { return info.authorized ? '授权有效' : info.status === 'failed' ? '未授权' : '等待授权' }
+function licenseStateClass(info: Dict) { return info.authorized ? 'is-authorized' : info.status === 'failed' ? 'is-denied' : 'is-pending' }

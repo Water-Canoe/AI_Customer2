@@ -10,7 +10,6 @@
       </div>
       <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench', 'content-workbench']" class="nav" @select="goToView">
         <el-menu-item index="automation-plans"><el-icon><Clock /></el-icon><span>自动化计划</span></el-menu-item>
-        <el-menu-item index="accounts"><el-icon><User /></el-icon><span>账号中心</span></el-menu-item>
         <el-sub-menu index="lead-workbench">
           <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
           <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
@@ -40,29 +39,15 @@
       <div class="sidebar-footer">
         <button
           type="button"
-          class="sidebar-license sidebar-update"
-          title="关闭并重新启动应用后检查新版本"
-          aria-label="检查软件更新"
-          :disabled="updateChecking"
-          @click="checkForUpdates"
-        >
-          <el-icon><Refresh /></el-icon>
-          <span class="sidebar-license-copy">
-            <strong>检查更新</strong>
-            <small>{{ updateChecking ? '正在重启并检查' : '重启后检查新版本' }}</small>
-          </span>
-        </button>
-        <button
-          type="button"
           class="sidebar-license"
-          :class="licenseStatusClass"
-          title="管理产品授权与设备"
-          aria-label="管理产品授权与设备"
-          @click="openLicenseDialog"
+          :class="[licenseStatusClass, { 'is-active': isGlobalSettingsView }]"
+          title="管理更新、授权设备和平台账号"
+          aria-label="打开全局设置"
+          @click="goToView('global-settings')"
         >
-          <el-icon><Key /></el-icon>
+          <el-icon><Setting /></el-icon>
           <span class="sidebar-license-copy">
-            <strong>授权与设备</strong>
+            <strong>全局设置</strong>
             <small>{{ licenseStatusLabel }}</small>
           </span>
           <i class="sidebar-license-dot" aria-hidden="true"></i>
@@ -107,7 +92,7 @@
         <div class="topbar-actions">
           <span class="topbar-env-tag" :class="topbarEnvClass">{{ topbarEnvLabel }}</span>
           <el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
-          <el-button v-if="!isAccountView" type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
+          <el-button v-if="!isGlobalSettingsView" type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
         </div>
       </el-header>
 
@@ -139,7 +124,6 @@ import {
   Collection,
   Clock,
   Grid,
-  Key,
   MagicStick,
   Message,
   Operation,
@@ -150,7 +134,6 @@ import {
   Share,
   SwitchButton,
   Tickets,
-  User,
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -209,7 +192,7 @@ const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
 const trafficEnv = ref<Dict>({})
 const trafficRefreshSeq = ref(0)
 const automationRefreshSeq = ref(0)
-const accountRefreshSeq = ref(0)
+const globalSettingsRefreshSeq = ref(0)
 const contentEnv = ref<Dict>({})
 const contentRefreshSeq = ref(0)
 const workbenchStatus = ref<Dict>({ metrics: {}, active: false })
@@ -220,17 +203,17 @@ let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
-const isAccountView = computed(() => activeView.value === 'accounts')
+const isGlobalSettingsView = computed(() => activeView.value === 'global-settings')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
-const topbarKicker = computed(() => isAccountView.value ? '系统中心' : (isAutomationView.value ? '自动化中心' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))
+const topbarKicker = computed(() => isGlobalSettingsView.value ? '系统中心' : (isAutomationView.value ? '自动化中心' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
-const topbarEnvOk = computed(() => isAutomationView.value || isAccountView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
-const topbarEnvClass = computed(() => isAutomationView.value || isAccountView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
+const topbarEnvOk = computed(() => isAutomationView.value || isGlobalSettingsView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
+const topbarEnvClass = computed(() => isAutomationView.value || isGlobalSettingsView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
 const topbarEnvLabel = computed(() => {
-  if (isAccountView.value) return '账号独立登录态'
+  if (isGlobalSettingsView.value) return licenseStatusLabel.value
   if (isAutomationView.value) return '共用浏览器队列'
   if (isContentView.value) return topbarEnvOk.value ? '视频环境正常' : '需要检查视频环境'
   if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
@@ -250,7 +233,7 @@ const autoSync = createAutoSyncController({
 })
 const dashboardInsights = computed(() => {
   const metrics = workbenchStatus.value?.metrics || {}
-  if (isAccountView.value) return []
+  if (isGlobalSettingsView.value) return []
   if (isAutomationView.value) {
     return [
       { label: '启用计划', value: compactCount(metrics.enabled_plans), tone: 'green' },
@@ -338,7 +321,15 @@ const routeProps = computed(() => {
   }
   if (activeView.value.startsWith('traffic-')) return { refreshSeq: trafficRefreshSeq.value }
   if (activeView.value === 'automation-plans') return { refreshSeq: automationRefreshSeq.value }
-  if (activeView.value === 'accounts') return { refreshSeq: accountRefreshSeq.value }
+  if (activeView.value === 'global-settings') {
+    return {
+      refreshSeq: globalSettingsRefreshSeq.value,
+      licenseInfo: licenseInfo.value,
+      appVersion: appVersion.value,
+      appPackaged: appPackaged.value,
+      updateChecking: updateChecking.value,
+    }
+  }
   if (activeView.value.startsWith('content-')) return { refreshSeq: contentRefreshSeq.value }
   return {
     settings: settings.value,
@@ -422,6 +413,12 @@ const routeListeners = computed(() => {
       'analyze-row': analyzeTableRow,
       'enrich-profile': enrichProfile,
       'find-customers': findCustomers,
+    }
+  }
+  if (activeView.value === 'global-settings') {
+    return {
+      'open-license': openLicenseDialog,
+      'check-update': checkForUpdates,
     }
   }
   if (activeView.value.startsWith('traffic-')) return {}
@@ -751,7 +748,7 @@ function compactCount(value: unknown) {
 
 function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
   const loaders: Array<() => Promise<unknown>> = []
-  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isAccountView.value && includeStatic) loaders.push(checkEnv)
+  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isGlobalSettingsView.value && includeStatic) loaders.push(checkEnv)
 
   if (activeView.value === 'tasks') {
     loaders.push(loadTasks)
@@ -778,8 +775,9 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
     if (refreshChild) loaders.push(async () => { contentRefreshSeq.value += 1 })
   } else if (isAutomationView.value) {
     if (includeStatic || refreshChild) loaders.push(async () => { automationRefreshSeq.value += 1 })
-  } else if (isAccountView.value) {
-    if (includeStatic || refreshChild) loaders.push(async () => { accountRefreshSeq.value += 1 })
+  } else if (isGlobalSettingsView.value) {
+    loaders.push(() => loadLicense(true))
+    if (includeStatic || refreshChild) loaders.push(async () => { globalSettingsRefreshSeq.value += 1 })
   }
   return loaders
 }

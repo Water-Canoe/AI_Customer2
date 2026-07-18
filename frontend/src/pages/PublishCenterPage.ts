@@ -147,7 +147,7 @@ export default defineComponent({
 
     function renderTasks() {
       return h('section', { class: 'pane publish-center-pane' }, [
-        sectionTitle({ title: '发布任务', subtitle: `共 ${tasks.value.total || 0} 条`, icon: Promotion, tone: 'blue', aside: h('div', { class: 'task-card-actions' }, [h('button', { class: 'secondary-action', onClick: () => router.push('/accounts') }, '管理发布账号'), h('button', { class: 'secondary-action publish-refresh', onClick: () => loadAll() }, [h(Refresh, { class: 'inline-icon' }), '刷新'])]) }),
+        sectionTitle({ title: '发布任务', subtitle: `共 ${tasks.value.total || 0} 条`, icon: Promotion, tone: 'blue', aside: h('div', { class: 'task-card-actions' }, [h('button', { class: 'secondary-action', onClick: () => router.push('/global-settings') }, '管理发布账号'), h('button', { class: 'secondary-action publish-refresh', onClick: () => loadAll() }, [h(Refresh, { class: 'inline-icon' }), '刷新'])]) }),
         h('div', { class: 'publish-stat-grid' }, [statCard('待发布', stats.value.pending), statCard('发布中', stats.value.running), statCard('已成功', stats.value.succeeded), statCard('需要处理', stats.value.review)]),
         h('div', { class: 'publish-task-filter' }, [h('select', { value: taskStatus.value, onChange: (event: Event) => { taskStatus.value = (event.target as HTMLSelectElement).value; void loadAll() } }, [h('option', { value: '' }, '全部状态'), ...['queued', 'running', 'succeeded', 'failed', 'review_required', 'cancelled'].map(value => h('option', { value }, taskStatusLabel(value)))])]),
         (tasks.value.items || []).length ? h('div', { class: 'publish-task-list' }, (tasks.value.items || []).map((task: Dict) => h('article', { class: 'publish-task-card' }, [

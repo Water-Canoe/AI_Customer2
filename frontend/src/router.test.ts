@@ -19,6 +19,13 @@ describe('工作台路由', () => {
     expect(typeof automationRoute?.component).toBe('function')
   })
 
+  it('全局设置统一承载更新、授权和账号入口', () => {
+    const globalSettingsRoute = routes.find(route => route.name === 'global-settings')
+
+    expect(globalSettingsRoute?.path).toBe('/global-settings')
+    expect(routes.some(route => route.name === 'accounts')).toBe(false)
+  })
+
   it('三类自动化计划拖动后按目标位置重排', () => {
     const plans = [{ id: 'lead' }, { id: 'message' }, { id: 'traffic' }]
 

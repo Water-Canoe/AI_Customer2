@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 // 页面按路由异步加载，首次启动只解析应用壳和当前工作台。
 const AiPage = () => import('./pages/AiPage')
-const AccountCenterPage = () => import('./pages/AccountCenterPage')
+const GlobalSettingsPage = () => import('./pages/AccountCenterPage')
 const AutomationPlanPage = () => import('./pages/AutomationPlanPage')
 const ContentWorkbenchPage = () => import('./pages/ContentWorkbenchPage')
 const PublishCenterPage = () => import('./pages/PublishCenterPage')
@@ -32,10 +32,10 @@ export const routes = [
     meta: { title: '自动化计划', subtitle: '统一安排获客、私信和引流任务，并按列表顺序共用浏览器队列。', hint: '把跨工作台的重复工作交给固定计划' },
   },
   {
-    path: '/accounts',
-    name: 'accounts',
-    component: AccountCenterPage,
-    meta: { title: '账号中心', subtitle: '统一管理平台账号、独立登录态、账号角色和工作台默认用途。', hint: '先登录账号，再分配到各工作台' },
+    path: '/global-settings',
+    name: 'global-settings',
+    component: GlobalSettingsPage,
+    meta: { title: '全局设置', subtitle: '统一管理软件更新、产品授权、设备信息和平台账号。', hint: '系统级配置集中在这里' },
   },
   {
     path: '/overview',
