@@ -9,7 +9,8 @@ from app.services import data_management
 
 
 CONFIRM_TEXT = "清空业务记录"
-RETAINED_PROJECT_TABLES = {"settings", "schema_migrations"}
+# 账号中心属于运行配置，清空业务记录后仍应保留登录绑定。
+RETAINED_PROJECT_TABLES = {"settings", "schema_migrations", "publish_accounts", "account_feature_bindings"}
 
 
 def _table_count(conn: sqlite3.Connection, table: str) -> int:

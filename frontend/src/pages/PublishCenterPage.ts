@@ -1,14 +1,12 @@
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Promotion, Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { Promotion, Refresh } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
-
-const PLATFORM_OPTIONS: Array<[string, string]> = [['dy', '抖音'], ['ks', '快手'], ['xhs', '小红书']]
 
 export default defineComponent({
   name: 'PublishCenterPage',
@@ -16,10 +14,8 @@ export default defineComponent({
   setup(props) {
     const route = useRoute()
     const router = useRouter()
-    const segment = ref<'tasks' | 'accounts'>('tasks')
     const accounts = ref<Dict[]>([])
     const tasks = ref<Dict>({ items: [], total: 0, page: 1, page_size: 30 })
-    const accountDraft = ref({ platform: 'dy', name: '' })
     const taskStatus = ref('')
     const composer = ref<Dict>({
       open: false,
@@ -56,55 +52,13 @@ export default defineComponent({
     async function loadAll(showError = true) {
       try {
         const [accountResult, taskResult] = await Promise.all([
-          api.get('/content/publish-accounts'),
+          api.get('/accounts', { params: { feature: 'publish' } }),
           api.get('/content/publish-tasks', { params: { page: tasks.value.page || 1, page_size: 30, status: taskStatus.value } }),
         ])
         accounts.value = accountResult.data
         tasks.value = taskResult.data
       } catch (error: any) {
         if (showError) ElMessage.error(error?.response?.data?.detail || '发布中心加载失败')
-      }
-    }
-
-    async function addAccount() {
-      if (!accountDraft.value.name.trim()) return ElMessage.warning('请输入账号名称')
-      try {
-        await api.post('/content/publish-accounts', accountDraft.value)
-        accountDraft.value.name = ''
-        ElMessage.success('账号已添加，请扫码登录')
-        await loadAll()
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '账号添加失败')
-      }
-    }
-
-    async function accountAction(account: Dict, action: 'login' | 'check') {
-      try {
-        await api.post(`/content/publish-accounts/${account.id}/${action}`)
-        ElMessage.success(action === 'login' ? '登录窗口已加入队列' : '登录状态检查已加入队列')
-        await loadAll()
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '账号操作失败')
-      }
-    }
-
-    async function updateAccount(account: Dict, values: Dict) {
-      try {
-        await api.patch(`/content/publish-accounts/${account.id}`, values)
-        await loadAll()
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '账号修改失败')
-      }
-    }
-
-    async function deleteAccount(account: Dict) {
-      try {
-        await ElMessageBox.confirm(`确认删除“${account.name}”？本机登录状态文件也会删除。`, '删除发布账号', { type: 'warning' })
-        await api.delete(`/content/publish-accounts/${account.id}`)
-        await loadAll()
-      } catch (error: any) {
-        if (error === 'cancel' || error === 'close') return
-        ElMessage.error(error?.response?.data?.detail || '账号删除失败')
       }
     }
 
@@ -133,7 +87,7 @@ export default defineComponent({
       const assetIds = String(route.query.asset_ids || '').split(',').filter(Boolean)
       if (!videoJobId && !assetIds.length) return
       composer.value.open = true
-      composer.value.account_ids = accounts.value.filter(item => item.is_default && item.enabled && item.status === 'ready').map(item => item.id)
+      composer.value.account_ids = accounts.value.filter(item => item.default_features?.includes('publish') && item.enabled && item.status === 'ready').map(item => item.id)
       if (videoJobId) {
         const { data } = await api.get(`/content/video-jobs/${videoJobId}`)
         composer.value.source = { type: 'video_output', video_job_id: videoJobId, output_name: outputName }
@@ -191,32 +145,9 @@ export default defineComponent({
       }
     }
 
-    function renderAccounts() {
-      return h('section', { class: 'pane publish-center-pane' }, [
-        sectionTitle({ title: '平台账号', subtitle: '扫码一次，后续即可一键发布', icon: Promotion, tone: 'purple' }),
-        h('div', { class: 'publish-account-create' }, [
-          h('select', { value: accountDraft.value.platform, onChange: (event: Event) => accountDraft.value.platform = (event.target as HTMLSelectElement).value }, PLATFORM_OPTIONS.map(([value, label]) => h('option', { value }, label))),
-          h('input', { value: accountDraft.value.name, placeholder: '账号备注，例如：品牌主账号', onInput: (event: Event) => accountDraft.value.name = (event.target as HTMLInputElement).value }),
-          h('button', { class: 'primary-action', onClick: addAccount }, [h(Plus, { class: 'inline-icon' }), '添加账号']),
-        ]),
-        accounts.value.length ? h('div', { class: 'publish-account-grid' }, accounts.value.map(account => h('article', { class: 'publish-account-card' }, [
-          h('div', { class: 'publish-account-head' }, [h('strong', `${platformLabel(account.platform)} · ${account.name}`), h('span', { class: `status-pill status-${account.status}` }, accountStatusLabel(account.status))]),
-          account.qrcode_url ? h('img', { class: 'publish-qrcode', src: `${account.qrcode_url}?t=${Date.now()}`, alt: '登录二维码' }) : null,
-          h('small', `最近检查：${account.last_checked_at || '尚未检查'}`),
-          account.last_error ? h('p', { class: 'content-job-error' }, String(account.last_error)) : null,
-          h('label', { class: 'publish-default-toggle' }, [h('input', { type: 'checkbox', checked: account.is_default, onChange: (event: Event) => updateAccount(account, { is_default: (event.target as HTMLInputElement).checked }) }), '设为一键发布默认账号']),
-          h('div', { class: 'task-card-actions' }, [
-            h('button', { class: 'primary-soft', onClick: () => accountAction(account, 'login') }, account.status === 'ready' ? '重新登录' : '扫码登录'),
-            h('button', { class: 'text-icon-button', onClick: () => accountAction(account, 'check') }, '检查状态'),
-            h('button', { class: 'text-icon-button danger', onClick: () => deleteAccount(account) }, '删除'),
-          ]),
-        ]))) : emptyState({ title: '还没有发布账号', description: '添加抖音、快手或小红书账号后扫码登录', icon: Promotion }),
-      ])
-    }
-
     function renderTasks() {
       return h('section', { class: 'pane publish-center-pane' }, [
-        sectionTitle({ title: '发布任务', subtitle: `共 ${tasks.value.total || 0} 条`, icon: Promotion, tone: 'blue', aside: h('button', { class: 'secondary-action publish-refresh', onClick: () => loadAll() }, [h(Refresh, { class: 'inline-icon' }), '刷新']) }),
+        sectionTitle({ title: '发布任务', subtitle: `共 ${tasks.value.total || 0} 条`, icon: Promotion, tone: 'blue', aside: h('div', { class: 'task-card-actions' }, [h('button', { class: 'secondary-action', onClick: () => router.push('/accounts') }, '管理发布账号'), h('button', { class: 'secondary-action publish-refresh', onClick: () => loadAll() }, [h(Refresh, { class: 'inline-icon' }), '刷新'])]) }),
         h('div', { class: 'publish-stat-grid' }, [statCard('待发布', stats.value.pending), statCard('发布中', stats.value.running), statCard('已成功', stats.value.succeeded), statCard('需要处理', stats.value.review)]),
         h('div', { class: 'publish-task-filter' }, [h('select', { value: taskStatus.value, onChange: (event: Event) => { taskStatus.value = (event.target as HTMLSelectElement).value; void loadAll() } }, [h('option', { value: '' }, '全部状态'), ...['queued', 'running', 'succeeded', 'failed', 'review_required', 'cancelled'].map(value => h('option', { value }, taskStatusLabel(value)))])]),
         (tasks.value.items || []).length ? h('div', { class: 'publish-task-list' }, (tasks.value.items || []).map((task: Dict) => h('article', { class: 'publish-task-card' }, [
@@ -246,18 +177,14 @@ export default defineComponent({
     }
 
     return () => h('div', { class: 'publish-center-page' }, [
-      h('div', { class: 'content-asset-segments publish-center-segments' }, [['tasks', '发布任务'], ['accounts', '平台账号']].map(([value, label]) => h('button', { class: segment.value === value ? 'active' : '', onClick: () => segment.value = value as 'tasks' | 'accounts' }, label))),
-      segment.value === 'accounts'
-        ? renderAccounts()
-        : composer.value.open
-          ? h('div', { class: 'publish-center-workspace' }, [renderComposer(), renderTasks()])
-          : renderTasks(),
+      composer.value.open
+        ? h('div', { class: 'publish-center-workspace' }, [renderComposer(), renderTasks()])
+        : renderTasks(),
     ])
   },
 })
 
 function platformLabel(value: string) { return ({ dy: '抖音', ks: '快手', xhs: '小红书' } as Dict)[value] || value }
-function accountStatusLabel(value: string) { return ({ login_required: '待登录', checking: '检查中', ready: '已登录', expired: '已失效', error: '异常' } as Dict)[value] || value }
 function taskStatusLabel(value: string) { return ({ waiting_media: '等待成品', queued: '待发布', running: '发布中', succeeded: '已发布', failed: '失败', review_required: '需要确认', cancelled: '已取消' } as Dict)[value] || value }
 function taskStageLabel(value: string) { return ({ waiting_media: '等待视频生成', queued: '等待执行', preparing: '准备素材', uploading: '上传素材', publishing: '提交发布', completed: '发布完成', review_required: '等待人工确认' } as Dict)[value] || value }
 function statCard(label: string, value: number) { return h('article', [h('span', label), h('strong', String(value))]) }

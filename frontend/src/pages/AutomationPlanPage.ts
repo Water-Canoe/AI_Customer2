@@ -66,19 +66,20 @@ const emptyDraft = (planType = 'keyword_lead'): Dict => ({
   config: planType === 'message'
     ? {
         platform: 'dy', keyword_scope: 'all', keywords: [], count: 20,
-        script_mode: 'ai', fixed_script: '', interval_min_seconds: 30, interval_max_seconds: 60,
+        script_mode: 'ai', fixed_script: '', interval_min_seconds: 30, interval_max_seconds: 60, account_id: '',
       }
     : planType === 'traffic'
       ? {
           platform: 'dy', source_mode: 'random_feed', source_value: '',
           action_like: false, action_collect: false, action_follow: false,
-          action_comment_text: false, action_comment_image: false, round_video_limit: 5,
+          action_comment_text: false, action_comment_image: false, round_video_limit: 5, account_id: '',
         }
     : {
         platform: 'dy', keywords: [], keyword_count: 1, discovery_content_count: 20,
         competitor_limit: 30, competitor_content_count: 10, comment_count: 50,
         collect_sub_comments: false, auto_delete_non_competitors: false,
         auto_analyze_leads: true, auto_delete_non_customers: false,
+        acquisition_account_id: '',
       },
 })
 
@@ -109,6 +110,7 @@ export default defineComponent({
     const plans = ref<Dict[]>([])
     const runs = ref<Dict[]>([])
     const summary = ref<Dict>({})
+    const accounts = ref<Dict[]>([])
     const limits = ref<Dict>({})
     const limitDraft = reactive({ daily_limit: 100, hourly_limit: 40 })
     const typePickerOpen = ref(false)
@@ -137,15 +139,17 @@ export default defineComponent({
 
     async function loadAll() {
       try {
-        const [planResponse, runResponse, limitResponse] = await Promise.all([
+        const [planResponse, runResponse, limitResponse, accountResponse] = await Promise.all([
           api.get('/automation/plans'),
           api.get('/automation/runs', { params: { page: 1, page_size: 50 } }),
           api.get('/automation/message-limits'),
+          api.get('/accounts'),
         ])
         plans.value = planResponse.data.items || []
         summary.value = planResponse.data.summary || {}
         runs.value = runResponse.data.items || []
         limits.value = limitResponse.data || {}
+        accounts.value = accountResponse.data || []
         limitDraft.daily_limit = Number(limits.value.daily_limit || 100)
         limitDraft.hourly_limit = Number(limits.value.hourly_limit || 40)
       } catch (error: any) {
@@ -164,12 +168,37 @@ export default defineComponent({
     function openEditor(type: string, plan?: Dict) {
       Object.keys(draft).forEach(key => delete draft[key])
       Object.assign(draft, plan ? JSON.parse(JSON.stringify(plan)) : emptyDraft(type))
+      selectDefaultAccount()
       typePickerOpen.value = false
       editorOpen.value = true
     }
 
     function setTrafficPlatform(platform: string) {
       draft.config = normalizeTrafficConfig({ ...(draft.config || {}), platform })
+      selectDefaultAccount()
+    }
+
+    function featureAccounts(feature: string, platform: string) {
+      return accounts.value.filter(account => account.platform === platform && account.enabled && account.status === 'ready' && account.features?.includes(feature))
+    }
+
+    function selectDefaultAccount() {
+      const config = draft.config || {}
+      const feature = draft.plan_type === 'keyword_lead' ? 'acquisition' : draft.plan_type
+      const key = draft.plan_type === 'keyword_lead' ? 'acquisition_account_id' : 'account_id'
+      const candidates = featureAccounts(feature, String(config.platform || 'dy'))
+      if (candidates.some(account => account.id === config[key])) return
+      const preferred = candidates.find(account => account.default_features?.includes(feature)) || candidates[0]
+      config[key] = String(preferred?.id || '')
+    }
+
+    function accountField(config: Dict, key: string, feature: string) {
+      const candidates = featureAccounts(feature, String(config.platform || 'dy'))
+      return h(ElFormItem, { label: '执行账号', required: true }, () => h(ElSelect, {
+        modelValue: config[key] || '',
+        placeholder: candidates.length ? '请选择账号' : '账号中心暂无可用账号',
+        'onUpdate:modelValue': (value: string) => config[key] = value,
+      }, () => candidates.map(account => h(ElOption, { label: account.name, value: account.id }))))
     }
 
     function setTrafficSource(sourceMode: string) {
@@ -195,6 +224,11 @@ export default defineComponent({
       }
       if (!Array.isArray(draft.weekdays) || !draft.weekdays.length) {
         ElMessage.warning('请至少选择一个运行星期')
+        return
+      }
+      const accountKey = draft.plan_type === 'keyword_lead' ? 'acquisition_account_id' : 'account_id'
+      if (!String(draft.config?.[accountKey] || '')) {
+        ElMessage.warning('请选择执行账号；登录和用途分配请到账号中心完成')
         return
       }
       if (draft.plan_type === 'traffic') {
@@ -512,6 +546,7 @@ export default defineComponent({
     function renderKeywordFields() {
       const config = draft.config as Dict
       return [
+        accountField(config, 'acquisition_account_id', 'acquisition'),
         h(ElFormItem, { label: '关键词（每行一个）', required: true }, () => h(ElInput, { type: 'textarea', rows: 4, modelValue: keywordText(config), placeholder: '例如：企业获客\n短视频营销', 'onUpdate:modelValue': (value: string) => setKeywords(config, value) })),
         h(ElRow, { gutter: 16 }, () => [
           numberField('每次选择关键词', config, 'keyword_count', 1, 10),
@@ -541,6 +576,7 @@ export default defineComponent({
     function renderMessageFields() {
       const config = draft.config as Dict
       return [
+        accountField(config, 'account_id', 'message'),
         h(ElRow, { gutter: 16 }, () => [
           h(ElCol, { span: 12 }, () => h(ElFormItem, { label: '关键词范围' }, () => h(ElSelect, { modelValue: config.keyword_scope, 'onUpdate:modelValue': (value: string) => config.keyword_scope = value }, () => [h(ElOption, { label: '全部关键词', value: 'all' }), h(ElOption, { label: '指定关键词', value: 'selected' })]))),
           numberField('本次目标数量', config, 'count', 1, 100, 12),
@@ -561,6 +597,7 @@ export default defineComponent({
         : sourceMode === 'collected_keyword' ? '已采集关键词' : '搜索关键词'
       const sourceRequired = ['collected_keyword', 'search_keyword'].includes(sourceMode)
       return [
+        accountField(config, 'account_id', 'traffic'),
         h(ElRow, { gutter: 16 }, () => [
           h(ElCol, { span: 8 }, () => h(ElFormItem, { label: '平台', required: true }, () => h(ElSelect, {
             modelValue: config.platform,

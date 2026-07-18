@@ -1,8 +1,9 @@
-import { computed, defineComponent, h, ref, watch } from 'vue'
+import { computed, defineComponent, h, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Close, Collection, CopyDocument, Promotion, Search } from '@element-plus/icons-vue'
 import { SplitPane } from '../components/ui/SplitPane'
 import { platformName } from '../shared/format'
+import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 import { iconBadge, sectionTitle } from '../components/ui/Workbench'
 
@@ -30,6 +31,19 @@ export default defineComponent({
     const batchCount = ref(savedBatchConfig.count)
     const intervalMin = ref(savedBatchConfig.min)
     const intervalMax = ref(savedBatchConfig.max)
+    const accounts = ref<Dict[]>([])
+    const accountId = ref('')
+    async function loadAccounts() {
+      try {
+        const { data } = await api.get('/accounts', { params: { feature: 'message', platform: 'dy' } })
+        accounts.value = data.filter((account: Dict) => account.enabled && account.status === 'ready')
+        const preferred = accounts.value.find(account => account.default_features?.includes('message')) || accounts.value[0]
+        accountId.value = String(preferred?.id || '')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '私信账号加载失败')
+      }
+    }
+    onMounted(loadAccounts)
     watch(() => (props.filters as Dict).query, value => {
       queryDraft.value = String(value || '')
     })
@@ -82,16 +96,25 @@ export default defineComponent({
         ])
       ]),
       default: () => h('section', { class: 'pane message-workbench' }, [
+        h('div', { class: 'workbench-account-bar' }, [
+          h('strong', '私信执行账号'),
+          h('select', { value: accountId.value, onChange: (event: Event) => accountId.value = (event.target as HTMLSelectElement).value }, [
+            h('option', { value: '' }, accounts.value.length ? '请选择账号' : '账号中心暂无可用抖音账号'),
+            ...accounts.value.map(account => h('option', { value: account.id }, account.name))
+          ])
+        ]),
         renderAutoBatchControls(props.filters as Dict, props.batches as Dict, batchCount.value, intervalMin.value, intervalMax.value, {
           setCount: (value: number) => batchCount.value = boundedNumber(value, autoBatchDefaults.count, 1, 200),
           setMin: (value: number) => intervalMin.value = boundedNumber(value, autoBatchDefaults.min, 0, 3600),
           setMax: (value: number) => intervalMax.value = boundedNumber(value, autoBatchDefaults.max, 0, 3600),
+          accountId: accountId.value,
           start: () => emit('start-auto-message-batch', {
             platform: (props.filters as Dict).platform || '',
             keyword: (props.filters as Dict).keyword || '',
             count: batchCount.value,
             interval_min_seconds: intervalMin.value,
-            interval_max_seconds: intervalMax.value
+            interval_max_seconds: intervalMax.value,
+            account_id: accountId.value
           }),
           cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch)
         }),
@@ -113,7 +136,7 @@ export default defineComponent({
             h('button', { type: 'button', onClick: runSearch }, [h(Search), h('span', '搜索')])
           ])
         ]),
-        renderCustomerTable(rows.value, props.loading, emit, props.settings as Dict),
+        renderCustomerTable(rows.value, props.loading, emit, props.settings as Dict, accountId.value),
         h('div', { class: 'message-pagination' }, [
           h('span', `共 ${total.value} 个客户`),
           h('div', [
@@ -207,7 +230,7 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
   const platform = String(filters.platform || '')
   const active = batches.active
   const unsupportedPlatform = Boolean(platform) && platform !== 'dy'
-  const disabled = Boolean(active) || unsupportedPlatform || !keyword
+  const disabled = Boolean(active) || unsupportedPlatform || !keyword || !String(actions.accountId || '')
   return h('section', { class: 'auto-message-batch-panel' }, [
     h('div', { class: 'auto-message-batch-title' }, [
       h('strong', 'AI一键私信'),
@@ -301,11 +324,11 @@ function batchStatusLabel(status: string) {
   } as Record<string, string>)[String(status || '')] || String(status || '-')
 }
 
-function renderCustomerTable(rows: Dict[], loading: boolean, emit: any, settings: Dict) {
+function renderCustomerTable(rows: Dict[], loading: boolean, emit: any, settings: Dict, accountId: string) {
   const body = loading
     ? [h('tr', [h('td', { colspan: 6, class: 'message-empty' }, '加载中...')])]
     : rows.length
-      ? rows.map(row => renderCustomerRow(row, emit, settings))
+      ? rows.map(row => renderCustomerRow(row, emit, settings, accountId))
       : [h('tr', [h('td', { colspan: 6, class: 'message-empty' }, '当前筛选下暂无客户')])]
 
   return h('div', { class: 'message-table-wrap' }, [
@@ -325,7 +348,7 @@ function renderCustomerTable(rows: Dict[], loading: boolean, emit: any, settings
   ])
 }
 
-function renderCustomerRow(row: Dict, emit: any, settings: Dict) {
+function renderCustomerRow(row: Dict, emit: any, settings: Dict, accountId: string) {
   const rawScript = String(row.script || '').trim()
   const script = rawScript || '暂无AI话术'
   const sendScript = selectedMessageScript(row, settings)
@@ -367,9 +390,9 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict) {
           h('button', {
             type: 'button',
             class: ['text-icon-button', autoDmUnsupported ? 'is-platform-disabled' : ''],
-            disabled: autoDmUnsupported || !sendScript || !row.profile_url,
-            title: autoDmUnsupported ? '自动私信当前只支持抖音客户' : !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : '自动打开抖音主页并处理话术',
-            onClick: () => emit('auto-message-customer', row)
+            disabled: autoDmUnsupported || !sendScript || !row.profile_url || !accountId,
+            title: autoDmUnsupported ? '自动私信当前只支持抖音客户' : !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : !accountId ? '请先在账号中心配置私信账号' : '自动打开抖音主页并处理话术',
+            onClick: () => emit('auto-message-customer', { ...row, account_id: accountId })
           }, [h(Promotion), h('span', '自动私信')]),
           h('button', {
             type: 'button',

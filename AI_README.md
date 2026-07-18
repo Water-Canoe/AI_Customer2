@@ -2,14 +2,14 @@
 
 ## 项目定位
 
-这是一个本地自用的 AI 获客系统。当前已实现“拓客工作台”“引流工作台”和“内容工作台”。拓客工作台不替代 MyCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选、私信话术和跟进状态管理；引流工作台提供计划配置、执行监控、操作记录和独立授权设置；内容工作台将视频文案、素材、配音、字幕、合成和发布直接接入本地后端。
+这是一个本地自用的 AI 获客系统。当前已实现自动化中心、统一账号中心、拓客工作台、私信工作台、引流工作台和内容工作台。拓客工作台不替代 MyCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选和客户分析；私信工作台负责客户触达与跟进；引流工作台提供计划配置、执行监控和操作记录；内容工作台将视频文案、素材、配音、字幕、合成和发布直接接入本地后端。
 
 数据分三层：
 
 1. MyCrawler 底层原始库：默认 `D:\Dev\Projects\MyCrawler\database\sqlite_tables.db`，只做采集保底和追溯。
 2. 项目业务库：默认 `data/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件；可用 `AI_CUSTOMER_DATA_DIR` 指定整个数据目录，或用 `AI_CUSTOMER_DB` 指定单独数据库文件。
 3. 内容文件：客户视频、图片和音频存入 `data/content_assets/`，视频缓存、模型和每次生成结果存入 `data/video_generation/`。业务库只保存稳定相对路径，不记录客户导入前的绝对路径。
-4. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析、私信工作台和日志只是展示方式，不等于真实数据结构；引流工作台共用 `traffic_*` 表和 `/api/traffic/*` 接口；内容工作台共用 `content_assets / video_jobs / video_job_assets / publish_accounts / publish_tasks / publish_task_assets` 表和 `/api/content/*` 接口。
+4. 页面视图：拓客工作台下的任务管理、数据表、总览树、AI分析和日志只是展示方式，不等于真实数据结构；账号中心复用 `publish_accounts` 并通过 `account_feature_bindings` 分配用途；引流工作台共用 `traffic_*` 表和 `/api/traffic/*` 接口；内容工作台共用 `content_assets / video_jobs / video_job_assets / publish_tasks / publish_task_assets` 表和 `/api/content/*` 接口。
 
 ## 统一后台任务队列与登录会话
 
@@ -17,7 +17,9 @@
 
 自动竞品分析和自动线索分析使用子任务串联：采集成功后只创建后续运行记录，不在当前采集线程里直接执行 AI；账号资料采集完成后立即释放浏览器资源，再由 AI 资源队列并行分析。这样慢模型调用不会占住登录会话，脚本重启时也能分别识别采集阶段和 AI 阶段。
 
-设置页手动打开的平台登录窗口由 `profile_manager.py` 管理。登录窗口打开期间浏览器队列自动等待；自动化运行期间登录按钮会禁用。用户可以从设置页关闭登录窗口，正常关闭后端时也会回收登录子进程及其浏览器进程树，API 不返回本机 Profile 路径。
+平台登录统一收口到侧边栏“账号中心”，设置页、引流设置和内容发布不再各自维护登录按钮。一个平台账号对应一个独立持久化目录 `data/platform_accounts/<platform>/<account-id>/profile/`，拓客、私信、引流和内容发布都从任务保存的 `account_id` 读取同一账号 Profile；复制任务不会复制登录态，删除账号记录也不会自动删除 Profile。账号登录和检查进入统一浏览器队列，API 不返回本机 Profile 路径。
+
+账号按用途分为品牌号、客服号、运营号、引流号和测试号。品牌号只允许私信和内容发布，客服号只允许私信，运营号允许拓客和私信，引流号允许拓客、私信和引流，测试号可绑定全部功能；后端会再次校验角色权限，不能只靠前端绕过。每个平台、每个功能只能有一个默认账号，工作台可以显式选择其它已绑定账号。新建任务、私信批次、引流计划和自动化计划都会保存账号 ID；运行时再次确认账号仍启用且登录有效，不再读取全局抖音或快手 Profile。旧发布账号升级到数据库版本 11 后保留账号记录，但登录状态重置为待登录，需要在账号中心重新登录并分配其它用途。
 
 后端正常关闭时先停止派发新任务：浏览器任务收到取消请求，限时内仍未结束的任务标记为 `interrupted` 并同步修正业务状态；可安全重放的 AI 任务退回排队并在下次启动继续。脚本强制关闭或进程崩溃时，下一次启动会将遗留浏览器任务中断、把采集/引流/私信业务记录恢复为可理解的终态，并只自动恢复仍有剩余尝试次数的 AI 任务。这样不会把不可幂等的浏览器动作直接重放。
 
@@ -67,7 +69,7 @@ cd D:\Dev\Projects\Web_Project\AI_Customer
 backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:app --host 127.0.0.1 --port 8025
 ```
 
-该工具只用于验证单个目标主页的自动化可行性，不内置账号池、代理池或自动重试队列；批量私信由“私信工作台”创建批次并复用同一个 CloakBrowser 上下文和页面逐个跳转客户主页，避免每个客户重复开关浏览器或新建页面。批次间隔等待每秒检查取消请求，不会因为较长间隔让停止操作长时间无响应。运行态登录目录统一为 `data/douyin_cloak_profile/`，拓客采集 CDP、引流执行和自动私信共用这个 CloakBrowser Profile。
+该工具只用于验证单个目标主页的自动化可行性，不内置账号池、代理池或自动重试队列；正式批量私信由“私信工作台”创建批次，使用页面选中的账号中心账号，并在该账号独立 Profile 中复用一个 CloakBrowser 上下文和页面逐个跳转客户主页，避免每个客户重复开关浏览器或新建页面。批次间隔等待每秒检查取消请求，不会因为较长间隔让停止操作长时间无响应。
 
 私信脚本在主文档响应开始后就进入可见控件轮询，不再等待整页 `DOMContentLoaded`；主页入口只匹配文本严格等于“私信/发私信”的 `button / role=button / a / span`，不再使用会命中大范围父容器的 `:has-text`。点击前会再次读取最近的可点击父节点文本，只有仍严格等于“私信/发私信”才使用 Playwright Locator 执行真实点击，Locator 会在网络加载引发页面重排后重新定位并等待按钮位置稳定，继续避开右侧“下载客户端/下载”。首次点击 4 秒后仍未出现聊天输入框且页面地址未切换时，会重新查找当前可见私信入口并重试，最多 3 次；进入聊天路由后只等待输入框，不重复点击。最终错误会带上实际尝试次数和最后一次点击错误，不再把JavaScript调用成功误报为“已点击”。自动私信浏览器上下文同时设置 `accept_downloads=False`，即使页面结构再次变化也不会接收下载文件。CloakBrowser 仍启用人类化轨迹，但改用默认速度预设，去掉 `careful` 在动作间追加的空转。修改该目录代码后必须重启 `uvicorn`，否则 `8025` 页面仍会调用旧模块。
 
@@ -75,7 +77,7 @@ backend\.venv\Scripts\python.exe -m uvicorn tools.douyin_dm_automation.server:ap
 
 ## 快手 Web 互动自动化验证工具
 
-`tools/kuaishou_dm_automation/` 是快手 Web 端的单用户自动化验证目录，复用 `backend/.venv` 里的 `playwright` 和 `cloakbrowser`，使用独立 `runtime/cloak_profile/` 保存验证登录态。`open_login_browser.py` 只负责打开最大化快手登录窗口；`automation.py` 提供最小 CLI，只保留已真实验证的推荐流动作：关注、点赞、收藏和文字评论。正式“引流工作台”不会直接复用该 runtime 目录，而是用 `data/kuaishou_cloak_profile/` 保存客户侧快手登录态。
+`tools/kuaishou_dm_automation/` 是快手 Web 端的单用户自动化验证目录，复用 `backend/.venv` 里的 `playwright` 和 `cloakbrowser`，使用独立 `runtime/cloak_profile/` 保存验证登录态。`open_login_browser.py` 只负责打开最大化快手登录窗口；`automation.py` 提供最小 CLI，只保留已真实验证的推荐流动作：关注、点赞、收藏和文字评论。该目录只用于独立验证，正式“引流工作台”使用账号中心所选快手账号的独立 Profile。
 
 运行命令：
 
@@ -179,7 +181,7 @@ ICP 画像里的 `company_name` 是可选字段：填写后 AI 私信话术可�
 
 根目录内置的 MyCrawler SQLite 如果是新建空文件，首次写入会因为缺少 `douyin_aweme`、`xhs_note` 等表而失败。后端适配器会在真实采集前检查当前平台内容表是否存在；缺表时会先在 MyCrawler 根目录执行 `python main.py --init_db sqlite` 初始化表结构，再继续启动采集任务。该步骤只创建 MyCrawler 原始库 schema，不会清空已有原始数据。
 
-根目录内置的 MyCrawler 如果配置为 `ENABLE_CDP_MODE=True` 且 `CDP_CONNECT_EXISTING=True`，会要求浏览器先开放 CDP 调试端口，默认端口为 `9222`。后端适配器在启动 MyCrawler 前会检查该端口；如果端口未开启，会自动启动 CloakBrowser 调试实例，用户数据目录统一为 `data/douyin_cloak_profile/`，再让 MyCrawler 继续按 CDP 模式连接。该逻辑只补齐“已有 CDP 浏览器”前置条件，不会切换到标准 Playwright，也不会修改 MyCrawler 源码。
+根目录内置的 MyCrawler 如果配置为 `ENABLE_CDP_MODE=True` 且 `CDP_CONNECT_EXISTING=True`，会要求浏览器先开放 CDP 调试端口，默认端口为 `9222`。后端适配器在启动 MyCrawler 前会检查该端口；如果端口未开启，会使用采集任务所选账号的独立 Profile 自动启动 CloakBrowser 调试实例，再让 MyCrawler 继续按 CDP 模式连接。该逻辑只补齐“已有 CDP 浏览器”前置条件，不会切换到标准 Playwright，也不会修改 MyCrawler 源码。
 
 抖音 creator 找客户任务会通过项目 `sitecustomize` shim 增强稳定性：当单条视频详情、评论列表或创作者视频列表请求出现 `httpx.HTTPError`（例如代理连接失败、TLS 连接失败、网络抖动）时，项目会记录 `[AI_Customer.http_resilience]` 日志并跳过当前视频或停止当前账号后续翻页，避免一次网络异常让整个 MyCrawler 子进程退出。该逻辑不伪造数据；如果网络持续不可用，任务仍可能导入 0 条有效数据，应优先检查代理、登录态和平台风控。
 
@@ -278,7 +280,8 @@ npm run dev
 - `GET /api/overview/tree`：返回总览树平台根节点和平台级统计，不预加载下级数据。
 - `GET /api/overview/children`：使用 `node_id/page/page_size` 分页加载平台、关键词、来源组或账号的直接子节点；响应统一包含 `items/total/total_pages`。
 - `GET /api/settings/env-check`：检查项目库、MyCrawler 路径、底层库、AI 配置；同时返回项目库关键字段质量和按平台诊断的 MyCrawler 原始表、行数、关键字段非空情况。
-- `POST /api/settings/platform-login/{platform}`：设置页“登录配置”入口，`platform` 支持 `dy / xhs / ks`，会用同一个 CloakBrowser Profile 打开抖音、小红书或快手登录窗口。
+- `GET/POST /api/accounts`、`PATCH/DELETE /api/accounts/{account_id}`：统一账号中心的列表、新增、修改、功能绑定、默认用途和软删除。
+- `POST /api/accounts/{account_id}/login`、`POST /api/accounts/{account_id}/check`、`GET /api/accounts/{account_id}/qrcode`：使用账号独立 Profile 执行扫码登录、状态检查和二维码展示。旧的设置页、引流页和内容发布账号登录接口已经移除。
 - `POST /api/settings/clear-data`：清空项目业务库和当前设置指向的 MyCrawler SQLite 业务表，必须输入确认文本 `清空业务记录`。
 - `POST /api/accounts/{account_id}/profile-enrichment`：为抖音/小红书/快手账号创建主页资料补全任务。导入 creator 主页简介后会自动复判竞品关键词命中关系；快手由 MyCrawler 的 `kuaishou_creator` 表写入后再导入。
 - `POST /api/accounts/profile-enrichment/batch`：批量创建主页资料补全任务，默认最多 10 个并串行执行；`limit` 最大 50，前端使用 10。
@@ -365,13 +368,13 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `data/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。操作记录页会把点赞、收藏、关注、评论渲染为不同颜色的标签；评论内容为图片时，如果图片来自素材库，会直接显示同一个预览地址的缩略图。操作记录表包含平台列，并提供抖音、小红书、快手平台筛选；当前抖音和快手会产生真实执行记录，小红书先保留筛选入口。
 
-引流设置页提供“失败后关闭浏览器”开关，默认开启以保持原有行为；关闭后，批次异常停止或停机时会保留当前抖音 CloakBrowser 窗口，便于复盘已经浏览和互动过的视频。复盘完成后需要手动关闭该浏览器，再启动新的引流批次。引流设置页也提供“无头浏览器执行”开关，默认关闭；开启后仅引流批次使用无头 CloakBrowser，抖音登录窗口仍强制有头，方便扫码登录和处理安全验证。
+引流设置页提供“失败后关闭浏览器”开关，默认开启以保持原有行为；关闭后，批次异常停止或停机时会保留当前 CloakBrowser 窗口，便于复盘已经浏览和互动过的视频。复盘完成后需要手动关闭该浏览器，再启动新的引流批次。引流设置页也提供“无头浏览器执行”开关，默认关闭；登录始终在账号中心以可见窗口完成，便于扫码和处理安全验证。
 
 引流设置页右栏新增“环境检查”，对齐拓客工作台设置页的紧凑列表样式。`GET /api/traffic/environment-check` 会检查当前 Python、Playwright Python 包、CloakBrowser Python 包、CloakBrowser 专用浏览器内核和图片目录；`POST /api/traffic/environment-install` 会依次执行 `pip install -r backend/requirements.txt` 和 `python -m cloakbrowser install`。如果安装失败，前端会展示安装输出，用户可据此处理代理、网络或权限问题。
 
-引流设置页右栏提供“打开抖音登录窗口”和“打开快手登录窗口”按钮。抖音调用 `POST /api/traffic/douyin-login` 并使用 `data/douyin_cloak_profile/`；快手调用 `POST /api/settings/platform-login/ks` 并使用 `data/kuaishou_cloak_profile/`。登录窗口只负责保活，不再检测登录状态或自动关闭，用户扫码后确认登录稳定再手动关闭窗口。后续抖音随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频；快手随机引流批次直接进入 `https://www.kuaishou.com/new-reco`。
+引流计划在创建时固定一个已绑定“引流”用途的账号，计划和运行批次都保存账号 ID 快照。账号登录、重新登录和状态检查只在账号中心完成；没有可用默认账号时，创建或运行计划会直接提示先配置账号。抖音随机引流批次会从抖音主页开始随机点击当前视口内的视频链接或封面卡片，不复用拓客项目库视频；快手随机引流批次直接进入 `https://www.kuaishou.com/new-reco`。
 
-执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium；抖音使用 `data/douyin_cloak_profile/`，快手使用 `data/kuaishou_cloak_profile/`，避免不同平台 Cookie 混在同一个 Profile。可见窗口默认最大化；Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
+执行器位于 `backend/app/services/traffic_workbench.py`，通过 CloakBrowser 启动专用 Chromium，并使用运行批次保存的账号独立 Profile，避免不同账号 Cookie 混用。可见窗口默认最大化；Playwright 仍作为自动化协议层使用，但不再直接启动本机 Chrome/Edge 或 Playwright 自带 Chromium。执行流程按“进入来源 -> 识别页面模式 -> 读取当前视频 -> 判断是否跳过 -> 执行动作 -> 写记录 -> 切换下一条”运行。页面模式会区分精选弹窗流、普通视频详情页、搜索结果页、首页、登录失效和安全验证；登录失效、人机验证不会绕过，只会停机并提示用户下一步。
 
 来源之间严格隔离：`随机推荐流` 只从抖音首页/精选页当前可见视频卡片进入，不读取拓客项目库；`手动搜索关键词 / 已采集关键词` 都会打开抖音关键词搜索页，从可见搜索结果逐条进入视频，处理下一条时重新回到同一关键词结果，且不会回退项目库；`拓客竞品视频` 只读取拓客库中已判定为竞品账号的抖音视频。竞品视频列表不再限制前 100 条或前 8 条，前端支持搜索、分页、复选和每页批量选择，计划字段按每行一个链接/ID保存多条视频；显式选择多条视频时按视频去重，不再用同作者冷却阻止同一竞品账号下的其它已选视频，未显式选择时仍按作者冷却分散执行。
 
@@ -420,7 +423,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
 
-扫码登录、账号检查、视频发布和图文发布统一通过 `backend/app/publish_engine/browser.py` 启动CloakBrowser，继续使用账号独立的 `storage_state` 文件，不再启动Patchright或Playwright自带Chromium。登录使用可见最大化窗口，正式发布默认无头；浏览器上下文关闭时由CloakBrowser一并清理底层Playwright进程。
+扫码登录、账号检查、视频发布和图文发布统一通过 `backend/app/publish_engine/browser.py` 启动CloakBrowser，使用账号中心分配的持久化 Profile 目录，不再使用可复制的 `storage_state` 文件，也不启动Patchright或Playwright自带Chromium。登录使用可见最大化窗口，正式发布默认无头；浏览器上下文关闭时由CloakBrowser一并清理底层Playwright进程。首次登录时空 Profile 会直接进入扫码流程，不会先重复执行无意义的 Cookie 检查。
 
 内容接口：
 
@@ -430,11 +433,11 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/voice-reference-script`：使用内容工作台独立AI配置生成声音克隆朗读文案；未配置供应商时明确返回错误，不使用固定文案兜底。
 - `/api/content/scripts`、`/api/content/terms`、`/api/content/social-metadata`：独立视频AI生成能力。
 - `/api/content/voices`、`/api/content/settings`、`/api/content/environment-check`：音色、完整独立配置和环境检查；`POST /api/content/voice-runtime/install` 创建音色克隆组件安装任务，取消复用 `/api/runtime/jobs/{job_id}/cancel`。
-- `/api/content/publish-accounts`：发布账号列表、新增、修改和软删除；`/{id}/login`、`/{id}/check`、`/{id}/qrcode` 负责扫码登录、有效性检查和二维码展示。
+- `/api/accounts`：发布账号与其它工作台共用统一账号中心；内容发布只列出已绑定“内容发布”用途的账号。
 - `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
 `backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。视频引擎的数据模型统一使用 Pydantic 2 的 `ConfigDict`，不再保留已经弃用的类式 `Config`；Gemini 测试使用新 SDK 的模拟 Client，验证文本、语音和自定义地址参数，不连接收费接口。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
-本轮完整后端回归为394项通过、8项联网测试跳过；CloakBrowser真实内核已完成无头启动和抖音登录二维码提取回调验证，未执行需要人工扫码的真实账号发布或真实用户私信。前端为4个测试文件、15项测试通过，并完成类型检查和生产构建。
+本轮统一账号中心改造完成后，完整后端回归为426项通过、8项联网测试跳过；未执行需要人工扫码的真实账号登录、发布或真实用户私信。前端为4个测试文件、15项测试通过，并完成类型检查和生产构建。本轮只修改源码、测试和文档，没有构建或发布新的 Program ZIP。
 
 ## 授权服务
 
@@ -466,7 +469,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 业务库连接默认启用 SQLite WAL、`busy_timeout=30s`、外键检查和 `synchronous=NORMAL`，用于降低页面轮询、AI任务、采集导入、自动私信和引流记录并发读写时的锁冲突。手动备份、清空前备份和恢复前安全备份统一保存在 `data/backups/<时间戳>/`，使用 SQLite Online Backup API 同时保存项目数据库 `ai_customer.sqlite3` 和 MyCrawler 原始库 `media_crawler.sqlite3`，不会把运行中的 WAL 裸文件直接复制；清单记录两个数据库的大小与 SHA-256，以及引流图片、内容资产、视频任务目录和社交发布目录的文件数、总大小和目录树 SHA-256。恢复前会先校验全部数据库和业务文件，恢复两个数据库，并把四个业务目录精确同步到备份时状态；备份后新增的孤立文件不会继续残留。不备份可重新下载的模型、在线素材缓存和浏览器 Profile。备份、恢复和清空业务记录共用维护窗口：先暂停自动化调度，拒绝其它并发页面请求，并检查统一运行队列以及采集、AI、私信、引流、视频和发布业务状态；AI 排队状态以统一运行队列为准，只有实际运行中的 `analysis_jobs` 会单独阻止维护，未入队的 `pending` 记录不会再造成永久阻塞。采集导入阶段只负责落库，自动 AI 分析统一在采集成功后的任务编排中按当前任务范围创建并入队。退出维护窗口后只恢复原本就在运行的调度器。设置页“数据保护”可以手动创建备份，并按每页五条查看、恢复或确认删除全部历史备份；删除末页最后一条后会自动校正到有效页码。恢复会先自动备份当前数据，校验目标备份后恢复并重新执行数据库迁移，删除只允许处理通过清单校验的单个备份目录。
 
-“清空业务记录”会清理拓客、AI、私信、引流、自动化、内容资产登记、视频生成、发布账号、发布任务、日志和当前配置指向的 MyCrawler 原始表数据；设置、授权、数据库迁移记录、登录状态和本地素材文件保留。正式页面调用默认先创建完整备份。清空后数据库不再引用保留的本地文件，避免危险的批量文件删除。
+“清空业务记录”会清理拓客、AI、私信、引流、自动化、内容资产登记、视频生成、发布任务、日志和当前配置指向的 MyCrawler 原始表数据；设置、授权、数据库迁移记录、账号中心账号、功能绑定、登录状态和本地素材文件保留。正式页面调用默认先创建完整备份。清空后数据库不再引用保留的业务素材文件，避免危险的批量文件删除。
 
 新增接口：
 
@@ -475,7 +478,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - `POST /api/system/backups/{backup_id}/restore`：输入“恢复备份”后执行安全恢复。
 - `POST /api/settings/clear-data`：支持 `create_backup` 和 `include_crawler`，正式页面默认都为 `true`。
 
-当前最新迁移为版本 10：版本 7 新增 `publish_accounts / publish_tasks / publish_task_assets` 国内发布账号和任务表；版本 8 新增 `automation_plans / automation_runs / automation_run_items / message_send_attempts`，并为采集、AI和私信批次增加自动化隔离与关联字段；版本 9 增加自动化计划排序；版本 10 扩展自动化计划和运行的 `traffic` 类型、保存关联引流批次/子任务，并为 `traffic_plans` 增加内部计划标识。
+当前最新迁移为版本 11：版本 7 新增 `publish_accounts / publish_tasks / publish_task_assets` 国内发布账号和任务表；版本 8 新增 `automation_plans / automation_runs / automation_run_items / message_send_attempts`，并为采集、AI和私信批次增加自动化隔离与关联字段；版本 9 增加自动化计划排序；版本 10 扩展自动化计划和运行的 `traffic` 类型、保存关联引流批次/子任务，并为 `traffic_plans` 增加内部计划标识；版本 11 将发布账号扩展为统一平台账号，新增角色、平台账号 ID、`account_feature_bindings`，并为采集、私信、引流计划和引流批次保存执行账号 ID。
 
 ## 后续优化清单
 
@@ -525,7 +528,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 2026-07-18 已使用 `-ProgramOnly` 生成远程更新版本 `deliverables/1.2.9/AI_Customer_Program_1.2.9.zip`：大小 139,619,055 字节，SHA-256 为 `2c31d8690c44644d4cdd17d5057a086dfb7b18c9e6209bfde3bbc2b8ebdc2afd`，schema 为 10，要求 Environment `1.0.1`。构建前回归为前端 15 项通过、后端 403 项通过且 8 项联网测试跳过；Program ZIP 已通过白名单、文件哈希和 Ed25519 签名校验并上传 Sealos，`stable` 当前已启用、非强制、灰度 100%。
 
-打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。打包环境中的平台登录子进程使用 `--internal-platform-login` 内部入口，不再把 `AI_Customer.exe` 当作 Python 执行；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
+打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。平台登录作为统一账号任务在后端浏览器队列中运行，不再启动带 `--internal-platform-login` 参数的第二个主程序；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
 稳定启动器已经实现授权身份读取、远端更新检查、用户确认、可视化进度、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。下载包每次解压到全新的 `<版本>.extracting` 目录并完成发布清单校验，不再复用上次中断留下的半成品。安装前只把当前发布清单管理的程序文件保存到 `updates/rollback/`，并写入持久化更新事务；异常、断电或进程退出后，当前或下次稳定启动器会恢复旧程序、旧清单并删除新版本独有文件，成功更新则删除旧版本已经取消的程序文件。回滚不复制 `data/`、MyCrawler、CloakBrowser、Python 环境或模型。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；本次确认和进度功能本身位于稳定启动器，因此首次交付该能力必须重新手动发送包含新 `AI_Customer.exe` 的 Program ZIP，不能由旧启动器自我更新。签名更新清单同时声明环境版本，客户端只安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。数据库 schema 升级前仍按迁移规则备份；如果需要回到无法读取新 schema 的旧程序，必须同时恢复对应迁移前备份。
 

@@ -40,7 +40,9 @@ async def login_account(
 
 
 async def check_account(platform: str, account_file: Path) -> bool:
-    if not account_file.is_file():
+    from app.publish_engine.browser import profile_has_state
+
+    if not profile_has_state(account_file):
         return False
     _, checker = _account_handlers(platform)
     return bool(await checker(str(account_file)))
@@ -64,7 +66,7 @@ async def publish(
     options = options or {}
     _stage(stage_callback, "preparing")
     _check_cancel(cancel_check)
-    if not account_file.is_file():
+    if not account_file.is_dir():
         raise ValueError("发布账号登录状态不存在，请先扫码登录")
     if content_type not in {"video", "note"}:
         raise ValueError("发布内容类型必须是 video 或 note")

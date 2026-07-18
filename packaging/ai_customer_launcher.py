@@ -124,16 +124,6 @@ def _show_error(message: str) -> None:
         print(message)
 
 
-def run_internal_mode(base_dir: Path) -> bool:
-    if len(sys.argv) != 3 or sys.argv[1] != "--internal-platform-login":
-        return False
-    configure_environment(base_dir)
-    from app.services.traffic_workbench import _hold_platform_login_window
-
-    _hold_platform_login_window(sys.argv[2])
-    return True
-
-
 def another_instance_running() -> bool:
     """Keep one packaged workbench process on Windows."""
     global _INSTANCE_MUTEX
@@ -158,8 +148,6 @@ def another_instance_running() -> bool:
 
 def main() -> None:
     base_dir = app_dir()
-    if run_internal_mode(base_dir):
-        return
     if another_instance_running():
         if url := existing_workbench_url():
             webbrowser.open(url)

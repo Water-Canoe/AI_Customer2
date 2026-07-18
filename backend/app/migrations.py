@@ -497,6 +497,67 @@ def _extend_automation_with_traffic(conn: sqlite3.Connection, _: str) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _create_platform_account_center(conn: sqlite3.Connection, _: str) -> None:
+    # 复用已有发布账号表，避免再维护一套登录账号数据。
+    conn.executescript(
+        """
+        ALTER TABLE publish_accounts ADD COLUMN role TEXT NOT NULL DEFAULT 'brand'
+            CHECK(role IN ('brand', 'service', 'operations', 'traffic', 'test'));
+        ALTER TABLE publish_accounts ADD COLUMN platform_user_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE crawl_jobs ADD COLUMN account_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE message_batches ADD COLUMN account_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE traffic_plans ADD COLUMN account_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE traffic_runs ADD COLUMN account_id TEXT NOT NULL DEFAULT '';
+
+        CREATE TABLE account_feature_bindings (
+            account_id TEXT NOT NULL,
+            feature TEXT NOT NULL CHECK(feature IN ('acquisition', 'message', 'traffic', 'publish')),
+            is_default INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'unknown'
+                CHECK(status IN ('unknown', 'checking', 'ready', 'expired', 'error')),
+            last_checked_at TEXT,
+            last_error TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(account_id, feature),
+            FOREIGN KEY(account_id) REFERENCES publish_accounts(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX idx_account_feature_lookup
+        ON account_feature_bindings(feature, is_default, status, account_id);
+        CREATE UNIQUE INDEX idx_platform_account_user
+        ON publish_accounts(platform, platform_user_id)
+        WHERE deleted_at IS NULL AND platform_user_id <> '';
+
+        INSERT INTO account_feature_bindings(account_id, feature, is_default)
+        SELECT id, 'publish', is_default FROM publish_accounts WHERE deleted_at IS NULL;
+
+        UPDATE publish_accounts
+        SET auth_relative_path = 'platform_accounts/' || platform || '/' || id || '/profile',
+            status = 'login_required',
+            qrcode_relative_path = '',
+            last_error = '',
+            last_checked_at = NULL,
+            updated_at = datetime('now', 'localtime');
+        """
+    )
+    # 旧发布表可能有多个默认账号；每个平台只保留最新的一个发布默认值。
+    for platform in ("dy", "ks", "xhs"):
+        rows = conn.execute(
+            """
+            SELECT b.account_id
+            FROM account_feature_bindings b
+            JOIN publish_accounts a ON a.id = b.account_id
+            WHERE a.platform = ? AND b.feature = 'publish' AND b.is_default = 1
+            ORDER BY a.created_at DESC, a.id DESC
+            """,
+            (platform,),
+        ).fetchall()
+        for row in rows[1:]:
+            conn.execute(
+                "UPDATE account_feature_bindings SET is_default = 0 WHERE account_id = ? AND feature = 'publish'",
+                (row["account_id"],),
+            )
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
@@ -508,6 +569,7 @@ MIGRATIONS = (
     Migration(8, "create_automation_plans", _create_automation_plans),
     Migration(9, "add_automation_plan_order", _add_automation_plan_order),
     Migration(10, "extend_automation_with_traffic", _extend_automation_with_traffic),
+    Migration(11, "create_platform_account_center", _create_platform_account_center),
 )
 
 

@@ -26,8 +26,6 @@ JOB_ENTITLEMENTS = {
     "ai_batch": "lead",
     "traffic_run": "traffic",
     "video_generation": "content",
-    "publish_account_login": "content",
-    "publish_account_check": "content",
     "content_publish": "content",
     "voice_runtime_install": "content",
 }
@@ -236,6 +234,7 @@ def enqueue_single_message(
     timeout_seconds: int,
     message_script: str,
     script_label: str,
+    account_id: str,
 ) -> dict[str, Any]:
     return enqueue(
         "message_single",
@@ -246,6 +245,7 @@ def enqueue_single_message(
             "timeout_seconds": int(timeout_seconds),
             "message_script": message_script,
             "script_label": script_label,
+            "account_id": account_id,
         },
         resource="browser",
     )
@@ -286,11 +286,11 @@ def enqueue_voice_runtime_install() -> dict[str, Any]:
     )
 
 
-def enqueue_publish_account_job(account_id: str, action: str) -> dict[str, Any]:
+def enqueue_account_job(account_id: str, action: str) -> dict[str, Any]:
     if action not in {"login", "check"}:
-        raise ValueError("发布账号任务只支持登录或检查")
+        raise ValueError("账号任务只支持登录或检查")
     return enqueue(
-        f"publish_account_{action}",
+        f"account_{action}",
         entity_id=str(account_id),
         payload={"account_id": str(account_id)},
         resource="browser",
@@ -657,6 +657,8 @@ def _execute_job(job: dict[str, Any]) -> Any:
     payload = dict(job["payload"])
     if entitlement := JOB_ENTITLEMENTS.get(kind):
         license_service.ensure_authorized_for(entitlement)
+    elif kind in {"account_login", "account_check"}:
+        license_service.ensure_authorized()
     if kind == "crawl_task":
         return crawler_adapter.run_task(str(payload["task_id"]))
     if kind == "crawl_batch":
@@ -690,6 +692,7 @@ def _execute_job(job: dict[str, Any]) -> Any:
                 timeout_seconds=int(payload.get("timeout_seconds") or 0),
                 message_script=str(payload.get("message_script") or ""),
                 script_label=str(payload.get("script_label") or "AI话术"),
+                account_id=str(payload.get("account_id") or ""),
             )
         )
     if kind == "automation_run":
@@ -700,9 +703,9 @@ def _execute_job(job: dict[str, Any]) -> Any:
         return ai_service.run_ai_jobs_parallel([str(value) for value in payload.get("job_ids", [])])
     if kind == "video_generation":
         return content_workbench.run_video_job(str(payload["video_job_id"]))
-    if kind == "publish_account_login":
+    if kind == "account_login":
         return content_publish.run_account_login(str(payload["account_id"]))
-    if kind == "publish_account_check":
+    if kind == "account_check":
         return content_publish.run_account_check(str(payload["account_id"]))
     if kind == "content_publish":
         return content_publish.run_publish_task(str(payload["publish_task_id"]))
@@ -993,9 +996,13 @@ def _normalize_interrupted_domain(conn: Any, job: dict[str, Any], reason: str) -
             """,
             (reason, str(payload["publish_task_id"])),
         )
-    if kind in {"publish_account_login", "publish_account_check"}:
+    if kind in {"account_login", "account_check"}:
         conn.execute(
-            "UPDATE publish_accounts SET status = 'error', last_error = ?, updated_at = datetime('now', 'localtime') WHERE id = ? AND status = 'checking'",
+            "UPDATE publish_accounts SET status = 'error', last_error = ?, qrcode_relative_path = '', updated_at = datetime('now', 'localtime') WHERE id = ? AND status = 'checking'",
+            (reason, str(payload["account_id"])),
+        )
+        conn.execute(
+            "UPDATE account_feature_bindings SET status = 'error', last_error = ?, last_checked_at = datetime('now', 'localtime') WHERE account_id = ? AND status = 'checking'",
             (reason, str(payload["account_id"])),
         )
 

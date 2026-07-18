@@ -1,9 +1,11 @@
 ﻿import { computed, defineComponent, h, reactive, ref, watch } from 'vue'
 import type { Component } from 'vue'
+import { onMounted } from 'vue'
 import { Aim, ChatDotRound, Compass, Search, Tickets, User, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
-import { taskModeName } from '../shared/format'
+import { platformName, taskModeName } from '../shared/format'
+import { api } from '../shared/api'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, joinTags, splitTagText } from '../components/ui/TagInput'
 import { iconBadge, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
@@ -33,6 +35,7 @@ export default defineComponent({
       mode: 'competitor_discovery',
       platform: 'dy',
       login_type: 'qrcode',
+      account_id: '',
       keyword_tags: [] as string[],
       creator_id_tags: [] as string[],
       specified_id_tags: [] as string[],
@@ -46,9 +49,27 @@ export default defineComponent({
       execute_crawler: true
     })
     const prefillSource = ref<Dict | null>(null)
+    const accounts = ref<Dict[]>([])
     const settingsDefaultsApplied = ref(false)
     const modeNeedsCreator = computed(() => ['competitor_crawl', 'own_account'].includes(form.mode))
     const modeUsesKeywords = computed(() => ['competitor_discovery', 'demand_content'].includes(form.mode))
+    const availableAccounts = computed(() => accounts.value.filter(account =>
+      account.platform === form.platform && account.enabled && account.status === 'ready' && account.features?.includes('acquisition')
+    ))
+    function selectDefaultAccount() {
+      if (availableAccounts.value.some(account => account.id === form.account_id)) return
+      const preferred = availableAccounts.value.find(account => account.default_features?.includes('acquisition')) || availableAccounts.value[0]
+      form.account_id = String(preferred?.id || '')
+    }
+    async function loadAccounts() {
+      try {
+        const { data } = await api.get('/accounts', { params: { feature: 'acquisition' } })
+        accounts.value = data
+        selectDefaultAccount()
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '拓客账号加载失败')
+      }
+    }
     const creatorFieldLabel = computed(() => {
       if (form.mode === 'own_account') return '自家账号主页/ID'
       if (form.mode === 'competitor_crawl') return '竞品账号主页/ID'
@@ -104,6 +125,7 @@ export default defineComponent({
       form.mode = String(task.mode || 'competitor_discovery')
       form.platform = ['dy', 'xhs', 'ks'].includes(task.platform) ? task.platform : 'dy'
       form.login_type = ['qrcode', 'phone', 'cookie'].includes(task.login_type) ? task.login_type : 'qrcode'
+      form.account_id = String(task.account_id || '')
       form.keyword_tags = splitTagText(String(task.keywords || ''))
       form.creator_id_tags = splitTagText(String(task.creator_id || ''))
       form.specified_id_tags = splitTagText(String(task.specified_id || ''))
@@ -122,6 +144,7 @@ export default defineComponent({
         mode: form.mode,
         platform: form.platform,
         login_type: form.login_type,
+        account_id: form.account_id,
         keywords: joinTags(form.keyword_tags),
         creator_id: joinTags(form.creator_id_tags),
         specified_id: joinTags(form.specified_id_tags),
@@ -160,8 +183,10 @@ export default defineComponent({
       () => [form.mode, form.platform],
       () => {
         if (form.mode === 'own_account') applyOwnAccountDefaults()
+        selectDefaultAccount()
       }
     )
+    onMounted(loadAccounts)
     watch(
       () => props.retryDraft,
       draft => {
@@ -179,6 +204,10 @@ export default defineComponent({
       }
       if (!modeUsesKeywords.value && !payload.creator_id && !payload.specified_id) {
         ElMessage.error('账号/详情采集任务必须填写创作者主页/ID或指定内容ID')
+        return
+      }
+      if (payload.execute_crawler && !payload.account_id) {
+        ElMessage.error(`请先到账号中心配置并登录${platformName(payload.platform)}拓客账号`)
         return
       }
       emit('create-task', payload)
@@ -211,10 +240,9 @@ export default defineComponent({
             h('option', { value: 'xhs' }, '小红书'),
             h('option', { value: 'ks' }, '快手')
           ])]),
-          h('label', ['登录方式', h('select', { value: form.login_type, onChange: (event: Event) => form.login_type = (event.target as HTMLSelectElement).value }, [
-            h('option', { value: 'qrcode' }, '二维码'),
-            h('option', { value: 'phone' }, '手机号'),
-            h('option', { value: 'cookie' }, 'Cookie')
+          h('label', ['执行账号', h('select', { value: form.account_id, onChange: (event: Event) => form.account_id = (event.target as HTMLSelectElement).value }, [
+            h('option', { value: '' }, availableAccounts.value.length ? '请选择账号' : '账号中心暂无可用账号'),
+            ...availableAccounts.value.map(account => h('option', { value: account.id }, account.name))
           ])]),
           h('label', { class: 'form-field field-full' }, ['关键词', h(TagInput, {
             modelValue: form.keyword_tags,

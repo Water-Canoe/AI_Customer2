@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from app import database
 from app.schemas import MessagePlanConfig
-from app.services import browser_queue
+from app.services import account_center, browser_queue
 
 
 TARGET_FOLLOW_STATUSES = ("未私信", "已私信", "未回复", "已回复", "未成交", "已成交")
@@ -94,6 +94,7 @@ def create_auto_message_batch(
     interval_min_seconds: int,
     interval_max_seconds: int,
     run_now: bool = True,
+    account_id: str = "",
 ) -> dict[str, Any]:
     platform = str(platform or "").strip()
     keyword = _normalize_keyword_filter(keyword)
@@ -106,6 +107,7 @@ def create_auto_message_batch(
     interval_max_seconds = _bounded_int(interval_max_seconds, 60, 0, 3600)
     if interval_max_seconds < interval_min_seconds:
         raise ValueError("最大时间间隔不能小于最小时间间隔")
+    account_id = account_center.resolve_account_id(platform, "message", account_id)
 
     with database.connect() as conn:
         active = conn.execute(
@@ -124,11 +126,11 @@ def create_auto_message_batch(
             """
             INSERT INTO message_batches(
                 id, platform, keyword, requested_count, interval_min_seconds,
-                interval_max_seconds, fill_only, timeout_seconds, status, total_count
+                interval_max_seconds, fill_only, timeout_seconds, status, total_count, account_id
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
             """,
-            (batch_id, platform, keyword, count, interval_min_seconds, interval_max_seconds, int(fill_only), timeout_seconds, len(customers)),
+            (batch_id, platform, keyword, count, interval_min_seconds, interval_max_seconds, int(fill_only), timeout_seconds, len(customers), account_id),
         )
         for customer in customers:
             conn.execute(
@@ -143,6 +145,7 @@ def create_auto_message_batch(
 
 
 def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig) -> dict[str, Any]:
+    account_id = account_center.resolve_account_id(config.platform, "message", config.account_id)
     with database.connect() as conn:
         active = conn.execute(
             "SELECT id FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
@@ -165,9 +168,9 @@ def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig) -> di
             INSERT INTO message_batches(
                 id, platform, keyword, requested_count, interval_min_seconds,
                 interval_max_seconds, fill_only, timeout_seconds, status, total_count,
-                source, automation_run_id, error, finished_at
+                source, automation_run_id, error, finished_at, account_id
             ) VALUES(?, 'dy', ?, ?, ?, ?, 0, 0, ?, ?, 'scheduled', ?, ?,
-                     CASE WHEN ? = 'quota_reached' THEN datetime('now', 'localtime') ELSE NULL END)
+                     CASE WHEN ? = 'quota_reached' THEN datetime('now', 'localtime') ELSE NULL END, ?)
             """,
             (
                 batch_id,
@@ -180,6 +183,7 @@ def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig) -> di
                 run_id,
                 error,
                 status,
+                account_id,
             ),
         )
         for customer in customers:
@@ -290,9 +294,9 @@ def retry_auto_message_batch(batch_id: str) -> dict[str, Any]:
             """
             INSERT INTO message_batches(
                 id, platform, keyword, requested_count, interval_min_seconds,
-                interval_max_seconds, fill_only, timeout_seconds, status, total_count
+                interval_max_seconds, fill_only, timeout_seconds, status, total_count, account_id
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
             """,
             (
                 new_batch_id,
@@ -304,6 +308,7 @@ def retry_auto_message_batch(batch_id: str) -> dict[str, Any]:
                 batch["fill_only"],
                 batch["timeout_seconds"],
                 len(rows),
+                batch["account_id"],
             ),
         )
         for row in rows:
@@ -348,6 +353,7 @@ async def auto_message_customer(
     timeout_seconds: int = 0,
     message_script: str = "",
     script_label: str = "",
+    account_id: str = "",
 ) -> dict[str, Any]:
     detail = customer_detail(lead_id)
     customer = detail["customer"]
@@ -355,6 +361,8 @@ async def auto_message_customer(
         raise ValueError("自动私信当前只支持抖音客户")
     if not customer["profile_url"]:
         raise ValueError("当前客户缺少主页链接，无法自动私信")
+    account_id = account_center.resolve_account_id("dy", "message", account_id)
+    profile_dir = account_center.profile_path(account_id, "message")
     with database.connect() as conn:
         fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
         configured_timeout = _bounded_int(database.get_setting(conn, "auto_dm_timeout_seconds", "300"), 300, 0, 3600)
@@ -377,7 +385,7 @@ async def auto_message_customer(
                 result = await sender(
                     customer["profile_url"],
                     selected_script,
-                    profile_dir=database.get_douyin_cloak_profile_dir(),
+                    profile_dir=profile_dir,
                     dry_run=effective_dry_run,
                     manual_send_timeout_seconds=effective_timeout,
                 )
@@ -407,6 +415,8 @@ async def run_auto_message_batch(batch_id: str) -> None:
             batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
             if not batch or batch["status"] not in ACTIVE_BATCH_STATUSES:
                 return
+            account_id = account_center.resolve_account_id(str(batch["platform"]), "message", str(batch["account_id"] or ""))
+            profile_dir = account_center.profile_path(account_id, "message")
             conn.execute(
                 """
                 UPDATE message_batches
@@ -426,7 +436,7 @@ async def run_auto_message_batch(batch_id: str) -> None:
                 f"message_batch:{batch_id}",
                 should_stop=lambda: _message_batch_stop_requested(batch_id),
             ):
-                context = await module.open_douyin_context(profile_dir=database.get_douyin_cloak_profile_dir())
+                context = await module.open_douyin_context(profile_dir=profile_dir)
                 page = context.pages[0] if context.pages else await context.new_page()
                 while True:
                     with database.connect() as conn:

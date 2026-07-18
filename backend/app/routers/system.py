@@ -10,7 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from app import views
 from app.schemas import BackupCreateRequest, BackupRestoreRequest, ClearDataRequest, LicenseUpdate, SettingsUpdate
-from app.services import data_management, license_service, maintenance, traffic_workbench, workbench_status
+from app.services import data_management, license_service, maintenance, workbench_status
 from app.version import APP_VERSION
 
 
@@ -48,14 +48,6 @@ def update_license(payload: LicenseUpdate) -> dict[str, object]:
 @router.post("/license/check")
 def check_license(payload: LicenseUpdate) -> dict[str, object]:
     return license_service.check_license(payload.license_code)
-
-
-@router.post("/settings/platform-login/{platform}")
-def open_settings_platform_login(platform: str) -> dict[str, object]:
-    try:
-        return traffic_workbench.open_platform_login_window(platform)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/settings")

@@ -36,11 +36,6 @@ def get_media_crawler_db_path(conn: sqlite3.Connection | None = None) -> Path:
     return Path(str(value).strip().strip('"').strip("'")).expanduser()
 
 
-def get_douyin_cloak_profile_dir() -> Path:
-    """Return the shared Douyin CloakBrowser profile directory."""
-    return get_data_root() / "douyin_cloak_profile"
-
-
 def get_content_assets_root() -> Path:
     """Return the managed customer content asset folder."""
     return get_data_root() / "content_assets"

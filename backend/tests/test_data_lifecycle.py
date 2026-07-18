@@ -128,7 +128,8 @@ def test_active_jobs_covers_runtime_content_and_pending_work(tmp_path: Path, mon
     with database.connect() as conn:
         conn.execute("INSERT INTO runtime_jobs(id, kind) VALUES('runtime-1', 'video_generation')")
         conn.execute("INSERT INTO video_jobs(id, subject) VALUES('video-1', '测试视频')")
-        conn.execute("INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES('account-1', 'dy', '测试账号', 'accounts/account-1.json')")
+        conn.execute("INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES('account-1', 'dy', '测试账号', 'platform_accounts/dy/account-1/profile')")
+        conn.execute("INSERT INTO account_feature_bindings(account_id, feature, is_default) VALUES('account-1', 'publish', 1)")
         conn.execute("INSERT INTO publish_tasks(id, batch_id, account_id, source_type, content_type, title) VALUES('publish-1', 'batch-1', 'account-1', 'asset_video', 'video', '测试发布')")
         conn.execute("INSERT INTO analysis_jobs(id, target_type, target_id, status) VALUES('analysis-1', 'lead', 1, 'running')")
 
@@ -199,7 +200,8 @@ def test_clear_all_data_includes_all_business_tables(tmp_path: Path, monkeypatch
         conn.execute("INSERT INTO content_assets(id, name, asset_type, relative_path, file_size, sha256) VALUES('asset-1', '素材', 'video', 'originals/asset-1.mp4', 1, 'hash-1')")
         conn.execute("INSERT INTO video_jobs(id, subject, status) VALUES('video-1', '测试视频', 'succeeded')")
         conn.execute("INSERT INTO video_job_assets(video_job_id, asset_id) VALUES('video-1', 'asset-1')")
-        conn.execute("INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES('account-1', 'dy', '测试账号', 'accounts/account-1.json')")
+        conn.execute("INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES('account-1', 'dy', '测试账号', 'platform_accounts/dy/account-1/profile')")
+        conn.execute("INSERT INTO account_feature_bindings(account_id, feature, is_default) VALUES('account-1', 'publish', 1)")
         conn.execute("INSERT INTO publish_tasks(id, batch_id, account_id, source_type, content_type, title, status) VALUES('publish-1', 'publish-batch-1', 'account-1', 'asset_video', 'video', '测试发布', 'succeeded')")
         conn.execute("INSERT INTO publish_task_assets(task_id, asset_id) VALUES('publish-1', 'asset-1')")
 
@@ -219,11 +221,12 @@ def test_clear_all_data_includes_all_business_tables(tmp_path: Path, monkeypatch
             "content_assets",
             "video_jobs",
             "video_job_assets",
-            "publish_accounts",
             "publish_tasks",
             "publish_task_assets",
         ):
             assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM publish_accounts").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM account_feature_bindings").fetchone()[0] == 1
     raw_conn = sqlite3.connect(raw_db)
     try:
         assert raw_conn.execute("SELECT COUNT(*) FROM raw_items").fetchone()[0] == 0

@@ -286,9 +286,9 @@ export default defineComponent({
     }
 
     async function loadPublishAccounts() {
-      const { data } = await api.get('/content/publish-accounts')
+      const { data } = await api.get('/accounts', { params: { feature: 'publish' } })
       publishAccounts.value = data
-      if (!autoPublish.value.account_ids.length) autoPublish.value.account_ids = data.filter((item: Dict) => item.is_default && item.enabled && item.status === 'ready').map((item: Dict) => item.id)
+      if (!autoPublish.value.account_ids.length) autoPublish.value.account_ids = data.filter((item: Dict) => item.default_features?.includes('publish') && item.enabled && item.status === 'ready').map((item: Dict) => item.id)
     }
 
     async function loadPublishTasks() {

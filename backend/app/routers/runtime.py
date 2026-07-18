@@ -2,20 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.services import job_queue, profile_manager
+from app.services import job_queue
 
 
 router = APIRouter(prefix="/api/runtime", tags=["runtime"])
-
-
-@router.get("/profile")
-def runtime_profile_status() -> dict[str, object]:
-    return profile_manager.status()
-
-
-@router.post("/profile/close")
-def close_runtime_profile() -> dict[str, object]:
-    return profile_manager.close_interactive()
 
 
 @router.get("/jobs")

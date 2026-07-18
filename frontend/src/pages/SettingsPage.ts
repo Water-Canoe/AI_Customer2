@@ -1,5 +1,5 @@
-import { defineComponent, h, onMounted, onUnmounted, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
-import { Check, DataAnalysis, Delete, Key, Monitor, Refresh, Setting, Tools, User, Warning } from '@element-plus/icons-vue'
+import { defineComponent, h, onMounted, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
+import { Check, DataAnalysis, Delete, Monitor, Refresh, Setting, Tools, User, Warning } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { api } from '../shared/api'
@@ -90,50 +90,12 @@ export default defineComponent({
     const local = reactive<Dict>({})
     const settingsDirty = ref(false)
     const syncingFromProps = ref(false)
-    const loginOpening = ref('')
-    const profileClosing = ref(false)
-    const profileStatus = ref<Dict>({ interactive_active: false, interactive_platform: '', runtime_active: false })
     const backups = ref<Dict>({ items: [], total: 0, schema: {} })
     const backupLoading = ref(false)
     const backupCreating = ref(false)
     const backupRestoring = ref('')
     const backupDeleting = ref('')
     const backupPage = ref(1)
-
-    async function openPlatformLogin(platform: string) {
-      loginOpening.value = platform
-      try {
-        const { data } = await api.post(`/settings/platform-login/${platform}`)
-        ElMessage.success(data.message || `${platformName(platform)}登录窗口已打开`)
-        await loadProfileStatus(true)
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || `${platformName(platform)}登录窗口打开失败`)
-      } finally {
-        loginOpening.value = ''
-      }
-    }
-
-    async function loadProfileStatus(silent = false) {
-      try {
-        const { data } = await api.get('/runtime/profile')
-        profileStatus.value = data
-      } catch (error: any) {
-        if (!silent) ElMessage.error(error?.response?.data?.detail || '登录会话状态加载失败')
-      }
-    }
-
-    async function closePlatformLogin() {
-      profileClosing.value = true
-      try {
-        const { data } = await api.post('/runtime/profile/close')
-        ElMessage.success(data.closed ? '登录窗口已关闭' : '当前没有打开的登录窗口')
-        await loadProfileStatus(true)
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '登录窗口关闭失败')
-      } finally {
-        profileClosing.value = false
-      }
-    }
 
     async function loadBackups() {
       backupLoading.value = true
@@ -238,13 +200,9 @@ export default defineComponent({
       emit('settings-dirty-change', false)
       sync()
     })
-    let profileTimer = 0
     onMounted(() => {
       loadBackups()
-      loadProfileStatus()
-      profileTimer = window.setInterval(() => loadProfileStatus(true), 3000)
     })
-    onUnmounted(() => window.clearInterval(profileTimer))
 
     return () => {
       if (!local.icp_profile || typeof local.icp_profile !== 'object') {
@@ -297,23 +255,6 @@ export default defineComponent({
               toggleField(local, 'auto_delete_non_customers', '自动删除非客户账号', markSettingsDirty),
               toggleField(local, 'auto_dm_fill_only', '自动私信只填内容不发送', markSettingsDirty)
             ])
-          ]),
-          settingsFoldPanel({ title: '登录配置', subtitle: '打开平台网页登录窗口完成扫码或账号登录', icon: Key, tone: 'green' }, [
-            h('div', { class: 'platform-login-actions' }, [
-              ...ownAccountPlatforms.map(platform => h('button', {
-              class: 'secondary-action',
-              disabled: Boolean(loginOpening.value) || Boolean(profileStatus.value.runtime_active),
-              onClick: () => openPlatformLogin(platform)
-              }, loginOpening.value === platform ? '打开中...' : `登录${platformName(platform)}`)),
-              profileStatus.value.interactive_active
-                ? h('button', { class: 'secondary-action', disabled: profileClosing.value, onClick: closePlatformLogin }, profileClosing.value ? '关闭中...' : '关闭登录窗口')
-                : null
-            ]),
-            h('p', { class: 'muted-text' }, profileStatus.value.interactive_active
-              ? `${platformName(String(profileStatus.value.interactive_platform || ''))}登录窗口已打开，自动化任务会等待窗口关闭。`
-              : profileStatus.value.runtime_active
-                ? '自动化任务正在使用登录会话，任务结束后可打开登录窗口。'
-                : '三个平台共用登录会话；登录完成后可手动关闭窗口，再打开其它平台。')
           ]),
           settingsFoldPanel({ title: '自家账号', subtitle: '同平台可多个，跨平台分任务运行', icon: User, tone: 'blue' }, [
             h('div', { class: 'own-account-grid' }, ownAccountPlatforms.map(platform => renderOwnAccountField(ownAccounts, platform, markSettingsDirty)))

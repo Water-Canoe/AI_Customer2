@@ -16,8 +16,12 @@ sys.path.insert(0, str(BACKEND_ROOT))
 def prepare_project(tmp_path: Path) -> None:
     os.environ["AI_CUSTOMER_DB"] = str(tmp_path / "automation.sqlite3")
     from app import database
+    from app.services import account_center, content_publish
 
     database.init_db()
+    account = account_center.create_account("dy", "自动化引流测试账号", "traffic", ["traffic"], ["traffic"])
+    content_publish.set_account_state(str(account["id"]), "ready", checked=True)
+    account_center.set_feature_status(str(account["id"]), "traffic", "ready")
 
 
 def keyword_plan_payload(**overrides: object):

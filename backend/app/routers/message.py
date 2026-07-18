@@ -48,6 +48,7 @@ def message_workbench_customer_auto_message(
             timeout_seconds=payload.timeout_seconds,
             message_script=payload.message_script,
             script_label=payload.script_label,
+            account_id=payload.account_id,
         )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -68,6 +69,7 @@ async def create_message_workbench_auto_message_batch(payload: MessageAutoBatchC
             count=payload.count,
             interval_min_seconds=payload.interval_min_seconds,
             interval_max_seconds=payload.interval_max_seconds,
+            account_id=payload.account_id,
             run_now=False,
         )
         batch["runtime_job"] = job_queue.enqueue_message_batch(str(batch["id"]))

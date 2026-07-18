@@ -6,8 +6,6 @@ from fastapi.responses import FileResponse
 from app.api_dependencies import require_license_for
 from app.schemas import (
     ContentAssetUpdate,
-    ContentPublishAccountCreate,
-    ContentPublishAccountUpdate,
     ContentPublishOneClick,
     ContentPublishResultUpdate,
     ContentPublishTaskCreate,
@@ -99,66 +97,6 @@ def preview_asset_thumbnail(asset_id: str) -> FileResponse:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="缩略图不存在")
     return FileResponse(path, media_type="image/jpeg")
-
-
-@router.get("/publish-accounts")
-def list_publish_accounts() -> list[dict[str, object]]:
-    return content_publish.list_accounts()
-
-
-@router.post("/publish-accounts")
-def create_publish_account(payload: ContentPublishAccountCreate) -> dict[str, object]:
-    require_license_for("content")
-    try:
-        return content_publish.create_account(payload.platform, payload.name)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.patch("/publish-accounts/{account_id}")
-def update_publish_account(account_id: str, payload: ContentPublishAccountUpdate) -> dict[str, object]:
-    try:
-        return content_publish.update_account(account_id, payload.model_dump(exclude_none=True))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.delete("/publish-accounts/{account_id}")
-def delete_publish_account(account_id: str) -> dict[str, object]:
-    try:
-        return content_publish.delete_account(account_id)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post("/publish-accounts/{account_id}/login")
-def login_publish_account(account_id: str) -> dict[str, object]:
-    require_license_for("content")
-    try:
-        content_publish.get_account(account_id)
-        return job_queue.enqueue_publish_account_job(account_id, "login")
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post("/publish-accounts/{account_id}/check")
-def check_publish_account(account_id: str) -> dict[str, object]:
-    require_license_for("content")
-    try:
-        content_publish.get_account(account_id)
-        return job_queue.enqueue_publish_account_job(account_id, "check")
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/publish-accounts/{account_id}/qrcode")
-def publish_account_qrcode(account_id: str) -> FileResponse:
-    try:
-        return FileResponse(content_publish.account_qrcode_path(account_id), media_type="image/png")
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/publish-tasks/one-click")

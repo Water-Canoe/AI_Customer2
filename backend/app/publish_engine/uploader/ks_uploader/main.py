@@ -9,7 +9,7 @@ from pathlib import Path
 
 from playwright.async_api import Page
 
-from app.publish_engine.browser import launch_publish_context
+from app.publish_engine.browser import launch_publish_context, profile_has_state
 from app.publish_engine.conf import DEBUG_MODE, LOCAL_CHROME_HEADLESS
 from app.publish_engine.uploader.base_video import BaseVideoUploader
 from app.publish_engine.utils.files_times import get_absolute_path
@@ -168,7 +168,7 @@ async def cookie_auth(account_file):
 
 async def ks_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, headless: bool = LOCAL_CHROME_HEADLESS):
     account_file = get_absolute_path(account_file, "ks_uploader")
-    if not os.path.exists(account_file) or not await cookie_auth(account_file):
+    if not profile_has_state(account_file) or not await cookie_auth(account_file):
         if not handle:
             result = _build_login_result(False, "cookie_invalid", "cookie文件不存在或已失效", account_file)
             return result if return_detail else False
@@ -190,7 +190,7 @@ async def get_ks_cookie(
     if headless:
         kuaishou_logger.info(_msg("🖼️", "快手登录将以无头模式运行，小人会输出终端二维码并保存本地二维码图片"))
 
-    context = await launch_publish_context(headless=headless)
+    context = await launch_publish_context(headless=headless, account_file=account_file)
     try:
         qrcode_path = None
         qrcode_info = None
@@ -205,20 +205,9 @@ async def get_ks_cookie(
 
             for _ in range(max_checks):
                 if page.url.startswith(KUAISHOU_UPLOAD_URL) or await _is_ks_login_page_gone(page):
-                    await context.storage_state(path=account_file)
-                    if await cookie_auth(account_file):
-                        kuaishou_logger.success(_msg("🥳", "快手扫码登录成功，小人开心收工"))
-                        result = _build_login_result(True, "success", "快手扫码登录成功", account_file, qrcode_info, page.url)
-                    else:
-                        kuaishou_logger.error(_msg("😢", "快手扫码完成了，但 cookie 校验失败"))
-                        result = _build_login_result(
-                            False,
-                            "cookie_invalid",
-                            "快手扫码流程结束，但 cookie 校验失败",
-                            account_file,
-                            qrcode_info,
-                            page.url,
-                        )
+                    # 当前持久化 Profile 关闭后即落盘，避免并发打开同一目录导致锁冲突。
+                    kuaishou_logger.success(_msg("🥳", "快手扫码登录成功，小人开心收工"))
+                    result = _build_login_result(True, "success", "快手扫码登录成功", account_file, qrcode_info, page.url)
                     return result
 
                 if qrcode_info and await _is_ks_qrcode_expired(page):
@@ -528,8 +517,7 @@ class KSVideo(KSBaseUploader):
             upload_success = True
         finally:
             if upload_success:
-                await context.storage_state(path=self.account_file)
-                kuaishou_logger.success(_msg("🥳", "cookie 更新完毕"))
+                kuaishou_logger.success(_msg("🥳", "登录态已持久化"))
                 await asyncio.sleep(2)
             await context.close()
 
@@ -681,8 +669,7 @@ class KSNote(KSBaseUploader):
             upload_success = True
         finally:
             if upload_success:
-                await context.storage_state(path=self.account_file)
-                kuaishou_logger.success(_msg("🥳", "cookie 更新完毕"))
+                kuaishou_logger.success(_msg("🥳", "登录态已持久化"))
                 await asyncio.sleep(2)
             await context.close()
 

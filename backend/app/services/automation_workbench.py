@@ -552,6 +552,7 @@ def _run_keyword_item(run_id: str, item: dict[str, Any], config: KeywordLeadPlan
             content_count=config.competitor_content_count,
             comment_count=config.comment_count,
             collect_sub_comments=config.collect_sub_comments,
+            execution_account_id=config.acquisition_account_id,
         )
         task_ids = [str(value) for value in prepared.get("task_ids", [])]
         context["customer_task_ids"] = task_ids
@@ -708,6 +709,7 @@ def _create_discovery_task(keyword: str, config: KeywordLeadPlanConfig) -> dict[
             collect_sub_comments=False,
             max_concurrency=1,
             headless=headless,
+            account_id=config.acquisition_account_id,
         ),
         automation_managed=True,
     )

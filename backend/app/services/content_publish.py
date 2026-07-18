@@ -38,7 +38,7 @@ def create_account(platform: str, name: str) -> dict[str, Any]:
         with database.connect() as conn:
             conn.execute(
                 "INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES(?, ?, ?, ?)",
-                (account_id, platform, name[:100], f"social_publish/accounts/{account_id}.json"),
+                (account_id, platform, name[:100], f"platform_accounts/{platform}/{account_id}/profile"),
             )
     except sqlite3.IntegrityError as exc:
         raise ValueError("同一平台下账号名称不能重复") from exc
@@ -58,33 +58,8 @@ def get_account(account_id: str, *, include_deleted: bool = False) -> dict[str, 
     with database.connect() as conn:
         row = conn.execute("SELECT * FROM publish_accounts WHERE id = ?", (str(account_id),)).fetchone()
     if not row or (row["deleted_at"] and not include_deleted):
-        raise ValueError("发布账号不存在")
+        raise ValueError("平台账号不存在")
     return _format_account(row)
-
-
-def update_account(account_id: str, values: dict[str, Any]) -> dict[str, Any]:
-    account = get_account(account_id)
-    name = str(values.get("name", account["name"])).strip()
-    if not name:
-        raise ValueError("账号名称不能为空")
-    try:
-        with database.connect() as conn:
-            conn.execute(
-                """
-                UPDATE publish_accounts
-                SET name = ?, enabled = ?, is_default = ?, updated_at = datetime('now', 'localtime')
-                WHERE id = ?
-                """,
-                (
-                    name[:100],
-                    int(bool(values.get("enabled", account["enabled"]))),
-                    int(bool(values.get("is_default", account["is_default"]))),
-                    account_id,
-                ),
-            )
-    except sqlite3.IntegrityError as exc:
-        raise ValueError("同一平台下账号名称不能重复") from exc
-    return get_account(account_id)
 
 
 def delete_account(account_id: str) -> dict[str, Any]:
@@ -100,9 +75,7 @@ def delete_account(account_id: str) -> dict[str, Any]:
             "UPDATE publish_accounts SET deleted_at = datetime('now', 'localtime'), enabled = 0, is_default = 0, updated_at = datetime('now', 'localtime') WHERE id = ?",
             (account_id,),
         )
-    path = resolve_runtime_path(_auth_relative_path(account_id))
-    if path.is_file():
-        path.unlink()
+    # 账号采用持久化 Profile，软删除记录时保留用户登录数据，避免误删整个目录。
     return {"id": account_id, "deleted": True}
 
 
@@ -352,7 +325,9 @@ def resolve_runtime_path(relative_path: str) -> Path:
 
 def account_auth_path(account_id: str) -> Path:
     get_account(account_id, include_deleted=True)
-    return resolve_runtime_path(_auth_relative_path(account_id))
+    path = resolve_runtime_path(_auth_relative_path(account_id))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def account_qrcode_path(account_id: str) -> Path:
@@ -383,6 +358,7 @@ def task_media_paths(task: dict[str, Any]) -> list[Path]:
 
 def run_account_login(account_id: str) -> dict[str, Any]:
     from app.publish_engine import service as engine
+    from app.services import account_center
 
     account = get_account(account_id)
     set_account_state(account_id, "checking")
@@ -397,35 +373,41 @@ def run_account_login(account_id: str) -> dict[str, Any]:
         if not bool(result.get("success")):
             raise RuntimeError(str(result.get("message") or "扫码登录失败"))
         set_account_state(account_id, "ready", checked=True)
+        account_center.set_all_feature_status(account_id, "ready")
         return {"account_id": account_id, "success": True}
     except Exception as exc:
         set_account_state(account_id, "error", error=str(exc), checked=True)
+        account_center.set_all_feature_status(account_id, "error", str(exc))
         raise
 
 
 def run_account_check(account_id: str) -> dict[str, Any]:
     from app.publish_engine import service as engine
+    from app.services import account_center
 
     account = get_account(account_id)
     set_account_state(account_id, "checking")
     try:
         valid = bool(engine.run(engine.check_account(account["platform"], account_auth_path(account_id))))
         set_account_state(account_id, "ready" if valid else "expired", error="" if valid else "登录已失效", checked=True)
+        account_center.set_all_feature_status(account_id, "ready" if valid else "expired", "" if valid else "登录已失效")
         return {"account_id": account_id, "valid": valid}
     except Exception as exc:
         set_account_state(account_id, "error", error=str(exc), checked=True)
+        account_center.set_all_feature_status(account_id, "error", str(exc))
         raise
 
 
 def run_publish_task(task_id: str) -> dict[str, Any]:
     from app.publish_engine import service as engine
-    from app.services import job_queue
+    from app.services import account_center, job_queue
 
     task = get_task(task_id)
-    account = get_account(str(task["account_id"]))
-    if account["status"] != "ready" or not account["enabled"]:
-        update_task_state(task_id, "failed", error="发布账号未登录或已停用")
-        raise RuntimeError("发布账号未登录或已停用")
+    try:
+        account = account_center.get_account(str(task["account_id"]), feature="publish", require_ready=True)
+    except ValueError as exc:
+        update_task_state(task_id, "failed", error=str(exc))
+        raise RuntimeError(str(exc)) from exc
     with database.connect() as conn:
         conn.execute(
             "UPDATE publish_tasks SET attempt = attempt + 1, updated_at = datetime('now', 'localtime') WHERE id = ?",
@@ -577,9 +559,11 @@ def _insert_tasks(
 
 
 def _selected_accounts(account_ids: list[str] | None) -> list[dict[str, Any]]:
+    from app.services import account_center
+
     requested = set(account_ids or [])
-    accounts = list_accounts()
-    selected = [item for item in accounts if item["id"] in requested] if requested else [item for item in accounts if item["is_default"]]
+    accounts = account_center.list_accounts(feature="publish")
+    selected = [item for item in accounts if item["id"] in requested] if requested else [item for item in accounts if "publish" in item["default_features"]]
     selected = [item for item in selected if item["enabled"] and item["status"] == "ready"]
     if not selected:
         raise ValueError("没有可用的默认发布账号，请先完成扫码登录并设为默认账号")
@@ -642,7 +626,7 @@ def _auth_relative_path(account_id: str) -> str:
     with database.connect() as conn:
         row = conn.execute("SELECT auth_relative_path FROM publish_accounts WHERE id = ?", (account_id,)).fetchone()
     if not row:
-        raise ValueError("发布账号不存在")
+        raise ValueError("平台账号不存在")
     return str(row["auth_relative_path"])
 
 
@@ -651,7 +635,7 @@ def _format_account(row: sqlite3.Row) -> dict[str, Any]:
     value.pop("auth_relative_path", None)
     value["enabled"] = bool(value.get("enabled"))
     value["is_default"] = bool(value.get("is_default"))
-    value["qrcode_url"] = f"/api/content/publish-accounts/{value['id']}/qrcode" if value.get("qrcode_relative_path") else ""
+    value["qrcode_url"] = f"/api/accounts/{value['id']}/qrcode" if value.get("qrcode_relative_path") else ""
     return value
 
 

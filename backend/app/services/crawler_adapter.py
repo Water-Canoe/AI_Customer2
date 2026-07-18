@@ -15,7 +15,7 @@ from typing import Any, Callable, Literal
 
 from app import database
 from app.schemas import TaskCreate
-from app.services import browser_queue
+from app.services import account_center, browser_queue
 from app.services.importer import CONTENT_TABLES, import_for_task
 
 
@@ -263,9 +263,9 @@ def create_task(payload: TaskCreate, *, automation_managed: bool = False) -> dic
                 specified_id, creator_id, content_count, comment_count,
                 collect_content, collect_comments, collect_authors, collect_sub_comments,
                 max_concurrency, tcp_mode, headless, execute_crawler,
-                status, command, raw_started_ts_ms, automation_managed
+                status, command, raw_started_ts_ms, automation_managed, account_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -291,6 +291,7 @@ def create_task(payload: TaskCreate, *, automation_managed: bool = False) -> dic
                 " ".join(command),
                 raw_started_ts_ms,
                 int(automation_managed),
+                task.account_id,
             ),
         )
         log_task(conn, task_id, "info", "任务已创建，等待执行")
@@ -622,6 +623,20 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         with database.connect() as conn:
             log_task(conn, task_id, "info", schema_message)
 
+    try:
+        account_id = account_center.resolve_account_id(
+            str(task["platform"]),
+            "acquisition",
+            str(task.get("account_id") or ""),
+        )
+        profile_dir = account_center.profile_path(account_id, "acquisition")
+        if account_id != str(task.get("account_id") or ""):
+            with database.connect() as conn:
+                conn.execute("UPDATE crawl_jobs SET account_id = ? WHERE id = ?", (account_id, task_id))
+    except ValueError as exc:
+        _fail_task(task_id, str(exc))
+        return
+
     def emit_queue_message(message: str) -> None:
         with database.connect() as conn:
             log_task(conn, task_id, "info", message)
@@ -638,7 +653,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         return
 
     try:
-        cdp_message = _ensure_cdp_browser_for_existing_mode(media_dir, bool(task.get("headless")))
+        cdp_message = _ensure_cdp_browser_for_existing_mode(media_dir, bool(task.get("headless")), profile_dir)
     except Exception as exc:
         browser_slot.release()
         _fail_task(task_id, f"启动 MyCrawler 前置 CDP 浏览器失败：{exc}")
@@ -771,7 +786,7 @@ def _sqlite_table_exists(db_path: Path, table_name: str) -> bool:
         return False
 
 
-def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> str | None:
+def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool, user_data_dir: Path) -> str | None:
     cdp_config = _read_media_crawler_cdp_config(media_dir)
     if not cdp_config["enabled"] or not cdp_config["connect_existing"]:
         return None
@@ -780,7 +795,6 @@ def _ensure_cdp_browser_for_existing_mode(media_dir: Path, headless: bool) -> st
     if _is_tcp_port_open("127.0.0.1", debug_port):
         return None
 
-    user_data_dir = database.get_douyin_cloak_profile_dir()
     user_data_dir.mkdir(parents=True, exist_ok=True)
 
     try:

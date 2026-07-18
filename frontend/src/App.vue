@@ -10,6 +10,7 @@
       </div>
       <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench', 'content-workbench']" class="nav" @select="goToView">
         <el-menu-item index="automation-plans"><el-icon><Clock /></el-icon><span>自动化计划</span></el-menu-item>
+        <el-menu-item index="accounts"><el-icon><User /></el-icon><span>账号中心</span></el-menu-item>
         <el-sub-menu index="lead-workbench">
           <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
           <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
@@ -106,7 +107,7 @@
         <div class="topbar-actions">
           <span class="topbar-env-tag" :class="topbarEnvClass">{{ topbarEnvLabel }}</span>
           <el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
-          <el-button type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
+          <el-button v-if="!isAccountView" type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
         </div>
       </el-header>
 
@@ -149,6 +150,7 @@ import {
   Share,
   SwitchButton,
   Tickets,
+  User,
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -207,6 +209,7 @@ const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
 const trafficEnv = ref<Dict>({})
 const trafficRefreshSeq = ref(0)
 const automationRefreshSeq = ref(0)
+const accountRefreshSeq = ref(0)
 const contentEnv = ref<Dict>({})
 const contentRefreshSeq = ref(0)
 const workbenchStatus = ref<Dict>({ metrics: {}, active: false })
@@ -217,15 +220,17 @@ let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
+const isAccountView = computed(() => activeView.value === 'accounts')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
-const topbarKicker = computed(() => isAutomationView.value ? '自动化中心' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台')))
+const topbarKicker = computed(() => isAccountView.value ? '系统中心' : (isAutomationView.value ? '自动化中心' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
-const topbarEnvOk = computed(() => isAutomationView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
-const topbarEnvClass = computed(() => isAutomationView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
+const topbarEnvOk = computed(() => isAutomationView.value || isAccountView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
+const topbarEnvClass = computed(() => isAutomationView.value || isAccountView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
 const topbarEnvLabel = computed(() => {
+  if (isAccountView.value) return '账号独立登录态'
   if (isAutomationView.value) return '共用浏览器队列'
   if (isContentView.value) return topbarEnvOk.value ? '视频环境正常' : '需要检查视频环境'
   if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
@@ -245,6 +250,7 @@ const autoSync = createAutoSyncController({
 })
 const dashboardInsights = computed(() => {
   const metrics = workbenchStatus.value?.metrics || {}
+  if (isAccountView.value) return []
   if (isAutomationView.value) {
     return [
       { label: '启用计划', value: compactCount(metrics.enabled_plans), tone: 'green' },
@@ -332,6 +338,7 @@ const routeProps = computed(() => {
   }
   if (activeView.value.startsWith('traffic-')) return { refreshSeq: trafficRefreshSeq.value }
   if (activeView.value === 'automation-plans') return { refreshSeq: automationRefreshSeq.value }
+  if (activeView.value === 'accounts') return { refreshSeq: accountRefreshSeq.value }
   if (activeView.value.startsWith('content-')) return { refreshSeq: contentRefreshSeq.value }
   return {
     settings: settings.value,
@@ -744,7 +751,7 @@ function compactCount(value: unknown) {
 
 function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
   const loaders: Array<() => Promise<unknown>> = []
-  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && includeStatic) loaders.push(checkEnv)
+  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isAccountView.value && includeStatic) loaders.push(checkEnv)
 
   if (activeView.value === 'tasks') {
     loaders.push(loadTasks)
@@ -771,6 +778,8 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
     if (refreshChild) loaders.push(async () => { contentRefreshSeq.value += 1 })
   } else if (isAutomationView.value) {
     if (includeStatic || refreshChild) loaders.push(async () => { automationRefreshSeq.value += 1 })
+  } else if (isAccountView.value) {
+    if (includeStatic || refreshChild) loaders.push(async () => { accountRefreshSeq.value += 1 })
   }
   return loaders
 }
@@ -1288,7 +1297,8 @@ async function autoMessageWorkbenchCustomer(row: Dict) {
       dry_run: Boolean(settings.value.auto_dm_fill_only),
       timeout_seconds: Number(settings.value.auto_dm_timeout_seconds || 0),
       message_script: scriptSelection.text,
-      script_label: scriptSelection.label
+      script_label: scriptSelection.label,
+      account_id: String(row.account_id || '')
     })
     ElMessage.success(`自动私信已加入队列：${String(data?.id || '').slice(0, 8)}`)
     await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])

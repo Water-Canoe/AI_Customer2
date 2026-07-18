@@ -83,6 +83,7 @@ def _build_account_analysis_task(
     log_message: str,
     skipped: list[dict[str, Any]] | None = None,
     automation_managed: bool = False,
+    execution_account_id: str = "",
 ) -> dict[str, Any]:
     skipped = skipped or []
     with database.connect() as conn:
@@ -136,6 +137,7 @@ def _build_account_analysis_task(
             max_concurrency=1,
             headless=headless,
             execute_crawler=True,
+            account_id=execution_account_id,
         ),
         automation_managed=automation_managed,
     )
@@ -213,6 +215,7 @@ def create_task_account_analysis_task(
         str(task["keywords"] or task["name"] or source_task_id),
         f"自动竞品分析：来源任务 {source_task_id}，账号 {len(rows)} 个",
         automation_managed=automation_managed,
+        execution_account_id=str(task["account_id"] or ""),
     )
 
 
@@ -362,6 +365,7 @@ def _build_find_customer_task(
     content_count: int | None = None,
     comment_count: int | None = None,
     collect_sub_comments: bool | None = None,
+    execution_account_id: str = "",
 ) -> dict[str, Any]:
     skipped = skipped or []
     defaults = _find_customer_defaults()
@@ -460,6 +464,7 @@ def _build_find_customer_task(
                 max_concurrency=1,
                 headless=defaults["headless"],
                 execute_crawler=True,
+                account_id=execution_account_id,
             ),
             automation_managed=automation_managed,
         )
@@ -513,6 +518,7 @@ def _build_find_customer_task(
                 max_concurrency=1,
                 headless=defaults["headless"],
                 execute_crawler=True,
+                account_id=execution_account_id,
             ),
             automation_managed=automation_managed,
         )
@@ -583,6 +589,7 @@ def create_keyword_find_customer_task(
     content_count: int | None = None,
     comment_count: int | None = None,
     collect_sub_comments: bool | None = None,
+    execution_account_id: str = "",
 ) -> dict[str, Any]:
     keyword_value = keyword or "未标记关键词"
     safe_limit = max(1, min(int(limit), 100))
@@ -614,6 +621,7 @@ def create_keyword_find_customer_task(
         content_count=content_count,
         comment_count=comment_count,
         collect_sub_comments=collect_sub_comments,
+        execution_account_id=execution_account_id,
     )
 
 

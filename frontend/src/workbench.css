@@ -1443,10 +1443,6 @@ button.filter-button,
   white-space: nowrap;
 }
 
-.traffic-login-actions button {
-  white-space: nowrap;
-}
-
 .traffic-env-suggestion {
   margin: 0;
   color: #64748b;
@@ -2685,17 +2681,6 @@ button.filter-button,
 
 .settings-fold-body {
   padding: 0 14px 14px;
-}
-
-.platform-login-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.platform-login-actions .secondary-action {
-  min-width: 118px;
 }
 
 .own-account-grid {
@@ -7229,4 +7214,84 @@ button.filter-button:focus-visible,
 .message-search button:focus-visible {
   outline: 3px solid rgba(15, 118, 110, 0.2);
   outline-offset: 2px;
+}
+.account-center-page {
+  display: grid;
+  gap: 16px;
+}
+
+.account-create-row,
+.account-identity-row,
+.workbench-account-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.account-create-row input {
+  min-width: 240px;
+  flex: 1;
+}
+
+.account-center-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.account-center-card {
+  display: grid;
+  gap: 12px;
+}
+
+.account-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-card-head > div {
+  display: grid;
+  gap: 4px;
+}
+
+.account-identity-row input {
+  min-width: 230px;
+  flex: 1;
+}
+
+.account-identity-row select {
+  min-width: 104px;
+}
+
+.account-feature-list {
+  display: grid;
+  gap: 7px;
+}
+
+.account-feature-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(90px, 1fr) 64px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #dbe7e2;
+  border-radius: 10px;
+}
+
+.account-feature-row.is-disabled {
+  opacity: .48;
+}
+
+.workbench-account-bar {
+  padding: 10px 12px;
+  border: 1px solid #dbe7e2;
+  border-radius: 10px;
+  background: #f7faf8;
+}
+
+.workbench-account-bar select {
+  min-width: 220px;
 }

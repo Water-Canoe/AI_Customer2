@@ -31,6 +31,7 @@ const defaultPlan = () => ({
   action_comment_image: false,
   round_video_limit: 5,
   enabled: true,
+  account_id: '',
 })
 
 // 来源模式取代旧的“定向/随机”独立页面，统一由计划工作台配置。
@@ -66,10 +67,9 @@ export default defineComponent({
     const uploadedImages = ref<Dict[]>([])
     const imageUploading = ref(false)
     const trafficEnv = ref<Dict>({})
+    const accounts = ref<Dict[]>([])
     const envInstalling = ref(false)
     const envInstallResult = ref<Dict | null>(null)
-    const douyinLoginOpening = ref(false)
-    const kuaishouLoginOpening = ref(false)
     const planArchiveFilter = ref('active')
     const runArchiveFilter = ref('active')
     const planPage = ref(1)
@@ -94,6 +94,9 @@ export default defineComponent({
     })
     const pagedSourceVideos = computed(() => pageSlice(filteredSourceVideos.value, sourceVideoPage.value))
     const pagedSourceKeywords = computed(() => pageSlice(keywords.value, sourceKeywordPage.value))
+    const availableAccounts = computed(() => accounts.value.filter(account =>
+      account.platform === planDraft.value.platform && account.enabled && account.features?.includes('traffic')
+    ))
 
     onMounted(loadPage)
     watch(view, () => loadPage())
@@ -119,7 +122,7 @@ export default defineComponent({
 
     async function loadPage() {
       // 四个子页面按需拉取数据，避免进入引流工作台时全量请求。
-      if (view.value === 'traffic-plans') await Promise.all([loadPlans(), loadSources()])
+      if (view.value === 'traffic-plans') await Promise.all([loadPlans(), loadSources(), loadAccounts()])
       else if (view.value === 'traffic-monitor') await Promise.all([loadRuns()])
       else if (view.value === 'traffic-records') await loadRecords()
       else if (view.value === 'traffic-settings') await Promise.all([loadSettings(), loadTrafficEnvironment()])
@@ -180,6 +183,18 @@ export default defineComponent({
       trafficEnv.value = data
     }
 
+    async function loadAccounts() {
+      const { data } = await api.get('/accounts', { params: { feature: 'traffic' } })
+      accounts.value = data
+      selectDefaultAccount()
+    }
+
+    function selectDefaultAccount() {
+      if (availableAccounts.value.some(account => account.id === planDraft.value.account_id)) return
+      const preferred = availableAccounts.value.find(account => account.default_features?.includes('traffic')) || availableAccounts.value[0]
+      planDraft.value.account_id = String(preferred?.id || '')
+    }
+
     async function loadSources() {
       const [keywordResult, videoResult] = await Promise.allSettled([
         api.get('/traffic/source-keywords'),
@@ -204,6 +219,7 @@ export default defineComponent({
         planDraft.value.action_comment_image = false
         ElMessage.info('快手 Web 端暂不支持评论图片')
       }
+      selectDefaultAccount()
     }
 
     function setSourceMode(value: string) {
@@ -223,6 +239,7 @@ export default defineComponent({
         const { data } = await api.post('/traffic/plans', planDraft.value)
         ElMessage.success('引流计划已创建')
         planDraft.value = defaultPlan()
+        selectDefaultAccount()
         await loadPlans()
         if (startNow) await startRun(data.id)
       } catch (error: any) {
@@ -368,30 +385,6 @@ export default defineComponent({
       }
     }
 
-    async function openDouyinLogin() {
-      douyinLoginOpening.value = true
-      try {
-        const { data } = await api.post('/traffic/douyin-login')
-        ElMessage.success(data.message || '抖音登录窗口已打开')
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '抖音登录窗口打开失败')
-      } finally {
-        douyinLoginOpening.value = false
-      }
-    }
-
-    async function openKuaishouLogin() {
-      kuaishouLoginOpening.value = true
-      try {
-        const { data } = await api.post('/settings/platform-login/ks')
-        ElMessage.success(data.message || '快手登录窗口已打开')
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '快手登录窗口打开失败')
-      } finally {
-        kuaishouLoginOpening.value = false
-      }
-    }
-
     async function clearRecords() {
       try {
         await ElMessageBox.confirm('会清除计划列表、批次列表、日志、视频明细、操作记录和防重复账本，并重置素材使用次数；配置项、文案、图片和授权不会删除。', '清除引流记录', { type: 'warning' })
@@ -412,6 +405,7 @@ export default defineComponent({
           renderPlatformTabs(),
           h('div', { class: 'form-grid traffic-plan-form' }, [
             labelInput('计划名称', planDraft.value.name, value => planDraft.value.name = value, 'field-wide', `留空自动生成：${sourceLabel(planDraft.value.source_mode)}-计划ID`),
+            labelSelect('执行账号', planDraft.value.account_id, availableAccounts.value.map(account => [account.id, account.name]), value => planDraft.value.account_id = value),
             labelSelect('来源模式', planDraft.value.source_mode, sourceOptions, setSourceMode),
             labelInput('每轮视频上限', String(planDraft.value.round_video_limit || 5), value => planDraft.value.round_video_limit = value.trim() || 5, '', '', 'number'),
             planDraft.value.source_mode === 'competitor_videos'
@@ -435,8 +429,8 @@ export default defineComponent({
           ]),
           renderSourceShortcuts(),
           h('div', { class: 'task-card-actions traffic-form-actions' }, [
-            h('button', { class: 'primary-soft', disabled: loading.value, onClick: () => createPlan(false) }, '保存计划'),
-            h('button', { class: 'primary-action', disabled: loading.value, onClick: () => createPlan(true) }, '保存并启动'),
+            h('button', { class: 'primary-soft', disabled: loading.value || !planDraft.value.account_id, onClick: () => createPlan(false) }, '保存计划'),
+            h('button', { class: 'primary-action', disabled: loading.value || !planDraft.value.account_id, onClick: () => createPlan(true) }, '保存并启动'),
           ]),
         ]),
         side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
@@ -565,16 +559,8 @@ export default defineComponent({
           ]),
         ]),
         side: () => h('aside', { class: 'pane side-pane traffic-settings-side traffic-split-side' }, [
-          sectionTitle({ title: '抖音登录态', subtitle: '扫码后用于引流执行', icon: VideoPlay, tone: 'blue', compact: true }),
-          h('p', { class: 'traffic-env-suggestion' }, '扫码后请保持登录窗口打开，确认登录稳定后再手动关闭。'),
-          h('div', { class: 'task-card-actions traffic-login-actions' }, [
-            h('button', { class: 'primary-action', disabled: douyinLoginOpening.value, onClick: openDouyinLogin }, douyinLoginOpening.value ? '打开中...' : '打开抖音登录窗口'),
-          ]),
-          sectionTitle({ title: '快手登录态', subtitle: '登录后用于快手推荐流引流', icon: VideoPlay, tone: 'green', compact: true }),
-          h('p', { class: 'traffic-env-suggestion' }, '快手使用独立登录态；登录后请确认推荐流能正常播放，再手动关闭窗口。'),
-          h('div', { class: 'task-card-actions traffic-login-actions' }, [
-            h('button', { class: 'primary-action', disabled: kuaishouLoginOpening.value, onClick: openKuaishouLogin }, kuaishouLoginOpening.value ? '打开中...' : '打开快手登录窗口'),
-          ]),
+          sectionTitle({ title: '登录态', subtitle: '统一由账号中心维护', icon: VideoPlay, tone: 'blue', compact: true }),
+          h('p', { class: 'traffic-env-suggestion' }, '引流计划会固定使用创建时选择的账号；扫码登录、状态检查和默认账号请到账号中心处理。'),
           renderTrafficEnvironment(),
           sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Delete, tone: 'red', compact: true }),
           h('button', { class: 'text-icon-button danger', onClick: clearRecords }, [h(Delete, { class: 'inline-icon' }), '清除引流记录']),

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from playwright.async_api import Page
 
-from app.publish_engine.browser import launch_publish_context
+from app.publish_engine.browser import launch_publish_context, profile_has_state
 from app.publish_engine.conf import DEBUG_MODE, LOCAL_CHROME_HEADLESS
 from app.publish_engine.uploader.base_video import BaseVideoUploader
 from app.publish_engine.utils.login_qrcode import build_login_qrcode_path
@@ -68,7 +68,7 @@ async def cookie_auth(account_file):
 
 
 async def douyin_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, headless: bool = LOCAL_CHROME_HEADLESS):
-    if not os.path.exists(account_file) or not await cookie_auth(account_file):
+    if not profile_has_state(account_file) or not await cookie_auth(account_file):
         if not handle:
             result = _build_login_result(False, "cookie_invalid", "cookie文件不存在或已失效", account_file)
             return result if return_detail else False
@@ -203,7 +203,7 @@ async def douyin_cookie_gen(
     max_checks: int = 60,
     headless: bool = LOCAL_CHROME_HEADLESS,
 ):
-    context = await launch_publish_context(headless=headless)
+    context = await launch_publish_context(headless=headless, account_file=account_file)
     try:
         qrcode_path = None
         result = _build_login_result(False, "failed", "抖音登录失败", account_file)
@@ -223,16 +223,7 @@ async def douyin_cookie_gen(
             )
             if result["success"]:
                 await asyncio.sleep(2)
-                await context.storage_state(path=account_file)
-                if not await cookie_auth(account_file):
-                    result = _build_login_result(
-                        False,
-                        "cookie_invalid",
-                        "抖音扫码流程结束，但 cookie 校验失败",
-                        account_file,
-                        qrcode_info,
-                        page.url,
-                    )
+                # 持久化 Profile 会在当前上下文关闭时保存，不能并发打开同一目录复检。
         except Exception as exc:
             result = _build_login_result(False, "failed", str(exc), account_file, current_url=page.url if "page" in locals() else "")
         finally:
@@ -700,8 +691,7 @@ class DouYinVideo(DouYinBaseUploader):
                     await page.screenshot(full_page=True)
                 await asyncio.sleep(0.5)
 
-        await context.storage_state(path=self.account_file)
-        douyin_logger.success(_msg("🥳", "cookie 更新完毕"))
+        douyin_logger.success(_msg("🥳", "登录态已持久化"))
         await asyncio.sleep(2)
         await context.close()
 
@@ -839,8 +829,7 @@ class DouYinNote(DouYinBaseUploader):
             upload_success = True
         finally:
             if upload_success:
-                await context.storage_state(path=self.account_file)
-                douyin_logger.success(_msg("🥳", "cookie 更新完毕"))
+                douyin_logger.success(_msg("🥳", "登录态已持久化"))
                 await asyncio.sleep(2)
             await context.close()
 

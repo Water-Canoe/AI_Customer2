@@ -1,4 +1,4 @@
-from app.routers import ai, message, overview, runtime, system, tasks, traffic
+from app.routers import accounts, ai, automation, content, message, overview, runtime, system, tasks, traffic
 
 
-__all__ = ["ai", "message", "overview", "runtime", "system", "tasks", "traffic"]
+__all__ = ["accounts", "ai", "automation", "content", "message", "overview", "runtime", "system", "tasks", "traffic"]

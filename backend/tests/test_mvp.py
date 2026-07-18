@@ -33,14 +33,32 @@ def prepare_project(tmp_path: Path) -> tuple[Path, Path]:
     project_db = tmp_path / "ai_customer.sqlite3"
     raw_db = tmp_path / "sqlite_tables.db"
     os.environ["AI_CUSTOMER_DB"] = str(project_db)
+    os.environ["AI_CUSTOMER_DATA_DIR"] = str(tmp_path / "data")
     from app import database
 
     database.init_db()
+    create_ready_test_account()
+    create_ready_test_account("ks")
     create_raw_db(raw_db)
     with database.connect() as conn:
         database.set_setting(conn, "media_crawler_db_path", str(raw_db))
         database.set_setting(conn, "media_crawler_path", str(tmp_path))
     return project_db, raw_db
+
+
+def create_ready_test_account(platform: str = "dy") -> dict[str, object]:
+    from app.services import account_center, content_publish
+
+    account = account_center.create_account(
+        platform,
+        f"{platform}-测试执行账号",
+        "test",
+        ["acquisition", "message", "traffic"],
+        ["acquisition", "message", "traffic"],
+    )
+    content_publish.set_account_state(str(account["id"]), "ready", checked=True)
+    account_center.set_all_feature_status(str(account["id"]), "ready")
+    return account_center.get_account(str(account["id"]))
 
 
 def expanded_overview_tree(views) -> list[dict]:
@@ -135,20 +153,13 @@ def test_packaged_launcher_uses_portable_program_and_environment_dirs(tmp_path: 
     assert os.environ["CLOAKBROWSER_BINARY_PATH"] == str(cloakbrowser_binary)
 
 
-def test_packaged_launcher_routes_internal_login_without_starting_workbench(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_packaged_launcher_has_no_fragmented_internal_login_mode(tmp_path: Path) -> None:
     launcher_path = BACKEND_ROOT.parent / "packaging" / "ai_customer_launcher.py"
     spec = importlib.util.spec_from_file_location("ai_customer_launcher_internal_test", launcher_path)
     assert spec and spec.loader
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
-    from app.services import traffic_workbench
-
-    calls: list[str] = []
-    monkeypatch.setattr(sys, "argv", ["AI_Customer.exe", "--internal-platform-login", "dy"])
-    monkeypatch.setattr(traffic_workbench, "_hold_platform_login_window", calls.append)
-
-    assert launcher.run_internal_mode(tmp_path) is True
-    assert calls == ["dy"]
+    assert not hasattr(launcher, "run_internal_mode")
 
 
 def create_raw_db(raw_db: Path) -> None:
@@ -894,6 +905,7 @@ def test_new_database_uses_current_traffic_run_schema(tmp_path: Path) -> None:
     from app.services import traffic_workbench
 
     database.init_db()
+    create_ready_test_account()
     with database.connect() as conn:
         columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(traffic_runs)").fetchall()}
 
@@ -1997,143 +2009,42 @@ def test_traffic_environment_install_runs_dependency_commands(tmp_path: Path, mo
     assert calls[2] == [sys.executable, "-m", "cloakbrowser", "doctor", "--quick", "--json"]
 
 
-def test_traffic_open_douyin_login_uses_shared_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    prepare_project(tmp_path)
-    from app.services import profile_manager, traffic_workbench
-
-    calls: dict[str, object] = {}
-
-    class Proc:
-        pid = 103
-
-        def poll(self) -> None:
-            return None
-
-    def fake_popen(command: list[str], **kwargs: object) -> Proc:
-        calls["command"] = command
-        calls["cwd"] = kwargs.get("cwd")
-        return Proc()
-
-    # 登录窗口只校验启动参数，不真实打开浏览器。
-    profile_manager.shutdown()
-    monkeypatch.setattr(profile_manager.time, "sleep", lambda _: None)
-    monkeypatch.setattr(profile_manager.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(profile_manager, "_terminate_process_tree", lambda process, timeout_seconds=5.0: None)
-    monkeypatch.setattr(
-        traffic_workbench.importlib.util,
-        "find_spec",
-        lambda name: object() if name in {"playwright", "cloakbrowser"} else None,
-    )
-
-    result = traffic_workbench.open_douyin_login_window()
-    profile_manager.close_interactive()
-
-    assert result["ok"] is True
-    assert "profile_dir" not in result
-    assert calls["cwd"] == str(BACKEND_ROOT)
-    assert calls["command"] == [
-        sys.executable,
-        "-c",
-        "from app.services.traffic_workbench import _hold_platform_login_window; _hold_platform_login_window('dy')",
-    ]
-
-
-def test_packaged_traffic_checks_do_not_restart_main_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    prepare_project(tmp_path)
-    from app.services import profile_manager, traffic_workbench
-
-    binary = tmp_path / "cloakbrowser" / "chrome.exe"
-    binary.parent.mkdir()
-    binary.touch()
-    calls: dict[str, object] = {}
-
-    class Proc:
-        pid = 104
-
-        def poll(self) -> None:
-            return None
-
-    def fake_popen(command: list[str], **_kwargs: object) -> Proc:
-        calls["command"] = command
-        return Proc()
-
-    monkeypatch.setattr(traffic_workbench.sys, "frozen", True, raising=False)
-    monkeypatch.setenv("CLOAKBROWSER_BINARY_PATH", str(binary))
-    monkeypatch.setattr(traffic_workbench.importlib.util, "find_spec", lambda _: object())
-    monkeypatch.setattr(traffic_workbench.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("不应启动主程序"))
-    monkeypatch.setattr(profile_manager.time, "sleep", lambda _: None)
-    monkeypatch.setattr(profile_manager.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(profile_manager, "_terminate_process_tree", lambda process, timeout_seconds=5.0: None)
-    profile_manager.shutdown()
-
-    assert traffic_workbench.install_environment()["ok"] is True
-    assert traffic_workbench.open_douyin_login_window()["ok"] is True
-    profile_manager.close_interactive()
-    assert calls["command"] == [sys.executable, "--internal-platform-login", "dy"]
-
-
-def test_settings_platform_login_route_supports_xhs_and_kuaishou(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_account_center_replaces_scattered_login_routes(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app.main import app
-    from app.services import traffic_workbench
+    paths = app.openapi()["paths"]
 
-    calls: list[str] = []
-
-    def fake_open(platform: str) -> dict[str, object]:
-        calls.append(platform)
-        return {"ok": True, "message": f"{platform} ok"}
-
-    monkeypatch.setattr(traffic_workbench, "open_platform_login_window", fake_open)
-
-    xhs_response = TestClient(app).post("/api/settings/platform-login/xhs")
-    ks_response = TestClient(app).post("/api/settings/platform-login/ks")
-
-    assert xhs_response.status_code == 200
-    assert ks_response.status_code == 200
-    assert calls == ["xhs", "ks"]
+    # 所有平台登录都从账号中心进入，旧入口不再保留。
+    assert "/api/accounts" in paths
+    assert "/api/accounts/{account_id}/login" in paths
+    assert "/api/accounts/{account_id}/check" in paths
+    assert "/api/settings/platform-login/{platform}" not in paths
+    assert "/api/traffic/douyin-login" not in paths
+    assert "/api/content/publish-accounts" not in paths
+    assert "/api/runtime/profile" not in paths
 
 
-def test_traffic_login_window_waits_for_manual_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    prepare_project(tmp_path)
-    from app.services import traffic_workbench
-
-    calls: dict[str, object] = {"waits": 0}
-
-    class FakePage:
-        def goto(self, url: str, **_: object) -> None:
-            calls["url"] = url
-
-        def wait_for_timeout(self, _: int) -> None:
-            calls["waits"] = int(calls["waits"]) + 1
-            raise RuntimeError("manual close")
-
-    class FakeContext:
-        pages = [FakePage()]
-
-    def fail_read_active_video(*_: object) -> None:
-        raise AssertionError("login window should not detect login state")
-
-    monkeypatch.setattr(traffic_workbench, "_launch_context", lambda *_: FakeContext())
-    monkeypatch.setattr(traffic_workbench, "_read_active_video", fail_read_active_video)
-
-    with pytest.raises(RuntimeError, match="manual close"):
-        traffic_workbench._hold_douyin_login_window()
-
-    assert calls["url"] == "https://www.douyin.com/?recommend=1"
-    assert calls["waits"] == 1
-
-
-def test_traffic_douyin_login_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_account_login_route_enqueues_generic_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.main import app
-    from app.services import traffic_workbench
+    from app.services import account_center, job_queue
 
-    monkeypatch.setattr(traffic_workbench, "open_douyin_login_window", lambda: {"ok": True, "message": "ok"})
+    account = account_center.list_accounts(platform="dy")[0]
+    calls: list[tuple[str, str]] = []
 
-    response = TestClient(app).post("/api/traffic/douyin-login")
+    def fake_enqueue(account_id: str, action: str) -> dict[str, object]:
+        calls.append((account_id, action))
+        return {"ok": True, "account_id": account_id, "action": action}
+
+    monkeypatch.setattr(job_queue, "enqueue_account_job", fake_enqueue)
+
+    response = TestClient(app).post(f"/api/accounts/{account['id']}/login")
 
     assert response.status_code == 200
-    assert response.json()["ok"] is True
+    assert calls == [(account["id"], "login")]
+    updated = account_center.get_account(str(account["id"]))
+    assert updated["status"] == "checking"
+    assert {item["status"] for item in updated["feature_status"].values()} == {"checking"}
 
 
 def test_traffic_random_feed_starts_from_homepage(tmp_path: Path) -> None:
@@ -2493,6 +2404,7 @@ def test_traffic_kuaishou_random_feed_can_start_and_unsupported_modes_are_reject
     with pytest.raises(ValueError, match="随机推荐流"):
         traffic_workbench.create_run(search_plan["id"])
 
+    create_ready_test_account("xhs")
     xhs_plan = traffic_workbench.create_plan(TrafficPlanCreate(name="小红书计划", platform="xhs"))
     with pytest.raises(ValueError, match="正在开发"):
         traffic_workbench.create_run(xhs_plan["id"])
@@ -3732,14 +3644,15 @@ def test_cdp_existing_mode_auto_launches_browser(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(crawler_adapter, "_wait_for_tcp_port", lambda host, port, timeout_seconds: True)
     monkeypatch.setitem(sys.modules, "cloakbrowser", fake_cloakbrowser)
 
-    message = crawler_adapter._ensure_cdp_browser_for_existing_mode(media_dir, headless=False)
+    profile_dir = tmp_path / "account-profile"
+    message = crawler_adapter._ensure_cdp_browser_for_existing_mode(media_dir, headless=False, user_data_dir=profile_dir)
 
     assert "9333" in str(message)
     assert "CloakBrowser" in str(message)
     assert launch_calls
     assert launch_calls[0]["headless"] is False
     assert "--remote-debugging-port=9333" in launch_calls[0]["args"]
-    assert str(launch_calls[0]["profile_dir"]).endswith("douyin_cloak_profile")
+    assert Path(str(launch_calls[0]["profile_dir"])) == profile_dir
     assert launch_calls[0]["viewport"] is None
 
 
@@ -4713,7 +4626,10 @@ def test_message_workbench_auto_message_uses_shared_profile_and_marks_sent(tmp_p
     assert result["ok"] is True
     assert calls[0]["user_url"] == "https://www.douyin.com/user/test-lead"
     assert calls[0]["message"] == "你好，方便沟通需求吗？"
-    assert calls[0]["profile_dir"] == database.get_douyin_cloak_profile_dir()
+    from app.services import account_center
+
+    account_id = account_center.resolve_account_id("dy", "message")
+    assert calls[0]["profile_dir"] == account_center.profile_path(account_id, "message")
     with database.connect() as conn:
         row = conn.execute("SELECT follow_status FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone()
         assert row["follow_status"] == "已私信"

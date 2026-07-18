@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from app import database
 from app.schemas import TrafficAutomationPlanConfig, TrafficPlanCreate, TrafficSettingsUpdate
-from app.services import browser_queue, profile_manager
+from app.services import account_center, browser_queue
 
 
 # 引流设置默认值只覆盖缺失项，避免覆盖用户在设置页保存的配置。
@@ -33,8 +33,6 @@ TRAFFIC_SETTING_KEYS = {
 }
 
 TRAFFIC_IMAGE_DIR = database.get_data_root() / "traffic_images"
-TRAFFIC_DOUYIN_PROFILE_DIR = database.get_douyin_cloak_profile_dir()
-TRAFFIC_KUAISHOU_PROFILE_DIR = database.get_data_root() / "kuaishou_cloak_profile"
 TRAFFIC_LAST_VIDEO_URL_KEY = "traffic_last_douyin_video_url"
 KUAISHOU_RECO_URL = "https://www.kuaishou.com/new-reco"
 TRAFFIC_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -56,11 +54,6 @@ SOURCE_MODE_LABELS = {
     "competitor_videos": "拓客竞品视频",
     "collected_keyword": "已采集关键词",
     "search_keyword": "手动搜索关键词",
-}
-PLATFORM_LOGIN_TARGETS = {
-    "dy": {"label": "抖音", "url": "https://www.douyin.com/?recommend=1"},
-    "xhs": {"label": "小红书", "url": "https://www.xiaohongshu.com/explore"},
-    "ks": {"label": "快手", "url": "https://www.kuaishou.com/"},
 }
 TRAFFIC_REVIEW_SESSIONS: list[dict[str, Any]] = []
 COMMENT_EDITOR_SELECTOR = "#videoSideCard .comment-input-inner-container textarea, #videoSideCard .comment-input-inner-container [contenteditable='true'], #videoSideBar .comment-input-inner-container textarea, #videoSideBar .comment-input-inner-container [contenteditable='true']"
@@ -97,15 +90,18 @@ def get_plan(plan_id: str) -> dict[str, Any] | None:
 def create_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
     plan_id = uuid.uuid4().hex
     plan = _normalize_plan(payload, plan_id)
+    plan["account_id"] = account_center.resolve_account_id(
+        plan["platform"], "traffic", plan["account_id"], require_ready=False
+    )
     with database.connect() as conn:
         conn.execute(
             """
             INSERT INTO traffic_plans(
                 id, name, platform, source_mode, source_value,
                 action_like, action_collect, action_follow,
-                action_comment_text, action_comment_image, round_video_limit, enabled
+                action_comment_text, action_comment_image, round_video_limit, enabled, account_id
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 plan_id,
@@ -120,6 +116,7 @@ def create_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
                 int(plan["action_comment_image"]),
                 int(plan["round_video_limit"]),
                 int(plan["enabled"]),
+                plan["account_id"],
             ),
         )
     created = get_plan(plan_id)
@@ -133,6 +130,7 @@ def create_automation_run(automation_run_id: str, plan_name: str, config: Traffi
     run_id = f"automation:{automation_run_id}"
     payload = TrafficPlanCreate(name=plan_name, enabled=True, **config.model_dump())
     plan = _normalize_plan(payload, plan_id)
+    plan["account_id"] = account_center.resolve_account_id(plan["platform"], "traffic", plan["account_id"])
     _validate_run_plan({**plan, "actions": _plan_actions(plan)})
     with database.connect() as conn:
         existing_plan = conn.execute("SELECT automation_managed FROM traffic_plans WHERE id = ?", (plan_id,)).fetchone()
@@ -145,8 +143,8 @@ def create_automation_run(automation_run_id: str, plan_name: str, config: Traffi
                     id, name, platform, source_mode, source_value,
                     action_like, action_collect, action_follow,
                     action_comment_text, action_comment_image, round_video_limit,
-                    enabled, automation_managed
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+                    enabled, automation_managed, account_id
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?)
                 """,
                 (
                     plan_id,
@@ -160,10 +158,11 @@ def create_automation_run(automation_run_id: str, plan_name: str, config: Traffi
                     int(plan["action_comment_text"]),
                     int(plan["action_comment_image"]),
                     int(plan["round_video_limit"]),
+                    plan["account_id"],
                 ),
             )
         if not conn.execute("SELECT 1 FROM traffic_runs WHERE id = ?", (run_id,)).fetchone():
-            _insert_run(conn, run_id, plan_id)
+            _insert_run(conn, run_id, plan_id, plan["account_id"])
             _insert_log(
                 conn,
                 run_id,
@@ -181,6 +180,9 @@ def create_automation_run(automation_run_id: str, plan_name: str, config: Traffi
 
 def update_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, Any]:
     plan = _normalize_plan(payload, plan_id)
+    plan["account_id"] = account_center.resolve_account_id(
+        plan["platform"], "traffic", plan["account_id"], require_ready=False
+    )
     with database.connect() as conn:
         row = conn.execute("SELECT id FROM traffic_plans WHERE id = ?", (plan_id,)).fetchone()
         if not row:
@@ -191,6 +193,7 @@ def update_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, Any]:
             SET name = ?, platform = ?, source_mode = ?, source_value = ?,
                 action_like = ?, action_collect = ?, action_follow = ?,
                 action_comment_text = ?, action_comment_image = ?, round_video_limit = ?, enabled = ?,
+                account_id = ?,
                 updated_at = datetime('now', 'localtime')
             WHERE id = ?
             """,
@@ -206,6 +209,7 @@ def update_plan(plan_id: str, payload: TrafficPlanCreate) -> dict[str, Any]:
                 int(plan["action_comment_image"]),
                 int(plan["round_video_limit"]),
                 int(plan["enabled"]),
+                plan["account_id"],
                 plan_id,
             ),
         )
@@ -277,9 +281,11 @@ def create_run(plan_id: str) -> dict[str, Any]:
     if plan.get("archived"):
         raise ValueError("该计划已归档，请先恢复后再启动")
     _validate_run_plan(plan)
+    account_id = account_center.resolve_account_id(str(plan["platform"]), "traffic", str(plan.get("account_id") or ""))
     run_id = uuid.uuid4().hex
     with database.connect() as conn:
-        _insert_run(conn, run_id, plan_id)
+        conn.execute("UPDATE traffic_plans SET account_id = ? WHERE id = ?", (account_id, plan_id))
+        _insert_run(conn, run_id, plan_id, account_id)
         _insert_log(
             conn,
             run_id,
@@ -295,8 +301,8 @@ def create_run(plan_id: str) -> dict[str, Any]:
     return run
 
 
-def _insert_run(conn: Any, run_id: str, plan_id: str) -> None:
-    columns = {"id": run_id, "plan_id": plan_id, "status": "queued"}
+def _insert_run(conn: Any, run_id: str, plan_id: str, account_id: str) -> None:
+    columns = {"id": run_id, "plan_id": plan_id, "status": "queued", "account_id": account_id}
     table_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(traffic_runs)").fetchall()}
     if "campaign_id" in table_columns:
         # 早期原型表保留了 NOT NULL 旧列；写入占位值即可，不参与新版逻辑。
@@ -648,53 +654,6 @@ def install_environment() -> dict[str, Any]:
     return {"ok": all(step["ok"] for step in steps), "steps": steps, "check": environment_check()}
 
 
-def open_platform_login_window(platform: str) -> dict[str, Any]:
-    target = PLATFORM_LOGIN_TARGETS.get(platform)
-    if not target:
-        raise ValueError("不支持的平台登录配置")
-    if importlib.util.find_spec("playwright") is None:
-        raise ValueError("缺少 Python Playwright 依赖，请先在引流设置执行环境检查并自动安装")
-    if importlib.util.find_spec("cloakbrowser") is None:
-        raise ValueError("缺少 Python CloakBrowser 依赖，请先在引流设置执行环境检查并自动安装")
-    active = profile_manager.status()
-    if active["interactive_active"]:
-        active_target = PLATFORM_LOGIN_TARGETS.get(str(active["interactive_platform"])) or target
-        return {
-            "ok": True,
-            "message": f"{active_target['label']}登录窗口已经打开。三个平台共用登录会话，请关闭当前窗口后再打开其它平台。",
-        }
-
-    runtime_dir = database.get_data_root()
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    log_path = runtime_dir / f"platform_{platform}_login.log"
-    # 打包后 sys.executable 是主程序本身，只能通过内部参数启动登录子进程。
-    command = (
-        [sys.executable, "--internal-platform-login", platform]
-        if getattr(sys, "frozen", False)
-        else [
-            sys.executable,
-            "-c",
-            f"from app.services.traffic_workbench import _hold_platform_login_window; _hold_platform_login_window('{platform}')",
-        ]
-    )
-    result = profile_manager.launch_interactive(
-        platform,
-        command,
-        cwd=database.BACKEND_ROOT,
-        log_path=log_path,
-    )
-    if not result["started"]:
-        return {"ok": True, "message": f"{target['label']}登录窗口已经打开。"}
-    return {
-        "ok": True,
-        "message": f"{target['label']}登录窗口已打开。登录完成后可手动关闭窗口。",
-    }
-
-
-def open_douyin_login_window() -> dict[str, Any]:
-    return open_platform_login_window("dy")
-
-
 def source_keywords() -> list[dict[str, Any]]:
     # 关键词直接来自拓客工作台已入库内容，计划页只负责点击填入。
     with database.connect() as conn:
@@ -738,6 +697,7 @@ def run_traffic_run(run_id: str) -> None:
     plan = get_plan(str(run["plan_id"]))
     if not plan:
         return
+    plan["account_id"] = str(run.get("account_id") or plan.get("account_id") or "")
     _mark_run_running(run_id)
     try:
         with browser_queue.browser_slot(
@@ -816,8 +776,14 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     close_browser_on_failure = _bool_setting(settings, "traffic_close_browser_on_failure", True)
     headless = _bool_setting(settings, "traffic_headless", False)
     action_probability = _int_setting(settings, "traffic_action_probability", 60, 0, 100)
+    account_id = account_center.resolve_account_id(
+        str(plan.get("platform") or "dy"),
+        "traffic",
+        str(plan.get("account_id") or ""),
+    )
+    profile_dir = account_center.profile_path(account_id, "traffic")
     if plan.get("platform") == "ks":
-        return _run_kuaishou_with_playwright(run_id, plan, PlaywrightTimeoutError)
+        return _run_kuaishou_with_playwright(run_id, plan, PlaywrightTimeoutError, profile_dir)
     action_budget = max(0, daily_action_limit - _daily_action_count("dy"))
     no_progress_count = 0
     project_author_keys: set[str] = set()
@@ -825,7 +791,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     context = None
     close_context = True
     try:
-        context = _launch_context(TRAFFIC_DOUYIN_PROFILE_DIR, headless)
+        context = _launch_context(profile_dir, headless)
         page = context.pages[0] if context.pages else context.new_page()
         video_cache = _setup_video_data_cache(page)
         try:
@@ -982,7 +948,12 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
-def _run_kuaishou_with_playwright(run_id: str, plan: dict[str, Any], timeout_error: Any) -> dict[str, str]:
+def _run_kuaishou_with_playwright(
+    run_id: str,
+    plan: dict[str, Any],
+    timeout_error: Any,
+    profile_dir: Path,
+) -> dict[str, str]:
     settings = get_settings()["values"]
     limit = int(plan.get("round_video_limit") or 5)
     daily_action_limit = _int_setting(settings, "traffic_daily_action_limit", 50, 0, 1000)
@@ -996,7 +967,7 @@ def _run_kuaishou_with_playwright(run_id: str, plan: dict[str, Any], timeout_err
     context = None
     close_context = True
     try:
-        context = _launch_context(TRAFFIC_KUAISHOU_PROFILE_DIR, headless)
+        context = _launch_context(profile_dir, headless)
         page = context.pages[0] if context.pages else context.new_page()
         video_cache = _setup_kuaishou_data_cache(page)
         target_url = _target_url(plan)
@@ -1106,27 +1077,6 @@ def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     return default
-
-
-def _hold_douyin_login_window() -> None:
-    _hold_platform_login_window("dy")
-
-
-def _hold_platform_login_window(platform: str) -> None:
-    target = PLATFORM_LOGIN_TARGETS.get(platform)
-    if not target:
-        raise ValueError("不支持的平台登录配置")
-    # 登录和安全验证必须可见，执行批次才允许无头。
-    context = _launch_context(_traffic_profile_dir(platform), False)
-    page = context.pages[0] if context.pages else context.new_page()
-    page.goto(str(target["url"]), wait_until="domcontentloaded", timeout=60_000)
-    while True:
-        # 登录窗口只负责保活，不检测登录状态，避免扫码后自动化读页触发窗口关闭。
-        page.wait_for_timeout(1000)
-
-
-def _traffic_profile_dir(platform: str) -> Path:
-    return TRAFFIC_KUAISHOU_PROFILE_DIR if platform == "ks" else TRAFFIC_DOUYIN_PROFILE_DIR
 
 
 def _launch_context(profile_dir: Path, headless: bool = False) -> Any:
@@ -2988,6 +2938,7 @@ def _normalize_plan(payload: TrafficPlanCreate, plan_id: str = "") -> dict[str, 
         "action_comment_image": payload.action_comment_image,
         "round_video_limit": payload.round_video_limit,
         "enabled": payload.enabled,
+        "account_id": payload.account_id,
     }
 
 

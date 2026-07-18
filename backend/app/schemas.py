@@ -35,6 +35,7 @@ class TaskCreate(BaseModel):
     tcp_mode: bool = True
     headless: bool = False
     execute_crawler: bool = True
+    account_id: str = ""
 
 
 class TableUpdate(BaseModel):
@@ -66,15 +67,25 @@ class ContentVideoOutputUpdate(BaseModel):
     upload_status: Literal["not_uploaded", "uploaded"]
 
 
-class ContentPublishAccountCreate(BaseModel):
-    platform: Literal["dy", "ks", "xhs"]
+AccountRole = Literal["brand", "service", "operations", "traffic", "test"]
+AccountFeature = Literal["acquisition", "message", "traffic", "publish"]
+
+
+class PlatformAccountCreate(BaseModel):
+    platform: Platform
     name: str = Field(min_length=1, max_length=100)
+    role: AccountRole
+    features: list[AccountFeature] = Field(default_factory=list, max_length=4)
+    default_features: list[AccountFeature] = Field(default_factory=list, max_length=4)
 
 
-class ContentPublishAccountUpdate(BaseModel):
+class PlatformAccountUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
+    role: AccountRole | None = None
+    platform_user_id: str | None = Field(default=None, max_length=200)
     enabled: bool | None = None
-    is_default: bool | None = None
+    features: list[AccountFeature] | None = Field(default=None, max_length=4)
+    default_features: list[AccountFeature] | None = Field(default=None, max_length=4)
 
 
 class ContentPublishSource(BaseModel):
@@ -161,6 +172,7 @@ class TrafficPlanCreate(BaseModel):
     action_comment_image: bool = False
     round_video_limit: int = Field(default=5, ge=1, le=200)
     enabled: bool = True
+    account_id: str = ""
 
 
 class TrafficSettingsUpdate(BaseModel):
@@ -224,6 +236,7 @@ class CustomerAutoMessageRequest(BaseModel):
     timeout_seconds: int = Field(default=0, ge=0, le=3600)
     message_script: str = ""
     script_label: str = ""
+    account_id: str = ""
 
 
 class MessageAutoBatchCreate(BaseModel):
@@ -232,6 +245,7 @@ class MessageAutoBatchCreate(BaseModel):
     count: int = Field(default=10, ge=1, le=200)
     interval_min_seconds: int = Field(default=30, ge=0, le=3600)
     interval_max_seconds: int = Field(default=60, ge=0, le=3600)
+    account_id: str = ""
 
 
 class KeywordLeadPlanConfig(BaseModel):
@@ -247,6 +261,7 @@ class KeywordLeadPlanConfig(BaseModel):
     auto_delete_non_competitors: bool = False
     auto_analyze_leads: bool = True
     auto_delete_non_customers: bool = False
+    acquisition_account_id: str = ""
 
     @model_validator(mode="after")
     def normalize_keywords(self) -> "KeywordLeadPlanConfig":
@@ -268,6 +283,7 @@ class MessagePlanConfig(BaseModel):
     fixed_script: str = Field(default="", max_length=2000)
     interval_min_seconds: int = Field(default=30, ge=0, le=3600)
     interval_max_seconds: int = Field(default=60, ge=0, le=3600)
+    account_id: str = ""
 
     @model_validator(mode="after")
     def validate_dependencies(self) -> "MessagePlanConfig":
@@ -291,6 +307,7 @@ class TrafficAutomationPlanConfig(BaseModel):
     action_comment_text: bool = False
     action_comment_image: bool = False
     round_video_limit: int = Field(default=5, ge=1, le=200)
+    account_id: str = ""
 
     @model_validator(mode="after")
     def validate_dependencies(self) -> "TrafficAutomationPlanConfig":

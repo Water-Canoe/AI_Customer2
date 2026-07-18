@@ -9,7 +9,7 @@ from pathlib import Path
 
 from playwright.async_api import Page
 
-from app.publish_engine.browser import launch_publish_context
+from app.publish_engine.browser import launch_publish_context, profile_has_state
 from app.publish_engine.conf import DEBUG_MODE, LOCAL_CHROME_HEADLESS
 from app.publish_engine.uploader.base_video import BaseVideoUploader
 from app.publish_engine.utils.login_qrcode import build_login_qrcode_path
@@ -195,7 +195,7 @@ async def xiaohongshu_setup(
     qrcode_callback=None,
     headless: bool = LOCAL_CHROME_HEADLESS,
 ):
-    if not os.path.exists(account_file) or not await cookie_auth(account_file):
+    if not profile_has_state(account_file) or not await cookie_auth(account_file):
         if not handle:
             result = _build_login_result(False, "cookie_invalid", "cookie文件不存在或已失效", account_file)
             return result if return_detail else False
@@ -224,7 +224,7 @@ async def xiaohongshu_cookie_gen(
     account_path = Path(account_file)
     account_path.parent.mkdir(parents=True, exist_ok=True)
 
-    context = await launch_publish_context(headless=headless)
+    context = await launch_publish_context(headless=headless, account_file=account_file)
     try:
         qrcode_path = None
         qrcode_info = None
@@ -239,19 +239,9 @@ async def xiaohongshu_cookie_gen(
             for _ in range(max_checks):
                 if await _is_xhs_login_completed(page):
                     await asyncio.sleep(2)
-                    await context.storage_state(path=account_file)
-                    if await cookie_auth(account_file):
-                        xiaohongshu_logger.success(_msg("🥳", "小红书扫码登录成功，小人开心收工"))
-                        result = _build_login_result(True, "success", "小红书扫码登录成功", account_file, qrcode_info, page.url)
-                    else:
-                        result = _build_login_result(
-                            False,
-                            "cookie_invalid",
-                            "小红书扫码流程结束，但 cookie 校验失败",
-                            account_file,
-                            qrcode_info,
-                            page.url,
-                        )
+                    # 当前持久化 Profile 关闭后即落盘，避免并发打开同一目录导致锁冲突。
+                    xiaohongshu_logger.success(_msg("🥳", "小红书扫码登录成功，小人开心收工"))
+                    result = _build_login_result(True, "success", "小红书扫码登录成功", account_file, qrcode_info, page.url)
                     return result
 
                 await asyncio.sleep(poll_interval)
@@ -621,8 +611,7 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
         try:
             page = await context.new_page()
             await self.upload_video_content(page)
-            await context.storage_state(path=self.account_file)
-            xiaohongshu_logger.success(_msg("🥳", "cookie 更新完毕"))
+            xiaohongshu_logger.success(_msg("🥳", "登录态已持久化"))
         finally:
             await context.close()
 
@@ -743,8 +732,7 @@ class XiaoHongShuNote(XiaoHongShuBaseUploader):
         try:
             page = await context.new_page()
             await self.upload_note_content(page)
-            await context.storage_state(path=self.account_file)
-            xiaohongshu_logger.success(_msg("🥳", "cookie 更新完毕"))
+            xiaohongshu_logger.success(_msg("🥳", "登录态已持久化"))
         finally:
             await context.close()
 
