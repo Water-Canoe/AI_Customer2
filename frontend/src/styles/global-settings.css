@@ -313,6 +313,49 @@
   color: #b91c1c;
 }
 
+.account-login-scopes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.account-login-scope {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #dbe7e2;
+  border-radius: 12px;
+  background: #f8fcfb;
+}
+
+.account-login-scope.is-disabled {
+  background: #f8fafc;
+  opacity: .6;
+}
+
+.account-login-scope-head,
+.account-login-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.account-login-scope-head strong {
+  color: #233044;
+  font-size: 14px;
+}
+
+.account-login-scope .content-job-error {
+  margin: 0;
+  font-size: 12px;
+}
+
+.account-login-actions button {
+  flex: 1;
+  min-width: 0;
+}
+
 .account-center-card > .task-card-actions {
   display: flex;
   justify-content: flex-end;
@@ -372,6 +415,10 @@
 
   .account-center-card > .task-card-actions {
     display: grid;
+  }
+
+  .account-login-scopes {
+    grid-template-columns: 1fr;
   }
 }
 

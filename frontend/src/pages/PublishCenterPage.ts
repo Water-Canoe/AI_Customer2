@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { Promotion, Refresh } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
+import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
@@ -42,7 +43,7 @@ export default defineComponent({
       await loadAll()
       await loadComposerFromRoute()
       timer = window.setInterval(() => {
-        if (active.value.length || accounts.value.some(item => item.status === 'checking')) void loadAll(false)
+        if (active.value.length || accounts.value.some(item => item.login_status?.creator?.status === 'checking')) void loadAll(false)
       }, 3000)
     })
     onUnmounted(() => window.clearInterval(timer))
@@ -87,7 +88,7 @@ export default defineComponent({
       const assetIds = String(route.query.asset_ids || '').split(',').filter(Boolean)
       if (!videoJobId && !assetIds.length) return
       composer.value.open = true
-      composer.value.account_ids = accounts.value.filter(item => item.default_features?.includes('publish') && item.enabled && item.status === 'ready').map(item => item.id)
+      composer.value.account_ids = accounts.value.filter(item => item.default_features?.includes('publish') && isAccountFeatureReady(item, 'publish')).map(item => item.id)
       if (videoJobId) {
         const { data } = await api.get(`/content/video-jobs/${videoJobId}`)
         composer.value.source = { type: 'video_output', video_job_id: videoJobId, output_name: outputName }
@@ -167,7 +168,7 @@ export default defineComponent({
       if (!composer.value.open) return null
       return h('section', { class: 'pane publish-composer' }, [
         sectionTitle({ title: '发布设置', subtitle: '选择账号、文案和发布时间', icon: Promotion, tone: 'purple' }),
-        h('div', { class: 'publish-account-options' }, accounts.value.filter(item => item.enabled && item.status === 'ready').map(account => h('label', [h('input', { type: 'checkbox', checked: composer.value.account_ids.includes(account.id), onChange: (event: Event) => composer.value.account_ids = toggleId(composer.value.account_ids, account.id, (event.target as HTMLInputElement).checked) }), `${platformLabel(account.platform)} · ${account.name}`]))),
+        h('div', { class: 'publish-account-options' }, accounts.value.filter(item => isAccountFeatureReady(item, 'publish')).map(account => h('label', [h('input', { type: 'checkbox', checked: composer.value.account_ids.includes(account.id), onChange: (event: Event) => composer.value.account_ids = toggleId(composer.value.account_ids, account.id, (event.target as HTMLInputElement).checked) }), `${platformLabel(account.platform)} · ${account.name}`]))),
         h('label', [h('span', '标题'), h('input', { value: composer.value.title, onInput: (event: Event) => composer.value.title = (event.target as HTMLInputElement).value })]),
         h('label', [h('span', '正文'), h('textarea', { rows: 5, value: composer.value.description, onInput: (event: Event) => composer.value.description = (event.target as HTMLTextAreaElement).value })]),
         h('label', [h('span', '标签'), h('input', { value: composer.value.tags, placeholder: '多个标签用逗号分隔', onInput: (event: Event) => composer.value.tags = (event.target as HTMLInputElement).value })]),

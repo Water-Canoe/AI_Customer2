@@ -8,6 +8,8 @@ from app.services import content_publish
 
 
 FEATURES = {"acquisition", "message", "traffic", "publish"}
+USER_FEATURES = {"acquisition", "message", "traffic"}
+LOGIN_FEATURES = {"user": USER_FEATURES, "creator": {"publish"}}
 ROLE_FEATURES = {
     "brand": {"message", "publish"},
     "service": {"message"},
@@ -50,7 +52,7 @@ def get_account(account_id: str, *, feature: str = "", require_ready: bool = Fal
         if feature not in account["features"]:
             raise ValueError(f"账号“{account['name']}”未启用该功能")
         binding_status = str(account["feature_status"][feature]["status"])
-        if require_ready and (not account["enabled"] or account["status"] != "ready" or binding_status != "ready"):
+        if require_ready and (not account["enabled"] or binding_status != "ready"):
             raise ValueError(f"账号“{account['name']}”未登录或已停用")
     return account
 
@@ -123,7 +125,35 @@ def resolve_account_id(platform: str, feature: str, account_id: str = "", *, req
 def profile_path(account_id: str, feature: str = "", *, require_ready: bool = True):
     if feature:
         get_account(account_id, feature=feature, require_ready=require_ready)
-    return content_publish.account_auth_path(account_id)
+    login_kind = "creator" if feature == "publish" else "user"
+    return content_publish.account_auth_path(account_id, login_kind)
+
+
+def require_login_kind(account_id: str, login_kind: str) -> dict[str, Any]:
+    features = _login_features(login_kind)
+    account = get_account(account_id)
+    if not features.intersection(account["features"]):
+        label = "创作者登录" if login_kind == "creator" else "用户登录"
+        raise ValueError(f"该账号没有启用需要{label}的功能")
+    return account
+
+
+def set_login_status(account_id: str, login_kind: str, status: str, error: str = "", *, checked: bool = False) -> None:
+    features = _login_features(login_kind)
+    require_login_kind(account_id, login_kind)
+    if login_kind == "creator":
+        content_publish.set_account_state(account_id, status, error=error, checked=checked)
+    placeholders = ",".join("?" for _ in features)
+    checked_sql = ", last_checked_at = datetime('now', 'localtime')" if checked else ""
+    with database.connect() as conn:
+        conn.execute(
+            f"""
+            UPDATE account_feature_bindings
+            SET status = ?, last_error = ?{checked_sql}
+            WHERE account_id = ? AND feature IN ({placeholders})
+            """,
+            (status, error, account_id, *sorted(features)),
+        )
 
 
 def set_feature_status(account_id: str, feature: str, status: str, error: str = "") -> None:
@@ -162,6 +192,10 @@ def _with_bindings(account: dict[str, Any]) -> dict[str, Any]:
     result["features"] = [str(row["feature"]) for row in bindings]
     result["default_features"] = [str(row["feature"]) for row in bindings if bool(row["is_default"])]
     result["feature_status"] = {str(row["feature"]): row for row in bindings}
+    result["login_status"] = {
+        login_kind: _scope_status(bindings, features)
+        for login_kind, features in LOGIN_FEATURES.items()
+    }
     return result
 
 
@@ -184,6 +218,11 @@ def _validated_bindings(
 
 
 def _replace_bindings(conn: Any, account_id: str, platform: str, features: set[str], defaults: set[str]) -> None:
+    existing_rows = conn.execute(
+        "SELECT feature, status, last_checked_at, last_error FROM account_feature_bindings WHERE account_id = ?",
+        (account_id,),
+    ).fetchall()
+    existing_bindings = database.rows_to_dicts(existing_rows)
     if features:
         placeholders = ",".join("?" for _ in features)
         conn.execute(
@@ -196,7 +235,6 @@ def _replace_bindings(conn: Any, account_id: str, platform: str, features: set[s
         "SELECT status, last_checked_at, last_error FROM publish_accounts WHERE id = ?",
         (account_id,),
     ).fetchone()
-    inherited_status = str(account_row["status"]) if account_row and account_row["status"] in {"checking", "ready", "expired", "error"} else "unknown"
     for feature in sorted(features):
         if feature in defaults:
             conn.execute(
@@ -209,6 +247,10 @@ def _replace_bindings(conn: Any, account_id: str, platform: str, features: set[s
                 """,
                 (feature, platform),
             )
+        scope = _scope_status(existing_bindings, {"publish"} if feature == "publish" else USER_FEATURES)
+        inherited_status = str(scope["status"])
+        if inherited_status == "unknown" and feature == "publish" and account_row:
+            inherited_status = str(account_row["status"]) if account_row["status"] in {"checking", "ready", "expired", "error"} else "unknown"
         conn.execute(
             """
             INSERT OR IGNORE INTO account_feature_bindings(
@@ -219,8 +261,8 @@ def _replace_bindings(conn: Any, account_id: str, platform: str, features: set[s
                 account_id,
                 feature,
                 inherited_status,
-                account_row["last_checked_at"] if account_row else None,
-                str(account_row["last_error"] or "") if account_row else "",
+                scope["last_checked_at"] or (account_row["last_checked_at"] if feature == "publish" and account_row else None),
+                str(scope["last_error"] or (account_row["last_error"] if feature == "publish" and account_row else "")),
             ),
         )
         conn.execute(
@@ -232,3 +274,34 @@ def _replace_bindings(conn: Any, account_id: str, platform: str, features: set[s
 def _validate_feature(feature: str) -> None:
     if feature not in FEATURES:
         raise ValueError("未知账号功能")
+
+
+def _login_features(login_kind: str) -> set[str]:
+    if login_kind not in LOGIN_FEATURES:
+        raise ValueError("未知登录类型")
+    return LOGIN_FEATURES[login_kind]
+
+
+def _scope_status(bindings: list[dict[str, Any]], features: set[str]) -> dict[str, Any]:
+    rows = [row for row in bindings if str(row["feature"]) in features]
+    if not rows:
+        return {"available": False, "status": "unknown", "last_checked_at": None, "last_error": ""}
+    statuses = {str(row["status"] or "unknown") for row in rows}
+    if "checking" in statuses:
+        status = "checking"
+    elif statuses == {"ready"}:
+        status = "ready"
+    elif "error" in statuses:
+        status = "error"
+    elif "expired" in statuses:
+        status = "expired"
+    else:
+        status = "unknown"
+    errors = [str(row["last_error"] or "") for row in rows if row["last_error"]]
+    checked = [str(row["last_checked_at"]) for row in rows if row["last_checked_at"]]
+    return {
+        "available": True,
+        "status": status,
+        "last_checked_at": max(checked) if checked else None,
+        "last_error": errors[0] if errors else "",
+    }

@@ -558,6 +558,34 @@ def _create_platform_account_center(conn: sqlite3.Connection, _: str) -> None:
             )
 
 
+def _separate_platform_login_profiles(conn: sqlite3.Connection, _: str) -> None:
+    # 旧版把创作者登录结果写给全部功能；拆分 Profile 后必须重新完成用户登录。
+    conn.execute(
+        """
+        UPDATE account_feature_bindings
+        SET status = 'unknown', last_checked_at = NULL,
+            last_error = '用户登录与创作者登录已分离，请重新完成用户登录'
+        WHERE feature IN ('acquisition', 'message', 'traffic')
+        """
+    )
+    conn.execute(
+        """
+        UPDATE publish_accounts
+        SET status = 'expired', qrcode_relative_path = '',
+            last_error = '旧登录任务已中断，请重新登录', updated_at = datetime('now', 'localtime')
+        WHERE status = 'checking'
+        """
+    )
+    conn.execute(
+        """
+        UPDATE account_feature_bindings
+        SET status = 'expired', last_error = '旧登录任务已中断，请重新登录',
+            last_checked_at = datetime('now', 'localtime')
+        WHERE feature = 'publish' AND status = 'checking'
+        """
+    )
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
@@ -570,6 +598,7 @@ MIGRATIONS = (
     Migration(9, "add_automation_plan_order", _add_automation_plan_order),
     Migration(10, "extend_automation_with_traffic", _extend_automation_with_traffic),
     Migration(11, "create_platform_account_center", _create_platform_account_center),
+    Migration(12, "separate_platform_login_profiles", _separate_platform_login_profiles),
 )
 
 

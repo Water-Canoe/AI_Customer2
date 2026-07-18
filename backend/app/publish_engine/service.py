@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -27,25 +28,29 @@ async def login_account(
     platform: str,
     account_file: Path,
     qrcode_callback: Callable[[dict[str, Any]], Any] | None = None,
+    cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
     setup, _ = _account_handlers(platform)
     account_file.parent.mkdir(parents=True, exist_ok=True)
-    return await setup(
-        str(account_file),
-        handle=True,
-        return_detail=True,
-        qrcode_callback=qrcode_callback,
-        headless=False,
+    return await _run_cancellable(
+        setup(
+            str(account_file),
+            handle=True,
+            return_detail=True,
+            qrcode_callback=qrcode_callback,
+            headless=False,
+        ),
+        cancel_check,
     )
 
 
-async def check_account(platform: str, account_file: Path) -> bool:
+async def check_account(platform: str, account_file: Path, cancel_check: CancelCheck | None = None) -> bool:
     from app.publish_engine.browser import profile_has_state
 
     if not profile_has_state(account_file):
         return False
     _, checker = _account_handlers(platform)
-    return bool(await checker(str(account_file)))
+    return bool(await _run_cancellable(checker(str(account_file)), cancel_check))
 
 
 async def publish(
@@ -176,3 +181,17 @@ def _stage(callback: StageCallback | None, stage: str) -> None:
 def _check_cancel(callback: CancelCheck | None) -> None:
     if callback and callback():
         raise PublishCancelled("用户已取消发布")
+
+
+async def _run_cancellable(operation: Any, cancel_check: CancelCheck | None) -> Any:
+    task = asyncio.create_task(operation)
+    try:
+        while not task.done():
+            _check_cancel(cancel_check)
+            await asyncio.wait({task}, timeout=0.25)
+        return await task
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task

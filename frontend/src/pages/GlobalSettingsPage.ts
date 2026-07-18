@@ -77,10 +77,11 @@ export default defineComponent({
       }
     }
 
-    async function accountAction(account: Dict, action: 'login' | 'check') {
+    async function accountAction(account: Dict, action: 'login' | 'check', loginKind: 'user' | 'creator') {
       try {
-        await api.post(`/accounts/${account.id}/${action}`)
-        ElMessage.success(action === 'login' ? '登录窗口已加入队列' : '状态检查已加入队列')
+        await api.post(`/accounts/${account.id}/${action}`, null, { params: { login_kind: loginKind } })
+        const label = loginKind === 'creator' ? '创作者登录' : '用户登录'
+        ElMessage.success(action === 'login' ? `${label}窗口已加入队列` : `${label}状态检查已加入队列`)
         await loadAccounts()
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '账号操作失败')
@@ -123,7 +124,7 @@ export default defineComponent({
     onMounted(async () => {
       await loadAccounts()
       timer = window.setInterval(() => {
-        if (accounts.value.some(account => account.status === 'checking')) void loadAccounts(false)
+        if (accounts.value.some(account => ['user', 'creator'].some(kind => account.login_status?.[kind]?.status === 'checking'))) void loadAccounts(false)
       }, 3000)
     })
     onUnmounted(() => window.clearInterval(timer))
@@ -136,7 +137,7 @@ export default defineComponent({
         : activeSection.value === 'accounts'
           ? [
               h('section', { class: 'pane account-create-pane' }, [
-                sectionTitle({ title: '统一账号中心', subtitle: '一个账号对应一个独立登录态，所有工作台从这里选择', icon: User, tone: 'teal', aside: h('button', { class: 'secondary-action', onClick: () => loadAccounts() }, [h(Refresh, { class: 'inline-icon' }), '刷新']) }),
+                sectionTitle({ title: '统一账号中心', subtitle: '普通用户站与创作者中心登录态分开保存，各工作台按用途自动选择', icon: User, tone: 'teal', aside: h('button', { class: 'secondary-action', onClick: () => loadAccounts() }, [h(Refresh, { class: 'inline-icon' }), '刷新']) }),
                 h('div', { class: 'account-create-row' }, [
                   h('select', { value: draft.value.platform, onChange: (event: Event) => draft.value.platform = (event.target as HTMLSelectElement).value }, [
                     h('option', { value: 'dy' }, '抖音'), h('option', { value: 'xhs' }, '小红书'), h('option', { value: 'ks' }, '快手'),
@@ -213,10 +214,9 @@ export default defineComponent({
           h('div', [h('strong', `${platformLabel(account.platform)} · ${account.name}`)]),
           h('div', { class: 'account-card-head-actions' }, [
             h('label', { class: 'account-enabled-toggle' }, [h('input', { type: 'checkbox', checked: account.enabled, onChange: (event: Event) => updateAccount(account, { enabled: (event.target as HTMLInputElement).checked }) }), '启用账号']),
-            h('span', { class: `status-pill status-${account.status}` }, statusLabel(account.status)),
           ]),
         ]),
-        account.qrcode_url ? h('img', { class: 'publish-qrcode', src: `${account.qrcode_url}?t=${Date.now()}`, alt: '登录二维码' }) : null,
+        account.qrcode_url ? h('img', { class: 'publish-qrcode', src: `${account.qrcode_url}?t=${Date.now()}`, alt: '创作者登录二维码' }) : null,
         h('div', { class: 'account-identity-row' }, [
           h('input', { value: account.name || '', placeholder: '账号名称', onChange: (event: Event) => updateAccount(account, { name: (event.target as HTMLInputElement).value.trim() }) }),
           h('select', { value: account.role, onChange: (event: Event) => changeRole(account, (event.target as HTMLSelectElement).value) }, Object.keys(ROLE_FEATURES).map(role => h('option', { value: role }, roleLabel(role)))),
@@ -230,11 +230,30 @@ export default defineComponent({
             h('small', { class: ['account-feature-status', `is-${account.feature_status?.[feature]?.status || 'unknown'}`] }, featureStatusLabel(account.feature_status?.[feature]?.status)),
           ])),
         ]),
-        account.last_error ? h('p', { class: 'content-job-error' }, String(account.last_error)) : h('small', `最近检查：${account.last_checked_at || '尚未检查'}`),
+        h('div', { class: 'account-login-scopes' }, [
+          renderLoginScope(account, 'user', '用户登录', '拓客、私信、引流使用普通用户站登录态'),
+          renderLoginScope(account, 'creator', '创作者登录', '仅内容发布使用创作者中心登录态'),
+        ]),
         h('div', { class: 'task-card-actions' }, [
-          h('button', { class: 'primary-soft', disabled: account.status === 'checking', onClick: () => accountAction(account, 'login') }, account.status === 'checking' ? '处理中...' : account.status === 'ready' ? '重新登录' : '扫码登录'),
-          h('button', { class: 'text-icon-button', disabled: account.status === 'checking', onClick: () => accountAction(account, 'check') }, '检查状态'),
           h('button', { class: 'text-icon-button danger', onClick: () => deleteAccount(account) }, '移除'),
+        ]),
+      ])
+    }
+
+    function renderLoginScope(account: Dict, loginKind: 'user' | 'creator', title: string, description: string) {
+      const state = account.login_status?.[loginKind] || {}
+      const unavailable = !state.available
+      const checking = state.status === 'checking'
+      return h('section', { class: ['account-login-scope', unavailable ? 'is-disabled' : ''] }, [
+        h('div', { class: 'account-login-scope-head' }, [
+          h('strong', title),
+          h('span', { class: `status-pill status-${state.status || 'unknown'}` }, unavailable ? '未启用' : statusLabel(state.status)),
+        ]),
+        h('small', description),
+        state.last_error ? h('p', { class: 'content-job-error' }, String(state.last_error)) : h('small', `最近检查：${state.last_checked_at || '尚未检查'}`),
+        h('div', { class: 'account-login-actions' }, [
+          h('button', { class: 'primary-soft', disabled: unavailable || checking, onClick: () => accountAction(account, 'login', loginKind) }, checking ? '处理中...' : state.status === 'ready' ? '重新登录' : '打开登录'),
+          h('button', { class: 'text-icon-button', disabled: unavailable || checking, onClick: () => accountAction(account, 'check', loginKind) }, '检查状态'),
         ]),
       ])
     }
@@ -244,7 +263,7 @@ export default defineComponent({
 function platformLabel(value: string) { return ({ dy: '抖音', xhs: '小红书', ks: '快手' } as Dict)[value] || value }
 function roleLabel(value: string) { return ({ brand: '品牌号', service: '客服号', operations: '运营号', traffic: '引流号', test: '测试号' } as Dict)[value] || value }
 function featureLabel(value: string) { return ({ acquisition: '拓客', message: '私信', traffic: '引流', publish: '内容发布' } as Dict)[value] || value }
-function statusLabel(value: string) { return ({ login_required: '待登录', checking: '检查中', ready: '已登录', expired: '已失效', error: '异常' } as Dict)[value] || value }
+function statusLabel(value: string) { return ({ login_required: '待登录', unknown: '待登录', checking: '检查中', ready: '已登录', expired: '已失效', error: '异常' } as Dict)[value] || value }
 function featureStatusLabel(value: string) { return ({ ready: '可用', checking: '检查中', expired: '失效', error: '异常', unknown: '未检查' } as Dict)[value] || '未检查' }
 function licenseStatusText(info: Dict) { return info.authorized ? '授权有效' : info.status === 'failed' ? '未授权' : '等待授权' }
 function licenseStateClass(info: Dict) { return info.authorized ? 'is-authorized' : info.status === 'failed' ? 'is-denied' : 'is-pending' }

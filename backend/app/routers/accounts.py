@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
@@ -55,27 +57,23 @@ def delete_account(account_id: str) -> dict[str, object]:
 
 
 @router.post("/{account_id}/login")
-def login_account(account_id: str) -> dict[str, object]:
+def login_account(account_id: str, login_kind: Literal["user", "creator"] = "user") -> dict[str, object]:
     require_license()
     try:
-        account_center.get_account(account_id)
-        content_publish.set_account_state(account_id, "checking")
-        account_center.set_all_feature_status(account_id, "checking")
-        return job_queue.enqueue_account_job(account_id, "login")
+        account_center.set_login_status(account_id, login_kind, "checking")
+        return job_queue.enqueue_account_job(account_id, "login", login_kind)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{account_id}/check")
-def check_account(account_id: str) -> dict[str, object]:
+def check_account(account_id: str, login_kind: Literal["user", "creator"] = "user") -> dict[str, object]:
     require_license()
     try:
-        account_center.get_account(account_id)
-        content_publish.set_account_state(account_id, "checking")
-        account_center.set_all_feature_status(account_id, "checking")
-        return job_queue.enqueue_account_job(account_id, "check")
+        account_center.set_login_status(account_id, login_kind, "checking")
+        return job_queue.enqueue_account_job(account_id, "check", login_kind)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{account_id}/qrcode")

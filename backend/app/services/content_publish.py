@@ -38,7 +38,7 @@ def create_account(platform: str, name: str) -> dict[str, Any]:
         with database.connect() as conn:
             conn.execute(
                 "INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES(?, ?, ?, ?)",
-                (account_id, platform, name[:100], f"platform_accounts/{platform}/{account_id}/profile"),
+                (account_id, platform, name[:100], f"platform_accounts/{platform}/{account_id}/creator-profile"),
             )
     except sqlite3.IntegrityError as exc:
         raise ValueError("同一平台下账号名称不能重复") from exc
@@ -323,9 +323,12 @@ def resolve_runtime_path(relative_path: str) -> Path:
     return path
 
 
-def account_auth_path(account_id: str) -> Path:
+def account_auth_path(account_id: str, login_kind: str = "creator") -> Path:
     get_account(account_id, include_deleted=True)
-    path = resolve_runtime_path(_auth_relative_path(account_id))
+    if login_kind not in {"user", "creator"}:
+        raise ValueError("未知登录类型")
+    creator_path = resolve_runtime_path(_auth_relative_path(account_id))
+    path = creator_path if login_kind == "creator" else creator_path.parent / "user-profile"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -356,12 +359,12 @@ def task_media_paths(task: dict[str, Any]) -> list[Path]:
     ]
 
 
-def run_account_login(account_id: str) -> dict[str, Any]:
+def run_account_login(account_id: str, login_kind: str = "creator", cancel_check=None) -> dict[str, Any]:
     from app.publish_engine import service as engine
-    from app.services import account_center
+    from app.services import account_center, platform_login
 
-    account = get_account(account_id)
-    set_account_state(account_id, "checking")
+    account = account_center.require_login_kind(account_id, login_kind)
+    account_center.set_login_status(account_id, login_kind, "checking")
 
     def qrcode_callback(payload: dict[str, Any]) -> None:
         image_path = Path(str(payload.get("image_path") or ""))
@@ -369,32 +372,73 @@ def run_account_login(account_id: str) -> dict[str, Any]:
         set_account_state(account_id, "checking", qrcode_relative_path=relative)
 
     try:
-        result = engine.run(engine.login_account(account["platform"], account_auth_path(account_id), qrcode_callback))
+        if login_kind == "creator":
+            operation = engine.login_account(
+                account["platform"],
+                account_auth_path(account_id, "creator"),
+                qrcode_callback,
+                cancel_check=cancel_check,
+            )
+        else:
+            operation = platform_login.login_account(
+                account["platform"],
+                account_auth_path(account_id, "user"),
+                cancel_check=cancel_check,
+            )
+        result = engine.run(operation)
         if not bool(result.get("success")):
             raise RuntimeError(str(result.get("message") or "扫码登录失败"))
-        set_account_state(account_id, "ready", checked=True)
-        account_center.set_all_feature_status(account_id, "ready")
-        return {"account_id": account_id, "success": True}
+        account_center.set_login_status(account_id, login_kind, "ready", checked=True)
+        return {"account_id": account_id, "login_kind": login_kind, "success": True}
     except Exception as exc:
-        set_account_state(account_id, "error", error=str(exc), checked=True)
-        account_center.set_all_feature_status(account_id, "error", str(exc))
+        cancelled = bool(cancel_check and cancel_check())
+        account_center.set_login_status(
+            account_id,
+            login_kind,
+            "expired" if cancelled else "error",
+            "用户取消" if cancelled else str(exc),
+            checked=True,
+        )
         raise
 
 
-def run_account_check(account_id: str) -> dict[str, Any]:
+def run_account_check(account_id: str, login_kind: str = "creator", cancel_check=None) -> dict[str, Any]:
     from app.publish_engine import service as engine
-    from app.services import account_center
+    from app.services import account_center, platform_login
 
-    account = get_account(account_id)
-    set_account_state(account_id, "checking")
+    account = account_center.require_login_kind(account_id, login_kind)
+    account_center.set_login_status(account_id, login_kind, "checking")
     try:
-        valid = bool(engine.run(engine.check_account(account["platform"], account_auth_path(account_id))))
-        set_account_state(account_id, "ready" if valid else "expired", error="" if valid else "登录已失效", checked=True)
-        account_center.set_all_feature_status(account_id, "ready" if valid else "expired", "" if valid else "登录已失效")
-        return {"account_id": account_id, "valid": valid}
+        if login_kind == "creator":
+            operation = engine.check_account(
+                account["platform"],
+                account_auth_path(account_id, "creator"),
+                cancel_check=cancel_check,
+            )
+        else:
+            operation = platform_login.check_account(
+                account["platform"],
+                account_auth_path(account_id, "user"),
+                cancel_check=cancel_check,
+            )
+        valid = bool(engine.run(operation))
+        account_center.set_login_status(
+            account_id,
+            login_kind,
+            "ready" if valid else "expired",
+            "" if valid else "登录已失效",
+            checked=True,
+        )
+        return {"account_id": account_id, "login_kind": login_kind, "valid": valid}
     except Exception as exc:
-        set_account_state(account_id, "error", error=str(exc), checked=True)
-        account_center.set_all_feature_status(account_id, "error", str(exc))
+        cancelled = bool(cancel_check and cancel_check())
+        account_center.set_login_status(
+            account_id,
+            login_kind,
+            "expired" if cancelled else "error",
+            "用户取消" if cancelled else str(exc),
+            checked=True,
+        )
         raise
 
 
@@ -564,7 +608,10 @@ def _selected_accounts(account_ids: list[str] | None) -> list[dict[str, Any]]:
     requested = set(account_ids or [])
     accounts = account_center.list_accounts(feature="publish")
     selected = [item for item in accounts if item["id"] in requested] if requested else [item for item in accounts if "publish" in item["default_features"]]
-    selected = [item for item in selected if item["enabled"] and item["status"] == "ready"]
+    selected = [
+        item for item in selected
+        if item["enabled"] and item["feature_status"].get("publish", {}).get("status") == "ready"
+    ]
     if not selected:
         raise ValueError("没有可用的默认发布账号，请先完成扫码登录并设为默认账号")
     if requested and len(selected) != len(requested):

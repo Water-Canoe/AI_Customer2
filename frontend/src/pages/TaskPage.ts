@@ -6,6 +6,7 @@ import { ElMessage } from 'element-plus'
 import type { Dict } from '../shared/types'
 import { platformName, taskModeName } from '../shared/format'
 import { api } from '../shared/api'
+import { isAccountFeatureReady } from '../shared/accounts'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, joinTags, splitTagText } from '../components/ui/TagInput'
 import { iconBadge, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
@@ -54,7 +55,7 @@ export default defineComponent({
     const modeNeedsCreator = computed(() => ['competitor_crawl', 'own_account'].includes(form.mode))
     const modeUsesKeywords = computed(() => ['competitor_discovery', 'demand_content'].includes(form.mode))
     const availableAccounts = computed(() => accounts.value.filter(account =>
-      account.platform === form.platform && account.enabled && account.status === 'ready' && account.features?.includes('acquisition')
+      account.platform === form.platform && isAccountFeatureReady(account, 'acquisition')
     ))
     function selectDefaultAccount() {
       if (availableAccounts.value.some(account => account.id === form.account_id)) return

@@ -29,6 +29,7 @@ def test_account_center_separates_profiles_and_function_defaults(tmp_path: Path,
     assert account_center.resolve_account_id("dy", "traffic") == traffic["id"]
     assert account_center.profile_path(brand["id"]) != account_center.profile_path(traffic["id"])
     assert database.get_data_root() in account_center.profile_path(brand["id"]).parents
+    assert account_center.profile_path(brand["id"], "message") != account_center.profile_path(brand["id"], "publish")
 
 
 def test_brand_account_cannot_bind_high_risk_features(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -87,3 +88,38 @@ def test_feature_status_blocks_only_unavailable_binding(tmp_path: Path, monkeypa
     assert account_center.resolve_account_id("dy", "message") == account["id"]
     with pytest.raises(ValueError, match="未登录"):
         account_center.resolve_account_id("dy", "traffic")
+
+
+def test_user_and_creator_login_statuses_are_independent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _init(tmp_path, monkeypatch)
+    from app.services import account_center
+
+    account = account_center.create_account("dy", "品牌账号", "brand", ["message", "publish"], [])
+    account_center.set_login_status(account["id"], "user", "ready", checked=True)
+    account_center.set_login_status(account["id"], "creator", "expired", "创作者登录失效", checked=True)
+    updated = account_center.get_account(account["id"])
+
+    assert updated["login_status"]["user"]["status"] == "ready"
+    assert updated["login_status"]["creator"]["status"] == "expired"
+    assert account_center.get_account(account["id"], feature="message", require_ready=True)["id"] == account["id"]
+    with pytest.raises(ValueError, match="未登录"):
+        account_center.get_account(account["id"], feature="publish", require_ready=True)
+
+
+def test_login_profile_migration_resets_only_user_features(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database = _init(tmp_path, monkeypatch)
+    from app import migrations
+    from app.services import account_center, content_publish
+
+    account = account_center.create_account("dy", "迁移账号", "test", ["message", "traffic", "publish"], [])
+    account_center.set_all_feature_status(account["id"], "ready")
+    content_publish.set_account_state(account["id"], "checking")
+    account_center.set_feature_status(account["id"], "publish", "checking")
+    with database.connect() as conn:
+        migrations.MIGRATIONS[-1].action(conn, database.SCHEMA_SQL)
+
+    updated = account_center.get_account(account["id"])
+    assert updated["feature_status"]["message"]["status"] == "unknown"
+    assert updated["feature_status"]["traffic"]["status"] == "unknown"
+    assert updated["feature_status"]["publish"]["status"] == "expired"
+    assert updated["status"] == "expired"

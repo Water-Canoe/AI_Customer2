@@ -17,9 +17,9 @@
 
 自动竞品分析和自动线索分析使用子任务串联：采集成功后只创建后续运行记录，不在当前采集线程里直接执行 AI；账号资料采集完成后立即释放浏览器资源，再由 AI 资源队列并行分析。这样慢模型调用不会占住登录会话，脚本重启时也能分别识别采集阶段和 AI 阶段。
 
-平台登录统一收口到侧边栏底部“全局设置”的“平台账号”分区，拓客设置、私信设置、引流设置和内容发布不再各自维护登录按钮。一个平台账号对应一个独立持久化目录 `data/platform_accounts/<platform>/<account-id>/profile/`，拓客、私信、引流和内容发布都从任务保存的 `account_id` 读取同一账号 Profile；复制任务不会复制登录态，删除账号记录也不会自动删除 Profile。账号登录和检查进入统一浏览器队列，API 不返回本机 Profile 路径。
+平台登录统一收口到侧边栏底部“全局设置”的“平台账号”分区，拓客设置、私信设置、引流设置和内容发布不再各自维护登录按钮。同一个平台账号分成两套互不混用的持久化登录态：拓客、私信和引流使用平台普通用户站的“用户登录”，内容发布独占创作者中心的“创作者登录”；工作台仍只保存同一个 `account_id`，运行时按功能自动选择对应 Profile。创作者 Profile 使用账号记录的 `auth_relative_path`，用户 Profile 固定为同级 `user-profile/`；复制任务不会复制登录态，删除账号记录也不会自动删除 Profile。两种登录和状态检查都进入统一浏览器队列，API 不返回本机 Profile 路径。
 
-账号按用途分为品牌号、客服号、运营号、引流号和测试号。品牌号只允许私信和内容发布，客服号只允许私信，运营号允许拓客和私信，引流号允许拓客、私信和引流，测试号可绑定全部功能；后端会再次校验角色权限，不能只靠前端绕过。每个平台、每个功能只能有一个默认账号，工作台可以显式选择其它已绑定账号。新建任务、私信批次、引流计划和自动化计划都会保存账号 ID；运行时再次确认账号仍启用且登录有效，不再读取全局抖音或快手 Profile。旧发布账号升级到数据库版本 11 后保留账号记录，但登录状态重置为待登录，需要在账号中心重新登录并分配其它用途。
+账号按用途分为品牌号、客服号、运营号、引流号和测试号。品牌号只允许私信和内容发布，客服号只允许私信，运营号允许拓客和私信，引流号允许拓客、私信和引流，测试号可绑定全部功能；后端会再次校验角色权限，不能只靠前端绕过。每个平台、每个功能只能有一个默认账号，工作台可以显式选择其它已绑定账号。新建任务、私信批次、引流计划和自动化计划都会保存账号 ID；运行时只校验当前功能对应的登录态，例如创作者登录有效不能代替已经失效的用户登录。账号卡片分别提供“用户登录/检查”和“创作者登录/检查”，没有绑定对应功能时按钮不可用。
 
 后端正常关闭时先停止派发新任务：浏览器任务收到取消请求，限时内仍未结束的任务标记为 `interrupted` 并同步修正业务状态；可安全重放的 AI 任务退回排队并在下次启动继续。脚本强制关闭或进程崩溃时，下一次启动会将遗留浏览器任务中断、把采集/引流/私信业务记录恢复为可理解的终态，并只自动恢复仍有剩余尝试次数的 AI 任务。这样不会把不可幂等的浏览器动作直接重放。
 
@@ -427,7 +427,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
 
-扫码登录、账号检查、视频发布和图文发布统一通过 `backend/app/publish_engine/browser.py` 启动CloakBrowser，使用账号中心分配的持久化 Profile 目录，不再使用可复制的 `storage_state` 文件，也不启动Patchright或Playwright自带Chromium。登录使用可见最大化窗口，正式发布默认无头；浏览器上下文关闭时由CloakBrowser一并清理底层Playwright进程。首次登录时空 Profile 会直接进入扫码流程，不会先重复执行无意义的 Cookie 检查。
+用户登录、创作者登录、账号检查、视频发布和图文发布统一通过 `backend/app/publish_engine/browser.py` 启动CloakBrowser，不再使用可复制的 `storage_state` 文件，也不启动Patchright或Playwright自带Chromium。用户登录打开抖音/小红书/快手普通用户站，创作者登录打开对应创作者中心；两者使用独立 Profile。登录使用可见最大化窗口，正式发布默认无头；浏览器上下文关闭时由CloakBrowser一并清理底层Playwright进程。运行队列取消账号登录或检查时，每 250ms 检查取消请求并终止当前浏览器协程，关闭上下文后释放浏览器资源，后续排队任务不会再被未完成的扫码等待卡住。
 
 内容接口：
 
@@ -437,7 +437,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `/api/content/voice-reference-script`：使用内容工作台独立AI配置生成声音克隆朗读文案；未配置供应商时明确返回错误，不使用固定文案兜底。
 - `/api/content/scripts`、`/api/content/terms`、`/api/content/social-metadata`：独立视频AI生成能力。
 - `/api/content/voices`、`/api/content/settings`、`/api/content/environment-check`：音色、完整独立配置和环境检查；`POST /api/content/voice-runtime/install` 创建音色克隆组件安装任务，取消复用 `/api/runtime/jobs/{job_id}/cancel`。
-- `/api/accounts`：发布账号与其它工作台共用统一账号中心；内容发布只列出已绑定“内容发布”用途的账号。
+- `/api/accounts`：发布账号与其它工作台共用统一账号中心；`POST /api/accounts/{account_id}/login|check` 通过 `login_kind=user|creator` 区分用户站和创作者中心，内容发布只列出创作者登录有效且已绑定“内容发布”用途的账号。
 - `/api/content/publish-tasks/one-click` 按全部有效默认账号拆分任务；`/api/content/publish-tasks` 提供自定义创建、列表、详情、取消、手动重试和结果确认。
 
 `backend/tests/video_engine/` 保留并适配上游核心服务测试，覆盖AI提示与解析、Pexels/Pixabay/Coverr、任务阶段、字幕、TwelveLabs、Upload-Post、MoviePy合成和全部TTS实现；控制器、Streamlit、Redis管理器和WebUI测试不进入本项目。视频引擎的数据模型统一使用 Pydantic 2 的 `ConfigDict`，不再保留已经弃用的类式 `Config`；Gemini 测试使用新 SDK 的模拟 Client，验证文本、语音和自定义地址参数，不连接收费接口。发布回归测试使用模拟平台页面，覆盖Cookie路径不出API、默认账号拆分、图片顺序、定时参数、取消、失败、结果不确定和手动重试，不使用真实账号发布。真实收费/联网测试只有显式设置 `AI_CUSTOMER_VIDEO_INTEGRATION_TESTS=1` 才运行。
@@ -485,7 +485,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - `POST /api/system/backups/{backup_id}/restore`：输入“恢复备份”后执行安全恢复。
 - `POST /api/settings/clear-data`：支持 `create_backup` 和 `include_crawler`，正式页面默认都为 `true`。
 
-当前最新迁移为版本 11：版本 7 新增 `publish_accounts / publish_tasks / publish_task_assets` 国内发布账号和任务表；版本 8 新增 `automation_plans / automation_runs / automation_run_items / message_send_attempts`，并为采集、AI和私信批次增加自动化隔离与关联字段；版本 9 增加自动化计划排序；版本 10 扩展自动化计划和运行的 `traffic` 类型、保存关联引流批次/子任务，并为 `traffic_plans` 增加内部计划标识；版本 11 将发布账号扩展为统一平台账号，新增角色、平台账号 ID、`account_feature_bindings`，并为采集、私信、引流计划和引流批次保存执行账号 ID。
+当前最新迁移为版本 12：版本 7 新增 `publish_accounts / publish_tasks / publish_task_assets` 国内发布账号和任务表；版本 8 新增 `automation_plans / automation_runs / automation_run_items / message_send_attempts`，并为采集、AI和私信批次增加自动化隔离与关联字段；版本 9 增加自动化计划排序；版本 10 扩展自动化计划和运行的 `traffic` 类型、保存关联引流批次/子任务，并为 `traffic_plans` 增加内部计划标识；版本 11 将发布账号扩展为统一平台账号，新增角色、平台账号 ID、`account_feature_bindings`，并为采集、私信、引流计划和引流批次保存执行账号 ID；版本 12 分离普通用户站与创作者中心 Profile，并把旧版误共享给拓客、私信、引流的登录状态重置为待登录，发布登录状态保留。
 
 ## 后续优化清单
 

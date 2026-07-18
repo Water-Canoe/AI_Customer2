@@ -63,6 +63,36 @@ def test_runtime_queue_cancels_queued_job(tmp_path: Path, monkeypatch: pytest.Mo
     assert job_queue.delete_job(str(job["id"])) == {"ok": True, "id": job["id"]}
 
 
+def test_running_account_login_cancels_and_releases_browser_queue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_queue(tmp_path, monkeypatch)
+    from app.services import content_publish, job_queue, license_service
+
+    started = threading.Event()
+
+    def fake_login(_account_id: str, _login_kind: str, cancel_check) -> dict[str, object]:
+        started.set()
+        while not cancel_check():
+            time.sleep(0.01)
+        raise RuntimeError("用户取消")
+
+    monkeypatch.setattr(license_service, "ensure_authorized", lambda: {"authorized": True})
+    monkeypatch.setattr(content_publish, "run_account_login", fake_login)
+    monkeypatch.setattr(content_publish, "run_account_check", lambda *_args, **_kwargs: {"valid": True})
+    login_job = job_queue.enqueue_account_job("account-cancel", "login", "user")
+    job_queue.start()
+    try:
+        assert started.wait(1)
+        job_queue.request_cancel(str(login_job["id"]))
+        cancelled = wait_for_job(str(login_job["id"]), {"cancelled"})
+        check_job = job_queue.enqueue_account_job("account-next", "check", "user")
+        finished = wait_for_job(str(check_job["id"]), {"succeeded"})
+    finally:
+        job_queue.shutdown(1)
+
+    assert cancelled["cancel_requested"] is True
+    assert finished["status"] == "succeeded"
+
+
 def test_queued_runtime_job_marks_workbench_active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_queue(tmp_path, monkeypatch)
     from app.services import job_queue, workbench_status

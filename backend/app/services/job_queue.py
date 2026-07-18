@@ -286,13 +286,15 @@ def enqueue_voice_runtime_install() -> dict[str, Any]:
     )
 
 
-def enqueue_account_job(account_id: str, action: str) -> dict[str, Any]:
+def enqueue_account_job(account_id: str, action: str, login_kind: str = "user") -> dict[str, Any]:
     if action not in {"login", "check"}:
         raise ValueError("账号任务只支持登录或检查")
+    if login_kind not in {"user", "creator"}:
+        raise ValueError("未知登录类型")
     return enqueue(
         f"account_{action}",
-        entity_id=str(account_id),
-        payload={"account_id": str(account_id)},
+        entity_id=f"{account_id}:{login_kind}",
+        payload={"account_id": str(account_id), "login_kind": login_kind},
         resource="browser",
         priority=100,
     )
@@ -704,9 +706,19 @@ def _execute_job(job: dict[str, Any]) -> Any:
     if kind == "video_generation":
         return content_workbench.run_video_job(str(payload["video_job_id"]))
     if kind == "account_login":
-        return content_publish.run_account_login(str(payload["account_id"]))
+        job_id = str(job["id"])
+        return content_publish.run_account_login(
+            str(payload["account_id"]),
+            str(payload.get("login_kind") or "creator"),
+            cancel_check=lambda: _cancel_requested(job_id),
+        )
     if kind == "account_check":
-        return content_publish.run_account_check(str(payload["account_id"]))
+        job_id = str(job["id"])
+        return content_publish.run_account_check(
+            str(payload["account_id"]),
+            str(payload.get("login_kind") or "creator"),
+            cancel_check=lambda: _cancel_requested(job_id),
+        )
     if kind == "content_publish":
         return content_publish.run_publish_task(str(payload["publish_task_id"]))
     if kind == "voice_runtime_install":
@@ -839,7 +851,7 @@ def _cancel_requested(job_id: str) -> bool:
 
 
 def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, queued: bool = False) -> None:
-    from app.services import automation_workbench, content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
+    from app.services import account_center, automation_workbench, content_publish, content_workbench, crawler_adapter, message_workbench, traffic_workbench
 
     kind = str(job["kind"])
     payload = dict(job["payload"])
@@ -861,6 +873,14 @@ def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, que
             content_workbench.mark_video_job_cancelled(str(payload["video_job_id"]), reason)
         elif kind == "content_publish" and queued:
             content_publish.update_task_state(str(payload["publish_task_id"]), "cancelled", error=reason)
+        elif kind in {"account_login", "account_check"}:
+            account_center.set_login_status(
+                str(payload["account_id"]),
+                str(payload.get("login_kind") or "creator"),
+                "expired",
+                reason,
+                checked=True,
+            )
         elif queued and kind in SAFE_RESUME_KINDS:
             job_ids = [str(payload["job_id"])] if kind == "ai_job" else [str(value) for value in payload.get("job_ids", [])]
             if job_ids:
@@ -997,13 +1017,17 @@ def _normalize_interrupted_domain(conn: Any, job: dict[str, Any], reason: str) -
             (reason, str(payload["publish_task_id"])),
         )
     if kind in {"account_login", "account_check"}:
+        login_kind = str(payload.get("login_kind") or "creator")
+        if login_kind == "creator":
+            conn.execute(
+                "UPDATE publish_accounts SET status = 'error', last_error = ?, qrcode_relative_path = '', updated_at = datetime('now', 'localtime') WHERE id = ? AND status = 'checking'",
+                (reason, str(payload["account_id"])),
+            )
+        features = ("publish",) if login_kind == "creator" else ("acquisition", "message", "traffic")
+        placeholders = ",".join("?" for _ in features)
         conn.execute(
-            "UPDATE publish_accounts SET status = 'error', last_error = ?, qrcode_relative_path = '', updated_at = datetime('now', 'localtime') WHERE id = ? AND status = 'checking'",
-            (reason, str(payload["account_id"])),
-        )
-        conn.execute(
-            "UPDATE account_feature_bindings SET status = 'error', last_error = ?, last_checked_at = datetime('now', 'localtime') WHERE account_id = ? AND status = 'checking'",
-            (reason, str(payload["account_id"])),
+            f"UPDATE account_feature_bindings SET status = 'error', last_error = ?, last_checked_at = datetime('now', 'localtime') WHERE account_id = ? AND feature IN ({placeholders}) AND status = 'checking'",
+            (reason, str(payload["account_id"]), *features),
         )
 
 

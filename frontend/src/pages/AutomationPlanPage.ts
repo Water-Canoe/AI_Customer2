@@ -28,6 +28,7 @@ import {
 import { ChatDotRound, Clock, Connection, Promotion, Rank } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
+import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
 
 
@@ -173,7 +174,7 @@ export default defineComponent({
     }
 
     function featureAccounts(feature: string, platform: string) {
-      return accounts.value.filter(account => account.platform === platform && account.enabled && account.status === 'ready' && account.features?.includes(feature))
+      return accounts.value.filter(account => account.platform === platform && isAccountFeatureReady(account, feature))
     }
 
     function selectDefaultAccount() {

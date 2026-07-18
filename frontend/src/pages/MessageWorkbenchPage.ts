@@ -4,6 +4,7 @@ import { Close, Collection, CopyDocument, Promotion, Search } from '@element-plu
 import { SplitPane } from '../components/ui/SplitPane'
 import { platformName } from '../shared/format'
 import { api } from '../shared/api'
+import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
 import { iconBadge, sectionTitle } from '../components/ui/Workbench'
 
@@ -36,7 +37,7 @@ export default defineComponent({
     async function loadAccounts() {
       try {
         const { data } = await api.get('/accounts', { params: { feature: 'message', platform: 'dy' } })
-        accounts.value = data.filter((account: Dict) => account.enabled && account.status === 'ready')
+        accounts.value = data.filter((account: Dict) => isAccountFeatureReady(account, 'message'))
         const preferred = accounts.value.find(account => account.default_features?.includes('message')) || accounts.value[0]
         accountId.value = String(preferred?.id || '')
       } catch (error: any) {

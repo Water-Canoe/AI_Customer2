@@ -55,6 +55,27 @@ def test_empty_profile_check_does_not_start_browser(tmp_path: Path, monkeypatch:
     assert asyncio.run(service.check_account("dy", profile_dir)) is False
 
 
+def test_creator_login_can_be_cancelled_while_waiting_for_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cancelled = {"checks": 0, "closed": False}
+
+    async def fake_setup(*_args, **_kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled["closed"] = True
+
+    def cancel_check() -> bool:
+        cancelled["checks"] += 1
+        return cancelled["checks"] > 1
+
+    monkeypatch.setattr(service, "_account_handlers", lambda _: (fake_setup, None))
+
+    with pytest.raises(service.PublishCancelled):
+        asyncio.run(service.login_account("dy", tmp_path / "creator-profile", cancel_check=cancel_check))
+
+    assert cancelled["closed"] is True
+
+
 class _FakeUploader:
     def __init__(self, *, fail_after_submit: bool = False) -> None:
         self.submitted = False

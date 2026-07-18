@@ -15,6 +15,7 @@ import {
 } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
+import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
 import { emptyState, metricTile, sectionTitle } from '../components/ui/Workbench'
@@ -95,7 +96,7 @@ export default defineComponent({
     const pagedSourceVideos = computed(() => pageSlice(filteredSourceVideos.value, sourceVideoPage.value))
     const pagedSourceKeywords = computed(() => pageSlice(keywords.value, sourceKeywordPage.value))
     const availableAccounts = computed(() => accounts.value.filter(account =>
-      account.platform === planDraft.value.platform && account.enabled && account.features?.includes('traffic')
+      account.platform === planDraft.value.platform && isAccountFeatureReady(account, 'traffic')
     ))
 
     onMounted(loadPage)

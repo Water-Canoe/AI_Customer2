@@ -2030,21 +2030,21 @@ def test_account_login_route_enqueues_generic_job(tmp_path: Path, monkeypatch: p
     from app.services import account_center, job_queue
 
     account = account_center.list_accounts(platform="dy")[0]
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, str]] = []
 
-    def fake_enqueue(account_id: str, action: str) -> dict[str, object]:
-        calls.append((account_id, action))
+    def fake_enqueue(account_id: str, action: str, login_kind: str) -> dict[str, object]:
+        calls.append((account_id, action, login_kind))
         return {"ok": True, "account_id": account_id, "action": action}
 
     monkeypatch.setattr(job_queue, "enqueue_account_job", fake_enqueue)
 
-    response = TestClient(app).post(f"/api/accounts/{account['id']}/login")
+    response = TestClient(app).post(f"/api/accounts/{account['id']}/login", params={"login_kind": "user"})
 
     assert response.status_code == 200
-    assert calls == [(account["id"], "login")]
+    assert calls == [(account["id"], "login", "user")]
     updated = account_center.get_account(str(account["id"]))
-    assert updated["status"] == "checking"
-    assert {item["status"] for item in updated["feature_status"].values()} == {"checking"}
+    assert updated["login_status"]["user"]["status"] == "checking"
+    assert updated["login_status"]["creator"]["status"] != "checking"
 
 
 def test_traffic_random_feed_starts_from_homepage(tmp_path: Path) -> None:
