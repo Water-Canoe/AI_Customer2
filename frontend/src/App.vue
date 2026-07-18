@@ -66,6 +66,21 @@
           </span>
           <i class="sidebar-license-dot" aria-hidden="true"></i>
         </button>
+        <button
+          v-if="appPackaged"
+          type="button"
+          class="sidebar-license"
+          title="安全停止任务队列和本地服务"
+          aria-label="安全退出应用"
+          :disabled="exitRequested"
+          @click="exitApplication"
+        >
+          <el-icon><SwitchButton /></el-icon>
+          <span class="sidebar-license-copy">
+            <strong>安全退出</strong>
+            <small>{{ exitRequested ? '正在关闭本地服务' : '关闭任务与本地服务' }}</small>
+          </span>
+        </button>
         <small v-if="appVersion" class="sidebar-version">版本 v{{ appVersion }}</small>
       </div>
     </el-aside>
@@ -132,6 +147,7 @@ import {
   Refresh,
   Setting,
   Share,
+  SwitchButton,
   Tickets,
   VideoPlay,
 } from '@element-plus/icons-vue'
@@ -179,7 +195,9 @@ const licenseLoading = ref(false)
 const licenseChecking = ref(false)
 const licenseCodeDraft = ref('')
 const updateChecking = ref(false)
+const exitRequested = ref(false)
 const appVersion = ref('')
+const appPackaged = ref(false)
 const messageKeywords = ref<Dict[]>([])
 const messageCustomers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const messageDetail = ref<Dict>({})
@@ -455,6 +473,24 @@ async function checkForUpdates() {
   } catch (error: any) {
     updateChecking.value = false
     ElMessage.error(error?.response?.data?.detail || '无法启动更新检查')
+  }
+}
+
+async function exitApplication() {
+  try {
+    const taskNotice = workbenchStatus.value.active ? '当前仍有任务，退出时会安全停止或标记中断。' : '当前没有运行中的任务。'
+    await ElMessageBox.confirm(`${taskNotice} 确认关闭应用和本地服务？`, '安全退出', { type: 'warning' })
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    throw error
+  }
+  exitRequested.value = true
+  try {
+    const { data } = await api.post('/system/exit')
+    ElMessage.success(data.message || '应用正在安全退出')
+  } catch (error: any) {
+    exitRequested.value = false
+    ElMessage.error(error?.response?.data?.detail || '无法安全退出应用')
   }
 }
 
@@ -1582,7 +1618,10 @@ watch(activeView, () => {
 
 onMounted(async () => {
   // 版本在当前进程内不会变化，只需在页面启动时读取一次。
-  const versionRequest = api.get('/health').then(({ data }) => appVersion.value = String(data.version || '')).catch(() => undefined)
+  const versionRequest = api.get('/health').then(({ data }) => {
+    appVersion.value = String(data.version || '')
+    appPackaged.value = Boolean(data.packaged)
+  }).catch(() => undefined)
   await Promise.all([refreshAll(), loadLicense(true), versionRequest])
   autoSync.start()
 })

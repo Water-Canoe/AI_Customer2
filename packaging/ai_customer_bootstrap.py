@@ -11,6 +11,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+import webbrowser
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
@@ -632,6 +633,19 @@ def _wait_for_process_exit(pid: int, timeout_ms: int = 120_000) -> None:
         raise RuntimeError("等待应用关闭失败，无法开始检查更新")
 
 
+def _running_workbench_url() -> str:
+    for port in [8000, *range(8010, 8030)]:
+        url = f"http://127.0.0.1:{port}"
+        try:
+            with urllib.request.urlopen(f"{url}/api/health", timeout=0.2) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (OSError, ValueError, urllib.error.URLError):
+            continue
+        if payload.get("status") == "ok" and payload.get("product") == "ai-customer":
+            return url
+    return ""
+
+
 def main() -> None:
     source_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
     progress_window: _UpdateProgressWindow | None = None
@@ -646,6 +660,9 @@ def main() -> None:
         parent_pid = _manual_update_parent_pid()
         if parent_pid is not None:
             _wait_for_process_exit(parent_pid)
+        elif running_url := _running_workbench_url():
+            webbrowser.open(running_url)
+            return
         _recover_interrupted_update(source_root)
         current_version(source_root)
         validate_environment(source_root)

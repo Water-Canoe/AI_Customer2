@@ -332,6 +332,19 @@ def test_manual_update_reports_latest_and_validates_wait_pid(tmp_path: Path, mon
         ai_customer_bootstrap._manual_update_parent_pid(["AI_Customer.exe", "--wait-for-pid", "invalid"])
 
 
+def test_stable_launcher_finds_an_existing_workbench(monkeypatch: pytest.MonkeyPatch) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+
+    def fake_urlopen(request: object, **_: object):
+        if "8010" not in str(request):
+            raise ai_customer_bootstrap.urllib.error.URLError("closed")
+        return io.BytesIO(json.dumps({"status": "ok", "product": "ai-customer"}).encode())
+
+    monkeypatch.setattr(ai_customer_bootstrap.urllib.request, "urlopen", fake_urlopen)
+
+    assert ai_customer_bootstrap._running_workbench_url() == "http://127.0.0.1:8010"
+
+
 def test_update_identity_uses_windows_bound_device_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ai_customer_bootstrap = _bootstrap_module()
     data_dir = tmp_path / "data"

@@ -25,6 +25,9 @@ def test_public_settings_mask_secrets_and_reject_internal_overrides(tmp_path: Pa
         database.set_setting(conn, "license_server_url", "https://should-not-be-used.invalid")
 
     client = TestClient(app)
+    health = client.get("/api/health").json()
+    assert health["product"] == "ai-customer"
+    assert health["packaged"] is False
     settings = client.get("/api/settings").json()
     assert settings["ai_api_key"] == ""
     assert settings["ai_api_key_configured"] is True
@@ -52,9 +55,16 @@ def test_public_settings_mask_secrets_and_reject_internal_overrides(tmp_path: Pa
 
     server = SimpleNamespace(should_exit=False)
     app.state.uvicorn_server = server
+    response = client.post("/api/system/exit")
+    assert response.status_code == 200
+    assert server.should_exit is True
+    del app.state.shutdown_requested
+    server.should_exit = False
     started: list[bool] = []
     monkeypatch.setattr(system, "_start_manual_update_launcher", lambda: started.append(True))
     response = client.post("/api/system/check-update")
     assert response.status_code == 200
     assert started == [True]
     assert server.should_exit is True
+    del app.state.uvicorn_server
+    del app.state.update_restart_requested

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
 import socket
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import webbrowser
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import uvicorn
@@ -63,10 +68,55 @@ def choose_port(default: int = 8000) -> int:
     raise RuntimeError("No free local port found between 8000 and 8029")
 
 
-def open_browser_later(url: str) -> None:
-    """Open the browser after uvicorn has a short moment to start."""
-    time.sleep(1.5)
-    webbrowser.open(url)
+def workbench_url_if_ready(port: int, timeout: float = 0.5) -> str:
+    url = f"http://127.0.0.1:{port}"
+    try:
+        with urllib.request.urlopen(f"{url}/api/health", timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return ""
+    return url if payload.get("status") == "ok" and payload.get("product") == "ai-customer" else ""
+
+
+def existing_workbench_url() -> str:
+    for port in [8000, *range(8010, 8030)]:
+        if url := workbench_url_if_ready(port, 0.2):
+            return url
+    return ""
+
+
+def open_browser_when_ready(url: str, timeout_seconds: float = 60.0) -> bool:
+    """Open the browser only after FastAPI finishes its startup lifecycle."""
+    deadline = time.monotonic() + timeout_seconds
+    port = int(url.rsplit(":", 1)[1])
+    while time.monotonic() < deadline:
+        if workbench_url_if_ready(port):
+            webbrowser.open(url)
+            return True
+        time.sleep(0.25)
+    _show_error("本地服务启动超时，请关闭软件后重试。详细原因已写入 data/logs/app.log。")
+    return False
+
+
+def configure_persistent_logging(data_dir: Path) -> Path:
+    log_dir = data_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "app.log"
+    handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logging.getLogger().addHandler(handler)
+    for name in ("uvicorn.error", "uvicorn.access"):
+        logging.getLogger(name).addHandler(handler)
+    return log_path
+
+
+def _show_error(message: str) -> None:
+    if os.name == "nt":
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, "AI拓客工具", 0x10)
+    else:
+        print(message)
 
 
 def run_internal_mode(base_dir: Path) -> bool:
@@ -106,18 +156,31 @@ def main() -> None:
     if run_internal_mode(base_dir):
         return
     if another_instance_running():
+        if url := existing_workbench_url():
+            webbrowser.open(url)
+        else:
+            _show_error("AI拓客工具已经运行，但暂时无法打开工作台，请稍后重试。")
         return
     configure_environment(base_dir)
     from app.main import app
 
     port = choose_port()
     url = f"http://127.0.0.1:{port}"
-    threading.Thread(target=open_browser_later, args=(url,), daemon=True).start()
+    threading.Thread(target=open_browser_when_ready, args=(url,), daemon=True).start()
     print(f"AI拓客工具已启动：{url}")
     print("关闭这个窗口即可停止本地服务。")
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info"))
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info")
+    log_path = configure_persistent_logging(Path(os.environ["AI_CUSTOMER_DATA_DIR"]))
+    server = uvicorn.Server(config)
     app.state.uvicorn_server = server
-    server.run()
+    try:
+        server.run()
+        if not server.started:
+            raise RuntimeError("本地服务未能完成启动")
+    except Exception as exc:
+        logging.getLogger(__name__).exception("AI拓客工具本地服务异常退出")
+        _show_error(f"AI拓客工具启动失败：{exc}\n\n详细日志：{log_path}")
+        raise
 
 
 if __name__ == "__main__":

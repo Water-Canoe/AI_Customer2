@@ -18,8 +18,13 @@ router = APIRouter(prefix="/api", tags=["system"])
 
 
 @router.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "version": APP_VERSION}
+def health() -> dict[str, object]:
+    return {
+        "status": "ok",
+        "product": "ai-customer",
+        "version": APP_VERSION,
+        "packaged": bool(getattr(sys, "frozen", False)),
+    }
 
 
 @router.get("/workbench/status")
@@ -99,6 +104,19 @@ def check_for_update(request: Request, background_tasks: BackgroundTasks) -> dic
     # 响应发出后让 Uvicorn 正常执行 lifespan 清理，再由稳定启动器检查更新。
     background_tasks.add_task(setattr, server, "should_exit", True)
     return {"ok": True, "message": "应用正在重启并检查更新"}
+
+
+@router.post("/system/exit")
+def exit_application(request: Request, background_tasks: BackgroundTasks) -> dict[str, object]:
+    server = getattr(request.app.state, "uvicorn_server", None)
+    if server is None:
+        raise HTTPException(status_code=400, detail="安全退出仅支持打包版")
+    if getattr(request.app.state, "shutdown_requested", False):
+        raise HTTPException(status_code=409, detail="应用正在退出")
+    request.app.state.shutdown_requested = True
+    # 响应发出后执行 lifespan 清理，确保队列和浏览器会话正确收尾。
+    background_tasks.add_task(setattr, server, "should_exit", True)
+    return {"ok": True, "message": "应用正在安全退出"}
 
 
 @router.get("/system/backups")
