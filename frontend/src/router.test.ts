@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
 import { paginateBackups } from './components/system/DataProtectionPanel'
 import { paginateAccounts } from './pages/GlobalSettingsPage'
+import { batchStatusLabel, resolveSelectedMessageBatch } from './pages/MessageBatchPage'
 import {
   automationPlanTypes,
   movePlan,
@@ -29,11 +30,24 @@ describe('工作台路由', () => {
     expect(logsRoute?.meta?.title).toBe('采集记录')
   })
 
-  it('私信工作台拥有独立设置页', () => {
+  it('私信工作台拆分客户跟进、批次记录和设置页', () => {
+    const workbenchRoute = routes.find(route => route.name === 'message-workbench')
+    const batchesRoute = routes.find(route => route.name === 'message-batches')
     const settingsRoute = routes.find(route => route.name === 'message-settings')
 
+    expect(workbenchRoute?.meta?.title).toBe('客户跟进')
+    expect(batchesRoute?.path).toBe('/message-batches')
+    expect(batchesRoute?.meta?.title).toBe('批次记录')
     expect(settingsRoute?.path).toBe('/message-settings')
     expect(settingsRoute?.meta?.title).toBe('私信设置')
+  })
+
+  it('批次记录保持用户选择并显示额度状态', () => {
+    const batches = [{ id: 'new' }, { id: 'old' }]
+
+    expect(resolveSelectedMessageBatch({ batches, selected_batch_id: 'old' })?.id).toBe('old')
+    expect(resolveSelectedMessageBatch({ batches, selected_batch_id: '' })?.id).toBe('new')
+    expect(batchStatusLabel('quota_reached')).toBe('额度已用完')
   })
 
   it('全局设置统一承载更新、授权和账号入口', () => {

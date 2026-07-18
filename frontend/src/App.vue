@@ -23,6 +23,7 @@
         <el-sub-menu index="message-center">
           <template #title><el-icon><Message /></el-icon><span>私信工作台</span></template>
           <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>客户跟进</span></el-menu-item>
+          <el-menu-item index="message-batches"><el-icon><Tickets /></el-icon><span>批次记录</span></el-menu-item>
           <el-menu-item index="message-settings"><el-icon><Setting /></el-icon><span>私信设置</span></el-menu-item>
         </el-sub-menu>
         <el-sub-menu index="traffic-workbench">
@@ -213,6 +214,7 @@ const {
   filters: messageFilters,
   batches: messageBatches,
   load: loadMessageWorkbench,
+  loadBatches: loadMessageBatches,
   changeFilter: changeMessageWorkbenchFilter,
   selectCustomer: selectMessageWorkbenchCustomer,
   closeDetail: closeMessageWorkbenchDetail,
@@ -347,6 +349,7 @@ const routeProps = computed(() => {
       settings: settings.value,
     }
   }
+  if (activeView.value === 'message-batches') return { batches: messageBatches.value }
   if (activeView.value === 'message-settings') {
     return {
       settings: settings.value,
@@ -458,10 +461,16 @@ const routeListeners = computed(() => {
       'auto-message-customer': autoMessageWorkbenchCustomer,
       'start-auto-message-batch': startMessageAutoBatch,
       'cancel-auto-message-batch': cancelMessageAutoBatch,
-      'retry-auto-message-batch': retryMessageAutoBatch,
-      'delete-auto-message-batch': deleteMessageAutoBatch,
       'update-follow-status': updateMessageWorkbenchFollowStatus,
       'close-detail': closeMessageWorkbenchDetail,
+    }
+  }
+  if (activeView.value === 'message-batches') {
+    return {
+      'select-auto-message-batch': (batch: Dict) => loadMessageBatches(String(batch.id || '')),
+      'cancel-auto-message-batch': cancelMessageAutoBatch,
+      'retry-auto-message-batch': retryMessageAutoBatch,
+      'delete-auto-message-batch': deleteMessageAutoBatch,
     }
   }
   if (activeView.value === 'message-settings') {
@@ -824,6 +833,8 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
   } else if (activeView.value === 'message-workbench') {
     loaders.push(() => loadMessageWorkbench(true))
     if (includeStatic) loaders.push(loadSettings)
+  } else if (activeView.value === 'message-batches') {
+    loaders.push(() => loadMessageBatches())
   } else if (activeView.value === 'message-settings') {
     if (!settingsDraftDirty.value) loaders.push(loadSettings)
     if (includeStatic || refreshChild) loaders.push(async () => { messageSettingsRefreshSeq.value += 1 })

@@ -9,6 +9,7 @@ const PublishCenterPage = () => import('./pages/PublishCenterPage')
 const RuntimeCenterPage = () => import('./pages/RuntimeCenterPage')
 const LogsPage = () => import('./pages/LogsPage')
 const MessageWorkbenchPage = () => import('./pages/MessageWorkbenchPage')
+const MessageBatchPage = () => import('./pages/MessageBatchPage')
 const MessageSettingsPage = () => import('./pages/MessageSettingsPage')
 const OverviewPage = () => import('./pages/OverviewPage')
 const SettingsPage = () => import('./pages/SettingsPage')
@@ -61,7 +62,13 @@ export const routes = [
     path: '/message-workbench',
     name: 'message-workbench',
     component: MessageWorkbenchPage,
-    meta: { title: '私信工作台', subtitle: '按关键词推进客户私信、回访和成交状态。', hint: '把客户变成可执行跟进队列' },
+    meta: { title: '客户跟进', subtitle: '按关键词推进客户私信、回访和成交状态。', hint: '把客户变成可执行跟进队列' },
+  },
+  {
+    path: '/message-batches',
+    name: 'message-batches',
+    component: MessageBatchPage,
+    meta: { title: '批次记录', subtitle: '查看自动私信批次及每位客户的执行结果。', hint: '失败项可从历史批次中重试' },
   },
   {
     path: '/message-settings',

@@ -20,17 +20,27 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
   const filters = ref<Dict>({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 })
   const batches = ref<Dict>({ batches: [], active: null, items: [] })
 
+  async function loadBatches(batchId?: string) {
+    // 未明确切换批次时保留当前选择，避免自动刷新跳回最新批次。
+    const selectedId = batchId === undefined
+      ? String(batches.value.selected_batch_id || '')
+      : String(batchId || '')
+    const { data } = await api.get('/message-workbench/auto-message-batches', {
+      params: selectedId ? { batch_id: selectedId } : {},
+    })
+    batches.value = data
+  }
+
   async function load(silent = false) {
     if (!silent) loading.value = true
     try {
-      const [keywordResponse, customerResponse, batchResponse] = await Promise.all([
+      const [keywordResponse, customerResponse] = await Promise.all([
         api.get('/message-workbench/keywords'),
         api.get('/message-workbench/customers', { params: filters.value }),
-        api.get('/message-workbench/auto-message-batches'),
+        loadBatches(),
       ])
       keywords.value = keywordResponse.data
       customers.value = customerResponse.data
-      batches.value = batchResponse.data
       const detailLeadId = detail.value?.customer?.lead_id
       if (detailLeadId) {
         try {
@@ -135,7 +145,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     try {
       const { data } = await api.post('/message-workbench/auto-message-batches', payload)
       ElMessage.success(`自动私信批次 ${data.id} 已启动`)
-      await load(true)
+      await loadBatches(String(data.id || ''))
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '启动自动私信批次失败')
     }
@@ -147,7 +157,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     try {
       await api.post(`/message-workbench/auto-message-batches/${batchId}/cancel`)
       ElMessage.success('已请求取消自动私信批次')
-      await load(true)
+      await loadBatches(String(batchId))
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '取消自动私信批次失败')
     }
@@ -159,7 +169,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     try {
       const { data } = await api.post(`/message-workbench/auto-message-batches/${batchId}/retry`)
       ElMessage.success(`已创建重试批次 ${data.id}`)
-      await load(true)
+      await loadBatches(String(data.id || ''))
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '重试自动私信批次失败')
     }
@@ -172,7 +182,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
       await ElMessageBox.confirm(`只删除自动私信批次 ${batchId} 的历史记录，不会删除客户数据。确认继续？`, '删除批次记录', { type: 'warning' })
       await api.delete(`/message-workbench/auto-message-batches/${batchId}`)
       ElMessage.success('自动私信批次记录已删除')
-      await load(true)
+      await loadBatches('')
     } catch (error: any) {
       if (error === 'cancel' || error === 'close') return
       ElMessage.error(error?.response?.data?.detail || '删除自动私信批次失败')
@@ -187,6 +197,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     filters,
     batches,
     load,
+    loadBatches,
     changeFilter,
     selectCustomer,
     closeDetail,
