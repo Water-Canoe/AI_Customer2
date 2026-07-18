@@ -2537,7 +2537,7 @@ def test_profile_enrichment_task_uses_creator_mode_and_imports_signature(tmp_pat
     _, raw_db = prepare_project(tmp_path)
 
     from app import database
-    from app.services import crawler_adapter
+    from app.services import account_center, crawler_adapter
     from app.services.importer import import_for_task
 
     with database.connect() as conn:
@@ -2553,6 +2553,7 @@ def test_profile_enrichment_task_uses_creator_mode_and_imports_signature(tmp_pat
     command = str(task["command"])
 
     assert task["mode"] == "profile_enrichment"
+    assert task["account_id"] == account_center.resolve_account_id("dy", "acquisition")
     assert task["crawler_type"] == "creator"
     assert task["creator_id"] == "https://www.douyin.com/user/sec-1"
     assert "--type creator" in command
@@ -2820,7 +2821,7 @@ def test_account_analysis_import_limits_contents_per_account(tmp_path: Path) -> 
 def test_keyword_account_analysis_creates_unanalysed_tasks_and_skips_running(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database
-    from app.services import account_actions, crawler_adapter
+    from app.services import account_actions, account_center, crawler_adapter
 
     with database.connect() as conn:
         target_a = conn.execute(
@@ -2871,7 +2872,7 @@ def test_keyword_account_analysis_creates_unanalysed_tasks_and_skips_running(tmp
     with database.connect() as conn:
         rows = conn.execute(
             """
-            SELECT name, creator_id, mode, status, command
+            SELECT name, creator_id, mode, status, command, account_id
             FROM crawl_jobs
             WHERE mode = 'account_analysis'
             ORDER BY id
@@ -2880,6 +2881,7 @@ def test_keyword_account_analysis_creates_unanalysed_tasks_and_skips_running(tmp
     pending_rows = [row for row in rows if row["status"] == "pending"]
     assert len(pending_rows) == 1
     assert pending_rows[0]["name"] == "账号分析-2个竞品账号"
+    assert pending_rows[0]["account_id"] == account_center.resolve_account_id("dy", "acquisition")
     assert pending_rows[0]["creator_id"] == "https://www.douyin.com/user/target-b,https://www.douyin.com/user/target-a"
     assert "--creator_id https://www.douyin.com/user/target-b,https://www.douyin.com/user/target-a" in pending_rows[0]["command"]
     assert all(row["mode"] == "account_analysis" for row in rows)
@@ -3788,6 +3790,7 @@ def test_profile_enrichment_accepts_kuaishou_creator_store(tmp_path: Path) -> No
 
 def test_batch_profile_enrichment_creates_limited_deduped_tasks(tmp_path: Path) -> None:
     prepare_project(tmp_path)
+    create_ready_test_account("xhs")
     from app import database
     from app.main import app
     from app.services import crawler_adapter

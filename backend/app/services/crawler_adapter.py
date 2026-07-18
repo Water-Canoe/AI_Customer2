@@ -346,6 +346,8 @@ def create_profile_enrichment_task(
         headless = database.get_setting(conn, "headless", "false") == "true"
 
     nickname = str(account.get("nickname") or account_id)
+    # 创建任务时固定拓客账号，避免运行时才发现未配置默认账号。
+    execution_account_id = account_center.resolve_account_id(platform, "acquisition")
     task = create_task(
         TaskCreate(
             name=f"{name_prefix}-{nickname}",
@@ -360,6 +362,7 @@ def create_profile_enrichment_task(
             max_concurrency=1,
             headless=headless,
             execute_crawler=True,
+            account_id=execution_account_id,
         )
     )
     with database.connect() as conn:

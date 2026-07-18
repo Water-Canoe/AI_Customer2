@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from app import database
 from app.schemas import TaskCreate
-from app.services import ai_service, crawler_adapter, deletion
+from app.services import account_center, ai_service, crawler_adapter, deletion
 from app.services import tombstones
 
 
@@ -122,6 +122,9 @@ def _build_account_analysis_task(
             "skipped": skipped,
         }
 
+    # 创建任务时固定拓客账号，避免排队期间默认账号变化。
+    if not execution_account_id:
+        execution_account_id = account_center.resolve_account_id(platform, "acquisition")
     creator_ids = ",".join(item["creator_id"] for item in accounts)
     task = crawler_adapter.create_task(
         TaskCreate(
