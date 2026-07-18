@@ -537,6 +537,8 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 2026-07-18 已使用 `-ProgramOnly` 生成远程更新版本 `deliverables/1.2.9/AI_Customer_Program_1.2.9.zip`：大小 139,619,055 字节，SHA-256 为 `2c31d8690c44644d4cdd17d5057a086dfb7b18c9e6209bfde3bbc2b8ebdc2afd`，schema 为 10，要求 Environment `1.0.1`。构建前回归为前端 15 项通过、后端 403 项通过且 8 项联网测试跳过；Program ZIP 已通过白名单、文件哈希和 Ed25519 签名校验并上传 Sealos，`stable` 当前已启用、非强制、灰度 100%。
 
+2026-07-19 已使用 `-ProgramOnly` 生成远程更新版本 `deliverables/1.2.10/AI_Customer_Program_1.2.10.zip`：大小 139,696,362 字节，SHA-256 为 `b831168e13d88bc2df9c1fb35e9ab661310b24fb9247976ac988b987bdf13af2`，schema 为 12，要求 Environment `1.0.1`。构建前回归为前端 23 项通过、后端 431 项通过且 8 项联网测试跳过；Program ZIP 已通过白名单、文件哈希和 Ed25519 签名校验并上传 Sealos，`stable` 当前已启用、非强制、灰度 100%。本版包含新版稳定启动器，但已安装客户端的远程更新仍不会覆盖正在运行的 `AI_Customer.exe`；更新事务回滚与新版设备身份读取必须手动替换该启动器后才生效。
+
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。平台登录作为统一账号任务在后端浏览器队列中运行，不再启动带 `--internal-platform-login` 参数的第二个主程序；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
 稳定启动器已经实现授权身份读取、远端更新检查、用户确认、可视化进度、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。下载包每次解压到全新的 `<版本>.extracting` 目录并完成发布清单校验，不再复用上次中断留下的半成品。安装前只把当前发布清单管理的程序文件保存到 `updates/rollback/`，并写入持久化更新事务；异常、断电或进程退出后，当前或下次稳定启动器会恢复旧程序、旧清单并删除新版本独有文件，成功更新则删除旧版本已经取消的程序文件。回滚不复制 `data/`、MyCrawler、CloakBrowser、Python 环境或模型。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；本次确认和进度功能本身位于稳定启动器，因此首次交付该能力必须重新手动发送包含新 `AI_Customer.exe` 的 Program ZIP，不能由旧启动器自我更新。签名更新清单同时声明环境版本，客户端只安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。数据库 schema 升级前仍按迁移规则备份；如果需要回到无法读取新 schema 的旧程序，必须同时恢复对应迁移前备份。
