@@ -6865,7 +6865,8 @@ button.filter-button:hover,
 }
 
 /* 长页面只滚动主工作区，保持左侧导航和顶部状态栏固定。 */
-.main.view-automation-plans {
+.main.view-automation-plans,
+.main.view-global-settings {
   overflow-y: auto;
 }
 
