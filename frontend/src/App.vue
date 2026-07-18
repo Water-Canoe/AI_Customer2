@@ -148,6 +148,7 @@ import { api } from './shared/api'
 import type { Dict } from './shared/types'
 import { competitorStatusLabel, platformName } from './shared/format'
 import { createAutoSyncController, type AutoSyncReason } from './composables/autoSync'
+import { selectDmScript, useMessageWorkbench } from './composables/messageWorkbench'
 import { LicenseDialog } from './components/ui/LicenseDialog'
 
 const router = useRouter()
@@ -189,12 +190,6 @@ const updateChecking = ref(false)
 const exitRequested = ref(false)
 const appVersion = ref('')
 const appPackaged = ref(false)
-const messageKeywords = ref<Dict[]>([])
-const messageCustomers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
-const messageDetail = ref<Dict>({})
-const messageLoading = ref(false)
-const messageFilters = ref<Dict>({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 })
-const messageBatches = ref<Dict>({ batches: [], active: null, items: [] })
 const trafficEnv = ref<Dict>({})
 const trafficRefreshSeq = ref(0)
 const automationRefreshSeq = ref(0)
@@ -209,6 +204,29 @@ const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, tota
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
 const sidebarMenu = ref<any>(null)
 let settingsMutationSeq = 0
+
+const {
+  keywords: messageKeywords,
+  customers: messageCustomers,
+  detail: messageDetail,
+  loading: messageLoading,
+  filters: messageFilters,
+  batches: messageBatches,
+  load: loadMessageWorkbench,
+  changeFilter: changeMessageWorkbenchFilter,
+  selectCustomer: selectMessageWorkbenchCustomer,
+  closeDetail: closeMessageWorkbenchDetail,
+  updateFollowStatus: updateMessageWorkbenchFollowStatus,
+  messageCustomer: messageWorkbenchCustomer,
+  autoMessageCustomer: autoMessageWorkbenchCustomer,
+  startBatch: startMessageAutoBatch,
+  cancelBatch: cancelMessageAutoBatch,
+  retryBatch: retryMessageAutoBatch,
+  deleteBatch: deleteMessageAutoBatch,
+} = useMessageWorkbench({
+  settings,
+  refreshRelated: () => Promise.allSettled([loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)]),
+})
 
 const activeView = computed(() => String(route.name || 'tasks'))
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
@@ -736,32 +754,6 @@ async function loadTombstones(filters: Dict = {}) {
   tombstones.value = data
 }
 
-async function loadMessageWorkbench(silent = false) {
-  if (!silent) messageLoading.value = true
-  try {
-    const [keywords, customers, batches] = await Promise.all([
-      api.get('/message-workbench/keywords'),
-      api.get('/message-workbench/customers', { params: messageFilters.value }),
-      api.get('/message-workbench/auto-message-batches')
-    ])
-    messageKeywords.value = keywords.data
-    messageCustomers.value = customers.data
-    messageBatches.value = batches.data
-    const detailLeadId = messageDetail.value?.customer?.lead_id
-    if (detailLeadId) {
-      try {
-        const detail = await api.get(`/message-workbench/customers/${detailLeadId}`)
-        messageDetail.value = detail.data
-      } catch (error: any) {
-        if (error?.response?.status === 404) messageDetail.value = {}
-        else throw error
-      }
-    }
-  } finally {
-    if (!silent) messageLoading.value = false
-  }
-}
-
 async function loadTrafficShell() {
   const { data } = await api.get('/traffic/environment-check')
   trafficEnv.value = data
@@ -1216,19 +1208,7 @@ async function updateOverviewCustomerFollowStatus(node: Dict, status: string) {
 }
 
 function selectedDmScript(aiScript: unknown) {
-  const fixedMode = String(settings.value.dm_script_mode || 'ai') === 'fixed'
-  if (fixedMode) {
-    return {
-      text: String(settings.value.fixed_dm_script || '').trim(),
-      label: '固定话术',
-      emptyMessage: '固定话术为空，请先到“私信设置”填写固定话术',
-    }
-  }
-  return {
-    text: String(aiScript || '').trim(),
-    label: 'AI话术',
-    emptyMessage: '当前客户暂无AI话术，请先做意向分析',
-  }
+  return selectDmScript(settings.value, aiScript)
 }
 
 async function messageOverviewCustomer(node: Dict) {
@@ -1271,176 +1251,6 @@ async function messageOverviewCustomer(node: Dict) {
     await Promise.allSettled([loadOverview(), loadTable(activeLibrary.value), loadAiJobs()])
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '私信操作失败')
-  }
-}
-
-async function changeMessageWorkbenchFilter(filters: Dict) {
-  messageFilters.value = {
-    ...messageFilters.value,
-    ...filters,
-    page: Number(filters.page || 1),
-  }
-  await loadMessageWorkbench()
-}
-
-async function selectMessageWorkbenchCustomer(leadId: number | string) {
-  const { data } = await api.get(`/message-workbench/customers/${leadId}`)
-  messageDetail.value = data
-}
-
-function closeMessageWorkbenchDetail() {
-  messageDetail.value = {}
-}
-
-async function updateMessageWorkbenchFollowStatus(row: Dict, status: string) {
-  const leadId = row.lead_id || row.id
-  if (!leadId) {
-    ElMessage.error('当前客户缺少线索ID，无法修改状态')
-    return
-  }
-  try {
-    await api.patch(`/overview/customers/${leadId}/follow-status`, {
-      follow_status: status,
-      note: '私信工作台修改跟进状态'
-    })
-    ElMessage.success(`已更新为“${status}”`)
-    await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '修改跟进状态失败')
-  }
-}
-
-async function messageWorkbenchCustomer(row: Dict) {
-  const leadId = row.lead_id || row.id
-  const scriptSelection = selectedDmScript(row.script)
-  const profileUrl = String(row.profile_url || '').trim()
-  if (!leadId) {
-    ElMessage.error('当前客户缺少线索ID，无法标记私信')
-    return
-  }
-  if (!scriptSelection.text) {
-    ElMessage.error(scriptSelection.emptyMessage)
-    return
-  }
-  if (!profileUrl) {
-    ElMessage.error('当前客户缺少主页链接，无法打开主页')
-    return
-  }
-  try {
-    const homepage = window.open(profileUrl, '_blank')
-    if (!homepage) {
-      ElMessage.warning('浏览器拦截了主页窗口，未复制话术，也未修改跟进状态')
-      return
-    }
-    homepage.opener = null
-    await navigator.clipboard.writeText(scriptSelection.text)
-
-    const currentStatus = String(row.follow_status || row.screening_status || '未私信')
-    const shouldMarkMessaged = ['待筛选', '未分析', '目标客户', '未私信'].includes(currentStatus)
-    if (shouldMarkMessaged) {
-      await api.patch(`/overview/customers/${leadId}/follow-status`, {
-        follow_status: '已私信',
-        note: `私信工作台：复制${scriptSelection.label}并打开客户主页`,
-        record_message_attempt: true,
-      })
-      ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开，跟进状态已更新为“已私信”`)
-    } else {
-      ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
-    }
-    await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '私信操作失败')
-  }
-}
-
-async function autoMessageWorkbenchCustomer(row: Dict) {
-  const leadId = row.lead_id || row.id
-  const scriptSelection = selectedDmScript(row.script)
-  if (!leadId) {
-    ElMessage.error('当前客户缺少线索ID，无法自动私信')
-    return
-  }
-  if (row.platform !== 'dy') {
-    ElMessage.error('自动私信当前只支持抖音客户')
-    return
-  }
-  if (!scriptSelection.text) {
-    ElMessage.error(scriptSelection.emptyMessage)
-    return
-  }
-  try {
-    const { data } = await api.post(`/message-workbench/customers/${leadId}/auto-message`, {
-      dry_run: Boolean(settings.value.auto_dm_fill_only),
-      timeout_seconds: Number(settings.value.auto_dm_timeout_seconds || 0),
-      message_script: scriptSelection.text,
-      script_label: scriptSelection.label,
-      account_id: String(row.account_id || '')
-    })
-    ElMessage.success(`自动私信已加入队列：${String(data?.id || '').slice(0, 8)}`)
-    await Promise.allSettled([loadMessageWorkbench(true), loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)])
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '自动私信失败')
-  }
-}
-
-async function startMessageAutoBatch(payload: Dict) {
-  if (String(payload.platform || '') !== 'dy') {
-    ElMessage.info('AI一键私信已跳过快手/小红书平台，请选择抖音关键词')
-    return
-  }
-  try {
-    const { data } = await api.post('/message-workbench/auto-message-batches', payload)
-    ElMessage.success(`自动私信批次 ${data.id} 已启动`)
-    await loadMessageWorkbench(true)
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '启动自动私信批次失败')
-  }
-}
-
-async function cancelMessageAutoBatch(batch: Dict) {
-  const batchId = batch?.id
-  if (!batchId) {
-    ElMessage.error('当前批次缺少ID，无法取消')
-    return
-  }
-  try {
-    await api.post(`/message-workbench/auto-message-batches/${batchId}/cancel`)
-    ElMessage.success('已请求取消自动私信批次')
-    await loadMessageWorkbench(true)
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '取消自动私信批次失败')
-  }
-}
-
-async function retryMessageAutoBatch(batch: Dict) {
-  const batchId = batch?.id
-  if (!batchId) {
-    ElMessage.error('当前批次缺少ID，无法重试')
-    return
-  }
-  try {
-    const { data } = await api.post(`/message-workbench/auto-message-batches/${batchId}/retry`)
-    ElMessage.success(`已创建重试批次 ${data.id}`)
-    await loadMessageWorkbench(true)
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '重试自动私信批次失败')
-  }
-}
-
-async function deleteMessageAutoBatch(batch: Dict) {
-  const batchId = batch?.id
-  if (!batchId) {
-    ElMessage.error('当前批次缺少ID，无法删除')
-    return
-  }
-  try {
-    await ElMessageBox.confirm(`只删除自动私信批次 ${batchId} 的历史记录，不会删除客户数据。确认继续？`, '删除批次记录', { type: 'warning' })
-    await api.delete(`/message-workbench/auto-message-batches/${batchId}`)
-    ElMessage.success('自动私信批次记录已删除')
-    await loadMessageWorkbench(true)
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close') return
-    ElMessage.error(error?.response?.data?.detail || '删除自动私信批次失败')
   }
 }
 
