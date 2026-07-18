@@ -51,6 +51,8 @@
 
 仓库根目录只保留项目级配置和源码入口：`backend/`、`frontend/`、`script/`、`packaging/`、`tools/` 与 `docs/` 属于本项目源码或文档；`MyCrawler/` 和 `GitItem/` 是本机外部参考仓库，不纳入本项目 Git；`data/`、`runtime/` 是本机运行数据，`build/`、`dist/`、`output/` 是构建中间产物，`deliverables/` 是唯一客户交付物目录，这些目录均不属于源码。Sealos 授权和更新协议统一放在 `docs/deployment/`，临时日志、PyInstaller `.spec` 和文档预览图不得留在根目录。
 
+`docs/AI_Customer_Blind_Watermark_统一规范.md` 记录两个 Windows 桌面项目在 CloakBrowser、设备身份与授权、统一运行队列、稳定启动器、双 ZIP 交付、Sealos 发布更新和数据保护方面的共同标准。该文档用于指导 Blind_Watermark 移植已验证的共性机制，同时明确保留其浏览器专用线程、候选版本健康检查和整目录回滚等更强实现，不要求两个不同打包器使用相同内部目录。
+
 后端依赖分为 `requirements.txt` 运行依赖和 `requirements-dev.txt` 开发/测试/打包工具；开发环境安装后者，客户环境和页面环境修复只安装前者。Pytest、PyInstaller 与仅供 Starlette 测试客户端使用的 HTTPX2 不再进入客户运行依赖，打包器固定为已经验收的 6.21.0。FastAPI 固定为 0.139.0、Starlette 固定为 1.3.1，使主服务与 VoxCPM 间接安装的 Gradio 共用同一依赖版本，避免开发环境冲突和安装结果漂移。
 
 后端只从已经解析的前端 `dist` 目录提供静态文件；请求路径必须在该目录的父子关系内，不能使用 `..` 读取名称前缀相同的相邻目录。未匹配到真实静态文件时只返回前端 `index.html`。
