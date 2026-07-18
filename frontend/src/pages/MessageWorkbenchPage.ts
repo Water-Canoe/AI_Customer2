@@ -352,7 +352,7 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict, accountId: stri
   const rawScript = String(row.script || '').trim()
   const script = rawScript || '暂无AI话术'
   const sendScript = selectedMessageScript(row, settings)
-  const missingScriptTip = scriptMode(settings) === 'fixed' ? '固定话术为空，请先到设置页填写' : '暂无AI话术'
+  const missingScriptTip = scriptMode(settings) === 'fixed' ? '固定话术为空，请先到“私信设置”填写' : '暂无AI话术'
   const autoDmUnsupported = row.platform !== 'dy'
   return h('tr', { class: row.overdue ? 'is-overdue' : '', onClick: () => emit('select-customer', row.lead_id) }, [
     h('td', { class: 'message-customer-cell' }, [

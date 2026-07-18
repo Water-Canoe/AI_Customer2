@@ -47,7 +47,7 @@ export default defineComponent({
 
     async function loadLimits(showError = true) {
       try {
-        const { data } = await api.get('/automation/message-limits')
+        const { data } = await api.get('/message-workbench/limits')
         limits.value = data || {}
         limitDraft.daily_limit = Number(data.daily_limit || 100)
         limitDraft.hourly_limit = Number(data.hourly_limit || 40)
@@ -59,7 +59,7 @@ export default defineComponent({
     async function saveLimits() {
       limitSaving.value = true
       try {
-        const { data } = await api.put('/automation/message-limits', limitDraft)
+        const { data } = await api.put('/message-workbench/limits', limitDraft)
         limits.value = data
         ElMessage.success('私信频率额度已保存')
       } catch (error: any) {

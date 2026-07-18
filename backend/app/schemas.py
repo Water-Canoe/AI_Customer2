@@ -373,6 +373,6 @@ class AutomationPlanOrderUpdate(BaseModel):
     plan_ids: list[str] = Field(min_length=1, max_length=500)
 
 
-class AutomationMessageLimitsUpdate(BaseModel):
+class MessageLimitsUpdate(BaseModel):
     daily_limit: int = Field(ge=1, le=100)
     hourly_limit: int = Field(ge=1, le=40)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api_dependencies import require_license, require_license_for
-from app.schemas import AutomationMessageLimitsUpdate, AutomationPlanCreate, AutomationPlanOrderUpdate, AutomationPlanPatch
+from app.schemas import AutomationPlanCreate, AutomationPlanOrderUpdate, AutomationPlanPatch
 from app.services import automation_workbench, job_queue
 
 
@@ -88,16 +88,6 @@ def cancel_automation_run(run_id: str) -> dict[str, object]:
         return automation_workbench.cancel_run(run_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/message-limits")
-def automation_message_limits() -> dict[str, object]:
-    return automation_workbench.get_message_limits()
-
-
-@router.put("/message-limits")
-def update_automation_message_limits(payload: AutomationMessageLimitsUpdate) -> dict[str, object]:
-    return automation_workbench.update_message_limits(payload.daily_limit, payload.hourly_limit)
 
 
 def _require_plan_license(plan_type: str) -> None:

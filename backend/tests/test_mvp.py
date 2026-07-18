@@ -5810,6 +5810,11 @@ def test_api_health_and_settings(tmp_path: Path) -> None:
         for scope in ("message", "traffic", "content", "automation", "runtime")
     )
     assert client.get("/api/workbench/status", params={"scope": "unknown"}).status_code == 400
+    limits = client.put("/api/message-workbench/limits", json={"daily_limit": 80, "hourly_limit": 20})
+    assert limits.status_code == 200
+    assert limits.json()["daily_limit"] == 80
+    assert client.get("/api/message-workbench/limits").json()["hourly_limit"] == 20
+    assert client.get("/api/automation/message-limits").status_code == 404
     task_response = client.get(f"/api/tasks/{task['id']}")
     assert task_response.status_code == 200
     assert task_response.json()["outcome"]["counts"]["leads"] == 1

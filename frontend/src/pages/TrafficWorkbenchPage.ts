@@ -559,8 +559,6 @@ export default defineComponent({
           ]),
         ]),
         side: () => h('aside', { class: 'pane side-pane traffic-settings-side traffic-split-side' }, [
-          sectionTitle({ title: '登录态', subtitle: '统一由账号中心维护', icon: VideoPlay, tone: 'blue', compact: true }),
-          h('p', { class: 'traffic-env-suggestion' }, '引流计划会固定使用创建时选择的账号；扫码登录、状态检查和默认账号请到账号中心处理。'),
           renderTrafficEnvironment(),
           sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Delete, tone: 'red', compact: true }),
           h('button', { class: 'text-icon-button danger', onClick: clearRecords }, [h(Delete, { class: 'inline-icon' }), '清除引流记录']),

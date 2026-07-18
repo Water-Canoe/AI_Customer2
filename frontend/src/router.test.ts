@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { assetMatchesSegment, filterMaterialAssets, paginateMaterialAssets } from './pages/ContentWorkbenchPage'
-import { paginateBackups } from './pages/SettingsPage'
+import { paginateBackups } from './components/system/DataProtectionPanel'
+import { paginateAccounts } from './pages/GlobalSettingsPage'
 import {
   automationPlanTypes,
   movePlan,
@@ -111,5 +112,12 @@ describe('工作台路由', () => {
 
     expect(paginateBackups(backups, 2, 5).items.map(item => item.id)).toEqual(['5'])
     expect(paginateBackups(backups.slice(0, 5), 2, 5).page).toBe(1)
+  })
+
+  it('平台账号分页限制全局设置页面长度', () => {
+    const accounts = Array.from({ length: 7 }, (_, index) => ({ id: String(index) }))
+
+    expect(paginateAccounts(accounts, 1, 6).items).toHaveLength(6)
+    expect(paginateAccounts(accounts, 2, 6).items[0].id).toBe('6')
   })
 })

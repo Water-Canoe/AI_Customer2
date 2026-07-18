@@ -1,12 +1,14 @@
 import { defineComponent, h, onMounted, onUnmounted, ref, watch, type PropType } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Key, Plus, Refresh, User } from '@element-plus/icons-vue'
+import { DataAnalysis, Key, Plus, Refresh, User } from '@element-plus/icons-vue'
 
+import { DataProtectionPanel } from '../components/system/DataProtectionPanel'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 const FEATURES = ['acquisition', 'message', 'traffic', 'publish']
+const ACCOUNT_PAGE_SIZE = 6
 const ROLE_FEATURES: Record<string, string[]> = {
   brand: ['message', 'publish'],
   service: ['message'],
@@ -23,18 +25,24 @@ export default defineComponent({
     appVersion: { type: String, default: '' },
     appPackaged: { type: Boolean, default: false },
     updateChecking: { type: Boolean, default: false },
+    tombstoneSummary: { type: Object as PropType<Dict>, default: () => ({}) },
+    tombstones: { type: Object as PropType<Dict>, default: () => ({ items: [] }) },
+    tombstoneFilters: { type: Object as PropType<Dict>, default: () => ({}) },
   },
-  emits: ['open-license', 'check-update'],
+  emits: ['open-license', 'check-update', 'clear-data', 'load-tombstones'],
   setup(props, { emit }) {
     const accounts = ref<Dict[]>([])
     const draft = ref<Dict>({ platform: 'dy', name: '', role: 'brand' })
     const loading = ref(false)
+    const activeSection = ref<'system' | 'accounts' | 'data'>('system')
+    const accountPage = ref(1)
     let timer = 0
 
     async function loadAccounts(showError = true) {
       try {
         const { data } = await api.get('/accounts')
         accounts.value = data
+        accountPage.value = Math.min(accountPage.value, Math.max(1, Math.ceil(accounts.value.length / ACCOUNT_PAGE_SIZE)))
       } catch (error: any) {
         if (showError) ElMessage.error(error?.response?.data?.detail || '账号列表加载失败')
       }
@@ -50,6 +58,7 @@ export default defineComponent({
           default_features: [],
         })
         draft.value.name = ''
+        accountPage.value = 1
         ElMessage.success('账号已创建，请完成扫码登录并设置默认用途')
         await loadAccounts()
       } catch (error: any) {
@@ -120,8 +129,62 @@ export default defineComponent({
     onUnmounted(() => window.clearInterval(timer))
     watch(() => props.refreshSeq, () => loadAccounts())
 
-    return () => h('div', { class: 'account-center-page' }, [
-      h('section', { class: 'pane global-settings-pane' }, [
+    return () => {
+      const paged = paginateAccounts(accounts.value, accountPage.value, ACCOUNT_PAGE_SIZE)
+      const content = activeSection.value === 'system'
+        ? [renderSystemSettings()]
+        : activeSection.value === 'accounts'
+          ? [
+              h('section', { class: 'pane account-create-pane' }, [
+                sectionTitle({ title: '统一账号中心', subtitle: '一个账号对应一个独立登录态，所有工作台从这里选择', icon: User, tone: 'teal', aside: h('button', { class: 'secondary-action', onClick: () => loadAccounts() }, [h(Refresh, { class: 'inline-icon' }), '刷新']) }),
+                h('div', { class: 'account-create-row' }, [
+                  h('select', { value: draft.value.platform, onChange: (event: Event) => draft.value.platform = (event.target as HTMLSelectElement).value }, [
+                    h('option', { value: 'dy' }, '抖音'), h('option', { value: 'xhs' }, '小红书'), h('option', { value: 'ks' }, '快手'),
+                  ]),
+                  h('select', { value: draft.value.role, onChange: (event: Event) => draft.value.role = (event.target as HTMLSelectElement).value }, Object.keys(ROLE_FEATURES).map(role => h('option', { value: role }, roleLabel(role)))),
+                  h('input', { value: draft.value.name, placeholder: '账号名称，例如：品牌主账号', onInput: (event: Event) => draft.value.name = (event.target as HTMLInputElement).value }),
+                  h('button', { class: 'primary-action', disabled: loading.value, onClick: createAccount }, [h(Plus, { class: 'inline-icon' }), loading.value ? '创建中...' : '添加账号']),
+                ]),
+                h('p', { class: 'muted-text' }, '品牌账号只允许私信和内容发布；拓客、引流等高风险操作请使用运营号、引流号或测试号。'),
+              ]),
+              accounts.value.length
+                ? h('div', { class: 'account-center-grid' }, paged.items.map(renderAccount))
+                : emptyState({ title: '还没有平台账号', description: '先添加账号，再扫码登录并分配用途', icon: User }),
+              paged.totalPages > 1 ? h('div', { class: 'table-page-controls account-center-pages' }, [
+                h('button', { disabled: paged.page <= 1, onClick: () => { accountPage.value -= 1 } }, '上一页'),
+                h('span', `${paged.page} / ${paged.totalPages} · 共 ${accounts.value.length} 个账号`),
+                h('button', { disabled: paged.page >= paged.totalPages, onClick: () => { accountPage.value += 1 } }, '下一页'),
+              ]) : null,
+            ]
+          : [h(DataProtectionPanel, {
+              tombstoneSummary: props.tombstoneSummary,
+              tombstones: props.tombstones,
+              tombstoneFilters: props.tombstoneFilters,
+              refreshSeq: props.refreshSeq,
+              onClearData: () => emit('clear-data'),
+              onLoadTombstones: (filters: Dict) => emit('load-tombstones', filters),
+            })]
+
+      return h('div', { class: 'account-center-page' }, [
+        h('nav', { class: 'pane global-settings-tabs', 'aria-label': '全局设置分类' }, [
+          settingsTab('system', '系统与授权', Key),
+          settingsTab('accounts', '平台账号', User),
+          settingsTab('data', '数据保护', DataAnalysis),
+        ]),
+        ...content,
+      ])
+    }
+
+    function settingsTab(section: 'system' | 'accounts' | 'data', label: string, icon: any) {
+      return h('button', {
+        class: { 'is-active': activeSection.value === section },
+        'aria-current': activeSection.value === section ? 'page' : undefined,
+        onClick: () => { activeSection.value = section },
+      }, [h(icon), h('span', label)])
+    }
+
+    function renderSystemSettings() {
+      return h('section', { class: 'pane global-settings-pane' }, [
         sectionTitle({ title: '系统与授权', subtitle: '软件更新、产品授权和设备信息集中管理', icon: Key, tone: 'blue' }),
         h('div', { class: 'global-settings-grid' }, [
           h('article', { class: 'global-setting-card' }, [
@@ -140,23 +203,8 @@ export default defineComponent({
             h('button', { class: 'primary-soft', disabled: props.updateChecking, onClick: () => emit('check-update') }, props.updateChecking ? '正在检查...' : '检查更新'),
           ]),
         ]),
-      ]),
-      h('section', { class: 'pane account-create-pane' }, [
-        sectionTitle({ title: '统一账号中心', subtitle: '一个账号对应一个独立登录态，所有工作台从这里选择', icon: User, tone: 'teal', aside: h('button', { class: 'secondary-action', onClick: () => loadAccounts() }, [h(Refresh, { class: 'inline-icon' }), '刷新']) }),
-        h('div', { class: 'account-create-row' }, [
-          h('select', { value: draft.value.platform, onChange: (event: Event) => draft.value.platform = (event.target as HTMLSelectElement).value }, [
-            h('option', { value: 'dy' }, '抖音'), h('option', { value: 'xhs' }, '小红书'), h('option', { value: 'ks' }, '快手'),
-          ]),
-          h('select', { value: draft.value.role, onChange: (event: Event) => draft.value.role = (event.target as HTMLSelectElement).value }, Object.keys(ROLE_FEATURES).map(role => h('option', { value: role }, roleLabel(role)))),
-          h('input', { value: draft.value.name, placeholder: '账号名称，例如：品牌主账号', onInput: (event: Event) => draft.value.name = (event.target as HTMLInputElement).value }),
-          h('button', { class: 'primary-action', disabled: loading.value, onClick: createAccount }, [h(Plus, { class: 'inline-icon' }), loading.value ? '创建中...' : '添加账号']),
-        ]),
-        h('p', { class: 'muted-text' }, '品牌账号只允许私信和内容发布；拓客、引流等高风险操作请使用运营号、引流号或测试号。'),
-      ]),
-      accounts.value.length
-        ? h('div', { class: 'account-center-grid' }, accounts.value.map(renderAccount))
-        : emptyState({ title: '还没有平台账号', description: '先添加账号，再扫码登录并分配用途', icon: User }),
-    ])
+      ])
+    }
 
     function renderAccount(account: Dict) {
       const allowed = ROLE_FEATURES[String(account.role)] || []
@@ -200,3 +248,10 @@ function statusLabel(value: string) { return ({ login_required: '待登录', che
 function featureStatusLabel(value: string) { return ({ ready: '可用', checking: '检查中', expired: '失效', error: '异常', unknown: '未检查' } as Dict)[value] || '未检查' }
 function licenseStatusText(info: Dict) { return info.authorized ? '授权有效' : info.status === 'failed' ? '未授权' : '等待授权' }
 function licenseStateClass(info: Dict) { return info.authorized ? 'is-authorized' : info.status === 'failed' ? 'is-denied' : 'is-pending' }
+
+export function paginateAccounts(items: Dict[], page: number, pageSize: number) {
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize))
+  const currentPage = Math.min(Math.max(1, page), totalPages)
+  const start = (currentPage - 1) * pageSize
+  return { items: items.slice(start, start + pageSize), page: currentPage, totalPages }
+}

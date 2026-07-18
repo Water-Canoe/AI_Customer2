@@ -228,9 +228,9 @@ def test_drag_order_serializes_same_time_plans(tmp_path: Path, monkeypatch: pyte
     prepare_project(tmp_path)
     from app import database
     from app.schemas import AutomationPlanCreate
-    from app.services import automation_workbench, job_queue, license_service
+    from app.services import automation_workbench, job_queue, license_service, message_workbench
 
-    automation_workbench.update_message_limits(100, 40)
+    message_workbench.update_message_limits(100, 40)
     message_plan = automation_workbench.create_plan(
         AutomationPlanCreate.model_validate(
             {
@@ -560,7 +560,7 @@ def test_message_quota_counts_failures_and_prevents_same_day_retry(tmp_path: Pat
             for index in range(3)
         ]
         lead_ids = [conn.execute("INSERT INTO lead_user_accounts(account_id) VALUES(?)", (account_id,)).lastrowid for account_id in account_ids]
-    automation_workbench.update_message_limits(2, 2)
+    message_workbench.update_message_limits(2, 2)
 
     first = message_workbench.reserve_message_attempt(int(lead_ids[0]), "test", "one")
     message_workbench.finish_message_attempt(first, "failed", "页面状态不明确")
@@ -571,7 +571,7 @@ def test_message_quota_counts_failures_and_prevents_same_day_retry(tmp_path: Pat
         message_workbench.reserve_message_attempt(int(lead_ids[2]), "test", "three")
     with pytest.raises(message_workbench.MessageQuotaReached):
         message_workbench.reserve_message_attempt(int(lead_ids[0]), "test", "retry")
-    limits = automation_workbench.get_message_limits()
+    limits = message_workbench.get_message_limits()
     assert limits["used_today"] == 2
     assert limits["remaining_today"] == 0
 
@@ -580,7 +580,7 @@ def test_message_plan_requires_limits_and_respects_fill_only_switch(tmp_path: Pa
     prepare_project(tmp_path)
     from app import database
     from app.schemas import AutomationPlanCreate
-    from app.services import automation_workbench
+    from app.services import automation_workbench, message_workbench
 
     payload = AutomationPlanCreate.model_validate(
         {
@@ -595,7 +595,7 @@ def test_message_plan_requires_limits_and_respects_fill_only_switch(tmp_path: Pa
     with pytest.raises(ValueError, match="请先配置"):
         automation_workbench.create_plan(payload)
 
-    automation_workbench.update_message_limits(100, 40)
+    message_workbench.update_message_limits(100, 40)
     with database.connect() as conn:
         database.set_setting(conn, "auto_dm_fill_only", "true")
     with pytest.raises(ValueError, match="只填内容不发送"):

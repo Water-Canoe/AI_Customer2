@@ -8,7 +8,7 @@
           <span>拓客 · 引流 · 内容 · 跟进</span>
         </div>
       </div>
-      <el-menu :default-active="activeView" :default-openeds="['lead-workbench', 'traffic-workbench', 'content-workbench']" class="nav" @select="goToView">
+      <el-menu ref="sidebarMenu" :default-active="activeView" :default-openeds="[]" :unique-opened="true" class="nav" @select="goToView">
         <el-menu-item index="automation-plans"><el-icon><Clock /></el-icon><span>自动化计划</span></el-menu-item>
         <el-menu-item index="runtime-center"><el-icon><Monitor /></el-icon><span>运行中心</span></el-menu-item>
         <el-sub-menu index="lead-workbench">
@@ -123,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
   Collection,
@@ -207,6 +207,7 @@ const workbenchStatus = ref<Dict>({ metrics: {}, active: false })
 const tombstoneSummary = ref<Dict>({})
 const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
+const sidebarMenu = ref<any>(null)
 let settingsMutationSeq = 0
 
 const activeView = computed(() => String(route.name || 'tasks'))
@@ -216,6 +217,13 @@ const isMessageView = computed(() => activeView.value.startsWith('message-'))
 const isGlobalSettingsView = computed(() => activeView.value === 'global-settings')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
+const activeMenuGroup = computed(() => {
+  if (isMessageView.value) return 'message-center'
+  if (isTrafficView.value) return 'traffic-workbench'
+  if (isContentView.value) return 'content-workbench'
+  if (['tasks', 'logs', 'overview', 'ai', 'tables', 'settings'].includes(activeView.value)) return 'lead-workbench'
+  return ''
+})
 const topbarKicker = computed(() => isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isMessageView.value ? '私信工作台' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))))
 const viewTitle = computed(() => String(route.meta.title || '任务管理'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
@@ -363,10 +371,20 @@ const routeProps = computed(() => {
       appVersion: appVersion.value,
       appPackaged: appPackaged.value,
       updateChecking: updateChecking.value,
+      tombstoneSummary: tombstoneSummary.value,
+      tombstones: tombstones.value,
+      tombstoneFilters: tombstoneFilters.value,
     }
   }
   if (activeView.value === 'runtime-center') return { refreshSeq: runtimeRefreshSeq.value }
   if (activeView.value.startsWith('content-')) return { refreshSeq: contentRefreshSeq.value }
+  if (activeView.value === 'settings') {
+    return {
+      settings: settings.value,
+      settingsSaveRevision: settingsSaveRevision.value,
+      env: env.value,
+    }
+  }
   return {
     settings: settings.value,
     settingsSaveRevision: settingsSaveRevision.value,
@@ -461,6 +479,15 @@ const routeListeners = computed(() => {
     return {
       'open-license': openLicenseDialog,
       'check-update': checkForUpdates,
+      'clear-data': clearAllData,
+      'load-tombstones': loadTombstones,
+    }
+  }
+  if (activeView.value === 'settings') {
+    return {
+      save: saveSettings,
+      'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
+      'check-env': checkEnv,
     }
   }
   if (activeView.value.startsWith('traffic-')) return {}
@@ -480,7 +507,8 @@ function goToView(view: string) {
 
 async function refreshAll(notifyFailure = false) {
   // 手动刷新只请求当前工作台，避免每次刷新拉取所有业务大列表。
-  const results = await Promise.allSettled([loadWorkbenchStatus(), ...currentViewLoaders(true, true).map(loader => loader())])
+  const statusLoaders = isGlobalSettingsView.value ? [] : [loadWorkbenchStatus()]
+  const results = await Promise.allSettled([...statusLoaders, ...currentViewLoaders(true, true).map(loader => loader())])
   const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
   if (failures.length > 0) {
     if (notifyFailure) {
@@ -811,7 +839,6 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
     loaders.push(() => loadTable(activeLibrary.value, true))
   } else if (activeView.value === 'settings') {
     if (!settingsDraftDirty.value) loaders.push(loadSettings)
-    loaders.push(loadTombstoneSummary, () => loadTombstones())
   } else if (isTrafficView.value) {
     if (includeStatic) loaders.push(loadTrafficShell)
     if (refreshChild) loaders.push(async () => { trafficRefreshSeq.value += 1 })
@@ -824,6 +851,7 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
     if (includeStatic || refreshChild) loaders.push(async () => { runtimeRefreshSeq.value += 1 })
   } else if (isGlobalSettingsView.value) {
     loaders.push(() => loadLicense(true))
+    loaders.push(loadTombstoneSummary, () => loadTombstones())
     if (includeStatic || refreshChild) loaders.push(async () => { globalSettingsRefreshSeq.value += 1 })
   }
   return loaders
@@ -831,7 +859,10 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
 
 async function syncCurrentView(reason: AutoSyncReason) {
   const includeStatic = reason === 'route'
-  const loaders = [loadWorkbenchStatus, ...currentViewLoaders(includeStatic, !isContentView.value)]
+  const loaders = [
+    ...(isGlobalSettingsView.value ? [] : [loadWorkbenchStatus]),
+    ...currentViewLoaders(includeStatic, !isContentView.value),
+  ]
   await Promise.allSettled(loaders.map(loader => loader()))
 }
 
@@ -1190,7 +1221,7 @@ function selectedDmScript(aiScript: unknown) {
     return {
       text: String(settings.value.fixed_dm_script || '').trim(),
       label: '固定话术',
-      emptyMessage: '固定话术为空，请先到设置页填写固定话术',
+      emptyMessage: '固定话术为空，请先到“私信设置”填写固定话术',
     }
   }
   return {
@@ -1680,6 +1711,14 @@ async function clearAllData() {
 watch(activeView, () => {
   void autoSync.trigger('route')
 })
+
+watch(activeMenuGroup, async group => {
+  await nextTick()
+  for (const item of ['lead-workbench', 'message-center', 'traffic-workbench', 'content-workbench']) {
+    if (item !== group) sidebarMenu.value?.close?.(item)
+  }
+  if (group) sidebarMenu.value?.open?.(group)
+}, { immediate: true })
 
 onMounted(async () => {
   // 版本在当前进程内不会变化，只需在页面启动时读取一次。

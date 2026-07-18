@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 // 页面按路由异步加载，首次启动只解析应用壳和当前工作台。
 const AiPage = () => import('./pages/AiPage')
-const GlobalSettingsPage = () => import('./pages/AccountCenterPage')
+const GlobalSettingsPage = () => import('./pages/GlobalSettingsPage')
 const AutomationPlanPage = () => import('./pages/AutomationPlanPage')
 const ContentWorkbenchPage = () => import('./pages/ContentWorkbenchPage')
 const PublishCenterPage = () => import('./pages/PublishCenterPage')
@@ -43,7 +43,7 @@ export const routes = [
     path: '/global-settings',
     name: 'global-settings',
     component: GlobalSettingsPage,
-    meta: { title: '全局设置', subtitle: '统一管理软件更新、产品授权、设备信息和平台账号。', hint: '系统级配置集中在这里' },
+    meta: { title: '全局设置', subtitle: '统一管理软件更新、产品授权、平台账号和数据保护。', hint: '系统级配置集中在这里' },
   },
   {
     path: '/overview',
@@ -109,7 +109,7 @@ export const routes = [
     path: '/traffic-settings',
     name: 'traffic-settings',
     component: TrafficWorkbenchPage,
-    meta: { title: '引流设置', subtitle: '授权、登录态、文案图片和限额统一配置。', hint: '启动前先检查授权' },
+    meta: { title: '引流设置', subtitle: '统一维护互动文案、图片、动作限额和运行环境。', hint: '账号登录与用途统一在全局设置管理' },
   },
   {
     path: '/content-create',

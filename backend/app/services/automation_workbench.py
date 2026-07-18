@@ -798,44 +798,13 @@ def _select_keywords(conn: Any, plan_id: str, config: KeywordLeadPlanConfig) -> 
     return ordered[: config.keyword_count]
 
 
-def get_message_limits() -> dict[str, Any]:
-    with database.connect() as conn:
-        daily_raw = database.get_setting(conn, "message_daily_limit", "").strip()
-        hourly_raw = database.get_setting(conn, "message_hourly_limit", "").strip()
-        used_today = int(
-            conn.execute("SELECT COUNT(*) AS c FROM message_send_attempts WHERE date(attempted_at) = date('now', 'localtime')").fetchone()["c"]
-        )
-        used_hour = int(
-            conn.execute("SELECT COUNT(*) AS c FROM message_send_attempts WHERE attempted_at >= datetime('now', 'localtime', '-1 hour')").fetchone()["c"]
-        )
-        fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
-    daily = int(daily_raw) if daily_raw else None
-    hourly = int(hourly_raw) if hourly_raw else None
-    return {
-        "configured": daily is not None and hourly is not None,
-        "daily_limit": daily,
-        "hourly_limit": hourly,
-        "used_today": used_today,
-        "used_hour": used_hour,
-        "remaining_today": max(0, daily - used_today) if daily is not None else None,
-        "remaining_hour": max(0, hourly - used_hour) if hourly is not None else None,
-        "fill_only": fill_only,
-        "notice": "仅统计本软件产生的私信，无法感知抖音 App 或其他工具中的手动发送数量。",
-    }
-
-
-def update_message_limits(daily_limit: int, hourly_limit: int) -> dict[str, Any]:
-    with database.connect() as conn:
-        database.set_setting(conn, "message_daily_limit", str(daily_limit))
-        database.set_setting(conn, "message_hourly_limit", str(hourly_limit))
-    return get_message_limits()
-
-
 def _validate_message_plan_state(plan_type: str, config: Any, enabled_or_run: bool) -> None:
     if plan_type != "message" or not enabled_or_run:
         return
     MessagePlanConfig.model_validate(config)
-    limits = get_message_limits()
+    from app.services import message_workbench
+
+    limits = message_workbench.get_message_limits()
     if not limits["configured"]:
         raise ValueError("请先配置自动私信的每小时和每日额度")
     if limits["fill_only"]:

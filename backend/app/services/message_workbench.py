@@ -656,6 +656,24 @@ def message_limit_summary(conn: Any | None = None) -> dict[str, Any]:
     }
 
 
+def get_message_limits() -> dict[str, Any]:
+    with database.connect() as conn:
+        summary = message_limit_summary(conn)
+        fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
+    return {
+        **summary,
+        "fill_only": fill_only,
+        "notice": "仅统计本软件产生的私信，无法感知抖音 App 或其他工具中的手动发送数量。",
+    }
+
+
+def update_message_limits(daily_limit: int, hourly_limit: int) -> dict[str, Any]:
+    with database.connect() as conn:
+        database.set_setting(conn, "message_daily_limit", str(daily_limit))
+        database.set_setting(conn, "message_hourly_limit", str(hourly_limit))
+    return get_message_limits()
+
+
 def reserve_message_attempt(lead_id: int, source: str, source_id: str) -> int:
     with database.connect() as conn:
         conn.execute("BEGIN IMMEDIATE")

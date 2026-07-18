@@ -7327,6 +7327,70 @@ button.filter-button:focus-visible,
   gap: 16px;
 }
 
+.global-settings-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
+.global-settings-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 140px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.global-settings-tabs button:hover {
+  background: #f2faf8;
+  color: var(--workbench-primary);
+}
+
+.global-settings-tabs button.is-active {
+  border-color: #a7d8ce;
+  background: var(--workbench-primary-soft);
+  color: var(--workbench-primary);
+}
+
+.global-settings-tabs svg {
+  width: 17px;
+  height: 17px;
+}
+
+.data-protection-page,
+.data-protection-pane {
+  display: grid;
+  gap: 16px;
+}
+
+.data-protection-page > .danger-zone {
+  display: grid;
+  gap: 12px;
+  border-color: #fecaca;
+  background: #fffafa;
+}
+
+.account-center-pages {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  padding: 10px 14px;
+  border: 1px solid var(--workbench-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+}
+
 .global-settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -7392,6 +7456,14 @@ button.filter-button:focus-visible,
 @media (max-width: 760px) {
   .global-settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .global-settings-tabs {
+    overflow-x: auto;
+  }
+
+  .global-settings-tabs button {
+    flex: 0 0 auto;
   }
 }
 

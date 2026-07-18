@@ -3,11 +3,21 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api_dependencies import require_license
-from app.schemas import CustomerAutoMessageRequest, MessageAutoBatchCreate
+from app.schemas import CustomerAutoMessageRequest, MessageAutoBatchCreate, MessageLimitsUpdate
 from app.services import job_queue, message_workbench
 
 
 router = APIRouter(prefix="/api/message-workbench", tags=["message"])
+
+
+@router.get("/limits")
+def message_limits() -> dict[str, object]:
+    return message_workbench.get_message_limits()
+
+
+@router.put("/limits")
+def update_message_limits(payload: MessageLimitsUpdate) -> dict[str, object]:
+    return message_workbench.update_message_limits(payload.daily_limit, payload.hourly_limit)
 
 
 @router.get("/keywords")

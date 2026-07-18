@@ -1,8 +1,6 @@
-import { defineComponent, h, onMounted, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
-import { Check, DataAnalysis, Delete, Monitor, Refresh, Setting, Tools, User, Warning } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { defineComponent, h, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
+import { Check, DataAnalysis, Monitor, Refresh, Setting, Tools, User } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
-import { api } from '../shared/api'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, splitTagText } from '../components/ui/TagInput'
 import { platformName } from '../shared/format'
@@ -30,7 +28,6 @@ const commentCutoffOptions = [
   { value: 0, label: '不限' }
 ]
 const ownAccountPlatforms = ['dy', 'xhs', 'ks']
-const BACKUP_PAGE_SIZE = 5
 
 function defaultIcpProfile() {
   return Object.fromEntries(icpFields.map(field => [field.key, '']))
@@ -80,94 +77,13 @@ export default defineComponent({
   props: {
     settings: { type: Object, required: true },
     settingsSaveRevision: { type: Number, default: 0 },
-    env: { type: Object, required: true },
-    tombstoneSummary: { type: Object, default: () => ({}) },
-    tombstones: { type: Object, default: () => ({ items: [] }) },
-    tombstoneFilters: { type: Object, default: () => ({}) }
+    env: { type: Object, required: true }
   },
-  emits: ['save', 'check-env', 'clear-data', 'load-tombstones', 'settings-dirty-change'],
+  emits: ['save', 'check-env', 'settings-dirty-change'],
   setup(props, { emit }) {
     const local = reactive<Dict>({})
     const settingsDirty = ref(false)
     const syncingFromProps = ref(false)
-    const backups = ref<Dict>({ items: [], total: 0, schema: {} })
-    const backupLoading = ref(false)
-    const backupCreating = ref(false)
-    const backupRestoring = ref('')
-    const backupDeleting = ref('')
-    const backupPage = ref(1)
-
-    async function loadBackups() {
-      backupLoading.value = true
-      try {
-        const { data } = await api.get('/system/backups')
-        backups.value = data
-        backupPage.value = paginateBackups(data.items || [], backupPage.value, BACKUP_PAGE_SIZE).page
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '备份列表加载失败')
-      } finally {
-        backupLoading.value = false
-      }
-    }
-
-    async function createBackup() {
-      backupCreating.value = true
-      try {
-        await api.post('/system/backups', { reason: 'manual' })
-        ElMessage.success('业务数据库、MyCrawler 原始库和业务文件已备份')
-        backupPage.value = 1
-        await loadBackups()
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '创建备份失败')
-      } finally {
-        backupCreating.value = false
-      }
-    }
-
-    async function restoreBackup(item: Dict) {
-      try {
-        const result = await ElMessageBox.prompt(
-          '恢复前会自动创建当前数据的安全备份。请输入“恢复备份”继续。',
-          '恢复数据备份',
-          { inputPlaceholder: '恢复备份', confirmButtonText: '确认恢复', cancelButtonText: '取消', type: 'warning' }
-        )
-        if (result.value !== '恢复备份') {
-          ElMessage.warning('确认文本不正确，未执行恢复')
-          return
-        }
-        backupRestoring.value = String(item.id || '')
-        await api.post(`/system/backups/${encodeURIComponent(String(item.id || ''))}/restore`, { confirm: result.value })
-        ElMessage.success('备份已恢复，页面即将重新加载')
-        window.setTimeout(() => window.location.reload(), 500)
-      } catch (error: any) {
-        if (error === 'cancel' || error?.toString?.() === 'cancel') return
-        ElMessage.error(error?.response?.data?.detail || '恢复备份失败')
-      } finally {
-        backupRestoring.value = ''
-      }
-    }
-
-    async function deleteBackup(item: Dict) {
-      const backupId = String(item.id || '')
-      if (!backupId) return
-      try {
-        // 备份删除不可恢复，必须由用户单独确认。
-        await ElMessageBox.confirm('删除后无法恢复，确认删除这份备份？', '删除数据备份', {
-          confirmButtonText: '确认删除',
-          cancelButtonText: '取消',
-          type: 'warning'
-        })
-        backupDeleting.value = backupId
-        await api.delete(`/system/backups/${encodeURIComponent(backupId)}`)
-        ElMessage.success('备份已删除')
-        await loadBackups()
-      } catch (error: any) {
-        if (error === 'cancel' || error?.toString?.() === 'cancel') return
-        ElMessage.error(error?.response?.data?.detail || '删除备份失败')
-      } finally {
-        backupDeleting.value = ''
-      }
-    }
 
     function sync() {
       if (settingsDirty.value) return
@@ -200,10 +116,6 @@ export default defineComponent({
       emit('settings-dirty-change', false)
       sync()
     })
-    onMounted(() => {
-      loadBackups()
-    })
-
     return () => {
       if (!local.icp_profile || typeof local.icp_profile !== 'object') {
         local.icp_profile = normalizeIcpProfile(local.icp_profile)
@@ -269,14 +181,7 @@ export default defineComponent({
         h('aside', { class: 'pane side-pane' }, [
           sectionTitle({ title: '环境状态', subtitle: '运行前先检查', icon: Monitor, tone: 'green' }),
           renderEnv(props.env),
-          h('button', { class: 'wide-action', onClick: () => emit('check-env') }, [h(Refresh, { class: 'inline-icon' }), '重新检查']),
-          renderBackups(backups.value, backupPage.value, page => backupPage.value = page, backupLoading.value, backupCreating.value, backupRestoring.value, backupDeleting.value, createBackup, loadBackups, restoreBackup, deleteBackup),
-          renderTombstones(props.tombstoneSummary as Dict, props.tombstones as Dict, props.tombstoneFilters as Dict, filters => emit('load-tombstones', filters)),
-          h('div', { class: 'danger-zone' }, [
-            sectionTitle({ title: '危险操作', subtitle: '执行前自动备份', icon: Warning, tone: 'red', compact: true }),
-            h('p', '清空项目库和原始采集库中的业务记录；配置、登录状态和本地素材文件保留。'),
-            h('button', { class: 'wide-action danger-action', onClick: () => emit('clear-data') }, [h(Delete, { class: 'inline-icon' }), '清空业务记录'])
-          ])
+          h('button', { class: 'wide-action', onClick: () => emit('check-env') }, [h(Refresh, { class: 'inline-icon' }), '重新检查'])
         ])
         ]
       })
@@ -401,221 +306,4 @@ function renderEnv(envValue: Dict) {
     ])))
     // 环境检查详情暂时隐藏，只保留用户需要处理的概览状态。
   ])
-}
-
-function renderTombstones(summary: Dict, tombstones: Dict, filters: Dict, load: (filters: Dict) => void) {
-  const localFilters = filters || {}
-  const items = tombstones.items || []
-  const page = Number(tombstones.page || 1)
-  const totalPages = Number(tombstones.total_pages || 1)
-  return h('div', { class: 'tombstone-panel' }, [
-    sectionTitle({ title: '防重复墓碑', subtitle: `共 ${summary.total || 0} 条`, icon: Delete, tone: 'amber', compact: true }),
-    h('div', { class: 'quality-summary tombstone-summary' }, [
-      renderQualityMetric('账号', summary.accounts || 0),
-      renderQualityMetric('内容', summary.contents || 0),
-      renderQualityMetric('评论', summary.comments || 0)
-    ]),
-    h('div', { class: 'tombstone-filters' }, [
-      h('select', {
-        value: localFilters.entity_type || '',
-        onChange: (event: Event) => load({ entity_type: (event.target as HTMLSelectElement).value, page: 1 })
-      }, [
-        h('option', { value: '' }, '全部类型'),
-        h('option', { value: 'author_account' }, '账号'),
-        h('option', { value: 'content' }, '内容'),
-        h('option', { value: 'comment' }, '评论')
-      ]),
-      h('input', {
-        value: localFilters.query || '',
-        placeholder: '搜索标识、来源或快照',
-        onInput: (event: Event) => load({ query: (event.target as HTMLInputElement).value, page: 1 })
-      })
-    ]),
-    items.length ? h('div', { class: 'tombstone-list' }, items.map((item: Dict) => h('article', [
-      h('div', [
-        h('strong', `${entityTypeLabel(item.entity_type)} · ${item.platform || '-'}`),
-        h('small', `${item.identifier_type || '-'}: ${item.identifier_value || '-'}`)
-      ]),
-      h('p', item.snapshot_summary || '无快照摘要'),
-      h('small', `${item.source || '未标记来源'} · ${item.updated_at || item.created_at || ''}`)
-    ]))) : h('div', { class: 'diagnostic-empty' }, '当前没有墓碑记录'),
-    h('div', { class: 'table-page-controls tombstone-pages' }, [
-      h('button', { disabled: page <= 1, onClick: () => load({ page: Math.max(1, page - 1) }) }, '上一页'),
-      h('span', `${page} / ${totalPages}`),
-      h('button', { disabled: page >= totalPages, onClick: () => load({ page: Math.min(totalPages, page + 1) }) }, '下一页')
-    ])
-  ])
-}
-
-function renderBackups(
-  value: Dict,
-  requestedPage: number,
-  changePage: (page: number) => void,
-  loading: boolean,
-  creating: boolean,
-  restoring: string,
-  deleting: string,
-  create: () => void,
-  reload: () => void,
-  restore: (item: Dict) => void,
-  remove: (item: Dict) => void
-) {
-  const backups = paginateBackups(value.items || [], requestedPage, BACKUP_PAGE_SIZE)
-  const schema = value.schema || {}
-  return h('div', { class: 'data-lifecycle-panel' }, [
-    sectionTitle({ title: '数据保护', subtitle: `数据库版本 ${schema.current || 0}/${schema.latest || 0}`, icon: DataAnalysis, tone: 'blue', compact: true }),
-    h('div', { class: 'data-lifecycle-actions' }, [
-      h('button', { class: 'secondary-action', disabled: creating, onClick: create }, creating ? '备份中...' : '立即备份'),
-      h('button', { class: 'secondary-action', disabled: loading, onClick: reload }, loading ? '刷新中...' : '刷新列表')
-    ]),
-    backups.items.length
-      ? h('div', { class: 'backup-list' }, backups.items.map((item: Dict) => h('article', [
-          h('div', [
-            h('strong', item.created_at || item.id),
-            h('span', `项目库 ${formatFileSize(item.database_size)} · 原始库 ${item.media_crawler_database ? formatFileSize(item.media_crawler_database.size) : '未初始化'} · 文件 ${formatFileSize(item.data_size)} / ${item.file_count || 0} 个`)
-          ]),
-          h('small', backupReasonLabel(item.reason)),
-          h('div', { class: 'backup-item-actions' }, [
-            h('button', {
-              class: 'text-icon-button',
-              disabled: Boolean(restoring) || Boolean(deleting),
-              onClick: () => restore(item)
-            }, restoring === String(item.id || '') ? '恢复中...' : '恢复'),
-            h('button', {
-              class: 'text-icon-button danger',
-              disabled: Boolean(restoring) || Boolean(deleting),
-              onClick: () => remove(item)
-            }, deleting === String(item.id || '') ? '删除中...' : '删除')
-          ])
-        ])))
-      : h('div', { class: 'diagnostic-empty' }, loading ? '正在读取备份...' : '暂无可恢复备份'),
-    backups.totalPages > 1 ? h('div', { class: 'table-page-controls backup-pages' }, [
-      h('button', { disabled: backups.page <= 1, onClick: () => changePage(backups.page - 1) }, '上一页'),
-      h('span', `${backups.page} / ${backups.totalPages}`),
-      h('button', { disabled: backups.page >= backups.totalPages, onClick: () => changePage(backups.page + 1) }, '下一页')
-    ]) : null
-  ])
-}
-
-export function paginateBackups(items: Dict[], page: number, pageSize: number) {
-  // 删除末页最后一条后自动回到仍然存在的最后一页。
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize))
-  const currentPage = Math.min(Math.max(1, page), totalPages)
-  const start = (currentPage - 1) * pageSize
-  return { items: items.slice(start, start + pageSize), page: currentPage, totalPages }
-}
-
-function formatFileSize(value: unknown) {
-  const bytes = Number(value || 0)
-  if (bytes <= 0) return '0 KB'
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function backupReasonLabel(value: unknown) {
-  const reason = String(value || 'manual')
-  if (reason === 'manual') return '手动备份'
-  if (reason === 'pre_clear_all_data') return '清空数据前自动备份'
-  if (reason.startsWith('pre_restore_')) return '恢复前安全备份'
-  if (reason.startsWith('pre_migration_')) return '数据库升级前自动备份'
-  return reason
-}
-
-function renderProjectQuality(quality: Dict) {
-  const summary = quality.summary || {}
-  const sections = quality.sections || []
-  const issues = quality.issues || []
-  return h('div', { class: 'project-quality' }, [
-    sectionTitle({
-      title: '项目数据质量',
-      subtitle: summary.status === 'ok' ? '关键字段完整' : `${summary.issues || 0} 项需要关注`,
-      icon: Check,
-      tone: summary.status === 'ok' ? 'green' : 'amber',
-      compact: true
-    }),
-    h('div', { class: 'quality-summary' }, [
-      renderQualityMetric('账号', summary.accounts || 0),
-      renderQualityMetric('内容', summary.contents || 0),
-      renderQualityMetric('评论', summary.comments || 0),
-      renderQualityMetric('线索', summary.leads || 0)
-    ]),
-    h('div', { class: 'quality-sections' }, sections.map((section: Dict) => h('div', { class: 'quality-section' }, [
-      h('div', { class: 'quality-section-head' }, [
-        h('strong', section.label),
-        h('span', `${section.total || 0} 条`)
-      ]),
-      h('div', { class: 'quality-fields' }, (section.fields || []).map((field: Dict) => renderQualityField(field)))
-    ]))),
-    issues.length
-      ? h('ul', { class: 'quality-issues' }, issues.map((issue: Dict) => h('li', { class: `issue-${issue.severity || 'warning'}` }, [
-        h('strong', issue.title),
-        h('span', issue.detail)
-      ])))
-      : h('div', { class: 'diagnostic-empty' }, '项目库关键字段当前没有明显缺口')
-  ])
-}
-
-function renderQualityMetric(label: string, value: number) {
-  return h('div', [
-    h('span', label),
-    h('strong', String(value))
-  ])
-}
-
-function renderQualityField(field: Dict) {
-  const total = Number(field.total || 0)
-  const nonEmpty = Number(field.non_empty || 0)
-  const missing = total > 0 && nonEmpty < total
-  return h('span', { class: missing ? 'field-warn' : '' }, `${field.label} ${nonEmpty}/${total}`)
-}
-
-function entityTypeLabel(type: string) {
-  return ({ author_account: '账号', content: '内容', comment: '评论' } as Record<string, string>)[type] || type || '-'
-}
-
-function renderPlatformDiagnostics(platforms: Dict[]) {
-  if (!platforms.length) {
-    return h('div', { class: 'diagnostic-empty' }, '底层 SQLite 不存在或尚未完成检查')
-  }
-  return h('div', { class: 'platform-diagnostics' }, [
-    sectionTitle({ title: '平台数据诊断', subtitle: '原始表与关键字段', icon: Monitor, tone: 'blue', compact: true }),
-    ...platforms.map(platform => h('div', { class: 'diagnostic-panel' }, [
-      h('div', { class: 'diagnostic-head' }, [
-        h('strong', platform.label || platform.platform),
-        h('span', { class: platform.ok ? 'ok' : 'warn' }, platform.ok ? '可导入' : '缺内容表')
-      ]),
-      h('div', { class: 'diagnostic-tables' }, [
-        renderRawTableMetric('内容', platform.tables?.content),
-        renderRawTableMetric('评论', platform.tables?.comment),
-        renderRawTableMetric('主页', platform.tables?.creator)
-      ]),
-      h('div', { class: 'field-quality' }, importantDiagnosticFields(platform).map(field => h('span', {
-        class: field.supported && field.row_count && field.non_empty === 0 ? 'field-warn' : ''
-      }, `${field.label} ${field.supported ? `${field.non_empty}/${field.row_count}` : '不支持'}`))),
-      platform.warnings?.length ? h('ul', { class: 'diagnostic-warnings' }, platform.warnings.map((warning: string) => h('li', warning))) : null
-    ]))
-  ])
-}
-
-function renderRawTableMetric(label: string, table: Dict = {}) {
-  return h('div', [
-    h('span', label),
-    h('strong', table.exists ? `${table.row_count || 0}` : '缺失'),
-    h('small', table.table || '无映射')
-  ])
-}
-
-function importantDiagnosticFields(platform: Dict) {
-  const contentFields = platform.tables?.content?.fields || []
-  const commentFields = platform.tables?.comment?.fields || []
-  const creatorFields = platform.tables?.creator?.fields || []
-  const pick = (fields: Dict[], key: string) => fields.find(field => field.key === key)
-  return [
-    pick(contentFields, 'author_id'),
-    pick(contentFields, 'nickname'),
-    pick(contentFields, 'signature'),
-    pick(commentFields, 'body'),
-    pick(creatorFields, 'signature'),
-    pick(creatorFields, 'fans')
-  ].filter((field): field is Dict => Boolean(field))
 }
