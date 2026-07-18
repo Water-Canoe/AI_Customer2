@@ -1,0 +1,172 @@
+/* 运行中心与私信设置的页面级样式。 */
+.runtime-queue-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #d9e7e1;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+
+.runtime-queue-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.runtime-job-list {
+  display: grid;
+  gap: 7px;
+}
+
+.runtime-center-page {
+  display: grid;
+  gap: 16px;
+  padding-bottom: 28px;
+}
+
+.message-settings-page {
+  display: grid;
+  gap: 16px;
+  padding-bottom: 28px;
+}
+
+.message-settings-pane,
+.message-limit-pane {
+  display: grid;
+  gap: 18px;
+}
+
+.message-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.message-limit-control,
+.message-limit-metric {
+  display: grid;
+  gap: 8px;
+  min-height: 92px;
+  padding: 14px;
+  border: 1px solid #d9e7e1;
+  border-radius: 8px;
+  background: #f7faf9;
+}
+
+.message-limit-control span,
+.message-limit-metric span,
+.message-limit-metric small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.message-limit-metric strong {
+  color: #0f172a;
+  font-size: 24px;
+}
+
+.runtime-resource-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  gap: 10px;
+}
+
+.runtime-resource-card {
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  border: 1px solid #d9e7e1;
+  border-radius: 8px;
+  background: #f7faf9;
+}
+
+.runtime-resource-card span,
+.runtime-resource-card small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.runtime-resource-card strong {
+  color: #0f172a;
+  font-size: 22px;
+}
+
+.runtime-queue-filters {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(220px, 320px);
+  gap: 10px;
+}
+
+.runtime-queue-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.runtime-queue-pagination button {
+  min-width: 88px;
+}
+
+.runtime-job-row {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid #e2ebe7;
+  border-left: 3px solid #94a3b8;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.runtime-job-row.runtime-running {
+  border-left-color: #0f766e;
+}
+
+.runtime-job-row.runtime-queued {
+  border-left-color: #2563eb;
+}
+
+.runtime-job-row.runtime-failed,
+.runtime-job-row.runtime-interrupted {
+  border-left-color: #dc2626;
+}
+
+.runtime-job-main,
+.runtime-job-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runtime-job-main > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.runtime-job-main span,
+.runtime-job-row small {
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-job-actions {
+  justify-content: flex-end;
+}
+
+.runtime-job-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font-size: 12px;
+}

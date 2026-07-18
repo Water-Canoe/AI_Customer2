@@ -13,6 +13,8 @@ import {
 import 'element-plus/dist/index.css'
 import './styles.css'
 import './workbench.css'
+import './styles/runtime-pages.css'
+import './styles/global-settings.css'
 import App from './App.vue'
 import { router } from './router'
 
