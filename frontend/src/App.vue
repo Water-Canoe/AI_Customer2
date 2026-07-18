@@ -520,7 +520,7 @@ const routeListeners = computed(() => {
 })
 
 function goToView(view: string) {
-  router.push(`/${view}`)
+  router.push({ name: view })
 }
 
 async function refreshAll(notifyFailure = false) {
