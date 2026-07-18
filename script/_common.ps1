@@ -68,6 +68,9 @@ function Test-ProjectOwnedProcess {
     if ($commandLine -match "uvicorn\s+app\.main:app") {
         return $true
     }
+    if ($commandLine -match "\s-m\s+app\.main(\s|$)") {
+        return $true
+    }
     if ($commandLine -match "vite(\.js)?\s+--host\s+127\.0\.0\.1") {
         return $true
     }

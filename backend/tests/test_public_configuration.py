@@ -52,12 +52,14 @@ def test_public_settings_mask_secrets_and_reject_internal_overrides(tmp_path: Pa
         assert database.get_setting(conn, "license_server_url") == "https://should-not-be-used.invalid"
 
     from app.routers import system
+    from app import main
 
     server = SimpleNamespace(should_exit=False)
     app.state.uvicorn_server = server
     response = client.post("/api/system/exit")
     assert response.status_code == 200
     assert server.should_exit is True
+    assert response.json()["message"] == "应用和当前页面正在安全退出"
     del app.state.shutdown_requested
     server.should_exit = False
     started: list[bool] = []
@@ -68,3 +70,17 @@ def test_public_settings_mask_secrets_and_reject_internal_overrides(tmp_path: Pa
     assert server.should_exit is True
     del app.state.uvicorn_server
     del app.state.update_restart_requested
+
+    created: list[tuple[str, int]] = []
+
+    class FakeServer:
+        def __init__(self, config) -> None:
+            created.append((config.host, config.port))
+
+        def run(self) -> None:
+            created.append(("run", 0))
+
+    monkeypatch.setattr(main.uvicorn, "Server", FakeServer)
+    main.run_development_server()
+    assert created == [("127.0.0.1", 8000), ("run", 0)]
+    del app.state.uvicorn_server

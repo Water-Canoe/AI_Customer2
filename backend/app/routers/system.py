@@ -102,13 +102,13 @@ def check_for_update(request: Request, background_tasks: BackgroundTasks) -> dic
 def exit_application(request: Request, background_tasks: BackgroundTasks) -> dict[str, object]:
     server = getattr(request.app.state, "uvicorn_server", None)
     if server is None:
-        raise HTTPException(status_code=400, detail="安全退出仅支持打包版")
+        raise HTTPException(status_code=400, detail="当前启动方式不支持安全退出，请使用 script/start_all.ps1 启动开发环境")
     if getattr(request.app.state, "shutdown_requested", False):
         raise HTTPException(status_code=409, detail="应用正在退出")
     request.app.state.shutdown_requested = True
     # 响应发出后执行 lifespan 清理，确保队列和浏览器会话正确收尾。
     background_tasks.add_task(setattr, server, "should_exit", True)
-    return {"ok": True, "message": "应用正在安全退出"}
+    return {"ok": True, "message": "应用和当前页面正在安全退出"}
 
 
 @router.get("/system/backups")

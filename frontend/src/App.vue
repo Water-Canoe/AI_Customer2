@@ -59,10 +59,9 @@
           <i class="sidebar-license-dot" aria-hidden="true"></i>
         </button>
         <button
-          v-if="appPackaged"
           type="button"
           class="sidebar-license"
-          title="安全停止任务队列和本地服务"
+          title="安全停止任务队列和本地服务，并关闭当前页面"
           aria-label="安全退出应用"
           :disabled="exitRequested"
           @click="exitApplication"
@@ -70,7 +69,7 @@
           <el-icon><SwitchButton /></el-icon>
           <span class="sidebar-license-copy">
             <strong>安全退出</strong>
-            <small>{{ exitRequested ? '正在关闭本地服务' : '关闭任务与本地服务' }}</small>
+            <small>{{ exitRequested ? '正在安全退出' : '关闭页面与本地服务' }}</small>
           </span>
         </button>
         <small v-if="appVersion" class="sidebar-version">版本 v{{ appVersion }}</small>
@@ -599,10 +598,18 @@ async function exitApplication() {
   try {
     const { data } = await api.post('/system/exit')
     ElMessage.success(data.message || '应用正在安全退出')
+    autoSync.stop()
+    window.setTimeout(closeFrontendPage, 120)
   } catch (error: any) {
     exitRequested.value = false
     ElMessage.error(error?.response?.data?.detail || '无法安全退出应用')
   }
+}
+
+function closeFrontendPage() {
+  // 浏览器禁止脚本关闭手动打开的标签页时，至少离开已停止服务的应用页面。
+  window.location.replace('about:blank')
+  window.close()
 }
 
 async function saveLicenseCode() {

@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+import uvicorn
 
 from app import database
 from app.routers import (
@@ -93,6 +94,13 @@ def _frontend_dist() -> Path | None:
     return None
 
 
+def run_development_server() -> None:
+    # 开发启动也保存 Server 实例，让页面可以请求 Uvicorn 正常退出。
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=8000, log_level="info"))
+    app.state.uvicorn_server = server
+    server.run()
+
+
 @app.get("/{full_path:path}", include_in_schema=False)
 def serve_frontend(full_path: str) -> FileResponse:
     if full_path.startswith("api/"):
@@ -105,3 +113,7 @@ def serve_frontend(full_path: str) -> FileResponse:
     if target.is_file() and safe_dist in target.parents:
         return FileResponse(target)
     return FileResponse(safe_dist / "index.html")
+
+
+if __name__ == "__main__":
+    run_development_server()

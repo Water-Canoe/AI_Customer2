@@ -15,12 +15,12 @@ if (-not (Test-Path $pythonPath)) {
     throw "Backend virtual environment not found: $pythonPath"
 }
 
-# Start FastAPI through uvicorn in a hidden background window.
+# Start FastAPI through the project runner so the page can request a graceful shutdown.
 $stdoutLog = Join-Path $LogDir "backend.out.log"
 $stderrLog = Join-Path $LogDir "backend.err.log"
 $backendProcess = Start-Process `
     -FilePath $pythonPath `
-    -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$BackendPort") `
+    -ArgumentList @("-m", "app.main") `
     -WorkingDirectory $BackendDir `
     -RedirectStandardOutput $stdoutLog `
     -RedirectStandardError $stderrLog `
