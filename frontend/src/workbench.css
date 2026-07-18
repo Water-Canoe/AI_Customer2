@@ -7316,13 +7316,16 @@ button.filter-button:focus-visible,
 
 .account-center-grid {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  align-items: start;
 }
 
 .account-center-card {
   display: grid;
   gap: 14px;
   padding: 18px;
+  border-top: 3px solid #9bcfc5;
 }
 
 .account-card-head {
@@ -7372,13 +7375,17 @@ button.filter-button:focus-visible,
 
 .account-identity-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.4fr) 150px;
+  grid-template-columns: minmax(0, 1fr) 140px;
   gap: 10px;
 }
 
 .account-identity-row input,
 .account-identity-row select {
   min-width: 0;
+}
+
+.account-platform-id {
+  grid-column: 1 / -1;
 }
 
 .account-feature-list {
@@ -7389,7 +7396,7 @@ button.filter-button:focus-visible,
 .account-feature-head,
 .account-feature-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(170px, 1fr) 110px;
+  grid-template-columns: minmax(110px, 1fr) minmax(120px, 1fr) 82px;
   align-items: center;
   gap: 10px;
 }
@@ -7462,6 +7469,12 @@ button.filter-button:focus-visible,
   padding-inline: 16px;
 }
 
+@media (max-width: 1180px) {
+  .account-center-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 960px) {
   .account-create-row,
   .account-identity-row {
@@ -7470,6 +7483,10 @@ button.filter-button:focus-visible,
 
   .account-create-row input,
   .account-create-row > button {
+    grid-column: 1 / -1;
+  }
+
+  .account-platform-id {
     grid-column: 1 / -1;
   }
 }

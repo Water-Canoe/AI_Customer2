@@ -171,8 +171,8 @@ export default defineComponent({
         account.qrcode_url ? h('img', { class: 'publish-qrcode', src: `${account.qrcode_url}?t=${Date.now()}`, alt: '登录二维码' }) : null,
         h('div', { class: 'account-identity-row' }, [
           h('input', { value: account.name || '', placeholder: '账号名称', onChange: (event: Event) => updateAccount(account, { name: (event.target as HTMLInputElement).value.trim() }) }),
-          h('input', { value: account.platform_user_id || '', placeholder: '平台账号ID（可选，用于防止重复添加）', onChange: (event: Event) => updateAccount(account, { platform_user_id: (event.target as HTMLInputElement).value.trim() }) }),
           h('select', { value: account.role, onChange: (event: Event) => changeRole(account, (event.target as HTMLSelectElement).value) }, Object.keys(ROLE_FEATURES).map(role => h('option', { value: role }, roleLabel(role)))),
+          h('input', { class: 'account-platform-id', value: account.platform_user_id || '', placeholder: '平台账号ID（可选，用于防止重复添加）', onChange: (event: Event) => updateAccount(account, { platform_user_id: (event.target as HTMLInputElement).value.trim() }) }),
         ]),
         h('div', { class: 'account-feature-list' }, [
           h('div', { class: 'account-feature-head' }, [h('span', '功能权限'), h('span', '默认账号'), h('span', '登录状态')]),
