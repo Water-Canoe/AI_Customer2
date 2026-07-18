@@ -121,14 +121,17 @@ Token 不允许放在 URL，不应写入浏览器 `localStorage` 或日志。
 - `GET /ai-customer/admin/licenses`：最近 200 个授权。
 - `PATCH /ai-customer/admin/licenses/{licenseId}`：修改 `status / entitlements / maxDevices / expiresAt / remark`。
 
-`status` 只支持 `active` 或 `disabled`。授权不提供硬删除；商业记录需要保留时使用停用。
+`status` 只支持 `active` 或 `disabled`。`maxDevices` 不能低于当前已激活设备数，否则返回 `409 / MAX_DEVICES_BELOW_ACTIVE`。授权不提供硬删除；商业记录需要保留时使用停用。
 
 ### 设备管理
 
 - `GET /ai-customer/admin/licenses/{licenseId}/devices`：查看设备。
 - `POST /ai-customer/admin/licenses/{licenseId}/devices/{deviceId}/revoke`：撤销设备并释放一个名额。
+- `POST /ai-customer/admin/licenses/{licenseId}/devices/{deviceId}/restore`：恢复已撤销设备并重新占用一个名额。
 
-根目录 `tools/license-admin.html` 已接入以上接口，可直接在浏览器打开。完整授权码和管理 Token 都不会持久化到页面存储。
+恢复只接受 `revoked` 设备；授权已停用、已过期或名额已满时拒绝恢复。设备已经是 `active` 时重复调用不会重复增加设备计数。成功响应会返回 `restoredAt`，设备列表也会返回最近一次恢复时间。
+
+根目录 `tools/license-admin.html` 已接入以上接口，可直接在浏览器打开。页面包含授权统计、创建与一次性保存、搜索筛选、CSV 导出、授权编辑、设备撤销与恢复；完整授权码和管理 Token 都不会持久化到页面存储。
 
 ## 远程更新
 
