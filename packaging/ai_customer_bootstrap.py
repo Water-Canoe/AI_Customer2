@@ -25,6 +25,8 @@ from app import device_identity
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MANIFEST_NAME = "release-manifest.json"
+UPDATE_TRANSACTION_NAME = "update-transaction.json"
+ROLLBACK_DIRECTORY_NAME = "rollback"
 PRODUCT_NAME = "AI Customer Desktop"
 UPDATER_VERSION = "1.0.0"
 MAX_EXTRACTED_SIZE = 8 * 1024 * 1024 * 1024
@@ -236,11 +238,8 @@ def _extract_update(
     version: str,
     progress: Callable[[str, int], None] | None = None,
 ) -> Path:
-    release_root = install_root / "updates" / version
-    if release_root.is_dir():
-        if progress:
-            progress("正在检查已下载的程序文件", 95)
-        return release_root
+    release_root = install_root / "updates" / f"{version}.extracting"
+    _remove_tree(release_root)
     with zipfile.ZipFile(archive_path) as archive:
         names: set[str] = set()
         files: list[tuple[zipfile.ZipInfo, str]] = []
@@ -264,6 +263,7 @@ def _extract_update(
             extracted += int(item.file_size)
             if progress:
                 progress("正在解压程序更新", 82 + min(13, int(extracted * 13 / max(total_size, 1))))
+    _read_verified_release(release_root)
     return release_root
 
 
@@ -302,6 +302,12 @@ def apply_remote_update(
         archive_path = _download_update(update, install_root, progress)
         release_root = _extract_update(archive_path, install_root, str(update["version"]), progress)
         apply_release(release_root, install_root, progress)
+        # ponytail: 清理失败只占用磁盘，不影响已经提交并校验完成的新版本。
+        try:
+            _remove_tree(release_root)
+            archive_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         return True
     except (InvalidSignature, OSError, RuntimeError, ValueError, sqlite3.Error, urllib.error.URLError, zipfile.BadZipFile) as exc:
         if confirmed and update and update.get("mandatory"):
@@ -343,29 +349,145 @@ def apply_release(
     install_root: Path,
     progress: Callable[[str, int], None] | None = None,
 ) -> str:
-    """Replace only program-owned files inside the portable directory."""
+    """Replace program-owned files and roll back the whole program set on failure."""
     release_root = release_root.resolve()
     version, files = _read_verified_release(release_root)
     install_root.mkdir(parents=True, exist_ok=True)
     (install_root / "data").mkdir(exist_ok=True)
-    ordered_files = sorted(files.items(), key=lambda value: value[0] == "AI_Customer_App.exe")
-    for index, (relative_path, item) in enumerate(ordered_files, start=1):
-        if relative_path == "AI_Customer.exe":
-            continue
-        destination = install_root / Path(*PurePosixPath(relative_path).parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(f"{destination.name}.next-{os.getpid()}")
-        shutil.copy2(item["source"], temporary)
-        temporary.replace(destination)
-        if progress:
-            progress("正在安装程序更新", 95 + min(4, int(index * 4 / len(ordered_files))))
-    manifest_source = release_root / MANIFEST_NAME
-    manifest_temporary = install_root / f"{MANIFEST_NAME}.next-{os.getpid()}"
-    shutil.copy2(manifest_source, manifest_temporary)
-    manifest_temporary.replace(install_root / MANIFEST_NAME)
+    _recover_interrupted_update(install_root)
+    _, current_files = _read_verified_release(install_root)
+    old_paths = set(current_files) - {"AI_Customer.exe"}
+    new_paths = set(files) - {"AI_Customer.exe"}
+    rollback_root = _prepare_update_transaction(install_root, sorted(old_paths), sorted(new_paths))
+    try:
+        for relative_path in sorted(old_paths - new_paths):
+            _installed_path(install_root, relative_path).unlink(missing_ok=True)
+        ordered_files = sorted(
+            ((path, files[path]) for path in new_paths),
+            key=lambda value: value[0] == "AI_Customer_App.exe",
+        )
+        for index, (relative_path, item) in enumerate(ordered_files, start=1):
+            _replace_file(item["source"], _installed_path(install_root, relative_path))
+            if progress:
+                progress("正在安装程序更新", 95 + min(4, int(index * 4 / len(ordered_files))))
+        _replace_file(release_root / MANIFEST_NAME, install_root / MANIFEST_NAME)
+        _write_transaction(install_root, "committed", sorted(old_paths), sorted(new_paths))
+    except Exception as exc:
+        try:
+            _recover_interrupted_update(install_root)
+        except Exception as rollback_exc:
+            raise RuntimeError(f"程序更新失败且旧版本恢复失败：{rollback_exc}") from exc
+        raise
+    # ponytail: 清理失败保留已提交事务，下次启动继续清理但不误报更新失败。
+    try:
+        _cleanup_update_transaction(install_root, rollback_root)
+    except OSError:
+        pass
     if progress:
         progress("更新完成，即将启动", 100)
     return version
+
+
+def _prepare_update_transaction(install_root: Path, old_paths: list[str], new_paths: list[str]) -> Path:
+    updates_root = install_root / "updates"
+    updates_root.mkdir(exist_ok=True)
+    rollback_root = updates_root / ROLLBACK_DIRECTORY_NAME
+    _remove_tree(rollback_root)
+    for relative_path in old_paths:
+        source = _installed_path(install_root, relative_path)
+        destination = _installed_path(rollback_root, relative_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    shutil.copy2(install_root / MANIFEST_NAME, rollback_root / MANIFEST_NAME)
+    _read_verified_release(rollback_root)
+    _write_transaction(install_root, "prepared", old_paths, new_paths)
+    return rollback_root
+
+
+def _recover_interrupted_update(install_root: Path) -> bool:
+    transaction_path = install_root / "updates" / UPDATE_TRANSACTION_NAME
+    if not transaction_path.is_file():
+        return False
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    if transaction.get("format") != 1 or transaction.get("state") not in {"prepared", "committed", "rolled_back"}:
+        raise RuntimeError("更新事务记录无效，已停止启动")
+    old_paths = _transaction_paths(transaction.get("old_files"))
+    new_paths = _transaction_paths(transaction.get("new_files"))
+    rollback_root = install_root / "updates" / ROLLBACK_DIRECTORY_NAME
+    recovered = transaction["state"] == "prepared"
+    if recovered:
+        _, rollback_files = _read_verified_release(rollback_root)
+        if set(rollback_files) - {"AI_Customer.exe"} != set(old_paths):
+            raise RuntimeError("更新回滚文件与事务记录不一致")
+        for relative_path in old_paths:
+            _replace_file(rollback_files[relative_path]["source"], _installed_path(install_root, relative_path))
+        for relative_path in sorted(set(new_paths) - set(old_paths)):
+            _installed_path(install_root, relative_path).unlink(missing_ok=True)
+        _replace_file(rollback_root / MANIFEST_NAME, install_root / MANIFEST_NAME)
+        _write_transaction(install_root, "rolled_back", old_paths, new_paths)
+    for relative_path in set(old_paths) | set(new_paths):
+        _replacement_path(_installed_path(install_root, relative_path)).unlink(missing_ok=True)
+    try:
+        _cleanup_update_transaction(install_root, rollback_root)
+    except OSError:
+        pass
+    return recovered
+
+
+def _write_transaction(install_root: Path, state: str, old_paths: list[str], new_paths: list[str]) -> None:
+    path = install_root / "updates" / UPDATE_TRANSACTION_NAME
+    temporary = path.with_suffix(".next")
+    temporary.write_text(
+        json.dumps(
+            {"format": 1, "state": state, "old_files": old_paths, "new_files": new_paths},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _transaction_paths(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise RuntimeError("更新事务文件清单无效")
+    paths = [_safe_release_path(item) for item in value]
+    if len(paths) != len(set(paths)) or any(not _is_program_owned_path(path) or path == "AI_Customer.exe" for path in paths):
+        raise RuntimeError("更新事务文件清单无效")
+    return paths
+
+
+def _replace_file(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _replacement_path(destination)
+    temporary.unlink(missing_ok=True)
+    shutil.copy2(source, temporary)
+    temporary.replace(destination)
+
+
+def _replacement_path(destination: Path) -> Path:
+    return destination.with_name(f"{destination.name}.update-next")
+
+
+def _installed_path(root: Path, relative_path: str) -> Path:
+    return root / Path(*PurePosixPath(_safe_release_path(relative_path)).parts)
+
+
+def _cleanup_update_transaction(install_root: Path, rollback_root: Path) -> None:
+    _remove_tree(rollback_root)
+    (install_root / "updates" / UPDATE_TRANSACTION_NAME).unlink(missing_ok=True)
+    (install_root / "updates" / UPDATE_TRANSACTION_NAME).with_suffix(".next").unlink(missing_ok=True)
+
+
+def _remove_tree(root: Path) -> None:
+    if not root.exists():
+        return
+    for path in sorted(root.rglob("*"), key=lambda value: len(value.parts), reverse=True):
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+        elif path.is_dir():
+            path.rmdir()
+    root.rmdir()
 
 
 def validate_environment(install_root: Path) -> str:
@@ -524,6 +646,7 @@ def main() -> None:
         parent_pid = _manual_update_parent_pid()
         if parent_pid is not None:
             _wait_for_process_exit(parent_pid)
+        _recover_interrupted_update(source_root)
         current_version(source_root)
         validate_environment(source_root)
         apply_remote_update(

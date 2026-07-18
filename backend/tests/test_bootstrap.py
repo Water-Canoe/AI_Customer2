@@ -7,6 +7,7 @@ import io
 import json
 import sqlite3
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,30 @@ def _bootstrap_module():
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_release(root: Path, version: str, contents: dict[str, bytes]) -> None:
+    for relative_path, content in contents.items():
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    files = [
+        {"path": path, "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+        for path, content in sorted(contents.items())
+    ]
+    (root / "release-manifest.json").write_text(
+        json.dumps(
+            {
+                "format": 1,
+                "product": "AI Customer Desktop",
+                "version": version,
+                "environment_version": "1.0.0",
+                "entrypoint": "AI_Customer_App.exe",
+                "files": files,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_bootstrap_resolves_only_valid_portable_version(tmp_path: Path) -> None:
@@ -57,31 +82,25 @@ def test_bootstrap_resolves_only_valid_portable_version(tmp_path: Path) -> None:
 def test_release_update_replaces_program_files_and_preserves_environment_and_data(tmp_path: Path) -> None:
     ai_customer_bootstrap = _bootstrap_module()
     release = tmp_path / "release"
-    frontend = release / "runtime" / "frontend_dist"
-    frontend.mkdir(parents=True)
-    (release / "AI_Customer.exe").write_bytes(b"launcher")
-    (release / "AI_Customer_App.exe").write_bytes(b"application-new")
-    (frontend / "index.html").write_bytes(b"frontend-new")
-    declared = ["AI_Customer_App.exe", "runtime/frontend_dist/index.html"]
-    files = [
-        {"path": relative, "size": (release / relative).stat().st_size, "sha256": _sha256(release / relative)}
-        for relative in declared
-    ]
-    (release / "release-manifest.json").write_text(
-        json.dumps(
-            {
-                "format": 1,
-                "product": "AI Customer Desktop",
-                "version": "1.1.1",
-                "environment_version": "1.0.0",
-                "entrypoint": "AI_Customer_App.exe",
-                "files": files,
-            }
-        ),
-        encoding="utf-8",
+    _write_release(
+        release,
+        "1.1.1",
+        {
+            "AI_Customer_App.exe": b"application-new",
+            "runtime/frontend_dist/index.html": b"frontend-new",
+        },
     )
 
     install_root = tmp_path / "installed"
+    _write_release(
+        install_root,
+        "1.1.0",
+        {
+            "AI_Customer_App.exe": b"application-old",
+            "runtime/frontend_dist/index.html": b"frontend-old",
+            "runtime/frontend_dist/obsolete.js": b"obsolete",
+        },
+    )
     (install_root / "runtime" / "python").mkdir(parents=True)
     (install_root / "runtime" / "python" / "python.exe").write_bytes(b"environment")
     (install_root / "data").mkdir()
@@ -93,9 +112,98 @@ def test_release_update_replaces_program_files_and_preserves_environment_and_dat
     assert (install_root / "AI_Customer.exe").read_bytes() == b"stable-running-launcher"
     assert (install_root / "AI_Customer_App.exe").read_bytes() == b"application-new"
     assert (install_root / "runtime" / "frontend_dist" / "index.html").read_bytes() == b"frontend-new"
+    assert not (install_root / "runtime" / "frontend_dist" / "obsolete.js").exists()
     assert (install_root / "runtime" / "python" / "python.exe").read_bytes() == b"environment"
     assert (install_root / "data" / "ai_customer.sqlite3").read_bytes() == b"customer-data"
     assert json.loads((install_root / "release-manifest.json").read_text(encoding="utf-8"))["version"] == "1.1.1"
+    assert not (install_root / "updates" / "update-transaction.json").exists()
+    assert not (install_root / "updates" / "rollback").exists()
+
+
+def test_release_update_rolls_back_all_program_files_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+    install_root = tmp_path / "installed"
+    release = tmp_path / "release"
+    _write_release(
+        install_root,
+        "1.1.0",
+        {
+            "AI_Customer_App.exe": b"application-old",
+            "runtime/frontend_dist/index.html": b"frontend-old",
+            "runtime/frontend_dist/obsolete.js": b"obsolete",
+        },
+    )
+    _write_release(
+        release,
+        "1.1.1",
+        {
+            "AI_Customer_App.exe": b"application-new",
+            "runtime/frontend_dist/index.html": b"frontend-new",
+            "runtime/frontend_dist/new.js": b"new",
+        },
+    )
+    original_replace = ai_customer_bootstrap._replace_file
+
+    def fail_new_application(source: Path, destination: Path) -> None:
+        if release in source.parents and source.name == "AI_Customer_App.exe":
+            raise OSError("simulated install failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(ai_customer_bootstrap, "_replace_file", fail_new_application)
+    with pytest.raises(OSError, match="simulated install failure"):
+        ai_customer_bootstrap.apply_release(release, install_root)
+
+    assert ai_customer_bootstrap.current_version(install_root) == "1.1.0"
+    assert (install_root / "AI_Customer_App.exe").read_bytes() == b"application-old"
+    assert (install_root / "runtime/frontend_dist/index.html").read_bytes() == b"frontend-old"
+    assert (install_root / "runtime/frontend_dist/obsolete.js").read_bytes() == b"obsolete"
+    assert not (install_root / "runtime/frontend_dist/new.js").exists()
+    assert not (install_root / "updates/update-transaction.json").exists()
+
+
+def test_launcher_recovers_a_prepared_update_transaction_after_interruption(tmp_path: Path) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+    install_root = tmp_path / "installed"
+    _write_release(
+        install_root,
+        "1.1.0",
+        {
+            "AI_Customer_App.exe": b"application-old",
+            "runtime/frontend_dist/index.html": b"frontend-old",
+        },
+    )
+    old_paths = ["AI_Customer_App.exe", "runtime/frontend_dist/index.html"]
+    new_paths = ["AI_Customer_App.exe", "runtime/frontend_dist/new.js"]
+    ai_customer_bootstrap._prepare_update_transaction(install_root, old_paths, new_paths)
+    (install_root / "AI_Customer_App.exe").write_bytes(b"application-new")
+    (install_root / "runtime/frontend_dist/index.html").unlink()
+    (install_root / "runtime/frontend_dist/new.js").write_bytes(b"new")
+
+    assert ai_customer_bootstrap._recover_interrupted_update(install_root) is True
+    assert ai_customer_bootstrap.current_version(install_root) == "1.1.0"
+    assert (install_root / "AI_Customer_App.exe").read_bytes() == b"application-old"
+    assert (install_root / "runtime/frontend_dist/index.html").read_bytes() == b"frontend-old"
+    assert not (install_root / "runtime/frontend_dist/new.js").exists()
+
+
+def test_update_extraction_replaces_an_interrupted_staging_directory(tmp_path: Path) -> None:
+    ai_customer_bootstrap = _bootstrap_module()
+    release = tmp_path / "release"
+    _write_release(release, "1.1.1", {"AI_Customer_App.exe": b"application-new"})
+    archive = tmp_path / "update.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        for path in release.rglob("*"):
+            if path.is_file():
+                output.write(path, path.relative_to(release).as_posix())
+    stale = tmp_path / "updates" / "1.1.1.extracting"
+    stale.mkdir(parents=True)
+    (stale / "partial.tmp").write_bytes(b"partial")
+
+    extracted = ai_customer_bootstrap._extract_update(archive, tmp_path, "1.1.1")
+
+    assert extracted == stale
+    assert not (extracted / "partial.tmp").exists()
+    assert (extracted / "AI_Customer_App.exe").read_bytes() == b"application-new"
 
 
 def test_environment_manifest_requires_matching_version_and_files(tmp_path: Path) -> None:
