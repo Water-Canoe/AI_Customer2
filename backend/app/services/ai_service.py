@@ -79,14 +79,20 @@ def run_ai_jobs_parallel(job_ids: list[str], max_workers: int | None = None) -> 
         return {"total": 0, "succeeded": 0, "failed": 0, "errors": []}
 
     def run_one(job_id: str) -> dict[str, Any]:
-        try:
-            job = run_ai_job(job_id)
-            return {"job_id": job_id, "ok": True, "job": job}
-        except HTTPException as exc:
-            detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, ensure_ascii=False)
-            return {"job_id": job_id, "ok": False, "reason": detail}
-        except Exception as exc:
-            return {"job_id": job_id, "ok": False, "reason": str(exc)}
+        # 网络中断或模型偶发输出非 JSON 时，仅重试当前失败项，避免重跑整个批次。
+        for attempt in range(2):
+            try:
+                job = run_ai_job(job_id)
+                return {"job_id": job_id, "ok": True, "job": job}
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail, ensure_ascii=False)
+                if exc.status_code < 500 or attempt == 1:
+                    return {"job_id": job_id, "ok": False, "reason": detail}
+            except Exception as exc:
+                if attempt == 1:
+                    return {"job_id": job_id, "ok": False, "reason": str(exc)}
+            time.sleep(0.5)
+        raise RuntimeError("AI 任务重试状态异常")
 
     results: list[dict[str, Any]] = []
     if worker_count == 1 or len(unique_ids) == 1:

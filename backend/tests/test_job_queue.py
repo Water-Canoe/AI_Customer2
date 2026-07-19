@@ -119,6 +119,62 @@ def test_cancelling_queued_runtime_job_updates_domain_status(tmp_path: Path, mon
         assert conn.execute("SELECT status FROM crawl_jobs WHERE id = 'crawl-cancel'").fetchone()[0] == "cancelled"
 
 
+def test_completed_traffic_run_uses_stop_reason_as_error_column(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_queue(tmp_path, monkeypatch)
+    from app import database
+    from app.services import job_queue
+
+    with database.connect() as conn:
+        conn.execute("INSERT INTO traffic_plans(id, name) VALUES('traffic-plan', '定时引流')")
+        conn.execute("INSERT INTO traffic_runs(id, plan_id, status) VALUES('traffic-run', 'traffic-plan', 'completed')")
+
+    outcome = job_queue._domain_outcome(
+        {"kind": "traffic_run", "payload": {"run_id": "traffic-run"}},
+    )
+
+    assert outcome == {"status": "succeeded", "error": ""}
+
+
+def test_ai_batch_only_fails_when_every_item_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_queue(tmp_path, monkeypatch)
+    from app.services import job_queue
+
+    partial = job_queue._domain_outcome(
+        {"kind": "ai_batch", "payload": {}},
+        {"succeeded": 459, "failed": 5, "errors": [{"reason": "网络中断"}]},
+    )
+    failed = job_queue._domain_outcome(
+        {"kind": "ai_batch", "payload": {}},
+        {"succeeded": 0, "failed": 2, "errors": [{"reason": "配置错误"}]},
+    )
+
+    assert partial == {"status": "succeeded", "error": ""}
+    assert failed == {"status": "failed", "error": "配置错误"}
+
+
+def test_ai_batch_retries_only_failed_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_queue(tmp_path, monkeypatch)
+    from app.services import ai_service
+
+    attempts = 0
+
+    def flaky_ai_job(job_id: str) -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ai_service.HTTPException(status_code=502, detail="连接中断")
+        return {"id": job_id, "status": "succeeded"}
+
+    monkeypatch.setattr(ai_service, "run_ai_job", flaky_ai_job)
+    monkeypatch.setattr(ai_service.time, "sleep", lambda _seconds: None)
+
+    summary = ai_service.run_ai_jobs_parallel(["ai-retry"], max_workers=1)
+
+    assert attempts == 2
+    assert summary["succeeded"] == 1
+    assert summary["failed"] == 0
+
+
 def test_video_import_failure_updates_business_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_queue(tmp_path, monkeypatch)
     from app import database

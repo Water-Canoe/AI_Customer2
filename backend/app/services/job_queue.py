@@ -751,13 +751,17 @@ def _domain_outcome(job: dict[str, Any], result: Any = None) -> dict[str, str]:
         return _multi_domain_outcome("crawl_jobs", [str(value) for value in payload.get("task_ids", [])], {"succeeded"})
     if kind in {"ai_batch", "account_customer_intent"}:
         summary = result if isinstance(result, dict) else {}
-        if int(summary.get("failed") or 0) > 0:
+        failed = int(summary.get("failed") or 0)
+        succeeded = int(summary.get("succeeded") or 0)
+        # 批量分析允许少量单项失败，明细错误仍保留在批次结果中供人工重试。
+        if failed > 0 and succeeded == 0:
             errors = summary.get("errors") if isinstance(summary.get("errors"), list) else []
             detail = "；".join(str(item.get("reason") or "") for item in errors if isinstance(item, dict))
-            return {"status": "failed", "error": detail or "部分 AI 任务执行失败"}
+            return {"status": "failed", "error": detail or "AI 任务全部执行失败"}
         return {"status": "succeeded", "error": ""}
     table = ""
     entity_id = ""
+    error_column = "error"
     success: set[str] = set()
     cancelled: set[str] = {"cancelled", "stopped"}
     if kind == "crawl_task":
@@ -766,6 +770,7 @@ def _domain_outcome(job: dict[str, Any], result: Any = None) -> dict[str, str]:
         table, entity_id, success = "crawl_jobs", str(payload["task_id"]), {"succeeded"}
     elif kind == "traffic_run":
         table, entity_id, success = "traffic_runs", str(payload["run_id"]), {"completed"}
+        error_column = "stop_reason"
     elif kind == "message_batch":
         table, entity_id, success = "message_batches", str(payload["batch_id"]), {"succeeded", "quota_reached"}
     elif kind == "automation_run":
@@ -779,7 +784,10 @@ def _domain_outcome(job: dict[str, Any], result: Any = None) -> dict[str, str]:
     if not table:
         return {"status": "succeeded", "error": ""}
     with database.connect() as conn:
-        row = conn.execute(f"SELECT status, COALESCE(error, '') AS error FROM {table} WHERE id = ?", (entity_id,)).fetchone()
+        row = conn.execute(
+            f"SELECT status, COALESCE({error_column}, '') AS error FROM {table} WHERE id = ?",
+            (entity_id,),
+        ).fetchone()
     if not row:
         return {"status": "failed", "error": "业务任务记录不存在"}
     status = str(row["status"])
