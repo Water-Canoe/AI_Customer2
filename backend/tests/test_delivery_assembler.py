@@ -66,6 +66,8 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     _file(cloak / "chrome.exe")
     component = tmp_path / "component"
     _file(component / "VoxCPM_Runtime.exe")
+    native_module = "r/ai_customer_voxcpm_native.cp311-win_amd64.pyd"
+    _file(component / native_module)
     (component / "component-info.json").write_text(
         json.dumps(
             {
@@ -74,6 +76,9 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
                 "component": "voxcpm2",
                 "version": "1.0.0",
                 "entrypoint": "VoxCPM_Runtime.exe",
+                "compiler": "nuitka",
+                "runtime_packager": "pyinstaller",
+                "native_module": native_module,
             }
         ),
         encoding="utf-8",
@@ -118,6 +123,7 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     assert "runtime/MyCrawler/wordcloud/stopwords" in environment_names
     assert "runtime/MyCrawler/database/sqlite_tables.db" not in environment_names
     assert not any(name.startswith("runtime/MyCrawler/") and name.endswith(".py") for name in environment_names)
+    assert "runtime/components/voxcpm2/versions/1.0.0/" + native_module in environment_names
     assert "runtime/frontend_dist/index.html" not in environment_names
 
     verified = _verifier_module().verify(str(program_zip), "1.2.3")

@@ -78,6 +78,14 @@ function Read-Component([string]$Path, [string]$ExpectedVersion) {
     if ([int]$Info.format -ne 1 -or [string]$Info.product -ne "AI Customer Component" -or [string]$Info.component -ne "voxcpm2") {
         throw "Component metadata is invalid"
     }
+    $NativeModule = [string]$Info.native_module
+    if ([string]$Info.compiler -ne "nuitka" -or [string]$Info.runtime_packager -ne "pyinstaller" -or $NativeModule -notmatch '^r/ai_customer_voxcpm_native[^/]*\.pyd$') {
+        throw "Component does not declare a valid Nuitka native entry module"
+    }
+    $NativePath = [System.IO.Path]::Combine($AccessPath, $NativeModule.Replace('/', '\'))
+    if (-not (Test-Path -LiteralPath $NativePath -PathType Leaf)) {
+        throw "Component native entry module is missing"
+    }
     if ([string]$Info.entrypoint -ne "VoxCPM_Runtime.exe" -or -not (Test-Path -LiteralPath ([System.IO.Path]::Combine($AccessPath, "VoxCPM_Runtime.exe")) -PathType Leaf)) {
         throw "Component executable is missing"
     }

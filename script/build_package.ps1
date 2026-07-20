@@ -57,7 +57,17 @@ if (-not $ProgramOnly) {
             (Test-Path -LiteralPath (Join-Path $_.FullName "MyCrawler.exe") -PathType Leaf)
         } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0].FullName
     }
-    if (-not $MyCrawlerComponentPath -or -not (Test-Path -LiteralPath (Join-Path $MyCrawlerComponentPath "MyCrawler.exe") -PathType Leaf)) {
+    $MyCrawlerInfoPath = if ($MyCrawlerComponentPath) { Join-Path $MyCrawlerComponentPath "component-info.json" } else { "" }
+    $MyCrawlerInfo = if ($MyCrawlerInfoPath -and (Test-Path -LiteralPath $MyCrawlerInfoPath -PathType Leaf)) {
+        Get-Content -LiteralPath $MyCrawlerInfoPath -Raw -Encoding utf8 | ConvertFrom-Json
+    } else { $null }
+    if (
+        -not $MyCrawlerInfo -or
+        [string]$MyCrawlerInfo.component -ne "mycrawler" -or
+        [string]$MyCrawlerInfo.compiler -ne "nuitka" -or
+        [string]$MyCrawlerInfo.entrypoint -ne "MyCrawler.exe" -or
+        -not (Test-Path -LiteralPath (Join-Path $MyCrawlerComponentPath "MyCrawler.exe") -PathType Leaf)
+    ) {
         throw "A completed Nuitka MyCrawler component is required. Run script/build_mycrawler_component.ps1 first."
     }
     $CloakBrowserPath = (& $Python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())").Trim()
@@ -72,12 +82,34 @@ if (-not $ProgramOnly) {
     if (-not $VoxComponentPath) {
         $ComponentRoot = Join-Path $ProjectRoot "dist\components"
         $VoxComponentPath = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
-            (Test-Path -LiteralPath (Join-Path $_.FullName "component-info.json") -PathType Leaf) -and
+            $InfoPath = Join-Path $_.FullName "component-info.json"
+            if (-not (Test-Path -LiteralPath $InfoPath -PathType Leaf)) { return $false }
+            $Info = Get-Content -LiteralPath $InfoPath -Raw -Encoding utf8 | ConvertFrom-Json
+            [string]$Info.component -eq "voxcpm2" -and
+            [string]$Info.compiler -eq "nuitka" -and
+            [string]$Info.runtime_packager -eq "pyinstaller" -and
+            [string]$Info.entrypoint -eq "VoxCPM_Runtime.exe" -and
+            [string]$Info.native_module -match '^r/ai_customer_voxcpm_native[^/]*\.pyd$' -and
+            (Test-Path -LiteralPath (Join-Path $_.FullName ([string]$Info.native_module)) -PathType Leaf) -and
             (Test-Path -LiteralPath (Join-Path $_.FullName "VoxCPM_Runtime.exe") -PathType Leaf)
         } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0].FullName
     }
-    if (-not $VoxComponentPath -or -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath "VoxCPM_Runtime.exe") -PathType Leaf)) {
-        throw "A completed VoxCPM2 component is required through -VoxComponentPath"
+    $VoxInfoPath = if ($VoxComponentPath) { Join-Path $VoxComponentPath "component-info.json" } else { "" }
+    $VoxInfo = if ($VoxInfoPath -and (Test-Path -LiteralPath $VoxInfoPath -PathType Leaf)) {
+        Get-Content -LiteralPath $VoxInfoPath -Raw -Encoding utf8 | ConvertFrom-Json
+    } else { $null }
+    $VoxNativeModule = if ($VoxInfo) { [string]$VoxInfo.native_module } else { "" }
+    if (
+        -not $VoxInfo -or
+        [string]$VoxInfo.component -ne "voxcpm2" -or
+        [string]$VoxInfo.compiler -ne "nuitka" -or
+        [string]$VoxInfo.runtime_packager -ne "pyinstaller" -or
+        [string]$VoxInfo.entrypoint -ne "VoxCPM_Runtime.exe" -or
+        $VoxNativeModule -notmatch '^r/ai_customer_voxcpm_native[^/]*\.pyd$' -or
+        -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath $VoxNativeModule) -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath "VoxCPM_Runtime.exe") -PathType Leaf)
+    ) {
+        throw "A completed Nuitka-entry VoxCPM2 component is required. Run script/build_voxcpm_component.ps1 first."
     }
 }
 

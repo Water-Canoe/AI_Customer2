@@ -8,7 +8,7 @@ import re
 import shutil
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
@@ -179,11 +179,16 @@ def assemble(
 
     component_info = json.loads((vox_component_root / "component-info.json").read_text(encoding="utf-8-sig"))
     component_version = str(component_info.get("version") or "")
+    native_module = str(component_info.get("native_module") or "")
     if (
         component_info.get("format") != 1
         or component_info.get("product") != "AI Customer Component"
         or component_info.get("component") != "voxcpm2"
+        or component_info.get("compiler") != "nuitka"
+        or component_info.get("runtime_packager") != "pyinstaller"
         or component_info.get("entrypoint") != "VoxCPM_Runtime.exe"
+        or not re.fullmatch(r"r/ai_customer_voxcpm_native[^/]*\.pyd", native_module)
+        or not (vox_component_root / Path(*PurePosixPath(native_module).parts)).is_file()
         or not VERSION_PATTERN.fullmatch(component_version)
     ):
         raise RuntimeError("VoxCPM2 组件清单无效")
@@ -207,6 +212,7 @@ def assemble(
         "MyCrawler/wordcloud/stopwords",
         "components/voxcpm2/current.json",
         "components/voxcpm2/versions/" + component_version + "/VoxCPM_Runtime.exe",
+        "components/voxcpm2/versions/" + component_version + "/" + native_module,
         model_files[0].relative_to(environment_runtime).as_posix(),
     ]
     missing = [relative for relative in required_paths if not (environment_runtime / relative).is_file()]
