@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-PROGRAM_RUNTIME_DIRS = {"app", "frontend_dist"}
+APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
+PROGRAM_APPLICATION_ENTRIES = {"AI_Customer_App.exe", "app", "frontend_dist"}
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 CRAWLER_IGNORED_DIRS = {
     ".git",
@@ -81,7 +82,7 @@ def _program_manifest(program_root: Path, version: str, environment_version: str
         "schema_version": schema_version,
         "environment_version": environment_version,
         "built_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "entrypoint": "AI_Customer_App.exe",
+        "entrypoint": APPLICATION_ENTRYPOINT,
         "files": files,
     }
 
@@ -125,14 +126,15 @@ def assemble(
         path.mkdir(parents=True, exist_ok=False)
 
     shutil.copy2(stable_launcher, program_root / "AI_Customer.exe")
-    shutil.copy2(packaged_app / "AI_Customer_App.exe", program_root / "AI_Customer_App.exe")
     shutil.copy2(readme, program_root / "README.txt")
-    packaged_runtime = packaged_app / "runtime"
-    for name in PROGRAM_RUNTIME_DIRS:
-        source = packaged_runtime / name
+    application_program = program_runtime / "application"
+    application_program.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(packaged_app / "AI_Customer_App.exe", application_program / "AI_Customer_App.exe")
+    for name, destination in (("app", application_program / "app"), ("frontend_dist", program_runtime / "frontend_dist")):
+        source = packaged_app / name
         if not source.is_dir():
             raise RuntimeError(f"程序资源缺失：{source}")
-        _copy_tree(source, program_runtime / name)
+        _copy_tree(source, destination)
 
     # Program-only deliveries reuse an existing matching environment ZIP.
     if program_only:
@@ -151,10 +153,11 @@ def assemble(
     if any(path is None for path in (crawler_python_root, crawler_root, cloakbrowser_root, vox_component_root, voice_models_root)):
         raise RuntimeError("生成环境 ZIP 时必须提供全部环境来源")
 
-    for source in sorted(packaged_runtime.iterdir()):
-        if source.name in PROGRAM_RUNTIME_DIRS:
+    application_environment = environment_runtime / "application"
+    for source in sorted(packaged_app.iterdir()):
+        if source.name in PROGRAM_APPLICATION_ENTRIES:
             continue
-        target = environment_runtime / source.name
+        target = application_environment / source.name
         if source.is_dir():
             _copy_tree(source, target)
         else:
@@ -189,8 +192,8 @@ def assemble(
     if not model_files:
         raise RuntimeError("VoxCPM2 模型目录为空，无法生成完整环境包")
     required_paths = [
-        "python311.dll",
-        "playwright/driver/node.exe",
+        "application/python311.dll",
+        "application/playwright/driver/node.exe",
         "cloakbrowser_browser/chrome.exe",
         "python/python.exe",
         "MyCrawler/main.py",

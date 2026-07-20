@@ -1,6 +1,6 @@
 param(
     [string]$Version = "",
-    [string]$EnvironmentVersion = "1.0.0",
+    [string]$EnvironmentVersion = "1.0.2",
     [string]$VoxComponentPath = "",
     [string]$VoiceModelsPath = "",
     [switch]$ProgramOnly
@@ -24,26 +24,14 @@ $CrawlerPython = Join-Path $CrawlerRoot ".venv\Scripts\python.exe"
 $CrawlerSitePackages = Join-Path $CrawlerRoot ".venv\Lib\site-packages"
 
 # Validate local dependencies only; this script never installs missing packages implicitly.
-foreach ($RequiredFile in @($Python, $CrawlerPython, $AppLauncher, $StableLauncher, $AppIcon, $DeliveryAssembler, $Readme)) {
+foreach ($RequiredFile in @($Python, $AppLauncher, $StableLauncher, $AppIcon, $DeliveryAssembler, $Readme)) {
     if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
         throw "Required build file is missing: $RequiredFile"
     }
 }
-if (-not (Test-Path -LiteralPath $CrawlerSitePackages -PathType Container)) {
-    throw "MyCrawler virtual environment is incomplete: $CrawlerSitePackages"
-}
-& $Python -c "import PyInstaller"
+& $Python -c "import nuitka"
 if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller is missing from backend/.venv. Install it explicitly before packaging."
-}
-$CloakBrowserPath = (& $Python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())").Trim()
-if (-not (Test-Path -LiteralPath $CloakBrowserPath -PathType Leaf)) {
-    throw "CloakBrowser is missing. Run backend/.venv/Scripts/python.exe -m cloakbrowser install first."
-}
-$CloakBrowserDir = Split-Path -Parent $CloakBrowserPath
-$CrawlerPythonRoot = (& $CrawlerPython -c "import sys; print(sys.base_prefix)").Trim()
-if (-not (Test-Path -LiteralPath (Join-Path $CrawlerPythonRoot "python.exe") -PathType Leaf)) {
-    throw "MyCrawler base Python is missing: $CrawlerPythonRoot"
+    throw "Nuitka is missing from backend/.venv. Install backend/requirements-dev.txt first."
 }
 
 # Keep one version source so the EXE and release manifest cannot disagree.
@@ -57,35 +45,49 @@ elseif ($Version -ne $SourceVersion) {
 if ($Version -notmatch $SemVerPattern -or $EnvironmentVersion -notmatch $SemVerPattern) {
     throw "Version and EnvironmentVersion must use semantic version format, for example 1.2.3"
 }
-if (-not $VoiceModelsPath) {
-    $VoiceModelsPath = Join-Path $ProjectRoot "data\voice_models"
-}
-if (-not (Test-Path -LiteralPath (Join-Path $VoiceModelsPath "VoxCPM2") -PathType Container)) {
-    throw "VoxCPM2 model files are missing: $VoiceModelsPath\VoxCPM2"
-}
-if (-not $VoxComponentPath) {
-    $ComponentRoot = Join-Path $ProjectRoot "dist\components"
-    $VoxComponentPath = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
-        (Test-Path -LiteralPath (Join-Path $_.FullName "component-info.json") -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $_.FullName "VoxCPM_Runtime.exe") -PathType Leaf)
-    } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0].FullName
-}
-if (-not $VoxComponentPath -or -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath "VoxCPM_Runtime.exe") -PathType Leaf)) {
-    throw "A completed VoxCPM2 component is required through -VoxComponentPath"
+$CloakBrowserDir = ""
+if (-not $ProgramOnly) {
+    if (-not (Test-Path -LiteralPath $CrawlerPython -PathType Leaf)) {
+        throw "MyCrawler virtual environment is missing: $CrawlerPython"
+    }
+    if (-not (Test-Path -LiteralPath $CrawlerSitePackages -PathType Container)) {
+        throw "MyCrawler virtual environment is incomplete: $CrawlerSitePackages"
+    }
+    $CrawlerPythonRoot = (& $CrawlerPython -c "import sys; print(sys.base_prefix)").Trim()
+    if (-not (Test-Path -LiteralPath (Join-Path $CrawlerPythonRoot "python.exe") -PathType Leaf)) {
+        throw "MyCrawler base Python is missing: $CrawlerPythonRoot"
+    }
+    $CloakBrowserPath = (& $Python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())").Trim()
+    if (-not (Test-Path -LiteralPath $CloakBrowserPath -PathType Leaf)) {
+        throw "CloakBrowser is missing. Run backend/.venv/Scripts/python.exe -m cloakbrowser install first."
+    }
+    $CloakBrowserDir = Split-Path -Parent $CloakBrowserPath
+    if (-not $VoiceModelsPath) { $VoiceModelsPath = Join-Path $ProjectRoot "data\voice_models" }
+    if (-not (Test-Path -LiteralPath (Join-Path $VoiceModelsPath "VoxCPM2") -PathType Container)) {
+        throw "VoxCPM2 model files are missing: $VoiceModelsPath\VoxCPM2"
+    }
+    if (-not $VoxComponentPath) {
+        $ComponentRoot = Join-Path $ProjectRoot "dist\components"
+        $VoxComponentPath = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+            (Test-Path -LiteralPath (Join-Path $_.FullName "component-info.json") -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $_.FullName "VoxCPM_Runtime.exe") -PathType Leaf)
+        } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0].FullName
+    }
+    if (-not $VoxComponentPath -or -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath "VoxCPM_Runtime.exe") -PathType Leaf)) {
+        throw "A completed VoxCPM2 component is required through -VoxComponentPath"
+    }
 }
 
 # Keep timestamped intermediate files; customers only receive deliverables/<version>.
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $BuildRoot = Join-Path $ProjectRoot "output\build_${Version}_$Stamp"
 $BuildDist = Join-Path $BuildRoot "dist"
-$BuildWork = Join-Path $BuildRoot "work"
-$BuildSpec = Join-Path $BuildRoot "spec"
 $StagingRoot = Join-Path $ProjectRoot "output\stage_$Stamp"
 $DeliveryRoot = Join-Path $ProjectRoot "deliverables\$Version"
 if ((Test-Path -LiteralPath $BuildRoot) -or (Test-Path -LiteralPath $DeliveryRoot)) {
     throw "Build or delivery output already exists. Increase the product version before rebuilding."
 }
-New-Item -ItemType Directory -Path $BuildDist, $BuildWork, $BuildSpec | Out-Null
+New-Item -ItemType Directory -Path $BuildDist | Out-Null
 
 # Run the existing frontend and backend checks before packaging verified source.
 Push-Location $FrontendDir
@@ -108,78 +110,73 @@ finally {
     Pop-Location
 }
 
-# Keep application code and frontend assets in the program payload; dependencies live in runtime.
-& $Python -m PyInstaller `
-    --name "AI_Customer_App" `
-    --icon $AppIcon `
-    --onedir `
-    --optimize 2 `
-    --contents-directory "runtime" `
-    --distpath $BuildDist `
-    --workpath (Join-Path $BuildWork "app") `
-    --specpath $BuildSpec `
-    --paths $BackendDir `
-    --paths $ProjectRoot `
-    --additional-hooks-dir (Join-Path $ProjectRoot "packaging\hooks") `
-    --exclude-module patchright `
-    --exclude-module torch `
-    --exclude-module torchaudio `
-    --exclude-module torchcodec `
-    --exclude-module transformers `
-    --exclude-module safetensors `
-    --exclude-module voxcpm `
-    --add-data "$FrontendDir\dist;frontend_dist" `
-    --add-data "$BackendDir\app\video_engine\resource;app/video_engine/resource" `
-    --add-data "$BackendDir\app\video_engine\services\data;app/video_engine/services/data" `
-    --add-data "$BackendDir\app\video_engine\config.default.toml;app/video_engine" `
-    --add-data "$BackendDir\app\video_engine\LICENSE;app/video_engine" `
-    --add-data "$BackendDir\app\publish_engine\utils\stealth.min.js;app/publish_engine/utils" `
-    --add-data "$BackendDir\app\publish_engine\LICENSE;app/publish_engine" `
-    --collect-all cv2 `
-    --collect-all qrcode `
-    --collect-all segno `
-    --collect-all cloakbrowser `
-    --collect-all moviepy `
-    --copy-metadata imageio `
-    --collect-all imageio_ffmpeg `
-    --collect-all edge_tts `
-    --collect-all faster_whisper `
-    --collect-all ctranslate2 `
-    --collect-all openai `
-    --collect-all google.genai `
-    --collect-all dashscope `
-    --collect-all azure.cognitiveservices.speech `
-    --collect-all twelvelabs `
-    --collect-all pydub `
-    $AppLauncher
-if ($LASTEXITCODE -ne 0) { throw "Application packaging failed" }
-$PackagedApp = Join-Path $BuildDist "AI_Customer_App"
-if (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\patchright")) {
-    throw "Patchright leaked into the main package; inspect PyInstaller hooks."
+# Compile the complete Python application to native code; data files stay beside the standalone binary.
+$PreviousPythonPath = $env:PYTHONPATH
+$env:PYTHONPATH = "$BackendDir;$ProjectRoot"
+try {
+    & $Python -m nuitka `
+        --mode=standalone `
+        --output-dir=$BuildDist `
+        --output-filename=AI_Customer_App.exe `
+        --windows-console-mode=force `
+        --windows-icon-from-ico=$AppIcon `
+        --assume-yes-for-downloads `
+        --python-flag=no_docstrings `
+        --include-package=app `
+        --include-package=tools `
+        --nofollow-import-to=patchright `
+        --nofollow-import-to=torch `
+        --nofollow-import-to=torchaudio `
+        --nofollow-import-to=torchcodec `
+        --nofollow-import-to=transformers `
+        --nofollow-import-to=safetensors `
+        --nofollow-import-to=voxcpm `
+        --include-data-dir="$FrontendDir\dist=frontend_dist" `
+        --include-data-dir="$BackendDir\app\video_engine\resource=app/video_engine/resource" `
+        --include-data-dir="$BackendDir\app\video_engine\services\data=app/video_engine/services/data" `
+        --include-data-files="$BackendDir\app\video_engine\config.default.toml=app/video_engine/config.default.toml" `
+        --include-data-files="$BackendDir\app\video_engine\LICENSE=app/video_engine/LICENSE" `
+        --include-data-files="$BackendDir\app\publish_engine\utils\stealth.min.js=app/publish_engine/utils/stealth.min.js" `
+        --include-data-files="$BackendDir\app\publish_engine\LICENSE=app/publish_engine/LICENSE" `
+        --include-package-data=cloakbrowser `
+        --include-package-data=moviepy `
+        --include-package-data=imageio_ffmpeg `
+        --include-package-data=faster_whisper `
+        --include-package-data=ctranslate2 `
+        $AppLauncher
 }
-foreach ($OptionalRuntime in @("torch", "torchaudio", "torchcodec", "transformers", "safetensors", "voxcpm")) {
-    if (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\$OptionalRuntime")) {
-        throw "$OptionalRuntime leaked into the main package; keep it in the environment package."
-    }
+finally {
+    $env:PYTHONPATH = $PreviousPythonPath
 }
-if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\playwright\driver\node.exe") -PathType Leaf)) {
-    throw "Playwright driver is missing from the packaged runtime."
+if ($LASTEXITCODE -ne 0) { throw "Application Nuitka compilation failed" }
+$PackagedApp = Join-Path $BuildDist "ai_customer_launcher.dist"
+if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "AI_Customer_App.exe") -PathType Leaf)) {
+    throw "Nuitka application executable was not created"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "playwright\driver\node.exe") -PathType Leaf)) {
+    throw "Playwright driver is missing from the Nuitka application runtime"
 }
 
-# The stable entrypoint only updates, validates the environment, and starts the application.
-& $Python -m PyInstaller `
-    --name "AI_Customer" `
-    --icon $AppIcon `
-    --onefile `
-    --windowed `
-    --optimize 2 `
-    --distpath $BuildDist `
-    --workpath (Join-Path $BuildWork "bootstrap") `
-    --specpath $BuildSpec `
-    --paths $BackendDir `
-    --add-data "$AppIcon;." `
-    $StableLauncher
-if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
+# Compile the stable updater as a single native Windows executable.
+$PreviousPythonPath = $env:PYTHONPATH
+$env:PYTHONPATH = $BackendDir
+try {
+    & $Python -m nuitka `
+        --mode=onefile `
+        --output-dir=$BuildDist `
+        --output-filename=AI_Customer.exe `
+        --windows-console-mode=disable `
+        --windows-icon-from-ico=$AppIcon `
+        --assume-yes-for-downloads `
+        --python-flag=no_docstrings `
+        --enable-plugin=tk-inter `
+        --include-data-files="$AppIcon=ai-customer-icon.ico" `
+        $StableLauncher
+}
+finally {
+    $env:PYTHONPATH = $PreviousPythonPath
+}
+if ($LASTEXITCODE -ne 0) { throw "Stable launcher Nuitka compilation failed" }
 
 # Assemble the two customer ZIPs: remotely updated program and one-time environment.
 $SchemaVersion = [int](& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.migrations import latest_version; print(latest_version())")

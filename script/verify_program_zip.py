@@ -12,6 +12,7 @@ from pathlib import PurePosixPath
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_PROGRAM_SIZE = 8 * 1024 * 1024 * 1024
+APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
 
 
 def _safe_path(value: object) -> str:
@@ -23,9 +24,9 @@ def _safe_path(value: object) -> str:
 
 
 def _program_owned(path: str) -> bool:
-    if path in {"AI_Customer.exe", "AI_Customer_App.exe", "README.txt"}:
+    if path in {"AI_Customer.exe", "README.txt", APPLICATION_ENTRYPOINT}:
         return True
-    return path.startswith(("runtime/frontend_dist/", "runtime/app/"))
+    return path.startswith(("runtime/frontend_dist/", "runtime/application/app/"))
 
 
 def verify(path: str, expected_version: str = "") -> dict[str, object]:
@@ -58,7 +59,7 @@ def verify(path: str, expected_version: str = "") -> dict[str, object]:
             not isinstance(manifest, dict)
             or manifest.get("format") != 1
             or manifest.get("product") != "AI Customer Desktop"
-            or manifest.get("entrypoint") != "AI_Customer_App.exe"
+            or manifest.get("entrypoint") != APPLICATION_ENTRYPOINT
             or not VERSION_PATTERN.fullmatch(version)
             or not VERSION_PATTERN.fullmatch(environment_version)
             or not isinstance(schema_version, int)
@@ -93,7 +94,7 @@ def verify(path: str, expected_version: str = "") -> dict[str, object]:
         if (
             declared != set(entries) - {"release-manifest.json", "AI_Customer.exe"}
             or "AI_Customer.exe" not in entries
-            or "AI_Customer_App.exe" not in declared
+            or APPLICATION_ENTRYPOINT not in declared
         ):
             raise RuntimeError("程序 ZIP 实际文件与发布清单不一致")
     return {

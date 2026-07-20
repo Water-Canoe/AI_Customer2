@@ -37,11 +37,11 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     assembler = _module()
     packaged = tmp_path / "packaged"
     _file(packaged / "AI_Customer_App.exe")
-    _file(packaged / "runtime" / "frontend_dist" / "index.html")
-    _file(packaged / "runtime" / "app" / "resource.txt")
-    _file(packaged / "runtime" / "python311.dll")
-    _file(packaged / "runtime" / "playwright" / "driver" / "node.exe")
-    _file(packaged / "runtime" / "library.zip")
+    _file(packaged / "frontend_dist" / "index.html")
+    _file(packaged / "app" / "resource.txt")
+    _file(packaged / "python311.dll")
+    _file(packaged / "playwright" / "driver" / "node.exe")
+    _file(packaged / "library.dll")
 
     crawler = tmp_path / "MyCrawler"
     _file(crawler / "main.py")
@@ -96,13 +96,15 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
         environment_names = set(archive.namelist())
 
     assert "AI_Customer.exe" in program_names
-    assert "AI_Customer_App.exe" in program_names
+    assert "runtime/application/AI_Customer_App.exe" in program_names
+    assert "runtime/application/app/resource.txt" in program_names
     assert "runtime/frontend_dist/index.html" in program_names
-    assert "runtime/library.zip" not in program_names
+    assert "runtime/application/library.dll" not in program_names
     assert manifest["environment_version"] == "1.0.0"
-    assert manifest["entrypoint"] == "AI_Customer_App.exe"
+    assert manifest["entrypoint"] == "runtime/application/AI_Customer_App.exe"
     assert "AI_Customer.exe" not in {item["path"] for item in manifest["files"]}
-    assert "runtime/library.zip" in environment_names
+    assert "runtime/application/library.dll" in environment_names
+    assert "runtime/application/python311.dll" in environment_names
     assert "runtime/python/python.exe" in environment_names
     assert "runtime/MyCrawler/main.py" in environment_names
     assert "runtime/MyCrawler/cache/__init__.py" in environment_names
@@ -119,8 +121,8 @@ def test_program_only_delivery_skips_environment_sources(tmp_path: Path) -> None
     assembler = _module()
     packaged = tmp_path / "packaged"
     _file(packaged / "AI_Customer_App.exe")
-    _file(packaged / "runtime" / "frontend_dist" / "index.html")
-    _file(packaged / "runtime" / "app" / "resource.txt")
+    _file(packaged / "frontend_dist" / "index.html")
+    _file(packaged / "app" / "resource.txt")
 
     program_zip, environment_zip = assembler.assemble(
         packaged_app=packaged,

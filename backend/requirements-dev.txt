@@ -2,5 +2,6 @@
 
 # Development, test, and packaging tools only.
 pytest==8.3.4
+nuitka[onefile]==4.1.3
 pyinstaller==6.21.0
 httpx2==2.5.0

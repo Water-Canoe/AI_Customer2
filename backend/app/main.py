@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -84,9 +83,9 @@ def _frontend_dist() -> Path | None:
     env_path = os.getenv("AI_CUSTOMER_FRONTEND_DIST", "").strip()
     if env_path:
         candidates.append(Path(env_path))
-    if getattr(sys, "frozen", False):
-        candidates.append(Path(getattr(sys, "_MEIPASS", "")) / "frontend_dist")
-        candidates.append(Path(sys.executable).resolve().parent / "frontend_dist")
+    if os.getenv("AI_CUSTOMER_PACKAGED", "").strip() == "1":
+        install_root = Path(os.environ["AI_CUSTOMER_INSTALL_ROOT"])
+        candidates.append(install_root / "runtime" / "frontend_dist")
     candidates.append(database.WORKSPACE_ROOT / "frontend" / "dist")
     for path in candidates:
         if path and (path / "index.html").exists():

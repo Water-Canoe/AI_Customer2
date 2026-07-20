@@ -133,7 +133,8 @@ def test_packaged_launcher_uses_portable_program_and_environment_dirs(tmp_path: 
     crawler_python.parent.mkdir()
     crawler_python.touch()
     (runtime_dir / "models").mkdir()
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("AI_CUSTOMER_PACKAGED", "1")
+    monkeypatch.setenv("AI_CUSTOMER_INSTALL_ROOT", str(tmp_path))
     monkeypatch.delenv("AI_CUSTOMER_DATA_DIR", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_DB", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_RUNTIME_DIR", raising=False)
@@ -151,6 +152,18 @@ def test_packaged_launcher_uses_portable_program_and_environment_dirs(tmp_path: 
     assert os.environ["AI_CUSTOMER_MEDIA_CRAWLER_PATH"] == str(runtime_dir / "MyCrawler")
     assert os.environ["AI_CUSTOMER_CRAWLER_PYTHON"] == str(crawler_python)
     assert os.environ["CLOAKBROWSER_BINARY_PATH"] == str(cloakbrowser_binary)
+    # configure_environment writes the process environment directly, so isolate later tests.
+    for name in (
+        "AI_CUSTOMER_DATA_DIR",
+        "AI_CUSTOMER_DB",
+        "AI_CUSTOMER_RUNTIME_DIR",
+        "AI_CUSTOMER_VOICE_MODELS_DIR",
+        "AI_CUSTOMER_MEDIA_CRAWLER_PATH",
+        "AI_CUSTOMER_MEDIA_CRAWLER_DB",
+        "AI_CUSTOMER_CRAWLER_PYTHON",
+        "CLOAKBROWSER_BINARY_PATH",
+    ):
+        os.environ.pop(name, None)
 
 
 def test_packaged_launcher_has_no_fragmented_internal_login_mode(tmp_path: Path) -> None:

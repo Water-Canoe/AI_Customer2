@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import sqlite3
 import subprocess
-import sys
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -23,7 +22,7 @@ def health() -> dict[str, object]:
         "status": "ok",
         "product": "ai-customer",
         "version": APP_VERSION,
-        "packaged": bool(getattr(sys, "frozen", False)),
+        "packaged": os.getenv("AI_CUSTOMER_PACKAGED") == "1",
     }
 
 

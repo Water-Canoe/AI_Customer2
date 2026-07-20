@@ -19,10 +19,17 @@ import uvicorn
 _INSTANCE_MUTEX: int | None = None
 
 
+def is_packaged() -> bool:
+    """Return whether this launcher is running from the Nuitka delivery."""
+    return os.getenv("AI_CUSTOMER_PACKAGED") == "1" or "__compiled__" in globals()
+
+
 def app_dir() -> Path:
     """Return the folder that owns the packaged runtime files."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+    if configured := os.getenv("AI_CUSTOMER_INSTALL_ROOT", "").strip():
+        return Path(configured).resolve()
+    if is_packaged():
+        return Path(sys.argv[0]).resolve().parents[2]
     return Path(__file__).resolve().parents[1]
 
 
@@ -30,7 +37,7 @@ def configure_environment(base_dir: Path) -> None:
     """Point the portable app at its data and reusable environment folders."""
     root_dir = base_dir
     data_dir = Path(os.environ.get("AI_CUSTOMER_DATA_DIR", str(root_dir / "data")))
-    packaged = bool(getattr(sys, "frozen", False))
+    packaged = is_packaged()
     environment_dir = root_dir / "runtime" if packaged else root_dir
     runtime_dir = Path(os.environ.get("AI_CUSTOMER_RUNTIME_DIR", str(environment_dir / "components" if packaged else root_dir / "runtimes")))
     frontend_dist = environment_dir / "frontend_dist" if packaged else base_dir / "frontend_dist"
@@ -46,6 +53,8 @@ def configure_environment(base_dir: Path) -> None:
     os.environ.setdefault("AI_CUSTOMER_DB", str(data_dir / "ai_customer.sqlite3"))
     os.environ.setdefault("AI_CUSTOMER_RUNTIME_DIR", str(runtime_dir))
     if packaged:
+        os.environ["AI_CUSTOMER_PACKAGED"] = "1"
+        os.environ["AI_CUSTOMER_INSTALL_ROOT"] = str(root_dir)
         os.environ.setdefault("AI_CUSTOMER_VOICE_MODELS_DIR", str(voice_models))
     if frontend_dist.exists():
         os.environ.setdefault("AI_CUSTOMER_FRONTEND_DIST", str(frontend_dist))
@@ -127,7 +136,7 @@ def _show_error(message: str) -> None:
 def another_instance_running() -> bool:
     """Keep one packaged workbench process on Windows."""
     global _INSTANCE_MUTEX
-    if os.name != "nt" or not getattr(sys, "frozen", False):
+    if os.name != "nt" or not is_packaged():
         return False
     import ctypes
 

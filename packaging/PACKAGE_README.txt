@@ -8,7 +8,7 @@ AI拓客工具（便携版）
 
 以后打开和关闭：
 
-- 打开：只双击 AI_Customer.exe，不要直接运行 AI_Customer_App.exe。
+- 打开：只双击最外层 AI_Customer.exe，不要进入 runtime/application 手工运行 AI_Customer_App.exe。
 - 关闭：关闭 AI_Customer_App 的运行窗口；稳定启动器会随之退出，不会保留旧服务进程。
 
 目录说明：

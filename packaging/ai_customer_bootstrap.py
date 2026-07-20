@@ -26,6 +26,7 @@ from app import device_identity
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MANIFEST_NAME = "release-manifest.json"
+APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
 UPDATE_TRANSACTION_NAME = "update-transaction.json"
 ROLLBACK_DIRECTORY_NAME = "rollback"
 PRODUCT_NAME = "AI Customer Desktop"
@@ -64,7 +65,7 @@ def _read_verified_release(release_root: Path) -> tuple[str, dict[str, dict[str,
     if (
         payload.get("format") != 1
         or payload.get("product") != PRODUCT_NAME
-        or payload.get("entrypoint") != "AI_Customer_App.exe"
+        or payload.get("entrypoint") != APPLICATION_ENTRYPOINT
         or not VERSION_PATTERN.fullmatch(version)
         or not VERSION_PATTERN.fullmatch(environment_version)
     ):
@@ -92,16 +93,16 @@ def _read_verified_release(release_root: Path) -> tuple[str, dict[str, dict[str,
             raise RuntimeError(f"发布包校验失败：{relative_path}")
         files[relative_path] = {"source": source}
 
-    if "AI_Customer_App.exe" not in files:
+    if APPLICATION_ENTRYPOINT not in files:
         raise RuntimeError("程序包缺少 AI_Customer_App.exe")
     return version, files
 
 
 def _is_program_owned_path(relative_path: str) -> bool:
     """Keep remote updates away from customer data and dependency files."""
-    if relative_path in {"AI_Customer.exe", "AI_Customer_App.exe", "README.txt"}:
+    if relative_path in {"AI_Customer.exe", "README.txt", APPLICATION_ENTRYPOINT}:
         return True
-    return relative_path.startswith(("runtime/frontend_dist/", "runtime/app/"))
+    return relative_path.startswith(("runtime/frontend_dist/", "runtime/application/app/"))
 
 
 def _is_newer_version(candidate: str, current: str) -> bool:
@@ -330,7 +331,7 @@ def current_version(install_root: Path) -> str:
     if (
         payload.get("format") != 1
         or payload.get("product") != PRODUCT_NAME
-        or payload.get("entrypoint") != "AI_Customer_App.exe"
+        or payload.get("entrypoint") != APPLICATION_ENTRYPOINT
         or not VERSION_PATTERN.fullmatch(version)
         or not VERSION_PATTERN.fullmatch(environment_version)
     ):
@@ -339,7 +340,7 @@ def current_version(install_root: Path) -> str:
 
 
 def application_executable(install_root: Path) -> Path:
-    executable = install_root / "AI_Customer_App.exe"
+    executable = install_root / Path(*PurePosixPath(APPLICATION_ENTRYPOINT).parts)
     if not executable.is_file():
         raise RuntimeError("程序目录缺少 AI_Customer_App.exe，请重新解压完整程序包")
     return executable
@@ -365,7 +366,7 @@ def apply_release(
             _installed_path(install_root, relative_path).unlink(missing_ok=True)
         ordered_files = sorted(
             ((path, files[path]) for path in new_paths),
-            key=lambda value: value[0] == "AI_Customer_App.exe",
+            key=lambda value: value[0] == APPLICATION_ENTRYPOINT,
         )
         for index, (relative_path, item) in enumerate(ordered_files, start=1):
             _replace_file(item["source"], _installed_path(install_root, relative_path))
@@ -520,9 +521,13 @@ def validate_environment(install_root: Path) -> str:
 def launch_current(install_root: Path) -> Path:
     current_version(install_root)
     executable = application_executable(install_root)
+    env = os.environ.copy()
+    env["AI_CUSTOMER_PACKAGED"] = "1"
+    env["AI_CUSTOMER_INSTALL_ROOT"] = str(install_root)
     process = subprocess.Popen(
         [str(executable)],
         cwd=str(install_root),
+        env=env,
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
     process.wait()
@@ -552,7 +557,7 @@ class _UpdateProgressWindow:
 
         self.root = tk.Tk()
         self.root.title("AI拓客工具更新")
-        icon_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        icon_root = Path(__file__).resolve().parent
         icon_path = icon_root / "ai-customer-icon.ico"
         if icon_path.is_file():
             try:
@@ -658,7 +663,7 @@ def _running_workbench_url() -> str:
 
 
 def main() -> None:
-    source_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+    source_root = Path(sys.argv[0]).resolve().parent if "__compiled__" in globals() else Path(__file__).resolve().parents[1]
     progress_window: _UpdateProgressWindow | None = None
 
     def show_progress(message: str, percent: int) -> None:

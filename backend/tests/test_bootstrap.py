@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
+APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
 sys.path.insert(0, str(WORKSPACE_ROOT))
 
 
@@ -49,7 +50,7 @@ def _write_release(root: Path, version: str, contents: dict[str, bytes]) -> None
                 "product": "AI Customer Desktop",
                 "version": version,
                 "environment_version": "1.0.0",
-                "entrypoint": "AI_Customer_App.exe",
+                "entrypoint": APPLICATION_ENTRYPOINT,
                 "files": files,
             }
         ),
@@ -59,14 +60,15 @@ def _write_release(root: Path, version: str, contents: dict[str, bytes]) -> None
 
 def test_bootstrap_resolves_only_valid_portable_version(tmp_path: Path) -> None:
     ai_customer_bootstrap = _bootstrap_module()
-    executable = tmp_path / "AI_Customer_App.exe"
+    executable = tmp_path / APPLICATION_ENTRYPOINT
+    executable.parent.mkdir(parents=True)
     executable.write_bytes(b"test")
     current_manifest = {
         "format": 1,
         "product": "AI Customer Desktop",
         "version": "1.1.0",
         "environment_version": "1.0.0",
-        "entrypoint": "AI_Customer_App.exe",
+        "entrypoint": APPLICATION_ENTRYPOINT,
     }
     (tmp_path / "release-manifest.json").write_text(json.dumps(current_manifest), encoding="utf-8")
 
@@ -86,7 +88,7 @@ def test_release_update_replaces_program_files_and_preserves_environment_and_dat
         release,
         "1.1.1",
         {
-            "AI_Customer_App.exe": b"application-new",
+            APPLICATION_ENTRYPOINT: b"application-new",
             "runtime/frontend_dist/index.html": b"frontend-new",
         },
     )
@@ -96,7 +98,7 @@ def test_release_update_replaces_program_files_and_preserves_environment_and_dat
         install_root,
         "1.1.0",
         {
-            "AI_Customer_App.exe": b"application-old",
+            APPLICATION_ENTRYPOINT: b"application-old",
             "runtime/frontend_dist/index.html": b"frontend-old",
             "runtime/frontend_dist/obsolete.js": b"obsolete",
         },
@@ -110,7 +112,7 @@ def test_release_update_replaces_program_files_and_preserves_environment_and_dat
     assert ai_customer_bootstrap.apply_release(release, install_root) == "1.1.1"
 
     assert (install_root / "AI_Customer.exe").read_bytes() == b"stable-running-launcher"
-    assert (install_root / "AI_Customer_App.exe").read_bytes() == b"application-new"
+    assert (install_root / APPLICATION_ENTRYPOINT).read_bytes() == b"application-new"
     assert (install_root / "runtime" / "frontend_dist" / "index.html").read_bytes() == b"frontend-new"
     assert not (install_root / "runtime" / "frontend_dist" / "obsolete.js").exists()
     assert (install_root / "runtime" / "python" / "python.exe").read_bytes() == b"environment"
@@ -128,7 +130,7 @@ def test_release_update_rolls_back_all_program_files_on_failure(tmp_path: Path, 
         install_root,
         "1.1.0",
         {
-            "AI_Customer_App.exe": b"application-old",
+            APPLICATION_ENTRYPOINT: b"application-old",
             "runtime/frontend_dist/index.html": b"frontend-old",
             "runtime/frontend_dist/obsolete.js": b"obsolete",
         },
@@ -137,7 +139,7 @@ def test_release_update_rolls_back_all_program_files_on_failure(tmp_path: Path, 
         release,
         "1.1.1",
         {
-            "AI_Customer_App.exe": b"application-new",
+            APPLICATION_ENTRYPOINT: b"application-new",
             "runtime/frontend_dist/index.html": b"frontend-new",
             "runtime/frontend_dist/new.js": b"new",
         },
@@ -154,7 +156,7 @@ def test_release_update_rolls_back_all_program_files_on_failure(tmp_path: Path, 
         ai_customer_bootstrap.apply_release(release, install_root)
 
     assert ai_customer_bootstrap.current_version(install_root) == "1.1.0"
-    assert (install_root / "AI_Customer_App.exe").read_bytes() == b"application-old"
+    assert (install_root / APPLICATION_ENTRYPOINT).read_bytes() == b"application-old"
     assert (install_root / "runtime/frontend_dist/index.html").read_bytes() == b"frontend-old"
     assert (install_root / "runtime/frontend_dist/obsolete.js").read_bytes() == b"obsolete"
     assert not (install_root / "runtime/frontend_dist/new.js").exists()
@@ -168,20 +170,20 @@ def test_launcher_recovers_a_prepared_update_transaction_after_interruption(tmp_
         install_root,
         "1.1.0",
         {
-            "AI_Customer_App.exe": b"application-old",
+            APPLICATION_ENTRYPOINT: b"application-old",
             "runtime/frontend_dist/index.html": b"frontend-old",
         },
     )
-    old_paths = ["AI_Customer_App.exe", "runtime/frontend_dist/index.html"]
-    new_paths = ["AI_Customer_App.exe", "runtime/frontend_dist/new.js"]
+    old_paths = [APPLICATION_ENTRYPOINT, "runtime/frontend_dist/index.html"]
+    new_paths = [APPLICATION_ENTRYPOINT, "runtime/frontend_dist/new.js"]
     ai_customer_bootstrap._prepare_update_transaction(install_root, old_paths, new_paths)
-    (install_root / "AI_Customer_App.exe").write_bytes(b"application-new")
+    (install_root / APPLICATION_ENTRYPOINT).write_bytes(b"application-new")
     (install_root / "runtime/frontend_dist/index.html").unlink()
     (install_root / "runtime/frontend_dist/new.js").write_bytes(b"new")
 
     assert ai_customer_bootstrap._recover_interrupted_update(install_root) is True
     assert ai_customer_bootstrap.current_version(install_root) == "1.1.0"
-    assert (install_root / "AI_Customer_App.exe").read_bytes() == b"application-old"
+    assert (install_root / APPLICATION_ENTRYPOINT).read_bytes() == b"application-old"
     assert (install_root / "runtime/frontend_dist/index.html").read_bytes() == b"frontend-old"
     assert not (install_root / "runtime/frontend_dist/new.js").exists()
 
@@ -189,7 +191,7 @@ def test_launcher_recovers_a_prepared_update_transaction_after_interruption(tmp_
 def test_update_extraction_replaces_an_interrupted_staging_directory(tmp_path: Path) -> None:
     ai_customer_bootstrap = _bootstrap_module()
     release = tmp_path / "release"
-    _write_release(release, "1.1.1", {"AI_Customer_App.exe": b"application-new"})
+    _write_release(release, "1.1.1", {APPLICATION_ENTRYPOINT: b"application-new"})
     archive = tmp_path / "update.zip"
     with zipfile.ZipFile(archive, "w") as output:
         for path in release.rglob("*"):
@@ -203,7 +205,7 @@ def test_update_extraction_replaces_an_interrupted_staging_directory(tmp_path: P
 
     assert extracted == stale
     assert not (extracted / "partial.tmp").exists()
-    assert (extracted / "AI_Customer_App.exe").read_bytes() == b"application-new"
+    assert (extracted / APPLICATION_ENTRYPOINT).read_bytes() == b"application-new"
 
 
 def test_environment_manifest_requires_matching_version_and_files(tmp_path: Path) -> None:
