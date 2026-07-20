@@ -16,6 +16,7 @@ $FrontendDir = Join-Path $ProjectRoot "frontend"
 $CrawlerRoot = Join-Path $ProjectRoot "MyCrawler"
 $AppLauncher = Join-Path $ProjectRoot "packaging\ai_customer_launcher.py"
 $StableLauncher = Join-Path $ProjectRoot "packaging\ai_customer_bootstrap.py"
+$AppIcon = Join-Path $ProjectRoot "packaging\ai-customer-icon.ico"
 $DeliveryAssembler = Join-Path $ProjectRoot "script\assemble_delivery.py"
 $Readme = Join-Path $ProjectRoot "packaging\PACKAGE_README.txt"
 $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
@@ -23,7 +24,7 @@ $CrawlerPython = Join-Path $CrawlerRoot ".venv\Scripts\python.exe"
 $CrawlerSitePackages = Join-Path $CrawlerRoot ".venv\Lib\site-packages"
 
 # Validate local dependencies only; this script never installs missing packages implicitly.
-foreach ($RequiredFile in @($Python, $CrawlerPython, $AppLauncher, $StableLauncher, $DeliveryAssembler, $Readme)) {
+foreach ($RequiredFile in @($Python, $CrawlerPython, $AppLauncher, $StableLauncher, $AppIcon, $DeliveryAssembler, $Readme)) {
     if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
         throw "Required build file is missing: $RequiredFile"
     }
@@ -110,6 +111,7 @@ finally {
 # Keep application code and frontend assets in the program payload; dependencies live in runtime.
 & $Python -m PyInstaller `
     --name "AI_Customer_App" `
+    --icon $AppIcon `
     --onedir `
     --optimize 2 `
     --contents-directory "runtime" `
@@ -167,6 +169,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\playwright\dri
 # The stable entrypoint only updates, validates the environment, and starts the application.
 & $Python -m PyInstaller `
     --name "AI_Customer" `
+    --icon $AppIcon `
     --onefile `
     --windowed `
     --optimize 2 `
@@ -174,6 +177,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "runtime\playwright\dri
     --workpath (Join-Path $BuildWork "bootstrap") `
     --specpath $BuildSpec `
     --paths $BackendDir `
+    --add-data "$AppIcon;." `
     $StableLauncher
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher packaging failed" }
 

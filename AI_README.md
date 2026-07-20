@@ -352,7 +352,7 @@ AI分析页已从裸 `analysis_jobs` 表重构为“AI分析工作台”。顶�
 
 客户状态与跟进状态在总览树客户行中分开展示。客户状态只表示 `未筛选 / 客户 / 非客户` 三类，前端显示值分别映射内部 `screening_status=待筛选 / 目标客户 / 非客户`；跟进状态只在客户状态为 `客户` 时显示，负责 `未私信 / 已私信 / 未回复 / 已回复 / 未成交 / 已成交` 这条跟进进度。界面标签只显示状态值本身，不额外显示“客户状态”或“跟进”前缀；客户状态标签负责客户三态切换，跟进状态标签负责跟进阶段推进和回退，例如 `未回复` 可以改回 `未私信`。客户行状态区固定为三层：第一层显示 AI 分析状态和客户三态，第二层在客户三态为 `客户` 时显示更大的跟进状态标签，第三层显示意向和证据数量；非客户不显示跟进状态，避免把客户筛选结论和跟进进度混在一起。
 
-本轮前端重构把图标化信息层级收敛为 `frontend/src/components/ui/Workbench.ts`：`sectionTitle` 统一页面/面板标题，`pageAction` 只保留给仍需要独立操作提示的复杂页面，`emptyState` 统一无数据提示，`metricTile` 统一 KPI 指标卡。图标来源统一使用项目已安装的 `@element-plus/icons-vue`，不额外引入图标包或新 UI 框架；任务管理、AI分析、私信工作台、总览树、采集记录、数据表和拓客设置页都使用 Element Plus 图标表达页面和操作语义。`TagInput` 只保留标签输入自身逻辑，ICP 字段定义只由拓客设置页维护。图标方框统一由 `.ui-icon-badge` 控制，裸 SVG 和 Element Plus `.el-icon` 都必须在方框内 flex 居中，并通过 `--icon-optical-y` 做向下光学偏移来修正 Element Plus 图标可视重心偏上的问题；小尺寸指标卡和业务库按钮也继承同一居中规则。风格继续保持工作台式：低圆角、浅边框、紧凑信息密度，主色为青绿色，辅以蓝色运行、绿色成功、橙色待处理、红色风险、紫色 AI/私信语义色。
+本轮前端重构把图标化信息层级收敛为 `frontend/src/components/ui/Workbench.ts`：`sectionTitle` 统一页面/面板标题，`pageAction` 只保留给仍需要独立操作提示的复杂页面，`emptyState` 统一无数据提示，`metricTile` 统一 KPI 指标卡。业务功能图标统一使用项目已安装的 `@element-plus/icons-vue`，产品图标统一使用 `frontend/public/ai-customer-icon.png`，同时显示在左侧品牌区和浏览器页签，不额外引入图标包或新 UI 框架；任务管理、AI分析、私信工作台、总览树、采集记录、数据表和拓客设置页都使用 Element Plus 图标表达页面和操作语义。`TagInput` 只保留标签输入自身逻辑，ICP 字段定义只由拓客设置页维护。图标方框统一由 `.ui-icon-badge` 控制，裸 SVG 和 Element Plus `.el-icon` 都必须在方框内 flex 居中，并通过 `--icon-optical-y` 做向下光学偏移来修正 Element Plus 图标可视重心偏上的问题；小尺寸指标卡和业务库按钮也继承同一居中规则。风格继续保持工作台式：低圆角、浅边框、紧凑信息密度，主色为青绿色，辅以蓝色运行、绿色成功、橙色待处理、红色风险、紫色 AI/私信语义色。
 
 任务管理、采集记录、总览树、AI 分析和数据表页已移除顶部页面行动区；数据表页同时去掉“数据表 / 选择一个业务库”二级标题，让业务库切换按钮直接成为页面起点。顶部栏去掉自动同步实现提示，指标卡去掉备注脚注，任务模式卡片只保留模式名、核心用途和必要说明。采集记录页未选任务时不再显示空的深色日志控制台，避免用户误读为内容缺失；总览树分页条会按当前层级显示“账号 / 客户 / 关键词”，关键词下的竞品账号列表和账号下的客户列表都按每页 10 条独立分页；私信工作台左侧关键词指标在窄栏内改为两列网格，移动端顶部动作按钮改为 2x2 布局，避免 390px 宽度下横向裁切。
 
@@ -513,7 +513,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 .\script\build_package.ps1 -Version 1.2.10 -EnvironmentVersion 1.0.1
 ```
 
-脚本先执行前端测试与生产构建、完整后端测试，再使用 PyInstaller 生成 `AI_Customer_App.exe` 和稳定入口 `AI_Customer.exe`，最后由 `script/assemble_delivery.py` 按所有权拆成两个 ZIP。缺少 PyInstaller、CloakBrowser、MyCrawler 虚拟环境、VoxCPM2 组件或模型时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
+脚本先执行前端测试与生产构建、完整后端测试，再使用 PyInstaller 生成 `AI_Customer_App.exe` 和稳定入口 `AI_Customer.exe`，最后由 `script/assemble_delivery.py` 按所有权拆成两个 ZIP。两个 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。缺少 PyInstaller、CloakBrowser、MyCrawler 虚拟环境、VoxCPM2 组件、模型或应用图标时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
 
 程序 ZIP 保存经常变化并允许远程更新的文件：`AI_Customer.exe`、`AI_Customer_App.exe`、`runtime/frontend_dist/`、`runtime/app/`、说明和发布清单。环境 ZIP 保存体积大且较少变化的依赖：PyInstaller Python 运行库、Playwright、CloakBrowser 浏览器、便携 Python、MyCrawler 源码及其 site-packages、VoxCPM2/PyTorch/CUDA 推理组件和模型。MyCrawler 上游 `LICENSE` 随环境包保留；本项目作者已在本次构建改造中明确确认其为 MyCrawler 作者并授权随本产品打包。
 

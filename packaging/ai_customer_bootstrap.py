@@ -552,6 +552,13 @@ class _UpdateProgressWindow:
 
         self.root = tk.Tk()
         self.root.title("AI拓客工具更新")
+        icon_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        icon_path = icon_root / "ai-customer-icon.ico"
+        if icon_path.is_file():
+            try:
+                self.root.iconbitmap(default=str(icon_path))
+            except tk.TclError:
+                pass
         self.root.geometry("440x150")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", lambda: None)

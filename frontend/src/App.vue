@@ -2,7 +2,7 @@
   <el-container class="shell">
     <el-aside class="sidebar" width="236px">
       <div class="brand">
-        <div class="brand-mark">AI</div>
+        <img class="brand-mark" src="/ai-customer-icon.png" alt="" aria-hidden="true" />
         <div>
           <strong>AI获客系统</strong>
           <span>拓客 · 引流 · 内容 · 跟进</span>
