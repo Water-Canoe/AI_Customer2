@@ -144,7 +144,7 @@ AI分析、私信详情、数据表、内容生成和授权窗口中的纯图标
 
 1. 在“拓客设置”页配置 AI 服务地址、API Key、模型名、采集与分析规则和 ICP 画像，并查看采集组件、采集存储、项目库和数据库版本状态；采集路径由后端按安装根目录或部署环境自动解析，不在客户页面手工填写。ICP 画像包含可选“公司名”，用于控制私信话术是否可以明说公司身份。
 2. 在“任务管理”页选择四种模式之一：竞品账号采集、竞品账号爬取、找需求内容、自家账号互动；页面只保留模式选择和必要参数，底层执行参数由后端按同一套规则归一化。
-3. 当前开发环境和交付环境都通过子进程执行 `python main.py` 调用 MyCrawler；主程序与稳定启动器迁移到 Nuitka 后，这条采集链暂不改变。MyCrawler 的独立 Nuitka 迁移将在下一步骤完成真实数据库初始化和采集验证后再切换。
+3. 开发环境继续通过子进程执行 `python main.py` 调用 MyCrawler；打包环境执行独立构建的 `runtime/MyCrawler/MyCrawler.exe`。两种入口共用同一套任务参数，运行时 shim 已编译进交付组件，不修改 MyCrawler 业务源码。
 4. 采集完成后自动读取底层 SQLite，并写入项目业务库和 `raw_source_refs`。
 5. 在“采集记录”中查看本次任务产出摘要、失败诊断和防重复记录，确认内容、评论、候选竞品、线索、目标客户和需分析账号数量；底层采集器运行日志默认不在页面展示。
 6. 在“AI分析”中筛选竞品账号或目标客户，目标客户按白板状态流转：`待筛选 -> 未私信 -> 已私信 -> 未回复 -> 已回复 -> 未成交 -> 已成交`。
@@ -510,6 +510,9 @@ backend\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
 
 # 只给 MyCrawler 的虚拟环境补充编译器，不修改它的业务依赖声明。
 uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
+
+# 单独构建并验证 MyCrawler 组件，不重新编译主程序或 VoxCPM2。
+.\script\build_mycrawler_component.ps1 -Version 1.0.0
 ```
 
 ### 唯一交付目录
@@ -523,11 +526,11 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 .\script\build_package.ps1 -Version 1.2.11 -EnvironmentVersion 1.0.2
 ```
 
-脚本先执行前端测试与生产构建、完整后端测试，再使用 Nuitka 4.1.3 编译主程序和稳定启动器；MyCrawler 的迁移将在下一步骤单独验证。VoxCPM2/PyTorch/CUDA 不参与本步骤的 Nuitka 编译，继续复用现有独立推理组件。两个桌面 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。缺少 Nuitka、应用图标或构建资源时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
+脚本先执行前端测试与生产构建、完整后端测试，再使用 Nuitka 4.1.3 编译主程序和稳定启动器；MyCrawler 由 `build_mycrawler_component.ps1` 独立构建，完整交付默认选择最新的有效组件，也可通过 `-MyCrawlerComponentPath` 指定。VoxCPM2/PyTorch/CUDA 不参与 MyCrawler 或主程序的 Nuitka 编译，继续复用现有独立推理组件。两个桌面 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。缺少 Nuitka、MyCrawler 组件、应用图标或构建资源时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
 
-程序 ZIP 保存经常变化并允许远程更新的文件：最外层稳定入口 `AI_Customer.exe`、`runtime/application/AI_Customer_App.exe`、`runtime/application/app/`、`runtime/frontend_dist/`、说明和发布清单。环境 ZIP 保存体积大且较少变化的依赖：主程序 Nuitka standalone 运行库、Playwright、CloakBrowser 浏览器、当前便携 Python 与 MyCrawler 源码依赖、VoxCPM2/PyTorch/CUDA 推理组件和模型。MyCrawler 上游 `LICENSE` 仍随环境包保留；后续只有在 MyCrawler Nuitka 步骤通过后，才移除便携 Python 和采集源码。
+程序 ZIP 保存经常变化并允许远程更新的文件：最外层稳定入口 `AI_Customer.exe`、`runtime/application/AI_Customer_App.exe`、`runtime/application/app/`、`runtime/frontend_dist/`、说明和发布清单。环境 ZIP 保存体积大且较少变化的依赖：主程序 Nuitka standalone 运行库、Playwright、CloakBrowser 浏览器、Nuitka 版 `runtime/MyCrawler/MyCrawler.exe` 及其运行库、VoxCPM2/PyTorch/CUDA 推理组件和模型。新环境包不再携带 MyCrawler 便携 Python、`.py` 源码或原始 site-packages；MyCrawler 上游 `LICENSE` 仍随组件保留。
 
-`MyCrawler/cache/` 是采集器源码模块，当前仍必须作为源码进入环境 ZIP，不能按普通缓存目录排除。`MyCrawler/database/sqlite_tables.db` 属于运行数据，仍由首次采集任务执行 `python main.py --init_db sqlite` 初始化；`*.db`、`*.sqlite`、`*.sqlite3` 及其派生文件继续被组装规则排除，不进入环境包。
+`MyCrawler/cache/` 是采集器源码模块，Nuitka 必须把它编译进 `MyCrawler.exe`，但环境 ZIP 中不再出现对应 `.py` 文件。`wordcloud/stopwords` 是启动时必需的第三方静态资源，组件构建和环境清单都会验证它存在。`MyCrawler/database/sqlite_tables.db` 属于运行数据，仍由首次采集任务执行 `MyCrawler.exe --init_db sqlite` 初始化；组件构建会真实初始化并检查 schema，随后删除测试数据库，`*.db`、`*.sqlite`、`*.sqlite3` 及其派生文件继续被组装规则排除，不进入环境包。
 
 开发环境不改成便携结构：后端继续使用 `backend/.venv`，前端继续使用 `frontend/node_modules`，MyCrawler 继续使用 `MyCrawler/.venv`，本地运行仍从源码目录启动。根目录 `runtime/` 只属于客户解压后的便携版本，不要求开发者手工维护。
 
@@ -549,6 +552,8 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 
 2026-07-19 已使用 `-ProgramOnly` 生成远程更新版本 `deliverables/1.2.10/AI_Customer_Program_1.2.10.zip`：大小 139,696,362 字节，SHA-256 为 `b831168e13d88bc2df9c1fb35e9ab661310b24fb9247976ac988b987bdf13af2`，schema 为 12，要求 Environment `1.0.1`。构建前回归为前端 23 项通过、后端 431 项通过且 8 项联网测试跳过；Program ZIP 已通过白名单、文件哈希和 Ed25519 签名校验并上传 Sealos，`stable` 当前已启用、非强制、灰度 100%。本版包含新版稳定启动器，但已安装客户端的远程更新仍不会覆盖正在运行的 `AI_Customer.exe`；更新事务回滚与新版设备身份读取必须手动替换该启动器后才生效。
 
+2026-07-20 已生成独立 Nuitka MyCrawler `1.0.0` 组件：共 1,236 个文件、487,265,886 字节，不含 `.py` 源码和 `database/sqlite_tables.db`；`MyCrawler.exe` 大小 191,160,832 字节，SHA-256 为 `d165ed3020a7cb7032b20546f0a2dfc5151c6ca2dc8a9580e054814a9e85d92a`。构建脚本真实执行 SQLite 初始化并校验表结构；随后复用账号中心已登录的抖音拓客 Profile，由编译后的 EXE 搜索关键词“AI获客”，进程退出码为 0，并在临时数据库写入 15 条 `douyin_aweme`。验证结束后已关闭 CDP 浏览器并删除组件中的测试数据库。
+
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。平台登录作为统一账号任务在后端浏览器队列中运行，不再启动带 `--internal-platform-login` 参数的第二个主程序；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
 稳定启动器已经实现授权身份读取、远端更新检查、用户确认、可视化进度、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。下载包每次解压到全新的 `<版本>.extracting` 目录并完成发布清单校验，不再复用上次中断留下的半成品。安装前只把当前发布清单管理的程序文件保存到 `updates/rollback/`，并写入持久化更新事务；异常、断电或进程退出后，当前或下次稳定启动器会恢复旧程序、旧清单并删除新版本独有文件，成功更新则删除旧版本已经取消的程序文件。回滚不复制 `data/`、MyCrawler、CloakBrowser、Python 环境或模型。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；本次确认和进度功能本身位于稳定启动器，因此首次交付该能力必须重新手动发送包含新 `AI_Customer.exe` 的 Program ZIP，不能由旧启动器自我更新。签名更新清单同时声明环境版本，客户端只安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。数据库 schema 升级前仍按迁移规则备份；如果需要回到无法读取新 schema 的旧程序，必须同时恢复对应迁移前备份。
@@ -557,7 +562,7 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 
 公共 `GET /api/settings` 会屏蔽采集路径、采集库路径、授权服务地址和 AI API Key，只返回 `ai_api_key_configured`；提交空 API Key 表示保留原值。`PUT /api/settings` 使用显式白名单，不能写入任意内部设置。环境检查只返回“采集组件/采集存储正常或待处理”和业务质量，不返回绝对路径、原始表名或列名。授权端点集中在 `product_config.py` 并做轻量字符串隐藏，可降低直接 strings 扫描得到地址的概率，但这不是密码学安全边界。
 
-程序 ZIP 不包含 AI_Customer 的 Python/Vue 源文件，主程序和稳定启动器由 Nuitka 编译为本机组件；这会明显提高静态还原成本，但不能让本地客户端绝对不可逆向。MyCrawler 和轻量 VoxCPM 入口只有在各自后续步骤完成真实验证后才计入迁移结果，PyTorch、CUDA、模型和其他第三方依赖不会为了形式上的“全量 Nuitka”重复编译。真正的授权与设备限制仍由远端服务执行，AI Key 也不通过 API 回传；环境 ZIP 仍包含第三方动态库和上游许可证，不应被视为绝对保密边界。
+程序 ZIP 不包含 AI_Customer 的 Python/Vue 源文件，主程序、稳定启动器和 MyCrawler 由 Nuitka 编译为本机组件；这会明显提高静态还原成本，但不能让本地客户端绝对不可逆向。轻量 VoxCPM 入口只有在后续步骤完成真实验证后才计入迁移结果，PyTorch、CUDA、模型和其他第三方依赖不会为了形式上的“全量 Nuitka”重复编译。真正的授权与设备限制仍由远端服务执行，AI Key 也不通过 API 回传；环境 ZIP 仍包含第三方动态库和上游许可证，不应被视为绝对保密边界。
 
 打包脚本显式收集CloakBrowser、Playwright、OpenCV、QR编码库、发布引擎脚本和许可说明，并把开发环境已安装的CloakBrowser专用内核复制到应用目录。稳定启动器通过 `CLOAKBROWSER_BINARY_PATH` 指向该内核，客户无需另装Python或浏览器。环境检查验证CloakBrowser、二维码依赖和专用内核路径。
 

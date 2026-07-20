@@ -103,8 +103,7 @@ def assemble(
     version: str,
     environment_version: str,
     schema_version: int,
-    crawler_python_root: Path | None,
-    crawler_root: Path | None,
+    crawler_component_root: Path | None,
     cloakbrowser_root: Path | None,
     vox_component_root: Path | None,
     voice_models_root: Path | None,
@@ -150,7 +149,7 @@ def assemble(
         artifact_root.replace(delivery_root)
         return delivery_root / program_zip.name, None
 
-    if any(path is None for path in (crawler_python_root, crawler_root, cloakbrowser_root, vox_component_root, voice_models_root)):
+    if any(path is None for path in (crawler_component_root, cloakbrowser_root, vox_component_root, voice_models_root)):
         raise RuntimeError("生成环境 ZIP 时必须提供全部环境来源")
 
     application_environment = environment_runtime / "application"
@@ -164,10 +163,18 @@ def assemble(
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
 
-    _copy_tree(crawler_python_root, environment_runtime / "python", ignored_dirs={"site-packages", "__pycache__"})
+    crawler_info = json.loads((crawler_component_root / "component-info.json").read_text(encoding="utf-8-sig"))
+    if (
+        crawler_info.get("format") != 1
+        or crawler_info.get("product") != "AI Customer Component"
+        or crawler_info.get("component") != "mycrawler"
+        or crawler_info.get("compiler") != "nuitka"
+        or crawler_info.get("entrypoint") != "MyCrawler.exe"
+        or not VERSION_PATTERN.fullmatch(str(crawler_info.get("version") or ""))
+    ):
+        raise RuntimeError("MyCrawler 组件清单无效")
     crawler_destination = environment_runtime / "MyCrawler"
-    _copy_tree(crawler_root, crawler_destination, ignored_dirs=CRAWLER_IGNORED_DIRS, ignored_files=CRAWLER_IGNORED_FILES)
-    _copy_tree(crawler_root / ".venv" / "Lib" / "site-packages", crawler_destination / ".venv" / "Lib" / "site-packages")
+    _copy_tree(crawler_component_root, crawler_destination, ignored_dirs=CRAWLER_IGNORED_DIRS, ignored_files=CRAWLER_IGNORED_FILES)
     _copy_tree(cloakbrowser_root, environment_runtime / "cloakbrowser_browser")
 
     component_info = json.loads((vox_component_root / "component-info.json").read_text(encoding="utf-8-sig"))
@@ -195,9 +202,9 @@ def assemble(
         "application/python311.dll",
         "application/playwright/driver/node.exe",
         "cloakbrowser_browser/chrome.exe",
-        "python/python.exe",
-        "MyCrawler/main.py",
-        "MyCrawler/.venv/Lib/site-packages/playwright/driver/node.exe",
+        "MyCrawler/MyCrawler.exe",
+        "MyCrawler/playwright/driver/node.exe",
+        "MyCrawler/wordcloud/stopwords",
         "components/voxcpm2/current.json",
         "components/voxcpm2/versions/" + component_version + "/VoxCPM_Runtime.exe",
         model_files[0].relative_to(environment_runtime).as_posix(),
@@ -247,8 +254,7 @@ def _arguments() -> argparse.Namespace:
     ):
         parser.add_argument("--" + name, type=Path, required=True)
     for name in (
-        "crawler-python-root",
-        "crawler-root",
+        "crawler-component-root",
         "cloakbrowser-root",
         "vox-component-root",
         "voice-models-root",

@@ -43,7 +43,7 @@ def configure_environment(base_dir: Path) -> None:
     frontend_dist = environment_dir / "frontend_dist" if packaged else base_dir / "frontend_dist"
     media_crawler_dir = environment_dir / "MyCrawler" if packaged else root_dir / "MyCrawler"
     cloakbrowser_binary = environment_dir / "cloakbrowser_browser" / "chrome.exe" if packaged else base_dir / "r" / "cloakbrowser_browser" / "chrome.exe"
-    crawler_python = environment_dir / "python" / "python.exe"
+    crawler_executable = media_crawler_dir / "MyCrawler.exe"
     voice_models = environment_dir / "models"
 
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -61,8 +61,8 @@ def configure_environment(base_dir: Path) -> None:
     if media_crawler_dir.exists():
         os.environ.setdefault("AI_CUSTOMER_MEDIA_CRAWLER_PATH", str(media_crawler_dir))
         os.environ.setdefault("AI_CUSTOMER_MEDIA_CRAWLER_DB", str(media_crawler_dir / "database" / "sqlite_tables.db"))
-    if crawler_python.is_file():
-        os.environ.setdefault("AI_CUSTOMER_CRAWLER_PYTHON", str(crawler_python))
+    if crawler_executable.is_file():
+        os.environ.setdefault("AI_CUSTOMER_CRAWLER_EXECUTABLE", str(crawler_executable))
     if cloakbrowser_binary.is_file():
         os.environ.setdefault("CLOAKBROWSER_BINARY_PATH", str(cloakbrowser_binary))
 

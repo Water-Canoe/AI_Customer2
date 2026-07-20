@@ -147,7 +147,10 @@ def environment_check() -> dict[str, Any]:
     return {
         "project_db": {"ok": database.get_db_path().exists()},
         "database_schema": {"ok": schema["current"] == schema["latest"], **schema},
-        "collector_component": {"ok": media_path.is_dir() and (media_path / "main.py").is_file()},
+        "collector_component": {
+            "ok": media_path.is_dir()
+            and ((media_path / "MyCrawler.exe").is_file() or (media_path / "main.py").is_file())
+        },
         "collector_storage": {"ok": raw_db_exists},
         "ai_config": {
             "ok": bool(settings.get("ai_base_url") and api_key_configured and settings.get("ai_model")),

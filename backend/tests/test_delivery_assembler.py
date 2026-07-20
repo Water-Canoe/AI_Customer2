@@ -43,15 +43,25 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     _file(packaged / "playwright" / "driver" / "node.exe")
     _file(packaged / "library.dll")
 
-    crawler = tmp_path / "MyCrawler"
-    _file(crawler / "main.py")
+    crawler = tmp_path / "crawler-component"
+    _file(crawler / "MyCrawler.exe")
     _file(crawler / "LICENSE")
-    _file(crawler / "cache" / "__init__.py")
-    _file(crawler / "cache" / "abs_cache.py")
     _file(crawler / "database" / "sqlite_tables.db", b"generated")
-    _file(crawler / ".venv" / "Lib" / "site-packages" / "playwright" / "driver" / "node.exe")
-    python_root = tmp_path / "python"
-    _file(python_root / "python.exe")
+    _file(crawler / "playwright" / "driver" / "node.exe")
+    _file(crawler / "wordcloud" / "stopwords")
+    (crawler / "component-info.json").write_text(
+        json.dumps(
+            {
+                "format": 1,
+                "product": "AI Customer Component",
+                "component": "mycrawler",
+                "version": "1.0.0",
+                "entrypoint": "MyCrawler.exe",
+                "compiler": "nuitka",
+            }
+        ),
+        encoding="utf-8",
+    )
     cloak = tmp_path / "cloak"
     _file(cloak / "chrome.exe")
     component = tmp_path / "component"
@@ -81,8 +91,7 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
         version="1.2.3",
         environment_version="1.0.0",
         schema_version=7,
-        crawler_python_root=python_root,
-        crawler_root=crawler,
+        crawler_component_root=crawler,
         cloakbrowser_root=cloak,
         vox_component_root=component,
         voice_models_root=models,
@@ -105,11 +114,10 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     assert "AI_Customer.exe" not in {item["path"] for item in manifest["files"]}
     assert "runtime/application/library.dll" in environment_names
     assert "runtime/application/python311.dll" in environment_names
-    assert "runtime/python/python.exe" in environment_names
-    assert "runtime/MyCrawler/main.py" in environment_names
-    assert "runtime/MyCrawler/cache/__init__.py" in environment_names
-    assert "runtime/MyCrawler/cache/abs_cache.py" in environment_names
+    assert "runtime/MyCrawler/MyCrawler.exe" in environment_names
+    assert "runtime/MyCrawler/wordcloud/stopwords" in environment_names
     assert "runtime/MyCrawler/database/sqlite_tables.db" not in environment_names
+    assert not any(name.startswith("runtime/MyCrawler/") and name.endswith(".py") for name in environment_names)
     assert "runtime/frontend_dist/index.html" not in environment_names
 
     verified = _verifier_module().verify(str(program_zip), "1.2.3")
@@ -132,8 +140,7 @@ def test_program_only_delivery_skips_environment_sources(tmp_path: Path) -> None
         version="1.2.4",
         environment_version="1.0.0",
         schema_version=7,
-        crawler_python_root=None,
-        crawler_root=None,
+        crawler_component_root=None,
         cloakbrowser_root=None,
         vox_component_root=None,
         voice_models_root=None,

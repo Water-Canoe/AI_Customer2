@@ -31,14 +31,14 @@ DIAGNOSTIC_RULES: list[Rule] = [
         "路径配置",
         ("media crawler path", "media_crawler_path", "no such file", "找不到路径", "系统找不到指定的路径", "不是有效的 mediacrawler"),
         "MyCrawler 路径或运行入口配置不正确，后端无法按预期启动采集程序。",
-        ["在设置页检查 MyCrawler 根目录", "确认该目录下存在 main.py 和 pyproject.toml", "修改路径后重启后端，避免旧配置仍在运行"],
+        ["在设置页检查 MyCrawler 根目录", "确认打包版存在 MyCrawler.exe，开发版存在 main.py", "修改路径后重启后端，避免旧配置仍在运行"],
         True,
     ),
     (
         "路径配置",
         ("failed to spawn", "应用程序控制策略", "os error 4551", "blocked this file", "applocker"),
         "本机 Windows 应用控制策略阻止了 Python 启动，MyCrawler 子进程没有真正开始采集。",
-        ["更新后重启后端，确认任务命令已变为 python main.py", "如果仍被拦截，在设置页确认 MyCrawler 路径下 .venv 依赖完整", "让系统管理员放行当前可执行的 Python，或把可执行 Python 加入系统允许列表"],
+        ["更新后重启后端，确认任务命令指向 MyCrawler.exe", "确认环境包中的 MyCrawler 组件完整", "让系统管理员放行 MyCrawler.exe"],
         True,
     ),
     (

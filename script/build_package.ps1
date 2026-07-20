@@ -1,6 +1,7 @@
 param(
     [string]$Version = "",
     [string]$EnvironmentVersion = "1.0.2",
+    [string]$MyCrawlerComponentPath = "",
     [string]$VoxComponentPath = "",
     [string]$VoiceModelsPath = "",
     [switch]$ProgramOnly
@@ -13,15 +14,12 @@ $SemVerPattern = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendDir = Join-Path $ProjectRoot "backend"
 $FrontendDir = Join-Path $ProjectRoot "frontend"
-$CrawlerRoot = Join-Path $ProjectRoot "MyCrawler"
 $AppLauncher = Join-Path $ProjectRoot "packaging\ai_customer_launcher.py"
 $StableLauncher = Join-Path $ProjectRoot "packaging\ai_customer_bootstrap.py"
 $AppIcon = Join-Path $ProjectRoot "packaging\ai-customer-icon.ico"
 $DeliveryAssembler = Join-Path $ProjectRoot "script\assemble_delivery.py"
 $Readme = Join-Path $ProjectRoot "packaging\PACKAGE_README.txt"
 $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
-$CrawlerPython = Join-Path $CrawlerRoot ".venv\Scripts\python.exe"
-$CrawlerSitePackages = Join-Path $CrawlerRoot ".venv\Lib\site-packages"
 
 # Validate local dependencies only; this script never installs missing packages implicitly.
 foreach ($RequiredFile in @($Python, $AppLauncher, $StableLauncher, $AppIcon, $DeliveryAssembler, $Readme)) {
@@ -47,15 +45,20 @@ if ($Version -notmatch $SemVerPattern -or $EnvironmentVersion -notmatch $SemVerP
 }
 $CloakBrowserDir = ""
 if (-not $ProgramOnly) {
-    if (-not (Test-Path -LiteralPath $CrawlerPython -PathType Leaf)) {
-        throw "MyCrawler virtual environment is missing: $CrawlerPython"
+    if (-not $MyCrawlerComponentPath) {
+        $ComponentRoot = Join-Path $ProjectRoot "dist\components"
+        $MyCrawlerComponentPath = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+            $InfoPath = Join-Path $_.FullName "component-info.json"
+            if (-not (Test-Path -LiteralPath $InfoPath -PathType Leaf)) { return $false }
+            $Info = Get-Content -LiteralPath $InfoPath -Raw -Encoding utf8 | ConvertFrom-Json
+            [string]$Info.component -eq "mycrawler" -and
+            [string]$Info.compiler -eq "nuitka" -and
+            [string]$Info.entrypoint -eq "MyCrawler.exe" -and
+            (Test-Path -LiteralPath (Join-Path $_.FullName "MyCrawler.exe") -PathType Leaf)
+        } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0].FullName
     }
-    if (-not (Test-Path -LiteralPath $CrawlerSitePackages -PathType Container)) {
-        throw "MyCrawler virtual environment is incomplete: $CrawlerSitePackages"
-    }
-    $CrawlerPythonRoot = (& $CrawlerPython -c "import sys; print(sys.base_prefix)").Trim()
-    if (-not (Test-Path -LiteralPath (Join-Path $CrawlerPythonRoot "python.exe") -PathType Leaf)) {
-        throw "MyCrawler base Python is missing: $CrawlerPythonRoot"
+    if (-not $MyCrawlerComponentPath -or -not (Test-Path -LiteralPath (Join-Path $MyCrawlerComponentPath "MyCrawler.exe") -PathType Leaf)) {
+        throw "A completed Nuitka MyCrawler component is required. Run script/build_mycrawler_component.ps1 first."
     }
     $CloakBrowserPath = (& $Python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())").Trim()
     if (-not (Test-Path -LiteralPath $CloakBrowserPath -PathType Leaf)) {
@@ -196,8 +199,7 @@ if ($ProgramOnly) {
 }
 else {
     $AssemblyArguments += @(
-        "--crawler-python-root", $CrawlerPythonRoot,
-        "--crawler-root", $CrawlerRoot,
+        "--crawler-component-root", $MyCrawlerComponentPath,
         "--cloakbrowser-root", $CloakBrowserDir,
         "--vox-component-root", $VoxComponentPath,
         "--voice-models-root", $VoiceModelsPath

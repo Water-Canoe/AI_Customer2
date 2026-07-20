@@ -129,9 +129,8 @@ def test_packaged_launcher_uses_portable_program_and_environment_dirs(tmp_path: 
     cloakbrowser_binary.parent.mkdir(parents=True)
     cloakbrowser_binary.touch()
     (runtime_dir / "MyCrawler").mkdir()
-    crawler_python = runtime_dir / "python" / "python.exe"
-    crawler_python.parent.mkdir()
-    crawler_python.touch()
+    crawler_executable = runtime_dir / "MyCrawler" / "MyCrawler.exe"
+    crawler_executable.touch()
     (runtime_dir / "models").mkdir()
     monkeypatch.setenv("AI_CUSTOMER_PACKAGED", "1")
     monkeypatch.setenv("AI_CUSTOMER_INSTALL_ROOT", str(tmp_path))
@@ -140,7 +139,7 @@ def test_packaged_launcher_uses_portable_program_and_environment_dirs(tmp_path: 
     monkeypatch.delenv("AI_CUSTOMER_RUNTIME_DIR", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_VOICE_MODELS_DIR", raising=False)
     monkeypatch.delenv("AI_CUSTOMER_MEDIA_CRAWLER_PATH", raising=False)
-    monkeypatch.delenv("AI_CUSTOMER_CRAWLER_PYTHON", raising=False)
+    monkeypatch.delenv("AI_CUSTOMER_CRAWLER_EXECUTABLE", raising=False)
     monkeypatch.delenv("CLOAKBROWSER_BINARY_PATH", raising=False)
 
     launcher.configure_environment(tmp_path)
@@ -150,7 +149,7 @@ def test_packaged_launcher_uses_portable_program_and_environment_dirs(tmp_path: 
     assert os.environ["AI_CUSTOMER_RUNTIME_DIR"] == str(runtime_dir / "components")
     assert os.environ["AI_CUSTOMER_VOICE_MODELS_DIR"] == str(runtime_dir / "models")
     assert os.environ["AI_CUSTOMER_MEDIA_CRAWLER_PATH"] == str(runtime_dir / "MyCrawler")
-    assert os.environ["AI_CUSTOMER_CRAWLER_PYTHON"] == str(crawler_python)
+    assert os.environ["AI_CUSTOMER_CRAWLER_EXECUTABLE"] == str(crawler_executable)
     assert os.environ["CLOAKBROWSER_BINARY_PATH"] == str(cloakbrowser_binary)
     # configure_environment writes the process environment directly, so isolate later tests.
     for name in (
@@ -160,7 +159,7 @@ def test_packaged_launcher_uses_portable_program_and_environment_dirs(tmp_path: 
         "AI_CUSTOMER_VOICE_MODELS_DIR",
         "AI_CUSTOMER_MEDIA_CRAWLER_PATH",
         "AI_CUSTOMER_MEDIA_CRAWLER_DB",
-        "AI_CUSTOMER_CRAWLER_PYTHON",
+        "AI_CUSTOMER_CRAWLER_EXECUTABLE",
         "CLOAKBROWSER_BINARY_PATH",
     ):
         os.environ.pop(name, None)
@@ -3581,23 +3580,23 @@ def test_account_analysis_subprocess_env_limits_douyin_creator_videos(tmp_path: 
     assert skip_env["AI_CUSTOMER_SKIP_CONTENT_IDS"] == "10001,10002"
 
 
-def test_packaged_crawler_uses_portable_python_and_playwright_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_packaged_crawler_uses_compiled_executable_and_playwright_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app.services import crawler_adapter
 
-    crawler_python = tmp_path / "runtime" / "python" / "python.exe"
-    crawler_python.parent.mkdir(parents=True)
-    crawler_python.touch()
     media_dir = tmp_path / "runtime" / "MyCrawler"
-    driver = media_dir / ".venv" / "Lib" / "site-packages" / "playwright" / "driver"
+    crawler_executable = media_dir / "MyCrawler.exe"
+    crawler_executable.parent.mkdir(parents=True)
+    crawler_executable.touch()
+    driver = media_dir / "playwright" / "driver"
     driver.mkdir(parents=True)
-    monkeypatch.setenv("AI_CUSTOMER_CRAWLER_PYTHON", str(crawler_python))
+    monkeypatch.setenv("AI_CUSTOMER_CRAWLER_EXECUTABLE", str(crawler_executable))
 
     env = crawler_adapter._media_crawler_subprocess_env({"PATH": "system-path"}, {}, media_dir)
 
-    assert crawler_adapter._python_launcher() == str(crawler_python)
+    assert crawler_adapter._crawler_entry_command(media_dir) == [str(crawler_executable)]
     assert env["PATH"].split(os.pathsep)[0] == str(driver)
-    assert str(media_dir / ".venv" / "Lib" / "site-packages") in env["PYTHONPATH"]
+    assert "PYTHONPATH" not in env
 
 
 def test_content_cutoff_subprocess_env_applies_without_comment_collection(tmp_path: Path) -> None:

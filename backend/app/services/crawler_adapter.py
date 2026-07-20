@@ -113,8 +113,7 @@ def normalize_task_defaults(payload: TaskCreate) -> TaskCreate:
 def build_command(task: dict[str, object], media_crawler_path: str) -> list[str]:
     """Translate project task fields to MyCrawler CLI flags."""
     command = [
-        _python_launcher(),
-        "main.py",
+        *_crawler_entry_command(Path(media_crawler_path)),
         "--platform",
         str(task["platform"]),
         "--lt",
@@ -146,20 +145,20 @@ def build_command(task: dict[str, object], media_crawler_path: str) -> list[str]
     return command
 
 
-def _python_launcher() -> str:
-    """Use an allowed Python executable instead of uv spawning python internally."""
-    packaged_python = os.getenv("AI_CUSTOMER_CRAWLER_PYTHON", "").strip()
-    if packaged_python:
-        path = Path(packaged_python)
+def _crawler_entry_command(media_dir: Path) -> list[str]:
+    """Use the compiled crawler in deliveries and source entrypoint in development."""
+    packaged_executable = os.getenv("AI_CUSTOMER_CRAWLER_EXECUTABLE", "").strip()
+    if packaged_executable:
+        path = Path(packaged_executable)
         if path.is_file():
-            return str(path)
-        raise RuntimeError("采集环境中的 Python 不存在，请重新解压完整环境包")
+            return [str(path)]
+        raise RuntimeError("采集环境中的 MyCrawler.exe 不存在，请重新解压完整环境包")
     current = Path(sys.executable)
     if current.name.lower() in {"python.exe", "python"}:
-        return str(current)
+        return [str(current), "main.py"]
     python_path = shutil.which("python")
     if python_path:
-        return python_path
+        return [python_path, "main.py"]
     raise RuntimeError("未找到可执行的 python，无法启动 MyCrawler")
 
 
@@ -750,7 +749,7 @@ def _ensure_media_crawler_sqlite_schema(media_dir: Path, platform_value: str, en
         return None
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [_python_launcher(), "main.py", "--init_db", "sqlite"]
+    command = [*_crawler_entry_command(media_dir), "--init_db", "sqlite"]
     init_env = _media_crawler_subprocess_env(env, {}, media_dir)
     result = subprocess.run(
         command,
@@ -765,11 +764,11 @@ def _ensure_media_crawler_sqlite_schema(media_dir: Path, platform_value: str, en
     )
     if result.returncode != 0:
         output = (result.stdout or "").strip()
-        raise RuntimeError(f"python main.py --init_db sqlite 退出码 {result.returncode}：{output}")
+        raise RuntimeError(f"MyCrawler --init_db sqlite 退出码 {result.returncode}：{output}")
     if not _sqlite_table_exists(db_path, required_table):
         output = (result.stdout or "").strip()
         raise RuntimeError(f"初始化完成后仍缺少表 {required_table}：{output}")
-    return f"检测到 MyCrawler SQLite 缺少 {required_table} 表，已自动执行 python main.py --init_db sqlite 初始化表结构"
+    return f"检测到 MyCrawler SQLite 缺少 {required_table} 表，已自动执行 MyCrawler --init_db sqlite 初始化表结构"
 
 
 def _sqlite_table_exists(db_path: Path, table_name: str) -> bool:
@@ -993,14 +992,17 @@ def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, obje
         env["AI_CUSTOMER_COMMENT_CUTOFF_TS"] = str(comment_cutoff_ts)
         shim_required = True
     pythonpath_items: list[str] = []
-    if shim_required:
+    packaged_crawler = bool(os.getenv("AI_CUSTOMER_CRAWLER_EXECUTABLE", "").strip())
+    if shim_required and not packaged_crawler:
         pythonpath_items.append(str(Path(__file__).resolve().parents[1] / "mediacrawler_shims"))
     site_packages = media_dir / ".venv" / "Lib" / "site-packages" if media_dir else None
     if site_packages and site_packages.exists():
         pythonpath_items.append(str(site_packages))
         playwright_driver = site_packages / "playwright" / "driver"
-        if playwright_driver.exists():
-            env["PATH"] = os.pathsep.join([str(playwright_driver), env.get("PATH", "")])
+    else:
+        playwright_driver = media_dir / "playwright" / "driver" if media_dir else None
+    if playwright_driver and playwright_driver.exists():
+        env["PATH"] = os.pathsep.join([str(playwright_driver), env.get("PATH", "")])
     existing_pythonpath = env.get("PYTHONPATH", "")
     if existing_pythonpath:
         pythonpath_items.append(existing_pythonpath)
