@@ -523,11 +523,11 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 
 `deliverables/<程序版本>/` 是唯一可以发给客户或上传的目录，只包含四项：`AI_Customer_Program_<程序版本>.zip`、`AI_Customer_Environment_<环境版本>.zip`、`SHA256.txt` 和 `README.txt`。`dist/releases/` 和 `output/` 中的历史文件都不是新架构交付物。`output/` 仍是被 Git 忽略的 Nuitka、组装、签名和测试中间工作区；脚本不自动删除历史文件，维护人员需要清理时必须逐个确认明确目录。
 
-当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.11`；前端 `package.json` 和 `package-lock.json` 不再重复保存产品版本，页面显示值只读取后端 `/api/health`。`-Version` 省略时自动读取后端版本，显式传入不同值时构建会停止，避免 EXE、页面与发布清单不一致。Nuitka 编译布局与旧环境不兼容，因此本轮环境版本提升为 `1.0.2`。只有明确要求正式打包时才执行：
+当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.12`；前端 `package.json` 和 `package-lock.json` 不再重复保存产品版本，页面显示值只读取后端 `/api/health`。`-Version` 省略时自动读取后端版本，显式传入不同值时构建会停止，避免 EXE、页面与发布清单不一致。Nuitka 编译布局与旧环境不兼容，因此本轮环境版本提升为 `1.0.2`。只有明确要求正式打包时才执行：
 
 ```powershell
 # 生成程序 ZIP 和环境 ZIP；程序版本默认读取 backend/app/version.py。
-.\script\build_package.ps1 -Version 1.2.11 -EnvironmentVersion 1.0.2
+.\script\build_package.ps1 -Version 1.2.12 -EnvironmentVersion 1.0.2
 ```
 
 脚本先执行前端测试与生产构建、完整后端测试，再使用 Nuitka 4.1.3 编译主程序和稳定启动器；MyCrawler 由 `build_mycrawler_component.ps1` 独立构建，完整交付默认选择最新的有效组件，也可通过 `-MyCrawlerComponentPath` 指定。VoxCPM2/PyTorch/CUDA 不参与 MyCrawler 或主程序的 Nuitka 编译，继续复用现有独立推理组件。两个桌面 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。缺少 Nuitka、MyCrawler 组件、应用图标或构建资源时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
@@ -558,6 +558,8 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 
 2026-07-20 已生成独立 Nuitka MyCrawler `1.0.0` 组件：共 1,236 个文件、487,265,886 字节，不含 `.py` 源码和 `database/sqlite_tables.db`；`MyCrawler.exe` 大小 191,160,832 字节，SHA-256 为 `d165ed3020a7cb7032b20546f0a2dfc5151c6ca2dc8a9580e054814a9e85d92a`。构建脚本真实执行 SQLite 初始化并校验表结构；随后复用账号中心已登录的抖音拓客 Profile，由编译后的 EXE 搜索关键词“AI获客”，进程退出码为 0，并在临时数据库写入 15 条 `douyin_aweme`。验证结束后已关闭 CDP 浏览器并删除组件中的测试数据库。
 
+2026-07-20 已完成全链路 Nuitka 交付 `deliverables/1.2.12/`：Program ZIP 为 216,433,333 字节（SHA-256 `a369884fdd70285496133a19e1bb976da736933f87d17a16ca0b38f1aecd88da`），Environment ZIP `1.0.2` 为 7,768,441,030 字节（SHA-256 `eff32d500a920907c22e8c7fe828fbe560bb8e789912efc09cbe3beff8b8c977`）。构建前回归为前端23项、后端434项通过，8项联网测试跳过；Environment ZIP共21,922个文件，10个必需路径及两个ZIP哈希全部通过校验。两个ZIP使用Windows自带 `tar.exe` 合并解压后，MyCrawler成功初始化23张表，CloakBrowser无头页面加载成功，VoxCPM2 `1.0.2` 从环境包模型目录使用CUDA完成48kHz真实克隆配音。最外层 `AI_Customer.exe` 通过环境检查并启动版本1.2.12、`packaged=true` 的工作台，安全退出后确认相关进程和监听端口均为0。
+
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。平台登录作为统一账号任务在后端浏览器队列中运行，不再启动带 `--internal-platform-login` 参数的第二个主程序；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
 稳定启动器已经实现授权身份读取、远端更新检查、用户确认、可视化进度、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。下载包每次解压到全新的 `<版本>.extracting` 目录并完成发布清单校验，不再复用上次中断留下的半成品。安装前只把当前发布清单管理的程序文件保存到 `updates/rollback/`，并写入持久化更新事务；异常、断电或进程退出后，当前或下次稳定启动器会恢复旧程序、旧清单并删除新版本独有文件，成功更新则删除旧版本已经取消的程序文件。回滚不复制 `data/`、MyCrawler、CloakBrowser、Python 环境或模型。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；本次确认和进度功能本身位于稳定启动器，因此首次交付该能力必须重新手动发送包含新 `AI_Customer.exe` 的 Program ZIP，不能由旧启动器自我更新。签名更新清单同时声明环境版本，客户端只安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。数据库 schema 升级前仍按迁移规则备份；如果需要回到无法读取新 schema 的旧程序，必须同时恢复对应迁移前备份。
@@ -566,7 +568,7 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 
 公共 `GET /api/settings` 会屏蔽采集路径、采集库路径、授权服务地址和 AI API Key，只返回 `ai_api_key_configured`；提交空 API Key 表示保留原值。`PUT /api/settings` 使用显式白名单，不能写入任意内部设置。环境检查只返回“采集组件/采集存储正常或待处理”和业务质量，不返回绝对路径、原始表名或列名。授权端点集中在 `product_config.py` 并做轻量字符串隐藏，可降低直接 strings 扫描得到地址的概率，但这不是密码学安全边界。
 
-程序 ZIP 不包含 AI_Customer 的 Python/Vue 源文件，主程序、稳定启动器和 MyCrawler 由 Nuitka 编译为本机组件；这会明显提高静态还原成本，但不能让本地客户端绝对不可逆向。轻量 VoxCPM 入口只有在后续步骤完成真实验证后才计入迁移结果，PyTorch、CUDA、模型和其他第三方依赖不会为了形式上的“全量 Nuitka”重复编译。真正的授权与设备限制仍由远端服务执行，AI Key 也不通过 API 回传；环境 ZIP 仍包含第三方动态库和上游许可证，不应被视为绝对保密边界。
+程序 ZIP 不包含 AI_Customer 的 Python/Vue 源文件，主程序、稳定启动器和 MyCrawler 由 Nuitka 编译为本机组件；VoxCPM自研调用入口以Nuitka原生 `.pyd` 进入独立推理组件。这会明显提高静态还原成本，但不能让本地客户端绝对不可逆向。PyTorch、CUDA、模型和其他第三方依赖不会为了形式上的“全量 Nuitka”重复编译。真正的授权与设备限制仍由远端服务执行，AI Key 也不通过 API 回传；环境 ZIP 仍包含第三方动态库和上游许可证，不应被视为绝对保密边界。
 
 打包脚本显式收集CloakBrowser、Playwright、OpenCV、QR编码库、发布引擎脚本和许可说明，并把开发环境已安装的CloakBrowser专用内核复制到应用目录。稳定启动器通过 `CLOAKBROWSER_BINARY_PATH` 指向该内核，客户无需另装Python或浏览器。环境检查验证CloakBrowser、二维码依赖和专用内核路径。
 
