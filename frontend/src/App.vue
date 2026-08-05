@@ -150,21 +150,13 @@ import { useAiWorkbench } from './composables/aiWorkbench'
 import { createAutoSyncController, type AutoSyncReason } from './composables/autoSync'
 import { useMessageWorkbench } from './composables/messageWorkbench'
 import { useOverviewWorkbench } from './composables/overviewWorkbench'
+import { useTableWorkbench } from './composables/tableWorkbench'
 import { useTaskWorkbench } from './composables/taskWorkbench'
 import { LicenseDialog } from './components/ui/LicenseDialog'
 
 const router = useRouter()
 const route = useRoute()
 
-const activeLibrary = ref('contents')
-const tableStatus = ref('')
-const tableKeyword = ref('')
-const tableRows = ref<Dict[]>([])
-const tableLoading = ref(false)
-const tablePage = ref(1)
-const tablePageSize = ref(20)
-const tableTotal = ref(0)
-const tableTotalPages = ref(1)
 const settings = ref<Dict>({})
 const settingsDraftDirty = ref(false)
 const settingsSaving = ref(false)
@@ -205,7 +197,6 @@ const {
   dedupSummary: taskDedupSummary,
   retryDraft,
   loadTasks,
-  fetchTask,
   loadDiagnostics: loadSelectedTaskDiagnostics,
   changePage: changeTaskPage,
   changeQuery: changeTaskQuery,
@@ -258,6 +249,30 @@ const {
   refreshTasks: loadTasks,
   refreshAi: loadAiJobs,
   refreshTable: () => loadTable(activeLibrary.value),
+  openTaskLogs,
+})
+
+const {
+  library: activeLibrary,
+  status: tableStatus,
+  keyword: tableKeyword,
+  rows: tableRows,
+  loading: tableLoading,
+  page: tablePage,
+  pageSize: tablePageSize,
+  total: tableTotal,
+  load: loadTable,
+  changeLibrary,
+  changeFilter: changeTableFilter,
+  changePage: changeTablePage,
+  updateRow,
+  deleteRow,
+  analyzeRow: analyzeTableRow,
+  enrichProfile,
+} = useTableWorkbench({
+  analyzeJob: createAiJob,
+  refreshTasks: loadTasks,
+  refreshOverview: loadOverview,
   openTaskLogs,
 })
 
@@ -762,31 +777,6 @@ async function loadTrafficShell() {
   trafficEnv.value = data
 }
 
-async function loadTable(library: string, silent = false) {
-  if (!silent) tableLoading.value = true
-  try {
-    const { data } = await api.get(`/tables/${library}`, {
-      params: {
-        status: tableStatus.value,
-        keyword: tableKeyword.value,
-        page: tablePage.value,
-        page_size: tablePageSize.value,
-      }
-    })
-    tableRows.value = data.rows
-    tableTotal.value = Number(data.total || 0)
-    tablePage.value = Number(data.page || 1)
-    tablePageSize.value = Number(data.page_size || tablePageSize.value)
-    tableTotalPages.value = Number(data.total_pages || 1)
-    if (!data.rows.length && tablePage.value > tableTotalPages.value) {
-      tablePage.value = tableTotalPages.value
-      await loadTable(library, silent)
-    }
-  } finally {
-    if (!silent) tableLoading.value = false
-  }
-}
-
 function compactCount(value: unknown) {
   const count = Number(value || 0)
   if (!Number.isFinite(count)) return '0'
@@ -845,63 +835,6 @@ async function syncCurrentView(reason: AutoSyncReason) {
     ...currentViewLoaders(includeStatic, !isContentView.value),
   ]
   await Promise.allSettled(loaders.map(loader => loader()))
-}
-
-async function changeLibrary(library: string) {
-  activeLibrary.value = library
-  tableStatus.value = ''
-  tableKeyword.value = ''
-  tablePage.value = 1
-  await loadTable(library)
-}
-
-async function changeTableFilter(filters: Dict) {
-  tableStatus.value = filters.status || ''
-  tableKeyword.value = filters.keyword || ''
-  tablePage.value = 1
-  await loadTable(activeLibrary.value)
-}
-
-async function changeTablePage(payload: Dict) {
-  tablePage.value = Number(payload.page || 1)
-  tablePageSize.value = Number(payload.page_size || tablePageSize.value)
-  await loadTable(activeLibrary.value)
-}
-
-async function updateRow(library: string, row: Dict) {
-  await api.patch(`/tables/${library}/${row.id}`, { values: row })
-  ElMessage.success('已保存')
-  await loadTable(library)
-}
-
-async function deleteRow(library: string, row: Dict, hard?: boolean) {
-  const message = library === 'target_customers' && !hard ? '目标客户会先隐藏并记录状态事件。确认删除？' : '此操作会删除项目库数据，并记录防重复墓碑。确认继续？'
-  await ElMessageBox.confirm(message, '删除确认', { type: 'warning' })
-  await api.delete(`/tables/${library}/${row.id}`, { params: { hard } })
-  ElMessage.success('删除完成')
-  await loadTable(library)
-}
-
-async function analyzeTableRow(library: string, row: Dict) {
-  if (library === 'competitor_candidates') await createAiJob('competitor', row.id)
-  if (library === 'lead_customers') await createAiJob('lead', row.id)
-}
-
-async function enrichProfile(library: string, row: Dict) {
-  const accountId = row.account_id || row.id
-  if (!accountId) {
-    ElMessage.error('当前记录缺少账号ID，无法补资料')
-    return
-  }
-  try {
-    const { data } = await api.post(`/accounts/${accountId}/profile-enrichment`)
-    ElMessage.success(`补资料任务 ${data.id} 已创建`)
-    await Promise.all([loadTasks(), loadOverview()])
-    selectedTask.value = await fetchTask(data.id)
-    await router.push('/logs')
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '补资料任务创建失败')
-  }
 }
 
 async function saveSettings(values: Dict) {
