@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
+from pathlib import Path
 from typing import Any
 
 from app import database
-from app.services import content_publish
 
 
+PLATFORMS = {"dy", "ks", "xhs"}
+ACCOUNT_STATUSES = {"login_required", "checking", "ready", "expired", "error"}
 FEATURES = {"acquisition", "message", "traffic", "publish"}
 USER_FEATURES = {"acquisition", "message", "traffic"}
 LOGIN_FEATURES = {"user": USER_FEATURES, "creator": {"publish"}}
@@ -27,7 +30,7 @@ def create_account(
     default_features: list[str] | None = None,
 ) -> dict[str, Any]:
     role, selected, defaults = _validated_bindings(role, features, default_features)
-    account = content_publish.create_account(platform, name)
+    account = _create_account_record(platform, name)
     with database.connect() as conn:
         conn.execute("UPDATE publish_accounts SET role = ? WHERE id = ?", (role, account["id"]))
         _replace_bindings(conn, str(account["id"]), str(account["platform"]), selected, defaults)
@@ -35,7 +38,7 @@ def create_account(
 
 
 def list_accounts(*, feature: str = "", platform: str = "") -> list[dict[str, Any]]:
-    accounts = content_publish.list_accounts()
+    accounts = _list_account_records()
     result = [_with_bindings(account) for account in accounts]
     if platform:
         result = [account for account in result if account["platform"] == platform]
@@ -46,7 +49,7 @@ def list_accounts(*, feature: str = "", platform: str = "") -> list[dict[str, An
 
 
 def get_account(account_id: str, *, feature: str = "", require_ready: bool = False) -> dict[str, Any]:
-    account = _with_bindings(content_publish.get_account(account_id))
+    account = _with_bindings(_get_account_record(account_id))
     if feature:
         _validate_feature(feature)
         if feature not in account["features"]:
@@ -91,13 +94,24 @@ def update_account(account_id: str, values: dict[str, Any]) -> dict[str, Any]:
 
 
 def delete_account(account_id: str) -> dict[str, Any]:
-    result = content_publish.delete_account(account_id)
+    account = get_account(account_id)
     with database.connect() as conn:
+        active = conn.execute(
+            "SELECT 1 FROM publish_tasks WHERE account_id = ? AND status IN ('waiting_media', 'queued', 'running') LIMIT 1",
+            (account_id,),
+        ).fetchone()
+        if active:
+            raise RuntimeError("该账号还有待发布或运行中的任务，暂时不能删除")
+        conn.execute(
+            "UPDATE publish_accounts SET deleted_at = datetime('now', 'localtime'), enabled = 0, is_default = 0, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (account_id,),
+        )
         conn.execute(
             "UPDATE account_feature_bindings SET is_default = 0, status = 'expired', last_error = '账号已移除' WHERE account_id = ?",
             (account_id,),
         )
-    return result
+    # 账号采用持久化 Profile，软删除记录时保留登录数据，避免误删用户目录。
+    return {"id": account_id, "deleted": True}
 
 
 def resolve_account_id(platform: str, feature: str, account_id: str = "", *, require_ready: bool = True) -> str:
@@ -130,7 +144,28 @@ def profile_path(account_id: str, feature: str = "", *, require_ready: bool = Tr
     if feature:
         get_account(account_id, feature=feature, require_ready=require_ready)
     login_kind = "creator" if feature == "publish" else "user"
-    return content_publish.account_auth_path(account_id, login_kind)
+    return account_auth_path(account_id, login_kind)
+
+
+def account_auth_path(account_id: str, login_kind: str = "creator") -> Path:
+    _get_account_record(account_id, include_deleted=True)
+    if login_kind not in {"user", "creator"}:
+        raise ValueError("未知登录类型")
+    creator_path = _resolve_runtime_path(_auth_relative_path(account_id))
+    path = creator_path if login_kind == "creator" else creator_path.parent / "user-profile"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def account_qrcode_path(account_id: str) -> Path:
+    with database.connect() as conn:
+        row = conn.execute("SELECT qrcode_relative_path FROM publish_accounts WHERE id = ?", (account_id,)).fetchone()
+    if not row or not row["qrcode_relative_path"]:
+        raise ValueError("登录二维码尚未生成")
+    path = _resolve_runtime_path(str(row["qrcode_relative_path"]))
+    if not path.is_file():
+        raise ValueError("登录二维码不存在或已失效")
+    return path
 
 
 def require_login_kind(account_id: str, login_kind: str) -> dict[str, Any]:
@@ -146,7 +181,7 @@ def set_login_status(account_id: str, login_kind: str, status: str, error: str =
     features = _login_features(login_kind)
     require_login_kind(account_id, login_kind)
     if login_kind == "creator":
-        content_publish.set_account_state(account_id, status, error=error, checked=checked)
+        set_account_state(account_id, status, error=error, checked=checked)
     placeholders = ",".join("?" for _ in features)
     checked_sql = ", last_checked_at = datetime('now', 'localtime')" if checked else ""
     with database.connect() as conn:
@@ -158,6 +193,31 @@ def set_login_status(account_id: str, login_kind: str, status: str, error: str =
             """,
             (status, error, account_id, *sorted(features)),
         )
+
+
+def set_account_state(
+    account_id: str,
+    status: str,
+    *,
+    error: str = "",
+    qrcode_relative_path: str = "",
+    checked: bool = False,
+) -> dict[str, Any]:
+    if status not in ACCOUNT_STATUSES:
+        raise ValueError("未知账号状态")
+    _get_account_record(account_id, include_deleted=True)
+    checked_sql = ", last_checked_at = datetime('now', 'localtime')" if checked else ""
+    with database.connect() as conn:
+        conn.execute(
+            f"""
+            UPDATE publish_accounts
+            SET status = ?, last_error = ?, qrcode_relative_path = ?,
+                updated_at = datetime('now', 'localtime'){checked_sql}
+            WHERE id = ?
+            """,
+            (status, str(error or ""), str(qrcode_relative_path or ""), account_id),
+        )
+    return _get_account_record(account_id, include_deleted=True)
 
 
 def set_feature_status(account_id: str, feature: str, status: str, error: str = "") -> None:
@@ -183,6 +243,67 @@ def set_all_feature_status(account_id: str, status: str, error: str = "") -> Non
             """,
             (status, error, account_id),
         )
+
+
+def _create_account_record(platform: str, name: str) -> dict[str, Any]:
+    platform = str(platform or "").strip().lower()
+    name = str(name or "").strip()
+    if platform not in PLATFORMS:
+        raise ValueError("发布平台只支持抖音、快手和小红书")
+    if not name:
+        raise ValueError("账号名称不能为空")
+    account_id = uuid.uuid4().hex
+    try:
+        with database.connect() as conn:
+            conn.execute(
+                "INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES(?, ?, ?, ?)",
+                (account_id, platform, name[:100], f"platform_accounts/{platform}/{account_id}/creator-profile"),
+            )
+    except sqlite3.IntegrityError as exc:
+        raise ValueError("同一平台下账号名称不能重复") from exc
+    return _get_account_record(account_id)
+
+
+def _list_account_records(*, include_deleted: bool = False) -> list[dict[str, Any]]:
+    where = "1 = 1" if include_deleted else "deleted_at IS NULL"
+    with database.connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM publish_accounts WHERE {where} ORDER BY platform, is_default DESC, created_at DESC"
+        ).fetchall()
+    return [_format_account(row) for row in rows]
+
+
+def _get_account_record(account_id: str, *, include_deleted: bool = False) -> dict[str, Any]:
+    with database.connect() as conn:
+        row = conn.execute("SELECT * FROM publish_accounts WHERE id = ?", (str(account_id),)).fetchone()
+    if not row or (row["deleted_at"] and not include_deleted):
+        raise ValueError("平台账号不存在")
+    return _format_account(row)
+
+
+def _resolve_runtime_path(relative_path: str) -> Path:
+    root = database.get_data_root().resolve()
+    path = (root / str(relative_path or "")).resolve()
+    if path == root or root not in path.parents:
+        raise ValueError("账号运行路径超出数据目录")
+    return path
+
+
+def _auth_relative_path(account_id: str) -> str:
+    with database.connect() as conn:
+        row = conn.execute("SELECT auth_relative_path FROM publish_accounts WHERE id = ?", (account_id,)).fetchone()
+    if not row:
+        raise ValueError("平台账号不存在")
+    return str(row["auth_relative_path"])
+
+
+def _format_account(row: sqlite3.Row) -> dict[str, Any]:
+    value = dict(row)
+    value.pop("auth_relative_path", None)
+    value["enabled"] = bool(value.get("enabled"))
+    value["is_default"] = bool(value.get("is_default"))
+    value["qrcode_url"] = f"/api/accounts/{value['id']}/qrcode" if value.get("qrcode_relative_path") else ""
+    return value
 
 
 def _with_bindings(account: dict[str, Any]) -> dict[str, Any]:

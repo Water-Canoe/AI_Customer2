@@ -12,7 +12,7 @@ from app.publish_engine.uploader.base_video import BaseVideoUploader
 
 
 def _create_publish_account(platform: str, name: str, *, is_default: bool = False) -> dict[str, object]:
-    from app.services import account_center, content_publish
+    from app.services import account_center
 
     account = account_center.create_account(
         platform,
@@ -21,7 +21,7 @@ def _create_publish_account(platform: str, name: str, *, is_default: bool = Fals
         ["publish"],
         ["publish"] if is_default else [],
     )
-    content_publish.set_account_state(str(account["id"]), "ready", checked=True)
+    account_center.set_account_state(str(account["id"]), "ready", checked=True)
     account_center.set_feature_status(str(account["id"]), "publish", "ready")
     return account_center.get_account(str(account["id"]))
 

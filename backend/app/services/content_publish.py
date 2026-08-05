@@ -11,10 +11,8 @@ from app import database
 from app.services import content_assets
 
 
-PLATFORMS = {"dy", "ks", "xhs"}
 ACTIVE_TASK_STATUSES = {"waiting_media", "queued", "running"}
 TERMINAL_TASK_STATUSES = {"succeeded", "failed", "review_required", "cancelled"}
-ACCOUNT_STATUSES = {"login_required", "checking", "ready", "expired", "error"}
 
 
 def validate_auto_publish(plan: dict[str, Any]) -> None:
@@ -24,84 +22,6 @@ def validate_auto_publish(plan: dict[str, Any]) -> None:
     if str(plan.get("output_scope") or "first") not in {"first", "all"}:
         raise ValueError("自动发布成品范围只支持首个或全部")
     _strategy(str(plan.get("publish_strategy") or "immediate"), str(plan.get("scheduled_at") or ""))
-
-
-def create_account(platform: str, name: str) -> dict[str, Any]:
-    platform = str(platform or "").strip().lower()
-    name = str(name or "").strip()
-    if platform not in PLATFORMS:
-        raise ValueError("发布平台只支持抖音、快手和小红书")
-    if not name:
-        raise ValueError("账号名称不能为空")
-    account_id = uuid.uuid4().hex
-    try:
-        with database.connect() as conn:
-            conn.execute(
-                "INSERT INTO publish_accounts(id, platform, name, auth_relative_path) VALUES(?, ?, ?, ?)",
-                (account_id, platform, name[:100], f"platform_accounts/{platform}/{account_id}/creator-profile"),
-            )
-    except sqlite3.IntegrityError as exc:
-        raise ValueError("同一平台下账号名称不能重复") from exc
-    return get_account(account_id)
-
-
-def list_accounts(*, include_deleted: bool = False) -> list[dict[str, Any]]:
-    where = "1 = 1" if include_deleted else "deleted_at IS NULL"
-    with database.connect() as conn:
-        rows = conn.execute(
-            f"SELECT * FROM publish_accounts WHERE {where} ORDER BY platform, is_default DESC, created_at DESC"
-        ).fetchall()
-    return [_format_account(row) for row in rows]
-
-
-def get_account(account_id: str, *, include_deleted: bool = False) -> dict[str, Any]:
-    with database.connect() as conn:
-        row = conn.execute("SELECT * FROM publish_accounts WHERE id = ?", (str(account_id),)).fetchone()
-    if not row or (row["deleted_at"] and not include_deleted):
-        raise ValueError("平台账号不存在")
-    return _format_account(row)
-
-
-def delete_account(account_id: str) -> dict[str, Any]:
-    account = get_account(account_id)
-    with database.connect() as conn:
-        active = conn.execute(
-            "SELECT 1 FROM publish_tasks WHERE account_id = ? AND status IN ('waiting_media', 'queued', 'running') LIMIT 1",
-            (account_id,),
-        ).fetchone()
-        if active:
-            raise RuntimeError("该账号还有待发布或运行中的任务，暂时不能删除")
-        conn.execute(
-            "UPDATE publish_accounts SET deleted_at = datetime('now', 'localtime'), enabled = 0, is_default = 0, updated_at = datetime('now', 'localtime') WHERE id = ?",
-            (account_id,),
-        )
-    # 账号采用持久化 Profile，软删除记录时保留用户登录数据，避免误删整个目录。
-    return {"id": account_id, "deleted": True}
-
-
-def set_account_state(
-    account_id: str,
-    status: str,
-    *,
-    error: str = "",
-    qrcode_relative_path: str = "",
-    checked: bool = False,
-) -> dict[str, Any]:
-    if status not in ACCOUNT_STATUSES:
-        raise ValueError("未知账号状态")
-    get_account(account_id, include_deleted=True)
-    checked_sql = ", last_checked_at = datetime('now', 'localtime')" if checked else ""
-    with database.connect() as conn:
-        conn.execute(
-            f"""
-            UPDATE publish_accounts
-            SET status = ?, last_error = ?, qrcode_relative_path = ?,
-                updated_at = datetime('now', 'localtime'){checked_sql}
-            WHERE id = ?
-            """,
-            (status, str(error or ""), str(qrcode_relative_path or ""), account_id),
-        )
-    return get_account(account_id, include_deleted=True)
 
 
 def create_video_output_tasks(
@@ -327,35 +247,6 @@ def update_task_state(
     return get_task(task_id)
 
 
-def resolve_runtime_path(relative_path: str) -> Path:
-    root = database.get_data_root().resolve()
-    path = (root / str(relative_path or "")).resolve()
-    if path == root or root not in path.parents:
-        raise ValueError("发布运行路径超出数据目录")
-    return path
-
-
-def account_auth_path(account_id: str, login_kind: str = "creator") -> Path:
-    get_account(account_id, include_deleted=True)
-    if login_kind not in {"user", "creator"}:
-        raise ValueError("未知登录类型")
-    creator_path = resolve_runtime_path(_auth_relative_path(account_id))
-    path = creator_path if login_kind == "creator" else creator_path.parent / "user-profile"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def account_qrcode_path(account_id: str) -> Path:
-    with database.connect() as conn:
-        row = conn.execute("SELECT qrcode_relative_path FROM publish_accounts WHERE id = ?", (account_id,)).fetchone()
-    if not row or not row["qrcode_relative_path"]:
-        raise ValueError("登录二维码尚未生成")
-    path = resolve_runtime_path(str(row["qrcode_relative_path"]))
-    if not path.is_file():
-        raise ValueError("登录二维码不存在或已失效")
-    return path
-
-
 def task_media_paths(task: dict[str, Any]) -> list[Path]:
     if task["source_type"] == "video_output":
         from app.services import content_workbench
@@ -381,20 +272,20 @@ def run_account_login(account_id: str, login_kind: str = "creator", cancel_check
     def qrcode_callback(payload: dict[str, Any]) -> None:
         image_path = Path(str(payload.get("image_path") or ""))
         relative = image_path.resolve().relative_to(database.get_data_root().resolve()).as_posix() if image_path.is_file() else ""
-        set_account_state(account_id, "checking", qrcode_relative_path=relative)
+        account_center.set_account_state(account_id, "checking", qrcode_relative_path=relative)
 
     try:
         if login_kind == "creator":
             operation = engine.login_account(
                 account["platform"],
-                account_auth_path(account_id, "creator"),
+                account_center.account_auth_path(account_id, "creator"),
                 qrcode_callback,
                 cancel_check=cancel_check,
             )
         else:
             operation = platform_login.login_account(
                 account["platform"],
-                account_auth_path(account_id, "user"),
+                account_center.account_auth_path(account_id, "user"),
                 cancel_check=cancel_check,
             )
         result = engine.run(operation)
@@ -424,13 +315,13 @@ def run_account_check(account_id: str, login_kind: str = "creator", cancel_check
         if login_kind == "creator":
             operation = engine.check_account(
                 account["platform"],
-                account_auth_path(account_id, "creator"),
+                account_center.account_auth_path(account_id, "creator"),
                 cancel_check=cancel_check,
             )
         else:
             operation = platform_login.check_account(
                 account["platform"],
-                account_auth_path(account_id, "user"),
+                account_center.account_auth_path(account_id, "user"),
                 cancel_check=cancel_check,
             )
         valid = bool(engine.run(operation))
@@ -481,7 +372,7 @@ def run_publish_task(task_id: str) -> dict[str, Any]:
             engine.publish(
                 platform=account["platform"],
                 content_type=task["content_type"],
-                account_file=account_auth_path(str(account["id"])),
+                account_file=account_center.account_auth_path(str(account["id"])),
                 title=task["title"],
                 description=task["description"],
                 tags=task["tags"],
@@ -679,23 +570,6 @@ def _schedule_value(strategy: str, value: str) -> str | None:
     if scheduled <= datetime.now() + timedelta(hours=2):
         raise ValueError("定时发布时间必须晚于当前时间至少2小时")
     return scheduled.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _auth_relative_path(account_id: str) -> str:
-    with database.connect() as conn:
-        row = conn.execute("SELECT auth_relative_path FROM publish_accounts WHERE id = ?", (account_id,)).fetchone()
-    if not row:
-        raise ValueError("平台账号不存在")
-    return str(row["auth_relative_path"])
-
-
-def _format_account(row: sqlite3.Row) -> dict[str, Any]:
-    value = dict(row)
-    value.pop("auth_relative_path", None)
-    value["enabled"] = bool(value.get("enabled"))
-    value["is_default"] = bool(value.get("is_default"))
-    value["qrcode_url"] = f"/api/accounts/{value['id']}/qrcode" if value.get("qrcode_relative_path") else ""
-    return value
 
 
 def _format_task(row: sqlite3.Row) -> dict[str, Any]:

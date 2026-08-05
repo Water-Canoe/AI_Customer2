@@ -16,12 +16,12 @@ def _init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_account_center_separates_profiles_and_function_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     database = _init(tmp_path, monkeypatch)
-    from app.services import account_center, content_publish
+    from app.services import account_center
 
     brand = account_center.create_account("dy", "品牌主号", "brand", ["message", "publish"], ["publish"])
     traffic = account_center.create_account("dy", "引流号", "traffic", ["acquisition", "traffic"], ["traffic"])
-    content_publish.set_account_state(brand["id"], "ready")
-    content_publish.set_account_state(traffic["id"], "ready")
+    account_center.set_account_state(brand["id"], "ready")
+    account_center.set_account_state(traffic["id"], "ready")
     account_center.set_all_feature_status(brand["id"], "ready")
     account_center.set_all_feature_status(traffic["id"], "ready")
 
@@ -75,10 +75,10 @@ def test_account_can_remove_all_feature_bindings(tmp_path: Path, monkeypatch: py
 
 def test_new_binding_inherits_ready_login_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _init(tmp_path, monkeypatch)
-    from app.services import account_center, content_publish
+    from app.services import account_center
 
     account = account_center.create_account("dy", "运营账号", "operations", ["message"], ["message"])
-    content_publish.set_account_state(account["id"], "ready", checked=True)
+    account_center.set_account_state(account["id"], "ready", checked=True)
     account_center.set_all_feature_status(account["id"], "ready")
     updated = account_center.update_account(account["id"], {"features": ["message", "acquisition"]})
 
@@ -88,10 +88,10 @@ def test_new_binding_inherits_ready_login_state(tmp_path: Path, monkeypatch: pyt
 
 def test_feature_status_blocks_only_unavailable_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _init(tmp_path, monkeypatch)
-    from app.services import account_center, content_publish
+    from app.services import account_center
 
     account = account_center.create_account("dy", "测试账号", "test", ["message", "traffic"], ["message", "traffic"])
-    content_publish.set_account_state(account["id"], "ready", checked=True)
+    account_center.set_account_state(account["id"], "ready", checked=True)
     account_center.set_all_feature_status(account["id"], "ready")
     account_center.set_feature_status(account["id"], "traffic", "expired", "引流登录失效")
 
@@ -119,11 +119,11 @@ def test_user_and_creator_login_statuses_are_independent(tmp_path: Path, monkeyp
 def test_login_profile_migration_resets_only_user_features(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     database = _init(tmp_path, monkeypatch)
     from app import migrations
-    from app.services import account_center, content_publish
+    from app.services import account_center
 
     account = account_center.create_account("dy", "迁移账号", "test", ["message", "traffic", "publish"], [])
     account_center.set_all_feature_status(account["id"], "ready")
-    content_publish.set_account_state(account["id"], "checking")
+    account_center.set_account_state(account["id"], "checking")
     account_center.set_feature_status(account["id"], "publish", "checking")
     with database.connect() as conn:
         migrations.MIGRATIONS[-1].action(conn, database.SCHEMA_SQL)

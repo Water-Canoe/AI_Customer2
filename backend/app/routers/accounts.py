@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 
 from app.api_dependencies import require_license
 from app.schemas import PlatformAccountCreate, PlatformAccountResponse, PlatformAccountUpdate, RuntimeJobResponse
-from app.services import account_center, content_publish, job_queue
+from app.services import account_center, job_queue
 
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -79,6 +79,6 @@ def check_account(account_id: str, login_kind: Literal["user", "creator"] = "use
 @router.get("/{account_id}/qrcode")
 def account_qrcode(account_id: str) -> FileResponse:
     try:
-        return FileResponse(content_publish.account_qrcode_path(account_id), media_type="image/png")
+        return FileResponse(account_center.account_qrcode_path(account_id), media_type="image/png")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

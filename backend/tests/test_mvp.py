@@ -47,7 +47,7 @@ def prepare_project(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def create_ready_test_account(platform: str = "dy") -> dict[str, object]:
-    from app.services import account_center, content_publish
+    from app.services import account_center
 
     account = account_center.create_account(
         platform,
@@ -56,7 +56,7 @@ def create_ready_test_account(platform: str = "dy") -> dict[str, object]:
         ["acquisition", "message", "traffic"],
         ["acquisition", "message", "traffic"],
     )
-    content_publish.set_account_state(str(account["id"]), "ready", checked=True)
+    account_center.set_account_state(str(account["id"]), "ready", checked=True)
     account_center.set_all_feature_status(str(account["id"]), "ready")
     return account_center.get_account(str(account["id"]))
 

@@ -112,6 +112,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 `backend/app/main.py` 只负责 FastAPI 生命周期、中间件、业务路由装配和前端静态文件托管。共享授权校验及“自家账号”默认参数位于 `api_dependencies.py`；接口按业务域拆到 `backend/app/routers/`：`system.py`、`traffic.py`、`automation.py`、`content.py`、`tasks.py`、`lead_accounts.py`、`libraries.py`、`overview.py`、`data_governance.py`、`message.py`、`ai.py` 和 `runtime.py`。其中采集任务、采集账号动作、业务数据表、业务总览以及墓碑/批量预览分别由独立路由承载，URL 保持不变，避免再次把不同数据域堆进 `tasks.py` 或 `overview.py`。业务计算继续放在 `services/`，路由只负责参数、授权、错误码和任务入队，新增接口时不得重新堆回 `main.py`。
 
+统一账号的记录增删改查、功能绑定、登录状态、Profile 路径和二维码读取由 `backend/app/services/account_center.py` 负责；内容发布服务只消费账号中心，不再反向提供通用账号能力。数据库继续保留历史表名 `publish_accounts`，避免无业务收益的高风险表迁移；表名不再代表服务职责归属。
+
 `backend/tests/test_api_routes.py` 校验接口方法/路径不重复，并检查关键接口由正确业务路由拥有；其余服务和接口行为由现有后端测试覆盖。
 
 ## 前端结构
