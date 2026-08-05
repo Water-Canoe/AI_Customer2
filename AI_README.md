@@ -197,7 +197,7 @@ ICP 画像里的 `company_name` 是可选字段：填写后 AI 私信话术可�
 
 根目录内置的 MyCrawler 如果配置为 `ENABLE_CDP_MODE=True` 且 `CDP_CONNECT_EXISTING=True`，会要求浏览器先开放 CDP 调试端口，默认端口为 `9222`。后端适配器在启动 MyCrawler 前会检查该端口；如果端口未开启，会使用采集任务所选账号的独立 Profile 自动启动 CloakBrowser 调试实例，再让 MyCrawler 继续按 CDP 模式连接。该逻辑只补齐“已有 CDP 浏览器”前置条件，不会切换到标准 Playwright，也不会修改 MyCrawler 源码。
 
-抖音 creator 找客户任务会通过项目 `sitecustomize` shim 增强稳定性：当单条视频详情、评论列表或创作者视频列表请求出现 `httpx.HTTPError`（例如代理连接失败、TLS 连接失败、网络抖动）时，项目会记录 `[AI_Customer.http_resilience]` 日志并跳过当前视频或停止当前账号后续翻页，避免一次网络异常让整个 MyCrawler 子进程退出。该逻辑不伪造数据；如果网络持续不可用，任务仍可能导入 0 条有效数据，应优先检查代理、登录态和平台风控。
+抖音 creator 找客户任务会通过项目 `sitecustomize` shim 增强稳定性：当单条视频详情、评论列表或创作者视频列表请求出现 `httpx.HTTPError`（例如代理连接失败、TLS 连接失败、网络抖动）时，项目会记录 `[AI_Customer.http_resilience]` 日志并跳过当前视频或停止当前账号后续翻页，避免一次网络异常让整个 MyCrawler 子进程退出。该逻辑不伪造数据；如果网络持续不可用，任务仍可能导入 0 条有效数据，应优先检查代理、登录态和平台风控。shim 替换上游方法前会核对参数签名，MyCrawler 组件构建也会一次检查全部 12 个补丁目标；上游函数改名或参数变化时直接停止构建，必须先确认补丁语义再适配。
 
 抖音日志里的 `Sleeping for 2 seconds after fetching aweme ...` 来自 MyCrawler 的 `CRAWLER_MAX_SLEEP_SEC` 限速配置。项目不修改 MyCrawler 源码，而是在设置页提供“抖音详情等待秒数”，默认 2 秒；后端启动抖音任务时通过 `AI_CUSTOMER_DY_DETAIL_SLEEP_SEC` 传给运行时 shim，由 shim 覆盖当前子进程中的 `CRAWLER_MAX_SLEEP_SEC`。该值可设为小数，例如 0.5；设得越低采集越快，但越容易遇到平台限流、网络抖动或风控。
 

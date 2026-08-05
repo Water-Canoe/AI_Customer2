@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import sys
 from typing import Any, Callable
@@ -150,8 +151,44 @@ def _ks_content_id(content: Any) -> str:
     return str(photo.get("id") or content.get("id") or "")
 
 
-def _patch_comment_response_method(client_class: Any, method_name: str, comments_key: str, stop_key: str, stop_value: Any) -> None:
+def _require_signature(target: Callable[..., Any], expected: tuple[str, ...]) -> None:
+    parameters = tuple(inspect.signature(target).parameters.values())
+    actual = tuple(parameter.name for parameter in parameters)
+    positional = all(parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters)
+    if actual != expected or not positional:
+        raise RuntimeError(
+            f"MyCrawler upstream signature changed: {target.__module__}.{target.__qualname__} "
+            f"expected {expected}, got {actual}"
+        )
+
+
+def verify_upstream_compatibility() -> None:
+    from media_platform.douyin import client as douyin_client
+    from media_platform.douyin import core as douyin_core
+    from media_platform.kuaishou import client as kuaishou_client
+    from media_platform.xhs import client as xhs_client
+
+    targets = (
+        (douyin_client.DouYinClient.get_aweme_comments, ("self", "aweme_id", "cursor")),
+        (douyin_client.DouYinClient.get_sub_comments, ("self", "aweme_id", "comment_id", "cursor")),
+        (xhs_client.XiaoHongShuClient.get_note_comments, ("self", "note_id", "xsec_token", "cursor")),
+        (xhs_client.XiaoHongShuClient.get_note_sub_comments, ("self", "note_id", "root_comment_id", "xsec_token", "num", "cursor")),
+        (kuaishou_client.KuaiShouClient.get_video_comments, ("self", "photo_id", "pcursor")),
+        (kuaishou_client.KuaiShouClient.get_video_sub_comments, ("self", "photo_id", "root_comment_id", "pcursor")),
+        (douyin_client.DouYinClient.get_all_user_aweme_posts, ("self", "sec_user_id", "callback")),
+        (xhs_client.XiaoHongShuClient.get_all_notes_by_creator, ("self", "user_id", "crawl_interval", "callback", "xsec_token", "xsec_source")),
+        (kuaishou_client.KuaiShouClient.get_all_videos_by_creator, ("self", "user_id", "crawl_interval", "callback")),
+        (douyin_core.DouYinCrawler.get_aweme_detail, ("self", "aweme_id", "semaphore")),
+        (douyin_core.DouYinCrawler.get_comments, ("self", "aweme_id", "semaphore")),
+        (douyin_client.DouYinClient.get_user_aweme_posts, ("self", "sec_user_id", "max_cursor")),
+    )
+    for target, expected in targets:
+        _require_signature(target, expected)
+
+
+def _patch_comment_response_method(client_class: Any, method_name: str, expected: tuple[str, ...], comments_key: str, stop_key: str, stop_value: Any) -> None:
     target = getattr(client_class, method_name)
+    _require_signature(target, expected)
     patch_flag = f"_ai_customer_comment_cutoff_{method_name}"
     if getattr(target, patch_flag, False):
         return
@@ -185,12 +222,12 @@ def _patch_comment_cutoff() -> None:
         from media_platform.kuaishou import client as kuaishou_client
         from media_platform.xhs import client as xhs_client
 
-    _patch_comment_response_method(douyin_client.DouYinClient, "get_aweme_comments", "comments", "has_more", 0)
-    _patch_comment_response_method(douyin_client.DouYinClient, "get_sub_comments", "comments", "has_more", 0)
-    _patch_comment_response_method(xhs_client.XiaoHongShuClient, "get_note_comments", "comments", "has_more", False)
-    _patch_comment_response_method(xhs_client.XiaoHongShuClient, "get_note_sub_comments", "comments", "has_more", False)
-    _patch_comment_response_method(kuaishou_client.KuaiShouClient, "get_video_comments", "rootCommentsV2", "pcursorV2", "no_more")
-    _patch_comment_response_method(kuaishou_client.KuaiShouClient, "get_video_sub_comments", "subCommentsV2", "pcursorV2", "no_more")
+    _patch_comment_response_method(douyin_client.DouYinClient, "get_aweme_comments", ("self", "aweme_id", "cursor"), "comments", "has_more", 0)
+    _patch_comment_response_method(douyin_client.DouYinClient, "get_sub_comments", ("self", "aweme_id", "comment_id", "cursor"), "comments", "has_more", 0)
+    _patch_comment_response_method(xhs_client.XiaoHongShuClient, "get_note_comments", ("self", "note_id", "xsec_token", "cursor"), "comments", "has_more", False)
+    _patch_comment_response_method(xhs_client.XiaoHongShuClient, "get_note_sub_comments", ("self", "note_id", "root_comment_id", "xsec_token", "num", "cursor"), "comments", "has_more", False)
+    _patch_comment_response_method(kuaishou_client.KuaiShouClient, "get_video_comments", ("self", "photo_id", "pcursor"), "rootCommentsV2", "pcursorV2", "no_more")
+    _patch_comment_response_method(kuaishou_client.KuaiShouClient, "get_video_sub_comments", ("self", "photo_id", "root_comment_id", "pcursor"), "subCommentsV2", "pcursorV2", "no_more")
 
 
 def _patch_douyin_creator_video_limit() -> None:
@@ -211,6 +248,7 @@ def _patch_douyin_creator_video_limit() -> None:
         from tools import utils
 
     target = douyin_client.DouYinClient.get_all_user_aweme_posts
+    _require_signature(target, ("self", "sec_user_id", "callback"))
     if getattr(target, "_ai_customer_limited", False):
         return
 
@@ -273,6 +311,7 @@ def _patch_xhs_creator_note_limit() -> None:
         from tools import utils
 
     target = xhs_client.XiaoHongShuClient.get_all_notes_by_creator
+    _require_signature(target, ("self", "user_id", "crawl_interval", "callback", "xsec_token", "xsec_source"))
     if getattr(target, "_ai_customer_limited", False):
         return
 
@@ -350,6 +389,7 @@ def _patch_ks_creator_video_limit() -> None:
         from tools import utils
 
     target = kuaishou_client.KuaiShouClient.get_all_videos_by_creator
+    _require_signature(target, ("self", "user_id", "crawl_interval", "callback"))
     if getattr(target, "_ai_customer_limited", False):
         return
 
@@ -408,6 +448,7 @@ def _patch_douyin_http_resilience() -> None:
         from tools import utils
 
     get_aweme_detail = douyin_core.DouYinCrawler.get_aweme_detail
+    _require_signature(get_aweme_detail, ("self", "aweme_id", "semaphore"))
     if not getattr(get_aweme_detail, "_ai_customer_http_resilient", False):
 
         async def resilient_get_aweme_detail(self, aweme_id: str, semaphore):
@@ -423,6 +464,7 @@ def _patch_douyin_http_resilience() -> None:
         douyin_core.DouYinCrawler.get_aweme_detail = resilient_get_aweme_detail
 
     get_comments = douyin_core.DouYinCrawler.get_comments
+    _require_signature(get_comments, ("self", "aweme_id", "semaphore"))
     if not getattr(get_comments, "_ai_customer_http_resilient", False):
 
         async def resilient_get_comments(self, aweme_id: str, semaphore):
@@ -438,6 +480,7 @@ def _patch_douyin_http_resilience() -> None:
         douyin_core.DouYinCrawler.get_comments = resilient_get_comments
 
     get_user_aweme_posts = douyin_client.DouYinClient.get_user_aweme_posts
+    _require_signature(get_user_aweme_posts, ("self", "sec_user_id", "max_cursor"))
     if not getattr(get_user_aweme_posts, "_ai_customer_http_resilient", False):
 
         async def resilient_get_user_aweme_posts(self, sec_user_id: str, max_cursor: str = ""):
@@ -466,13 +509,16 @@ def _patch_douyin_sleep_interval() -> None:
         from tools import utils
 
     # MyCrawler reads this global in Douyin detail/comment throttling paths.
+    if not hasattr(config, "CRAWLER_MAX_SLEEP_SEC"):
+        raise RuntimeError("MyCrawler upstream setting changed: config.CRAWLER_MAX_SLEEP_SEC is missing")
     config.CRAWLER_MAX_SLEEP_SEC = value
     utils.logger.info(f"[AI_Customer.sleep_interval] CRAWLER_MAX_SLEEP_SEC set to {value:g}")
 
 
-_patch_douyin_sleep_interval()
-_patch_douyin_creator_video_limit()
-_patch_xhs_creator_note_limit()
-_patch_ks_creator_video_limit()
-_patch_comment_cutoff()
-_patch_douyin_http_resilience()
+if os.getenv("AI_CUSTOMER_SHIM_VERIFY_ONLY") != "1":
+    _patch_douyin_sleep_interval()
+    _patch_douyin_creator_video_limit()
+    _patch_xhs_creator_note_limit()
+    _patch_ks_creator_video_limit()
+    _patch_comment_cutoff()
+    _patch_douyin_http_resilience()

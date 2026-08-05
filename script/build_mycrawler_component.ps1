@@ -28,6 +28,21 @@ if ($LASTEXITCODE -ne 0 -or $SourceRevision -notmatch '^[0-9a-f]{40,64}$') {
 }
 $SourceDirty = @(& git -C $CrawlerRoot status --short).Count -gt 0
 
+$PreviousPythonPath = $env:PYTHONPATH
+$PreviousVerifyOnly = $env:AI_CUSTOMER_SHIM_VERIFY_ONLY
+$env:PYTHONPATH = "$CrawlerRoot;$BackendDir\app\mediacrawler_shims"
+$env:AI_CUSTOMER_SHIM_VERIFY_ONLY = "1"
+Push-Location $CrawlerRoot
+try {
+    & $Python -c "import sitecustomize; sitecustomize.verify_upstream_compatibility()"
+}
+finally {
+    Pop-Location
+    $env:PYTHONPATH = $PreviousPythonPath
+    $env:AI_CUSTOMER_SHIM_VERIFY_ONLY = $PreviousVerifyOnly
+}
+if ($LASTEXITCODE -ne 0) { throw "MyCrawler shim is incompatible with the current upstream source" }
+
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $BuildRoot = Join-Path $ProjectRoot "output\mycrawler_${Version}_$Stamp"
 $BuildDist = Join-Path $BuildRoot "dist"
