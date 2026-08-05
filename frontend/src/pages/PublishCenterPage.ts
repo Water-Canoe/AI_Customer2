@@ -5,7 +5,7 @@ import { Promotion, Refresh } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
-import type { Dict } from '../shared/types'
+import type { Dict, PlatformAccount } from '../shared/types'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 import { DEFAULT_PAGE_SIZE, ListPagination, type PageChange } from '../components/ui/ListPagination'
 
@@ -16,7 +16,7 @@ export default defineComponent({
   setup(props) {
     const route = useRoute()
     const router = useRouter()
-    const accounts = ref<Dict[]>([])
+    const accounts = ref<PlatformAccount[]>([])
     const tasks = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
     const taskStatus = ref('')
     const composer = ref<Dict>({
@@ -48,7 +48,7 @@ export default defineComponent({
     async function loadAll(showError = true) {
       try {
         const [accountResult, taskResult] = await Promise.all([
-          api.get('/accounts', { params: { feature: 'publish' } }),
+          api.get<PlatformAccount[]>('/accounts', { params: { feature: 'publish' } }),
           api.get('/content/publish-tasks', { params: { page: tasks.value.page || 1, page_size: tasks.value.page_size || DEFAULT_PAGE_SIZE, status: taskStatus.value } }),
         ])
         accounts.value = accountResult.data

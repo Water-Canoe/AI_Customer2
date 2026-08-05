@@ -3,14 +3,14 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api_dependencies import apply_own_account_defaults, require_license
-from app.schemas import TaskCreate
+from app.schemas import TaskCreate, TaskPageResponse, TaskResponse
 from app.services import account_actions, crawler_adapter, deletion, diagnostics, job_queue, ops_visibility
 
 
 router = APIRouter(prefix="/api", tags=["tasks"])
 
 
-@router.post("/tasks")
+@router.post("/tasks", response_model=TaskResponse)
 def create_task(payload: TaskCreate) -> dict[str, object]:
     require_license()
     try:
@@ -38,7 +38,7 @@ def preview_task(payload: TaskCreate) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/tasks")
+@router.get("/tasks", response_model=TaskPageResponse)
 def list_tasks(
     include_archived: bool = False,
     page: int = Query(default=1, ge=1),
@@ -48,7 +48,7 @@ def list_tasks(
     return crawler_adapter.list_tasks(include_archived, page, page_size, query)
 
 
-@router.get("/tasks/{task_id}")
+@router.get("/tasks/{task_id}", response_model=TaskResponse)
 def get_task(task_id: str) -> dict[str, object]:
     task = crawler_adapter.get_task(task_id)
     if not task:
@@ -67,13 +67,13 @@ def get_task_dedup_summary(task_id: str) -> dict[str, object]:
     return ops_visibility.task_dedup_summary(task_id)
 
 
-@router.post("/tasks/{task_id}/cancel")
+@router.post("/tasks/{task_id}/cancel", response_model=TaskResponse)
 def cancel_task(task_id: str) -> dict[str, object]:
     job_queue.cancel_jobs_for_domain_id(task_id, "用户取消采集任务")
     return crawler_adapter.cancel_task(task_id)
 
 
-@router.post("/tasks/{task_id}/archive")
+@router.post("/tasks/{task_id}/archive", response_model=TaskResponse)
 def archive_task(task_id: str) -> dict[str, object]:
     return crawler_adapter.archive_task(task_id)
 

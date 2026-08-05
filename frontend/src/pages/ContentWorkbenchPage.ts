@@ -14,7 +14,7 @@ import {
 
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
-import type { Dict } from '../shared/types'
+import type { Dict, PlatformAccount } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
 import { COMPACT_PAGE_SIZE, DEFAULT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
@@ -183,7 +183,7 @@ export default defineComponent({
     const assets = ref<Dict[]>([])
     const voiceProfiles = ref<Dict[]>([])
     const jobs = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
-    const publishAccounts = ref<Dict[]>([])
+    const publishAccounts = ref<PlatformAccount[]>([])
     const publishTasks = ref<Dict[]>([])
     const selectedJob = ref<Dict | null>(null)
     const settings = ref<Dict>({})
@@ -297,9 +297,9 @@ export default defineComponent({
     }
 
     async function loadPublishAccounts() {
-      const { data } = await api.get('/accounts', { params: { feature: 'publish' } })
+      const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'publish' } })
       publishAccounts.value = data
-      if (!autoPublish.value.account_ids.length) autoPublish.value.account_ids = data.filter((item: Dict) => item.default_features?.includes('publish') && isAccountFeatureReady(item, 'publish')).map((item: Dict) => item.id)
+      if (!autoPublish.value.account_ids.length) autoPublish.value.account_ids = data.filter(item => item.default_features.includes('publish') && isAccountFeatureReady(item, 'publish')).map(item => item.id)
     }
 
     async function loadPublishTasks() {

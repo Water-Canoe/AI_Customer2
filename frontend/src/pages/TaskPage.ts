@@ -3,7 +3,7 @@ import type { Component } from 'vue'
 import { onMounted } from 'vue'
 import { Aim, ChatDotRound, Compass, Search, Tickets, User, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import type { Dict } from '../shared/types'
+import type { Dict, PlatformAccount, TaskRecord } from '../shared/types'
 import { platformName, taskModeName } from '../shared/format'
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
@@ -53,8 +53,8 @@ export default defineComponent({
       tcp_mode: true,
       execute_crawler: true
     })
-    const prefillSource = ref<Dict | null>(null)
-    const accounts = ref<Dict[]>([])
+    const prefillSource = ref<TaskRecord | null>(null)
+    const accounts = ref<PlatformAccount[]>([])
     const settingsDefaultsApplied = ref(false)
     const modeNeedsCreator = computed(() => ['competitor_crawl', 'own_account'].includes(form.mode))
     const modeUsesKeywords = computed(() => ['competitor_discovery', 'demand_content'].includes(form.mode))
@@ -68,7 +68,7 @@ export default defineComponent({
     }
     async function loadAccounts() {
       try {
-        const { data } = await api.get('/accounts', { params: { feature: 'acquisition' } })
+        const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'acquisition' } })
         accounts.value = data
         selectDefaultAccount()
       } catch (error: any) {
@@ -125,7 +125,7 @@ export default defineComponent({
       form.headless = boolValue((props.settings as Dict).headless)
       settingsDefaultsApplied.value = true
     }
-    function applyTaskDraft(task: Dict) {
+    function applyTaskDraft(task: TaskRecord) {
       // 失败任务重试只回填表单，真正创建仍走任务管理页的提交入口。
       form.mode = String(task.mode || 'competitor_discovery')
       form.platform = ['dy', 'xhs', 'ks'].includes(task.platform) ? task.platform : 'dy'
@@ -196,7 +196,7 @@ export default defineComponent({
       () => props.retryDraft,
       draft => {
         if (!draft) return
-        applyTaskDraft(draft as Dict)
+        applyTaskDraft(draft as TaskRecord)
         emit('consume-retry-draft')
       },
       { immediate: true }
@@ -285,7 +285,7 @@ export default defineComponent({
       side: () => [
       h('aside', { class: 'pane side-pane' }, [
         sectionTitle({ title: '最近任务', subtitle: '确认采集是否跑通', icon: Tickets, tone: 'blue' }),
-        h('div', { class: 'task-list' }, (props.tasks as Dict[]).map(task => h('button', { class: 'task-row', onClick: () => emit('open-logs', task.id) }, [
+        h('div', { class: 'task-list' }, (props.tasks as TaskRecord[]).map(task => h('button', { class: 'task-row', onClick: () => emit('open-logs', task.id) }, [
           h('strong', `${task.id} · ${task.name}`),
           h('span', `${task.platform} / ${task.mode}`),
           h('em', { class: `status ${task.status}` }, task.status)

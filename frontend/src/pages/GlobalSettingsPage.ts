@@ -4,7 +4,7 @@ import { DataAnalysis, Key, Plus, Refresh, User } from '@element-plus/icons-vue'
 
 import { DataProtectionPanel } from '../components/system/DataProtectionPanel'
 import { api } from '../shared/api'
-import type { Dict } from '../shared/types'
+import type { Dict, PlatformAccount } from '../shared/types'
 import { ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
@@ -32,7 +32,7 @@ export default defineComponent({
   },
   emits: ['open-license', 'check-update', 'clear-data', 'load-tombstones'],
   setup(props, { emit }) {
-    const accounts = ref<Dict[]>([])
+    const accounts = ref<PlatformAccount[]>([])
     const draft = ref<Dict>({ platform: 'dy', name: '', role: 'brand' })
     const loading = ref(false)
     const activeSection = ref<'system' | 'accounts' | 'data'>('system')
@@ -41,7 +41,7 @@ export default defineComponent({
 
     async function loadAccounts(showError = true) {
       try {
-        const { data } = await api.get('/accounts')
+        const { data } = await api.get<PlatformAccount[]>('/accounts')
         accounts.value = data
         accountPage.value = Math.min(accountPage.value, Math.max(1, Math.ceil(accounts.value.length / ACCOUNT_PAGE_SIZE)))
       } catch (error: any) {
@@ -69,7 +69,7 @@ export default defineComponent({
       }
     }
 
-    async function updateAccount(account: Dict, values: Dict) {
+    async function updateAccount(account: PlatformAccount, values: Dict) {
       try {
         await api.patch(`/accounts/${account.id}`, values)
         await loadAccounts()
@@ -78,7 +78,7 @@ export default defineComponent({
       }
     }
 
-    async function accountAction(account: Dict, action: 'login' | 'check', loginKind: 'user' | 'creator') {
+    async function accountAction(account: PlatformAccount, action: 'login' | 'check', loginKind: 'user' | 'creator') {
       try {
         await api.post(`/accounts/${account.id}/${action}`, null, { params: { login_kind: loginKind } })
         const label = loginKind === 'creator' ? '创作者登录' : '用户登录'
@@ -89,7 +89,7 @@ export default defineComponent({
       }
     }
 
-    async function deleteAccount(account: Dict) {
+    async function deleteAccount(account: PlatformAccount) {
       try {
         await ElMessageBox.confirm(`确认移除“${account.name}”？账号记录会停用，持久化登录目录会保留。`, '移除账号', { type: 'warning' })
         await api.delete(`/accounts/${account.id}`)
@@ -100,7 +100,7 @@ export default defineComponent({
       }
     }
 
-    function toggleFeature(account: Dict, feature: string, checked: boolean) {
+    function toggleFeature(account: PlatformAccount, feature: string, checked: boolean) {
       const features = checked
         ? [...new Set([...(account.features || []), feature])]
         : (account.features || []).filter((value: string) => value !== feature)
@@ -108,14 +108,14 @@ export default defineComponent({
       void updateAccount(account, { features, default_features: defaultFeatures })
     }
 
-    function toggleDefault(account: Dict, feature: string, checked: boolean) {
+    function toggleDefault(account: PlatformAccount, feature: string, checked: boolean) {
       const defaults = checked
         ? [...new Set([...(account.default_features || []), feature])]
         : (account.default_features || []).filter((value: string) => value !== feature)
       void updateAccount(account, { default_features: defaults })
     }
 
-    function changeRole(account: Dict, role: string) {
+    function changeRole(account: PlatformAccount, role: string) {
       const allowed = ROLE_FEATURES[role] || []
       const features = (account.features || []).filter((feature: string) => allowed.includes(feature))
       const defaults = (account.default_features || []).filter((feature: string) => features.includes(feature))
@@ -210,7 +210,7 @@ export default defineComponent({
       ])
     }
 
-    function renderAccount(account: Dict) {
+    function renderAccount(account: PlatformAccount) {
       const allowed = ROLE_FEATURES[String(account.role)] || []
       return h('article', { class: 'pane account-center-card' }, [
         h('div', { class: 'account-card-head' }, [
@@ -230,7 +230,7 @@ export default defineComponent({
           ...FEATURES.map(feature => h('div', { class: ['account-feature-row', allowed.includes(feature) ? '' : 'is-disabled'] }, [
             h('label', { class: 'account-feature-toggle' }, [h('input', { type: 'checkbox', disabled: !allowed.includes(feature), checked: account.features?.includes(feature), onChange: (event: Event) => toggleFeature(account, feature, (event.target as HTMLInputElement).checked) }), featureLabel(feature)]),
             h('label', { class: 'account-feature-toggle' }, [h('input', { type: 'checkbox', disabled: !account.features?.includes(feature), checked: account.default_features?.includes(feature), onChange: (event: Event) => toggleDefault(account, feature, (event.target as HTMLInputElement).checked) }), '设为默认']),
-            h('small', { class: ['account-feature-status', `is-${account.feature_status?.[feature]?.status || 'unknown'}`] }, featureStatusLabel(account.feature_status?.[feature]?.status)),
+            h('small', { class: ['account-feature-status', `is-${account.feature_status?.[feature]?.status || 'unknown'}`] }, featureStatusLabel(account.feature_status?.[feature]?.status || 'unknown')),
           ])),
         ]),
         h('div', { class: 'account-login-scopes' }, [
@@ -243,7 +243,7 @@ export default defineComponent({
       ])
     }
 
-    function renderLoginScope(account: Dict, loginKind: 'user' | 'creator', title: string, description: string) {
+    function renderLoginScope(account: PlatformAccount, loginKind: 'user' | 'creator', title: string, description: string) {
       const state = account.login_status?.[loginKind] || {}
       const unavailable = !state.available
       const checking = state.status === 'checking'
@@ -271,7 +271,7 @@ function featureStatusLabel(value: string) { return ({ ready: '可用', checking
 function licenseStatusText(info: Dict) { return info.authorized ? '授权有效' : info.status === 'failed' ? '未授权' : '等待授权' }
 function licenseStateClass(info: Dict) { return info.authorized ? 'is-authorized' : info.status === 'failed' ? 'is-denied' : 'is-pending' }
 
-export function paginateAccounts(items: Dict[], page: number, pageSize: number) {
+export function paginateAccounts<T>(items: T[], page: number, pageSize: number) {
   const result = paginateItems(items, page, pageSize)
   return { items: result.items, page: result.page, totalPages: result.totalPages }
 }

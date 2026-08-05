@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.schemas import RuntimeJobPageResponse, RuntimeJobResponse
 from app.services import job_queue
 
 
 router = APIRouter(prefix="/api/runtime", tags=["runtime"])
 
 
-@router.get("/jobs")
+@router.get("/jobs", response_model=RuntimeJobPageResponse)
 def list_runtime_jobs(
     status: str = Query(default=""),
     kind: str = Query(default=""),
@@ -18,7 +19,7 @@ def list_runtime_jobs(
     return job_queue.list_jobs(status=status, kind=kind, page=page, page_size=page_size)
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", response_model=RuntimeJobResponse)
 def get_runtime_job(job_id: str) -> dict[str, object]:
     try:
         return job_queue.get_job(job_id)
@@ -26,7 +27,7 @@ def get_runtime_job(job_id: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/jobs/{job_id}/cancel")
+@router.post("/jobs/{job_id}/cancel", response_model=RuntimeJobResponse)
 def cancel_runtime_job(job_id: str) -> dict[str, object]:
     try:
         return job_queue.request_cancel(job_id)
@@ -34,7 +35,7 @@ def cancel_runtime_job(job_id: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/jobs/{job_id}/retry")
+@router.post("/jobs/{job_id}/retry", response_model=RuntimeJobResponse)
 def retry_runtime_job(job_id: str) -> dict[str, object]:
     try:
         return job_queue.retry_job(job_id)

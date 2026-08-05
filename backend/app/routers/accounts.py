@@ -6,14 +6,14 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from app.api_dependencies import require_license
-from app.schemas import PlatformAccountCreate, PlatformAccountUpdate
+from app.schemas import PlatformAccountCreate, PlatformAccountResponse, PlatformAccountUpdate, RuntimeJobResponse
 from app.services import account_center, content_publish, job_queue
 
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 
-@router.get("")
+@router.get("", response_model=list[PlatformAccountResponse])
 def list_accounts(feature: str = "", platform: str = "") -> list[dict[str, object]]:
     try:
         return account_center.list_accounts(feature=feature, platform=platform)
@@ -21,7 +21,7 @@ def list_accounts(feature: str = "", platform: str = "") -> list[dict[str, objec
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("")
+@router.post("", response_model=PlatformAccountResponse)
 def create_account(payload: PlatformAccountCreate) -> dict[str, object]:
     require_license()
     try:
@@ -36,7 +36,7 @@ def create_account(payload: PlatformAccountCreate) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.patch("/{account_id}")
+@router.patch("/{account_id}", response_model=PlatformAccountResponse)
 def update_account(account_id: str, payload: PlatformAccountUpdate) -> dict[str, object]:
     require_license()
     try:
@@ -56,7 +56,7 @@ def delete_account(account_id: str) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/{account_id}/login")
+@router.post("/{account_id}/login", response_model=RuntimeJobResponse)
 def login_account(account_id: str, login_kind: Literal["user", "creator"] = "user") -> dict[str, object]:
     require_license()
     try:
@@ -66,7 +66,7 @@ def login_account(account_id: str, login_kind: Literal["user", "creator"] = "use
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/{account_id}/check")
+@router.post("/{account_id}/check", response_model=RuntimeJobResponse)
 def check_account(account_id: str, login_kind: Literal["user", "creator"] = "user") -> dict[str, object]:
     require_license()
     try:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 Platform = Literal["dy", "xhs", "ks"]
@@ -86,6 +86,102 @@ class PlatformAccountUpdate(BaseModel):
     enabled: bool | None = None
     features: list[AccountFeature] | None = Field(default=None, max_length=4)
     default_features: list[AccountFeature] | None = Field(default=None, max_length=4)
+
+
+class TaskResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    name: str
+    mode: TaskMode
+    platform: Platform
+    login_type: LoginType
+    crawler_type: str
+    keywords: str
+    specified_id: str
+    creator_id: str
+    content_count: int
+    comment_count: int
+    collect_content: bool
+    collect_comments: bool
+    collect_authors: bool
+    collect_sub_comments: bool
+    max_concurrency: int
+    tcp_mode: bool
+    headless: bool
+    execute_crawler: bool
+    status: Literal["pending", "running", "succeeded", "failed", "cancelled"]
+    archived: bool
+    error: str
+    process_id: int | None
+    started_at: str | None
+    finished_at: str | None
+    created_at: str
+    updated_at: str
+    automation_managed: bool
+    account_id: str
+    outcome: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskPageResponse(BaseModel):
+    items: list[TaskResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class PlatformAccountResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    platform: Platform
+    name: str
+    status: str
+    is_default: bool
+    enabled: bool
+    last_checked_at: str | None
+    last_error: str
+    qrcode_url: str
+    deleted_at: str | None
+    created_at: str
+    updated_at: str
+    role: AccountRole
+    platform_user_id: str
+    features: list[AccountFeature]
+    default_features: list[AccountFeature]
+    feature_status: dict[str, dict[str, Any]]
+    login_status: dict[str, dict[str, Any]]
+
+
+class RuntimeJobResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    kind: str
+    entity_id: str
+    resource: str
+    payload: dict[str, Any]
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled", "interrupted"]
+    priority: int
+    attempt: int
+    max_attempts: int
+    cancel_requested: bool
+    error: str
+    result: dict[str, Any]
+    heartbeat_at: str | None
+    started_at: str | None
+    finished_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class RuntimeJobPageResponse(BaseModel):
+    items: list[RuntimeJobResponse]
+    total: int
+    page: int
+    page_size: int
+    active: dict[str, int]
 
 
 class ContentPublishSource(BaseModel):

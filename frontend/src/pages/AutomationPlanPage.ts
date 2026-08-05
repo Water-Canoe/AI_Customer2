@@ -29,7 +29,7 @@ import { ChatDotRound, Clock, Connection, Promotion, Rank } from '@element-plus/
 
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
-import type { Dict } from '../shared/types'
+import type { Dict, PlatformAccount } from '../shared/types'
 import { COMPACT_PAGE_SIZE, DEFAULT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 
 
@@ -115,7 +115,7 @@ export default defineComponent({
     const planPageSize = ref(DEFAULT_PAGE_SIZE)
     const runItemPage = ref(1)
     const summary = ref<Dict>({})
-    const accounts = ref<Dict[]>([])
+    const accounts = ref<PlatformAccount[]>([])
     const typePickerOpen = ref(false)
     const editorOpen = ref(false)
     const runDetailOpen = ref(false)
@@ -147,7 +147,7 @@ export default defineComponent({
         const [planResponse, runResponse, accountResponse] = await Promise.all([
           api.get('/automation/plans'),
           api.get('/automation/runs', { params: { page: runs.value.page || 1, page_size: runs.value.page_size || DEFAULT_PAGE_SIZE } }),
-          api.get('/accounts'),
+          api.get<PlatformAccount[]>('/accounts'),
         ])
         plans.value = planResponse.data.items || []
         summary.value = planResponse.data.summary || {}

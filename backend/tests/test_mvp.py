@@ -2046,7 +2046,25 @@ def test_account_login_route_enqueues_generic_job(tmp_path: Path, monkeypatch: p
 
     def fake_enqueue(account_id: str, action: str, login_kind: str) -> dict[str, object]:
         calls.append((account_id, action, login_kind))
-        return {"ok": True, "account_id": account_id, "action": action}
+        return {
+            "id": "runtime-account-login",
+            "kind": "account_login",
+            "entity_id": account_id,
+            "resource": "browser",
+            "payload": {"account_id": account_id, "action": action, "login_kind": login_kind},
+            "status": "queued",
+            "priority": 0,
+            "attempt": 0,
+            "max_attempts": 1,
+            "cancel_requested": False,
+            "error": "",
+            "result": {},
+            "heartbeat_at": None,
+            "started_at": None,
+            "finished_at": None,
+            "created_at": "2026-08-05 18:00:00",
+            "updated_at": "2026-08-05 18:00:00",
+        }
 
     monkeypatch.setattr(job_queue, "enqueue_account_job", fake_enqueue)
 
@@ -2057,6 +2075,23 @@ def test_account_login_route_enqueues_generic_job(tmp_path: Path, monkeypatch: p
     updated = account_center.get_account(str(account["id"]))
     assert updated["login_status"]["user"]["status"] == "checking"
     assert updated["login_status"]["creator"]["status"] != "checking"
+
+
+def test_account_and_runtime_lists_match_response_contracts(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app.main import app
+    from app.services import job_queue
+
+    job_queue.enqueue("contract_check", entity_id="contract-1")
+    client = TestClient(app)
+    accounts = client.get("/api/accounts")
+    jobs = client.get("/api/runtime/jobs")
+
+    assert accounts.status_code == 200
+    assert {"id", "features", "feature_status", "login_status"} <= accounts.json()[0].keys()
+    assert jobs.status_code == 200
+    assert jobs.json()["items"][0]["id"]
+    assert {"items", "total", "page", "page_size", "active"} <= jobs.json().keys()
 
 
 def test_traffic_random_feed_starts_from_homepage(tmp_path: Path) -> None:

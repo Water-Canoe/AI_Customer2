@@ -145,7 +145,7 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api } from './shared/api'
-import type { Dict } from './shared/types'
+import type { Dict, TaskPage, TaskRecord } from './shared/types'
 import { competitorStatusLabel, platformName } from './shared/format'
 import { createAutoSyncController, type AutoSyncReason } from './composables/autoSync'
 import { selectDmScript, useMessageWorkbench } from './composables/messageWorkbench'
@@ -157,7 +157,7 @@ const route = useRoute()
 const activeLibrary = ref('contents')
 const tableStatus = ref('')
 const tableKeyword = ref('')
-const tasks = ref<Dict[]>([])
+const tasks = ref<TaskRecord[]>([])
 const taskPage = ref(1)
 const taskPageSize = ref(10)
 const taskTotal = ref(0)
@@ -172,10 +172,10 @@ const tableTotalPages = ref(1)
 const overviewTree = ref<Dict[]>([])
 const aiWorkbench = ref<Dict>({})
 const aiQuery = ref<Dict>({ tab: 'competitors', keyword: '', status: '', result: '', page: 1, page_size: 10 })
-const selectedTask = ref<Dict | null>(null)
+const selectedTask = ref<TaskRecord | null>(null)
 const taskDiagnostics = ref<Dict>({})
 const taskDedupSummary = ref<Dict>({})
-const retryDraft = ref<Dict | null>(null)
+const retryDraft = ref<(TaskRecord & { retry_token?: number }) | null>(null)
 const settings = ref<Dict>({})
 const settingsDraftDirty = ref(false)
 const settingsSaving = ref(false)
@@ -677,7 +677,7 @@ async function loadContentShell() {
 }
 
 async function loadTasks() {
-  const { data } = await api.get('/tasks', {
+  const { data } = await api.get<TaskPage>('/tasks', {
     params: { page: taskPage.value, page_size: taskPageSize.value, query: taskQuery.value }
   })
   tasks.value = data.items
@@ -713,7 +713,7 @@ async function changeTaskQuery(query: string) {
 }
 
 async function fetchTask(id: string) {
-  const { data } = await api.get(`/tasks/${id}`)
+  const { data } = await api.get<TaskRecord>(`/tasks/${id}`)
   return data
 }
 
@@ -941,7 +941,7 @@ async function cancelTask(id: string) {
   await loadSelectedTaskDiagnostics(id)
 }
 
-function retryTask(task: Dict) {
+function retryTask(task: TaskRecord) {
   retryDraft.value = { ...task, retry_token: Date.now() }
   router.push('/tasks')
   ElMessage.success('已带入失败任务参数，请确认后重新启动')

@@ -22,6 +22,7 @@ def _walk_routes(routes: list[object]):
 
 def test_api_routes_have_unique_method_paths_and_business_owners() -> None:
     from app.main import app
+    from app.schemas import PlatformAccountResponse, RuntimeJobPageResponse, TaskPageResponse
 
     routes: dict[tuple[str, str], object] = {}
     for route in _walk_routes(app.routes):
@@ -50,6 +51,10 @@ def test_api_routes_have_unique_method_paths_and_business_owners() -> None:
     for key, module in expected_owners.items():
         assert key in routes
         assert routes[key].endpoint.__module__ == module
+
+    assert routes[("GET", "/api/tasks")].response_model is TaskPageResponse
+    assert routes[("GET", "/api/accounts")].response_model == list[PlatformAccountResponse]
+    assert routes[("GET", "/api/runtime/jobs")].response_model is RuntimeJobPageResponse
 
 
 def test_frontend_static_files_cannot_escape_dist_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

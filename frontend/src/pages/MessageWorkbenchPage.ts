@@ -5,7 +5,7 @@ import { SplitPane } from '../components/ui/SplitPane'
 import { platformName } from '../shared/format'
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
-import type { Dict } from '../shared/types'
+import type { Dict, PlatformAccount } from '../shared/types'
 import { COMPACT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { iconBadge, sectionTitle } from '../components/ui/Workbench'
 
@@ -33,14 +33,14 @@ export default defineComponent({
     const batchCount = ref(savedBatchConfig.count)
     const intervalMin = ref(savedBatchConfig.min)
     const intervalMax = ref(savedBatchConfig.max)
-    const accounts = ref<Dict[]>([])
+    const accounts = ref<PlatformAccount[]>([])
     const accountId = ref('')
     const sourcePage = ref(1)
     const eventPage = ref(1)
     async function loadAccounts() {
       try {
-        const { data } = await api.get('/accounts', { params: { feature: 'message', platform: 'dy' } })
-        accounts.value = data.filter((account: Dict) => isAccountFeatureReady(account, 'message'))
+        const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'message', platform: 'dy' } })
+        accounts.value = data.filter(account => isAccountFeatureReady(account, 'message'))
         const preferred = accounts.value.find(account => account.default_features?.includes('message')) || accounts.value[0]
         accountId.value = String(preferred?.id || '')
       } catch (error: any) {
@@ -225,7 +225,7 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
           onChange: (event: Event) => actions.setAccountId((event.target as HTMLSelectElement).value),
         }, [
           h('option', { value: '' }, actions.accounts.length ? '请选择账号' : '账号中心暂无可用抖音账号'),
-          ...actions.accounts.map((account: Dict) => h('option', { value: account.id }, account.name)),
+          ...actions.accounts.map((account: PlatformAccount) => h('option', { value: account.id }, account.name)),
         ]),
       ]),
     ]),

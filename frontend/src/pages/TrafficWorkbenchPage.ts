@@ -16,7 +16,7 @@ import {
 
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
-import type { Dict } from '../shared/types'
+import type { Dict, PlatformAccount } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
 import { COMPACT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, metricTile, sectionTitle } from '../components/ui/Workbench'
@@ -69,7 +69,7 @@ export default defineComponent({
     const uploadedImages = ref<Dict[]>([])
     const imageUploading = ref(false)
     const trafficEnv = ref<Dict>({})
-    const accounts = ref<Dict[]>([])
+    const accounts = ref<PlatformAccount[]>([])
     const envInstalling = ref(false)
     const envInstallResult = ref<Dict | null>(null)
     const planArchiveFilter = ref('active')
@@ -192,7 +192,7 @@ export default defineComponent({
     }
 
     async function loadAccounts() {
-      const { data } = await api.get('/accounts', { params: { feature: 'traffic' } })
+      const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'traffic' } })
       accounts.value = data
       selectDefaultAccount()
     }

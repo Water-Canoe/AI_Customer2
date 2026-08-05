@@ -3,7 +3,7 @@ import { Clock, Delete, Refresh, RefreshRight, VideoPause } from '@element-plus/
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api } from '../../shared/api'
-import type { Dict } from '../../shared/types'
+import type { RuntimeJob, RuntimeJobPage } from '../../shared/types'
 import { ListPagination, type PageChange } from '../ui/ListPagination'
 import { sectionTitle } from '../ui/Workbench'
 
@@ -12,7 +12,7 @@ export const RuntimeQueuePanel = defineComponent({
   name: 'RuntimeQueuePanel',
   props: { refreshSeq: { type: Number, default: 0 } },
   setup(props) {
-    const queue = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, active: {} })
+    const queue = ref<RuntimeJobPage>({ items: [], total: 0, page: 1, page_size: 20, active: {} })
     const filters = reactive({ status: '', kind: '', page: 1, page_size: 20 })
     const loading = ref(false)
     const operating = ref('')
@@ -20,7 +20,7 @@ export const RuntimeQueuePanel = defineComponent({
     async function load(silent = false) {
       if (!silent) loading.value = true
       try {
-        const { data } = await api.get('/runtime/jobs', { params: { ...filters } })
+        const { data } = await api.get<RuntimeJobPage>('/runtime/jobs', { params: { ...filters } })
         queue.value = data
         const totalPages = Math.max(1, Math.ceil(Number(data.total || 0) / filters.page_size))
         if (!(data.items || []).length && filters.page > totalPages) {
@@ -39,7 +39,7 @@ export const RuntimeQueuePanel = defineComponent({
       void load()
     }
 
-    async function cancel(job: Dict) {
+    async function cancel(job: RuntimeJob) {
       operating.value = String(job.id || '')
       try {
         await api.post(`/runtime/jobs/${job.id}/cancel`)
@@ -52,7 +52,7 @@ export const RuntimeQueuePanel = defineComponent({
       }
     }
 
-    async function retry(job: Dict) {
+    async function retry(job: RuntimeJob) {
       operating.value = String(job.id || '')
       try {
         await api.post(`/runtime/jobs/${job.id}/retry`)
@@ -65,7 +65,7 @@ export const RuntimeQueuePanel = defineComponent({
       }
     }
 
-    async function remove(job: Dict) {
+    async function remove(job: RuntimeJob) {
       try {
         await ElMessageBox.confirm('只删除运行队列历史，不删除业务数据。确认继续？', '删除队列记录', { type: 'warning' })
       } catch (error: any) {
@@ -112,7 +112,7 @@ export const RuntimeQueuePanel = defineComponent({
           ]),
         ]),
         items.length
-          ? h('div', { class: 'runtime-job-list' }, items.map((job: Dict) => renderJob(job, operating.value, cancel, retry, remove)))
+          ? h('div', { class: 'runtime-job-list' }, items.map(job => renderJob(job, operating.value, cancel, retry, remove)))
           : h('div', { class: 'diagnostic-empty' }, loading.value ? '正在读取队列...' : '当前没有匹配的运行记录'),
         h(ListPagination, {
           page: filters.page,
@@ -140,11 +140,11 @@ const RUNTIME_KINDS = [
 
 
 function renderJob(
-  job: Dict,
+  job: RuntimeJob,
   operating: string,
-  cancel: (job: Dict) => void,
-  retry: (job: Dict) => void,
-  remove: (job: Dict) => void
+  cancel: (job: RuntimeJob) => void,
+  retry: (job: RuntimeJob) => void,
+  remove: (job: RuntimeJob) => void
 ) {
   const status = String(job.status || '')
   const busy = operating === String(job.id || '')
@@ -201,7 +201,7 @@ export function runtimeStatusLabel(status: string) {
 }
 
 
-export function runtimeJobSummary(job: Dict) {
+export function runtimeJobSummary(job: Partial<RuntimeJob>) {
   const parts = [`资源：${runtimeResourceLabel(String(job.resource || ''))}`, `尝试：${job.attempt || 0}/${job.max_attempts || 1}`]
   if (job.error) parts.push(String(job.error))
   else if (job.started_at) parts.push(`开始：${job.started_at}`)
