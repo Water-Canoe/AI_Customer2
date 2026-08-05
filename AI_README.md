@@ -116,6 +116,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 `backend/app/services/job_queue.py` 只负责持久化队列、资源并发、线程调度、心跳和运行状态，不再导入采集、AI、自动化、私信、引流或内容业务服务。任务类型分派、授权、领域结果判断、取消和恢复规则集中在 `job_handlers.py`，由 FastAPI lifespan 启动层显式注入队列；业务服务可以入队，但队列核心不会反向调用具体业务模块。
 
+视频工作台可以编排内容发布任务；内容发布服务读取成品时直接使用自身已有的视频任务查询和受限路径解析，不再反向导入 `content_workbench.py`。依赖方向固定为“视频生成 -> 内容发布”。
+
 `backend/tests/test_api_routes.py` 校验接口方法/路径不重复，并检查关键接口由正确业务路由拥有；其余服务和接口行为由现有后端测试覆盖。
 
 ## 前端结构

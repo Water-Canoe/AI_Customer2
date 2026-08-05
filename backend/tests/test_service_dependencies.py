@@ -21,3 +21,4 @@ def test_queue_and_account_center_keep_one_way_service_dependencies() -> None:
     # 队列仅依赖浏览器资源管理；业务处理器只能由启动层注入。
     assert service_imports("job_queue") == {"profile_manager"}
     assert service_imports("account_center") == set()
+    assert "content_workbench" not in service_imports("content_publish")

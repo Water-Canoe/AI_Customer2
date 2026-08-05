@@ -249,13 +249,11 @@ def update_task_state(
 
 def task_media_paths(task: dict[str, Any]) -> list[Path]:
     if task["source_type"] == "video_output":
-        from app.services import content_workbench
-
-        job = content_workbench.get_video_job(str(task["video_job_id"]), include_archived=True)
+        job = _video_job(str(task["video_job_id"]))
         output = next((item for item in job["outputs"] if str(item.get("name") or "") == task["output_name"]), None)
         if not output:
             raise ValueError("视频成品不存在")
-        return [content_workbench.resolve_video_output(str(output["relative_path"]))]
+        return [_resolve_video_output(str(output["relative_path"]))]
     return [
         content_assets.resolve_asset_path(str(asset["relative_path"]))
         for asset in task.get("assets", []) if asset["role"] == "media"
@@ -530,6 +528,16 @@ def _video_job(video_job_id: str) -> dict[str, Any]:
     result = dict(row)
     result["outputs"] = json.loads(result.get("outputs") or "[]")
     return result
+
+
+def _resolve_video_output(relative_path: str) -> Path:
+    root = database.get_video_generation_root().resolve()
+    path = (root / str(relative_path or "")).resolve()
+    if path != root and root not in path.parents:
+        raise ValueError("视频输出路径超出运行目录")
+    if not path.is_file():
+        raise ValueError("视频输出文件不存在")
+    return path
 
 
 def _task_values(platform: str, title: str, description: str, tags: list[str], overrides: dict[str, Any]) -> tuple[str, str, list[str], dict[str, Any]]:
