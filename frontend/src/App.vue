@@ -145,10 +145,11 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api } from './shared/api'
-import type { Dict, TaskPage, TaskRecord } from './shared/types'
+import type { Dict } from './shared/types'
 import { competitorStatusLabel, platformName } from './shared/format'
 import { createAutoSyncController, type AutoSyncReason } from './composables/autoSync'
 import { selectDmScript, useMessageWorkbench } from './composables/messageWorkbench'
+import { useTaskWorkbench } from './composables/taskWorkbench'
 import { LicenseDialog } from './components/ui/LicenseDialog'
 
 const router = useRouter()
@@ -157,12 +158,6 @@ const route = useRoute()
 const activeLibrary = ref('contents')
 const tableStatus = ref('')
 const tableKeyword = ref('')
-const tasks = ref<TaskRecord[]>([])
-const taskPage = ref(1)
-const taskPageSize = ref(10)
-const taskTotal = ref(0)
-const taskTotalPages = ref(1)
-const taskQuery = ref('')
 const tableRows = ref<Dict[]>([])
 const tableLoading = ref(false)
 const tablePage = ref(1)
@@ -172,10 +167,6 @@ const tableTotalPages = ref(1)
 const overviewTree = ref<Dict[]>([])
 const aiWorkbench = ref<Dict>({})
 const aiQuery = ref<Dict>({ tab: 'competitors', keyword: '', status: '', result: '', page: 1, page_size: 10 })
-const selectedTask = ref<TaskRecord | null>(null)
-const taskDiagnostics = ref<Dict>({})
-const taskDedupSummary = ref<Dict>({})
-const retryDraft = ref<(TaskRecord & { retry_token?: number }) | null>(null)
 const settings = ref<Dict>({})
 const settingsDraftDirty = ref(false)
 const settingsSaving = ref(false)
@@ -204,6 +195,35 @@ const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, tota
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
 const sidebarMenu = ref<any>(null)
 let settingsMutationSeq = 0
+
+const {
+  tasks,
+  page: taskPage,
+  pageSize: taskPageSize,
+  total: taskTotal,
+  query: taskQuery,
+  selected: selectedTask,
+  diagnostics: taskDiagnostics,
+  dedupSummary: taskDedupSummary,
+  retryDraft,
+  loadTasks,
+  fetchTask,
+  loadDiagnostics: loadSelectedTaskDiagnostics,
+  changePage: changeTaskPage,
+  changeQuery: changeTaskQuery,
+  refreshSelected: refreshSelectedTask,
+  createTask,
+  openLogs: openTaskLogs,
+  selectTask,
+  archiveTask,
+  cancelTask,
+  retryTask,
+  consumeRetryDraft,
+  deleteTask,
+} = useTaskWorkbench({
+  router,
+  refreshRelated: () => Promise.allSettled([loadOverview(), loadAiJobs()]),
+})
 
 const {
   keywords: messageKeywords,
@@ -676,47 +696,6 @@ async function loadContentShell() {
   contentEnv.value = data
 }
 
-async function loadTasks() {
-  const { data } = await api.get<TaskPage>('/tasks', {
-    params: { page: taskPage.value, page_size: taskPageSize.value, query: taskQuery.value }
-  })
-  tasks.value = data.items
-  taskTotal.value = Number(data.total || 0)
-  taskPage.value = Number(data.page || 1)
-  taskPageSize.value = Number(data.page_size || taskPageSize.value)
-  taskTotalPages.value = Number(data.total_pages || 1)
-  if (!data.items.length && taskPage.value > taskTotalPages.value) {
-    taskPage.value = taskTotalPages.value
-    await loadTasks()
-    return
-  }
-  if (!selectedTask.value && data.items.length) selectedTask.value = await fetchTask(data.items[0].id)
-}
-
-async function changeTaskPage(payload: Dict) {
-  taskPage.value = Number(payload.page || 1)
-  selectedTask.value = null
-  taskDiagnostics.value = {}
-  taskDedupSummary.value = {}
-  await loadTasks()
-  await loadSelectedTaskDiagnostics()
-}
-
-async function changeTaskQuery(query: string) {
-  taskQuery.value = String(query || '').trim()
-  taskPage.value = 1
-  selectedTask.value = null
-  taskDiagnostics.value = {}
-  taskDedupSummary.value = {}
-  await loadTasks()
-  await loadSelectedTaskDiagnostics()
-}
-
-async function fetchTask(id: string) {
-  const { data } = await api.get<TaskRecord>(`/tasks/${id}`)
-  return data
-}
-
 async function loadSettings() {
   const requestSeq = settingsMutationSeq
   const { data } = await api.get('/settings')
@@ -748,21 +727,6 @@ async function changeAiQuery(query: Dict) {
 async function loadOverview() {
   const { data } = await api.get('/overview/tree')
   overviewTree.value = data
-}
-
-async function loadSelectedTaskDiagnostics(id?: string) {
-  const taskId = id || selectedTask.value?.id
-  if (!taskId) {
-    taskDiagnostics.value = {}
-    taskDedupSummary.value = {}
-    return
-  }
-  const [diagnosticResult, dedupResult] = await Promise.allSettled([
-    api.get(`/tasks/${taskId}/diagnostics`),
-    api.get(`/tasks/${taskId}/dedup-summary`),
-  ])
-  taskDiagnostics.value = diagnosticResult.status === 'fulfilled' ? diagnosticResult.value.data : {}
-  taskDedupSummary.value = dedupResult.status === 'fulfilled' ? dedupResult.value.data : {}
 }
 
 async function loadTombstoneSummary() {
@@ -803,22 +767,6 @@ async function loadTable(library: string, silent = false) {
     }
   } finally {
     if (!silent) tableLoading.value = false
-  }
-}
-
-async function refreshSelectedTask() {
-  const taskId = selectedTask.value?.id
-  if (!taskId) return
-  try {
-    selectedTask.value = await fetchTask(String(taskId))
-    await loadSelectedTaskDiagnostics(String(taskId))
-  } catch (error: any) {
-    if (error?.response?.status === 404) {
-      selectedTask.value = null
-      taskDiagnostics.value = {}
-      taskDedupSummary.value = {}
-    }
-    else throw error
   }
 }
 
@@ -901,64 +849,6 @@ async function changeTablePage(payload: Dict) {
   tablePage.value = Number(payload.page || 1)
   tablePageSize.value = Number(payload.page_size || tablePageSize.value)
   await loadTable(activeLibrary.value)
-}
-
-async function createTask(payload: Dict) {
-  try {
-    const { data } = await api.post('/tasks', payload)
-    ElMessage.success(`任务 ${data.id} 已创建`)
-    await loadTasks()
-    selectedTask.value = await fetchTask(data.id)
-    await loadSelectedTaskDiagnostics(data.id)
-    await router.push('/logs')
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '任务创建失败')
-  }
-}
-
-async function openTaskLogs(id: string) {
-  selectedTask.value = await fetchTask(id)
-  await loadSelectedTaskDiagnostics(id)
-  await router.push('/logs')
-}
-
-async function selectTask(id: string) {
-  selectedTask.value = await fetchTask(id)
-  await loadSelectedTaskDiagnostics(id)
-}
-
-async function archiveTask(id: string) {
-  await api.post(`/tasks/${id}/archive`)
-  ElMessage.success('任务已归档')
-  await loadTasks()
-}
-
-async function cancelTask(id: string) {
-  await api.post(`/tasks/${id}/cancel`)
-  ElMessage.success('任务已取消')
-  await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
-  selectedTask.value = await fetchTask(id)
-  await loadSelectedTaskDiagnostics(id)
-}
-
-function retryTask(task: TaskRecord) {
-  retryDraft.value = { ...task, retry_token: Date.now() }
-  router.push('/tasks')
-  ElMessage.success('已带入失败任务参数，请确认后重新启动')
-}
-
-function consumeRetryDraft() {
-  retryDraft.value = null
-}
-
-async function deleteTask(id: string) {
-  await ElMessageBox.confirm('任务删除会同步清理项目库和原始采集映射。确认继续？', '硬删除确认', { type: 'warning' })
-  await api.delete(`/tasks/${id}`)
-  ElMessage.success('任务已硬删除')
-  selectedTask.value = null
-  taskDiagnostics.value = {}
-  taskDedupSummary.value = {}
-  await Promise.allSettled([loadTasks(), loadOverview(), loadAiJobs()])
 }
 
 async function updateRow(library: string, row: Dict) {
