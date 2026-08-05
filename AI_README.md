@@ -122,6 +122,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 自动私信批次接口 `/api/message-workbench/auto-message-batches` 使用 `page / page_size` 分页批次，并使用 `item_page / item_page_size` 独立分页当前批次的客户执行明细；响应同时返回两组 `total / total_pages` 元数据，不再只保留最近 20 个批次。
 
+“客户跟进”页面的私信执行账号选择器位于“AI一键私信”面板标题区，不再单独占用一整行；该账号同时用于批量一键私信和客户表格中的单客户自动私信操作。
+
 内容生成任务和发布任务的进行中数量、状态指标由后端对完整数据集汇总，不从当前页推算；即使用户停留在历史页，前端仍会继续轮询其它页面上的运行任务。
 
 顶部指标统一读取轻量 `/api/workbench/status`，只统计当前工作台和全局运行态；统一队列的 `queued` 和 `running` 都属于活跃状态，只有排队任务时也不会被误判为空闲。定时同步只刷新当前路由所需数据；设置、环境检查和非当前页面的大列表不再被每 3/12 秒全量请求。手动刷新同样限定在当前工作台，自动化计划页额外显示启用、运行和失败计数。

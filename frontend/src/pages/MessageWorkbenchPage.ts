@@ -103,18 +103,13 @@ export default defineComponent({
         ])
       ]),
       default: () => h('section', { class: 'pane message-workbench' }, [
-        h('div', { class: 'workbench-account-bar' }, [
-          h('strong', '私信执行账号'),
-          h('select', { value: accountId.value, onChange: (event: Event) => accountId.value = (event.target as HTMLSelectElement).value }, [
-            h('option', { value: '' }, accounts.value.length ? '请选择账号' : '账号中心暂无可用抖音账号'),
-            ...accounts.value.map(account => h('option', { value: account.id }, account.name))
-          ])
-        ]),
         renderAutoBatchControls(props.filters as Dict, props.batches as Dict, batchCount.value, intervalMin.value, intervalMax.value, {
           setCount: (value: number) => batchCount.value = boundedNumber(value, autoBatchDefaults.count, 1, 200),
           setMin: (value: number) => intervalMin.value = boundedNumber(value, autoBatchDefaults.min, 0, 3600),
           setMax: (value: number) => intervalMax.value = boundedNumber(value, autoBatchDefaults.max, 0, 3600),
           accountId: accountId.value,
+          accounts: accounts.value,
+          setAccountId: (value: string) => { accountId.value = value },
           start: () => emit('start-auto-message-batch', {
             platform: (props.filters as Dict).platform || '',
             keyword: (props.filters as Dict).keyword || '',
@@ -219,8 +214,20 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
   const disabled = Boolean(active) || unsupportedPlatform || !keyword || !String(actions.accountId || '')
   return h('section', { class: 'auto-message-batch-panel' }, [
     h('div', { class: 'auto-message-batch-title' }, [
-      h('strong', 'AI一键私信'),
-      h('span', keyword ? `${platformName(platform)} / ${keyword}` : '先在左侧选择一个抖音关键词')
+      h('div', { class: 'auto-message-batch-heading' }, [
+        h('strong', 'AI一键私信'),
+        h('span', keyword ? `${platformName(platform)} / ${keyword}` : '先在左侧选择一个抖音关键词'),
+      ]),
+      h('label', { class: 'auto-message-account' }, [
+        h('span', '执行账号'),
+        h('select', {
+          value: actions.accountId,
+          onChange: (event: Event) => actions.setAccountId((event.target as HTMLSelectElement).value),
+        }, [
+          h('option', { value: '' }, actions.accounts.length ? '请选择账号' : '账号中心暂无可用抖音账号'),
+          ...actions.accounts.map((account: Dict) => h('option', { value: account.id }, account.name)),
+        ]),
+      ]),
     ]),
     h('div', { class: 'auto-message-batch-form' }, [
       h('label', ['私信数量', h('input', {

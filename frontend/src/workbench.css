@@ -3711,16 +3711,36 @@ button.filter-button,
 }
 
 .auto-message-batch-title,
-.auto-message-batch-form {
+.auto-message-batch-heading,
+.auto-message-batch-form,
+.auto-message-account {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
 }
 
+.auto-message-batch-title {
+  justify-content: space-between;
+}
+
 .auto-message-batch-title span {
   color: #69788f;
   font-size: 13px;
+}
+
+.auto-message-account {
+  flex-wrap: nowrap;
+  margin-left: auto;
+  color: #526178;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.auto-message-account select {
+  width: min(260px, 34vw);
+  min-width: 180px;
+  min-height: 34px;
 }
 
 .auto-message-batch-form label {

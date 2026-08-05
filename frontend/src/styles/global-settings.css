@@ -144,13 +144,6 @@
   }
 }
 
-.workbench-account-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
 .account-create-row {
   display: grid;
   grid-template-columns: 140px 160px minmax(260px, 1fr) auto;
@@ -420,15 +413,4 @@
   .account-login-scopes {
     grid-template-columns: 1fr;
   }
-}
-
-.workbench-account-bar {
-  padding: 10px 12px;
-  border: 1px solid #dbe7e2;
-  border-radius: 10px;
-  background: #f7faf8;
-}
-
-.workbench-account-bar select {
-  min-width: 220px;
 }
