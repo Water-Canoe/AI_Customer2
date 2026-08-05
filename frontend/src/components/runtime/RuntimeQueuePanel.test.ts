@@ -20,6 +20,7 @@ vi.mock('../../shared/api', () => ({
 vi.mock('element-plus', () => ({
   ElMessage: { success: mocks.success, error: mocks.error },
   ElMessageBox: { confirm: vi.fn() },
+  ElPagination: { render: () => null },
 }))
 
 

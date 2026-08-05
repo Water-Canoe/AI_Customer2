@@ -5,6 +5,7 @@ import { DataAnalysis, Key, Plus, Refresh, User } from '@element-plus/icons-vue'
 import { DataProtectionPanel } from '../components/system/DataProtectionPanel'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
+import { ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 const FEATURES = ['acquisition', 'message', 'traffic', 'publish']
@@ -151,11 +152,13 @@ export default defineComponent({
               accounts.value.length
                 ? h('div', { class: 'account-center-grid' }, paged.items.map(renderAccount))
                 : emptyState({ title: '还没有平台账号', description: '先添加账号，再扫码登录并分配用途', icon: User }),
-              paged.totalPages > 1 ? h('div', { class: 'table-page-controls account-center-pages' }, [
-                h('button', { disabled: paged.page <= 1, onClick: () => { accountPage.value -= 1 } }, '上一页'),
-                h('span', `${paged.page} / ${paged.totalPages} · 共 ${accounts.value.length} 个账号`),
-                h('button', { disabled: paged.page >= paged.totalPages, onClick: () => { accountPage.value += 1 } }, '下一页'),
-              ]) : null,
+              h(ListPagination, {
+                page: paged.page,
+                pageSize: ACCOUNT_PAGE_SIZE,
+                total: accounts.value.length,
+                compact: true,
+                onChange: (payload: PageChange) => { accountPage.value = payload.page },
+              }),
             ]
           : [h(DataProtectionPanel, {
               tombstoneSummary: props.tombstoneSummary,
@@ -269,8 +272,6 @@ function licenseStatusText(info: Dict) { return info.authorized ? '授权有效'
 function licenseStateClass(info: Dict) { return info.authorized ? 'is-authorized' : info.status === 'failed' ? 'is-denied' : 'is-pending' }
 
 export function paginateAccounts(items: Dict[], page: number, pageSize: number) {
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize))
-  const currentPage = Math.min(Math.max(1, page), totalPages)
-  const start = (currentPage - 1) * pageSize
-  return { items: items.slice(start, start + pageSize), page: currentPage, totalPages }
+  const result = paginateItems(items, page, pageSize)
+  return { items: result.items, page: result.page, totalPages: result.totalPages }
 }

@@ -118,6 +118,12 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 前端已从单个 `App.vue` 活跃视图切换重构为 Vue Router 多页面结构。`App.vue` 只保留应用壳、侧边栏、顶部栏和跨页面数据动作；页面文件位于 `frontend/src/pages/`，包括 `TaskPage.ts`、`AutomationPlanPage.ts`、`OverviewPage.ts`、`AiPage.ts`、`MessageWorkbenchPage.ts`、`MessageBatchPage.ts`、`MessageSettingsPage.ts`、`RuntimeCenterPage.ts`、`LogsPage.ts`、`TablesPage.ts`、`SettingsPage.ts`、`TrafficWorkbenchPage.ts`、`ContentWorkbenchPage.ts` 和 `GlobalSettingsPage.ts`。内容工作台的四个路由共用同一个页面外壳，按当前路由渲染视频创作、内容资产、生成记录和内容设置。可复用控件放在 `frontend/src/components/ui/`，运行队列组件放在 `components/runtime/`，共享 API、类型和格式化工具放在 `frontend/src/shared/`。自动同步的并发保护、活跃/空闲节流、路由切换和可见性恢复集中在 `frontend/src/composables/autoSync.ts`；私信工作台的数据、筛选和私信批次操作集中在 `frontend/src/composables/messageWorkbench.ts`，避免业务动作继续堆积在应用壳。通用工作台样式保留在 `frontend/src/workbench.css`，运行中心、私信设置和全局设置的页面级样式分别拆入 `frontend/src/styles/runtime-pages.css` 与 `frontend/src/styles/global-settings.css`；基础浏览器/Element Plus 覆盖样式保留在 `frontend/src/styles.css`。
 
+前端业务记录统一使用分页展示：服务端已经支持分页的接口继续传递 `page / page_size`，本地配置数组使用 `frontend/src/components/ui/ListPagination.ts` 的 `paginateItems` 切片，新增和整改的普通列表通过 `ListPagination` 渲染统一页码；树节点内联分页等特殊布局可保留等价的紧凑分页控件。默认每页 20 条，窄侧栏和嵌套明细默认每页 10 条；新增长度会随业务增长的表格、卡片流或历史记录时必须同时接入分页，不允许用 `slice(0, N)` 隐藏剩余记录。当前已覆盖采集任务、自动化计划及执行明细、客户与来源时间线、自动私信批次及客户明细、引流计划/批次/操作记录/视频明细/评论素材、内容资产/音色/生成任务/生成成品/发布任务、账号、备份、防重复记录、AI记录、数据表和统一运行队列。固定枚举选项、指标卡、账号勾选器、实时追加日志和明确标注为诊断摘要的少量预览不是可翻页业务列表，不强制分页。
+
+自动私信批次接口 `/api/message-workbench/auto-message-batches` 使用 `page / page_size` 分页批次，并使用 `item_page / item_page_size` 独立分页当前批次的客户执行明细；响应同时返回两组 `total / total_pages` 元数据，不再只保留最近 20 个批次。
+
+内容生成任务和发布任务的进行中数量、状态指标由后端对完整数据集汇总，不从当前页推算；即使用户停留在历史页，前端仍会继续轮询其它页面上的运行任务。
+
 顶部指标统一读取轻量 `/api/workbench/status`，只统计当前工作台和全局运行态；统一队列的 `queued` 和 `running` 都属于活跃状态，只有排队任务时也不会被误判为空闲。定时同步只刷新当前路由所需数据；设置、环境检查和非当前页面的大列表不再被每 3/12 秒全量请求。手动刷新同样限定在当前工作台，自动化计划页额外显示启用、运行和失败计数。
 
 数据表接口使用数据库级分页，参数为 `page / page_size`，响应包含 `total / total_pages`。前端切页和切换每页数量时只请求当前页，不再先读取最多 500 行后在浏览器内切片。

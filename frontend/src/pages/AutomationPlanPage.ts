@@ -30,6 +30,7 @@ import { ChatDotRound, Clock, Connection, Promotion, Rank } from '@element-plus/
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
+import { COMPACT_PAGE_SIZE, DEFAULT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 
 
 const weekdays = [
@@ -109,7 +110,10 @@ export default defineComponent({
     const route = useRoute()
     const router = useRouter()
     const plans = ref<Dict[]>([])
-    const runs = ref<Dict[]>([])
+    const runs = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
+    const planPage = ref(1)
+    const planPageSize = ref(DEFAULT_PAGE_SIZE)
+    const runItemPage = ref(1)
     const summary = ref<Dict>({})
     const accounts = ref<Dict[]>([])
     const typePickerOpen = ref(false)
@@ -123,6 +127,8 @@ export default defineComponent({
     const draft = reactive<Dict>(emptyDraft())
 
     const editing = computed(() => Boolean(draft.id))
+    const planPagination = computed(() => paginateItems(plans.value, planPage.value, planPageSize.value))
+    const runItemPagination = computed(() => paginateItems<Dict>((selectedRun.value.items || []) as Dict[], runItemPage.value, COMPACT_PAGE_SIZE))
     const planProgress = (run: Dict) => {
       const total = Number(run.total_count || 0)
       if (!total) return 0
@@ -140,12 +146,12 @@ export default defineComponent({
       try {
         const [planResponse, runResponse, accountResponse] = await Promise.all([
           api.get('/automation/plans'),
-          api.get('/automation/runs', { params: { page: 1, page_size: 50 } }),
+          api.get('/automation/runs', { params: { page: runs.value.page || 1, page_size: runs.value.page_size || DEFAULT_PAGE_SIZE } }),
           api.get('/accounts'),
         ])
         plans.value = planResponse.data.items || []
         summary.value = planResponse.data.summary || {}
-        runs.value = runResponse.data.items || []
+        runs.value = runResponse.data
         accounts.value = accountResponse.data || []
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '自动化计划加载失败')
@@ -309,8 +315,9 @@ export default defineComponent({
       void persistPlanMove(sourceId, String(plan.id))
     }
 
-    function movePlanByKeyboard(plan: Dict, index: number, event: KeyboardEvent) {
+    function movePlanByKeyboard(plan: Dict, event: KeyboardEvent) {
       if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
+      const index = plans.value.findIndex(item => String(item.id) === String(plan.id))
       const targetIndex = index + (event.key === 'ArrowUp' ? -1 : 1)
       const target = plans.value[targetIndex]
       if (!target) return
@@ -344,6 +351,7 @@ export default defineComponent({
       try {
         const { data } = await api.get(`/automation/runs/${run.id}`)
         selectedRun.value = data
+        runItemPage.value = 1
         runDetailOpen.value = true
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '运行详情加载失败')
@@ -399,21 +407,21 @@ export default defineComponent({
     function renderPlans() {
       return h(ElCard, { class: 'automation-section', shadow: 'never' }, () => [
         h('div', { class: 'automation-section-head' }, [h('div', [h('h2', '计划列表'), h('p', '拖动计划调整顺序；相同时间从上到下逐个执行，前一个结束后再执行下一个。')])]),
-        h(ElTable, { data: plans.value, stripe: true, emptyText: '还没有自动化计划' }, () => [
+        h(ElTable, { data: planPagination.value.items, stripe: true, emptyText: '还没有自动化计划' }, () => [
           h(ElTableColumn, { label: '计划', minWidth: 210 }, { default: ({ row, $index }: Dict) => h('div', {
             class: ['automation-plan-drag-cell', { 'is-dragging': draggedPlanId.value === String(row.id), 'is-over': dragOverPlanId.value === String(row.id) }],
             draggable: !reordering.value,
             tabindex: 0,
-            'aria-label': `第${$index + 1}项，${row.name}。拖动排序，或按 Alt 加上下方向键调整`,
+            'aria-label': `第${planPagination.value.start + $index + 1}项，${row.name}。拖动排序，或按 Alt 加上下方向键调整`,
             title: '按住拖动调整执行顺序',
             onDragstart: (event: DragEvent) => startPlanDrag(row, event),
             onDragover: (event: DragEvent) => overPlan(row, event),
             onDragleave: () => { if (dragOverPlanId.value === String(row.id)) dragOverPlanId.value = '' },
             onDrop: (event: DragEvent) => dropPlan(row, event),
             onDragend: () => { draggedPlanId.value = ''; dragOverPlanId.value = '' },
-            onKeydown: (event: KeyboardEvent) => movePlanByKeyboard(row, Number($index), event),
+            onKeydown: (event: KeyboardEvent) => movePlanByKeyboard(row, event),
           }, [
-            h('span', { class: 'automation-drag-handle', 'aria-hidden': 'true' }, [h(Rank), h('b', String($index + 1))]),
+            h('span', { class: 'automation-drag-handle', 'aria-hidden': 'true' }, [h(Rank), h('b', String(planPagination.value.start + $index + 1))]),
             h('div', [h('strong', row.name), h('small', { class: 'table-subtext' }, planTypeLabel(row.plan_type))]),
           ]) }),
           h(ElTableColumn, { label: '执行时间', minWidth: 190 }, { default: ({ row }: Dict) => h('div', [h('span', `${weekdayText(row.weekdays)} ${row.run_time}`), h('small', { class: 'table-subtext' }, row.next_run_at ? `下次 ${row.next_run_at}` : '已停用')]) }),
@@ -426,13 +434,22 @@ export default defineComponent({
             h(ElButton, { text: true, type: 'danger', onClick: () => archivePlan(row) }, () => '归档'),
           ]) }),
         ]),
+        h(ListPagination, {
+          page: planPagination.value.page,
+          pageSize: planPagination.value.pageSize,
+          total: planPagination.value.total,
+          onChange: (payload: PageChange) => {
+            planPage.value = payload.page
+            planPageSize.value = payload.page_size
+          },
+        }),
       ])
     }
 
     function renderRuns() {
       return h(ElCard, { class: 'automation-section', shadow: 'never' }, () => [
         h('div', { class: 'automation-section-head' }, [h('div', [h('h2', '执行记录'), h('p', '查看当前阶段、关键词进度、关联任务、私信数量和错误原因。')])]),
-        h(ElTable, { data: runs.value, stripe: true, emptyText: '暂无执行记录' }, () => [
+        h(ElTable, { data: runs.value.items || [], stripe: true, emptyText: '暂无执行记录' }, () => [
           h(ElTableColumn, { prop: 'created_at', label: '开始时间', width: 170 }),
           h(ElTableColumn, { label: '计划', minWidth: 160 }, { default: ({ row }: Dict) => h('div', [h('strong', row.plan_name), h('small', { class: 'table-subtext' }, row.trigger_type === 'manual' ? '立即运行' : '定时触发')]) }),
           h(ElTableColumn, { label: '状态', width: 110 }, { default: ({ row }: Dict) => statusTag(row.status) }),
@@ -448,6 +465,16 @@ export default defineComponent({
             ['queued', 'running'].includes(row.status) ? h(ElButton, { text: true, type: 'danger', onClick: () => cancelRun(row) }, () => '停止') : null,
           ]) }),
         ]),
+        h(ListPagination, {
+          page: Number(runs.value.page || 1),
+          pageSize: Number(runs.value.page_size || DEFAULT_PAGE_SIZE),
+          total: Number(runs.value.total || 0),
+          onChange: (payload: PageChange) => {
+            runs.value.page = payload.page
+            runs.value.page_size = payload.page_size
+            void loadAll()
+          },
+        }),
       ])
     }
 
@@ -619,7 +646,7 @@ export default defineComponent({
             onClick: () => { runDetailOpen.value = false; router.push({ path: '/traffic-monitor', query: { run: trafficRunId } }) },
           }, () => '前往引流执行监控') : null,
         ]) : null,
-        (run.items || []).length ? h(ElTable, { data: run.items, stripe: true }, () => [
+        (run.items || []).length ? h(ElTable, { data: runItemPagination.value.items, stripe: true }, () => [
           h(ElTableColumn, { prop: 'keyword', label: '关键词', width: 140 }),
           h(ElTableColumn, { label: '状态', width: 100 }, { default: ({ row }: Dict) => statusTag(row.status) }),
           h(ElTableColumn, { label: '阶段', width: 140 }, { default: ({ row }: Dict) => stageLabel(row.current_stage) }),
@@ -627,6 +654,13 @@ export default defineComponent({
           h(ElTableColumn, { label: 'AI / 客户', width: 130 }, { default: ({ row }: Dict) => h('span', `AI ${row.ai_results?.filter((item: Dict) => item.status === 'succeeded').length || 0}/${row.ai_results?.length || 0} · 客户 ${row.lead_count || 0}`) }),
           h(ElTableColumn, { prop: 'error', label: '错误原因', minWidth: 180 }),
         ]) : null,
+        (run.items || []).length ? h(ListPagination, {
+          page: runItemPagination.value.page,
+          pageSize: runItemPagination.value.pageSize,
+          total: runItemPagination.value.total,
+          compact: true,
+          onChange: (payload: PageChange) => { runItemPage.value = payload.page },
+        }) : null,
       ] })
     }
 

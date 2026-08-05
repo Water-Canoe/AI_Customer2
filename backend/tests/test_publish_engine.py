@@ -139,6 +139,31 @@ def test_publish_accounts_and_tasks_do_not_expose_cookie_path(tmp_path: Path, mo
     assert tasks[0]["title"] == "测试主题"
 
 
+def test_publish_task_pagination_keeps_global_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_CUSTOMER_DB", str(tmp_path / "ai_customer.sqlite3"))
+    from app import database
+    from app.services import content_publish
+
+    database.init_db()
+    account = _create_publish_account("dy", "分页账号")
+    with database.connect() as conn:
+        for index, status in enumerate(("queued", "running", "succeeded", "failed")):
+            conn.execute(
+                """
+                INSERT INTO publish_tasks(id, batch_id, account_id, source_type, content_type, title, status)
+                VALUES(?, 'batch-page', ?, 'asset_video', 'video', ?, ?)
+                """,
+                (f"publish-page-{index}", account["id"], f"任务{index}", status),
+            )
+
+    result = content_publish.list_tasks(page=1, page_size=2)
+
+    assert len(result["items"]) == 2
+    assert result["total"] == 4
+    assert result["summary"] == {"pending": 1, "running": 1, "succeeded": 1, "review": 1, "active": 2}
+
+
 def test_publish_asset_order_and_delete_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AI_CUSTOMER_DB", str(tmp_path / "ai_customer.sqlite3"))

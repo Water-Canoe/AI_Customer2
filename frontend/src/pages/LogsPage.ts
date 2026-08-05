@@ -3,6 +3,7 @@ import { Document, Tickets, Warning } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
 import { platformName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
+import { ListPagination, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 export default defineComponent({
@@ -14,16 +15,11 @@ export default defineComponent({
     page: { type: Number, default: 1 },
     pageSize: { type: Number, default: 20 },
     total: { type: Number, default: 0 },
-    totalPages: { type: Number, default: 1 },
     query: { type: String, default: '' }
   },
   emits: ['select-task', 'retry-task', 'cancel-task', 'archive-task', 'delete-task', 'change-task-page', 'change-task-query'],
   setup(props, { emit }) {
     const taskSearch = ref(props.query)
-
-    function goTaskPage(delta: number) {
-      emit('change-task-page', { page: Math.max(1, Math.min(props.totalPages, props.page + delta)) })
-    }
 
     function applyTaskSearch() {
       emit('change-task-query', taskSearch.value)
@@ -125,11 +121,13 @@ export default defineComponent({
           icon: Tickets,
           tone: 'gray'
         })]),
-        h('div', { class: 'task-list-pagination' }, [
-          h('button', { disabled: props.page <= 1, onClick: () => goTaskPage(-1) }, '上一页'),
-          h('span', `${props.page} / ${props.totalPages}`),
-          h('button', { disabled: props.page >= props.totalPages, onClick: () => goTaskPage(1) }, '下一页')
-        ])
+        h(ListPagination, {
+          page: props.page,
+          pageSize: props.pageSize,
+          total: props.total,
+          compact: true,
+          onChange: (payload: PageChange) => emit('change-task-page', payload),
+        }),
       ])
       ]
     })

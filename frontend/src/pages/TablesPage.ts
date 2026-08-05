@@ -3,6 +3,7 @@ import type { Component } from 'vue'
 import { ChatDotRound, CopyDocument, DataBoard, Delete, Files, MagicStick, Management, Memo, Refresh, Search, User } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
 import { clamp } from '../shared/format'
+import { ListPagination, type PageChange } from '../components/ui/ListPagination'
 import { iconBadge, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 export default defineComponent({
@@ -13,7 +14,6 @@ export default defineComponent({
     page: { type: Number, default: 1 },
     pageSize: { type: Number, default: 20 },
     total: { type: Number, default: 0 },
-    totalPages: { type: Number, default: 1 },
     statusFilter: { type: String, default: '' },
     keywordFilter: { type: String, default: '' }
   },
@@ -60,15 +60,6 @@ export default defineComponent({
       filterDraft.status = ''
       filterDraft.keyword = ''
       emit('change-filter', { status: '', keyword: '' })
-    }
-    function changePageSize(event: Event) {
-      emit('change-page', { page: 1, page_size: Number((event.target as HTMLSelectElement).value) })
-    }
-    function previousPage() {
-      emit('change-page', { page: Math.max(1, props.page - 1), page_size: props.pageSize })
-    }
-    function nextPage() {
-      emit('change-page', { page: Math.min(props.totalPages, props.page + 1), page_size: props.pageSize })
     }
     function startColumnResize(index: number, event: PointerEvent) {
       event.preventDefault()
@@ -137,22 +128,12 @@ export default defineComponent({
           ])
         ])
         ]),
-        h('div', { class: 'table-pagination' }, [
-          h('div', { class: 'table-page-size' }, [
-            h('span', '每页'),
-            h('select', { value: String(props.pageSize), onChange: changePageSize }, [
-              h('option', { value: '10' }, '10'),
-              h('option', { value: '20' }, '20'),
-              h('option', { value: '50' }, '50')
-            ]),
-            h('span', '条')
-          ]),
-          h('div', { class: 'table-page-controls' }, [
-            h('button', { type: 'button', disabled: props.page <= 1, onClick: previousPage }, '上一页'),
-            h('span', `${Math.min(props.page, props.totalPages)} / ${props.totalPages}`),
-            h('button', { type: 'button', disabled: props.page >= props.totalPages, onClick: nextPage }, '下一页')
-          ])
-        ])
+        h(ListPagination, {
+          page: props.page,
+          pageSize: props.pageSize,
+          total: props.total,
+          onChange: (payload: PageChange) => emit('change-page', payload),
+        }),
       ])
     ])
   }

@@ -195,22 +195,67 @@ def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig) -> di
     return get_auto_message_batch(batch_id)
 
 
-def list_auto_message_batches(batch_id: str = "") -> dict[str, Any]:
+def list_auto_message_batches(
+    batch_id: str = "",
+    page: int = 1,
+    page_size: int = 10,
+    item_page: int = 1,
+    item_page_size: int = 20,
+) -> dict[str, Any]:
     with database.connect() as conn:
+        total = int(conn.execute("SELECT COUNT(*) FROM message_batches").fetchone()[0])
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = min(max(1, page), total_pages)
         batches = database.rows_to_dicts(
             conn.execute(
                 """
                 SELECT *
                 FROM message_batches
                 ORDER BY created_at DESC
-                LIMIT 20
-                """
+                LIMIT ? OFFSET ?
+                """,
+                (page_size, (page - 1) * page_size),
             ).fetchall()
         )
-        active = next((batch for batch in batches if batch["status"] in ACTIVE_BATCH_STATUSES), None)
-        selected_id = str(batch_id or (active or (batches[0] if batches else {})).get("id") or "")
-        items = _batch_items(conn, selected_id) if selected_id else []
-    return {"batches": batches, "active": active, "selected_batch_id": selected_id, "items": items}
+        active = database.row_to_dict(
+            conn.execute(
+                "SELECT * FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        )
+        selected_id = str(batch_id or ((active or {}) if page == 1 else {}).get("id") or (batches[0] if batches else {}).get("id") or "")
+        selected_batch = database.row_to_dict(
+            conn.execute("SELECT * FROM message_batches WHERE id = ?", (selected_id,)).fetchone()
+        ) if selected_id else None
+        if not selected_batch and batches:
+            selected_batch = batches[0]
+            selected_id = str(selected_batch["id"])
+
+        item_total = int(conn.execute(
+            "SELECT COUNT(*) FROM message_batch_items WHERE batch_id = ?", (selected_id,)
+        ).fetchone()[0]) if selected_id else 0
+        item_total_pages = max(1, (item_total + item_page_size - 1) // item_page_size)
+        item_page = min(max(1, item_page), item_total_pages)
+        items = database.rows_to_dicts(
+            conn.execute(
+                "SELECT * FROM message_batch_items WHERE batch_id = ? ORDER BY id ASC LIMIT ? OFFSET ?",
+                (selected_id, item_page_size, (item_page - 1) * item_page_size),
+            ).fetchall()
+        ) if selected_id else []
+    return {
+        "batches": batches,
+        "active": active,
+        "selected_batch": selected_batch,
+        "selected_batch_id": selected_id,
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "item_total": item_total,
+        "item_page": item_page,
+        "item_page_size": item_page_size,
+        "item_total_pages": item_total_pages,
+    }
 
 
 def get_auto_message_batch(batch_id: str) -> dict[str, Any]:

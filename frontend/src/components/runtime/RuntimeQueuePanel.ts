@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api } from '../../shared/api'
 import type { Dict } from '../../shared/types'
+import { ListPagination, type PageChange } from '../ui/ListPagination'
 import { sectionTitle } from '../ui/Workbench'
 
 
@@ -35,12 +36,6 @@ export const RuntimeQueuePanel = defineComponent({
 
     function applyFilters() {
       filters.page = 1
-      void load()
-    }
-
-    function goPage(delta: number) {
-      const totalPages = Math.max(1, Math.ceil(Number(queue.value.total || 0) / filters.page_size))
-      filters.page = Math.max(1, Math.min(totalPages, filters.page + delta))
       void load()
     }
 
@@ -96,7 +91,6 @@ export const RuntimeQueuePanel = defineComponent({
       const items = queue.value.items || []
       const active = queue.value.active || {}
       const activeCount = Object.values(active).reduce((sum: number, value) => sum + Number(value || 0), 0)
-      const totalPages = Math.max(1, Math.ceil(Number(queue.value.total || 0) / filters.page_size))
       return h('section', { class: 'runtime-queue-panel' }, [
         h('div', { class: 'runtime-queue-heading' }, [
           sectionTitle({ title: '统一运行队列', subtitle: `${activeCount} 个执行中 · 共 ${queue.value.total || 0} 条`, icon: Clock, tone: activeCount ? 'green' : 'blue', compact: true }),
@@ -120,11 +114,16 @@ export const RuntimeQueuePanel = defineComponent({
         items.length
           ? h('div', { class: 'runtime-job-list' }, items.map((job: Dict) => renderJob(job, operating.value, cancel, retry, remove)))
           : h('div', { class: 'diagnostic-empty' }, loading.value ? '正在读取队列...' : '当前没有匹配的运行记录'),
-        h('div', { class: 'runtime-queue-pagination' }, [
-          h('button', { disabled: filters.page <= 1, onClick: () => goPage(-1) }, '上一页'),
-          h('span', `${filters.page} / ${totalPages}`),
-          h('button', { disabled: filters.page >= totalPages, onClick: () => goPage(1) }, '下一页'),
-        ]),
+        h(ListPagination, {
+          page: filters.page,
+          pageSize: filters.page_size,
+          total: Number(queue.value.total || 0),
+          onChange: (payload: PageChange) => {
+            filters.page = payload.page
+            filters.page_size = payload.page_size
+            void load()
+          },
+        }),
       ])
     }
   }

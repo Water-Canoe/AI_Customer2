@@ -5,13 +5,14 @@ import { SplitPane } from '../components/ui/SplitPane'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 import { platformName } from '../shared/format'
 import type { Dict } from '../shared/types'
+import { ListPagination, type PageChange } from '../components/ui/ListPagination'
 
 
 export default defineComponent({
   props: {
     batches: { type: Object, default: () => ({ batches: [], active: null, selected_batch_id: '', items: [] }) },
   },
-  emits: ['select-auto-message-batch', 'cancel-auto-message-batch', 'retry-auto-message-batch', 'delete-auto-message-batch'],
+  emits: ['select-auto-message-batch', 'cancel-auto-message-batch', 'retry-auto-message-batch', 'delete-auto-message-batch', 'change-auto-message-batch-page', 'change-auto-message-item-page'],
   setup(props, { emit }) {
     return () => {
       const data = props.batches as Dict
@@ -22,10 +23,11 @@ export default defineComponent({
       return h(SplitPane, { storageKey: 'message-batches', side: 'right', defaultSideWidth: 390 }, {
         default: () => h('section', { class: 'pane primary-pane message-batch-detail-pane' }, [
           selected
-            ? renderBatchDetail(selected, items, {
+            ? renderBatchDetail(selected, items, data, {
               cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch),
               retry: (batch: Dict) => emit('retry-auto-message-batch', batch),
               remove: (batch: Dict) => emit('delete-auto-message-batch', batch),
+              changeItemPage: (payload: PageChange) => emit('change-auto-message-item-page', payload),
             })
             : emptyState({
               title: '暂无自动私信批次',
@@ -35,7 +37,7 @@ export default defineComponent({
             }),
         ]),
         side: () => h('aside', { class: 'pane side-pane message-batch-history-pane' }, [
-          sectionTitle({ title: '批次列表', subtitle: '最近 20 个批次', icon: Tickets, tone: 'purple' }),
+          sectionTitle({ title: '批次列表', subtitle: `共 ${Number(data.total || 0)} 个批次`, icon: Tickets, tone: 'purple' }),
           batchList.length
             ? h('div', { class: 'message-batch-history-list' }, batchList.map(batch => renderBatchHistoryCard(
               batch,
@@ -48,6 +50,13 @@ export default defineComponent({
               icon: Tickets,
               tone: 'gray',
             }),
+          h(ListPagination, {
+            page: Number(data.page || 1),
+            pageSize: Number(data.page_size || 10),
+            total: Number(data.total || 0),
+            compact: true,
+            onChange: (payload: PageChange) => emit('change-auto-message-batch-page', payload),
+          }),
         ]),
       })
     }
@@ -59,7 +68,8 @@ export function resolveSelectedMessageBatch(data: Dict): Dict | null {
   // 以接口选择项为准；首次进入时回退到活动批次或最新批次。
   const batchList = Array.isArray(data.batches) ? data.batches as Dict[] : []
   const selectedId = String(data.selected_batch_id || '')
-  return batchList.find(batch => String(batch.id || '') === selectedId)
+  return (data.selected_batch as Dict | null)
+    || batchList.find(batch => String(batch.id || '') === selectedId)
     || (data.active as Dict | null)
     || batchList[0]
     || null
@@ -95,7 +105,7 @@ function renderBatchHistoryCard(batch: Dict, selected: boolean, select: () => vo
 }
 
 
-function renderBatchDetail(batch: Dict, items: Dict[], actions: Dict) {
+function renderBatchDetail(batch: Dict, items: Dict[], pagination: Dict, actions: Dict) {
   const active = ['pending', 'running'].includes(String(batch.status || ''))
   const retryable = !active && Number(batch.failed_count || 0) + Number(batch.skipped_count || 0) > 0
   return [
@@ -125,7 +135,7 @@ function renderBatchDetail(batch: Dict, items: Dict[], actions: Dict) {
       batch.error ? h('p', { class: 'message-batch-error' }, batch.error) : null,
     ]),
     h('section', { class: 'message-batch-items-panel' }, [
-      sectionTitle({ title: '客户执行明细', subtitle: `${items.length} 条`, icon: User, tone: 'blue' }),
+      sectionTitle({ title: '客户执行明细', subtitle: `共 ${Number(pagination.item_total || 0)} 条`, icon: User, tone: 'blue' }),
       items.length
         ? h('div', { class: 'message-batch-item-detail-list' }, items.map(renderBatchItem))
         : emptyState({
@@ -134,6 +144,12 @@ function renderBatchDetail(batch: Dict, items: Dict[], actions: Dict) {
           icon: User,
           tone: 'gray',
         }),
+      h(ListPagination, {
+        page: Number(pagination.item_page || 1),
+        pageSize: Number(pagination.item_page_size || 20),
+        total: Number(pagination.item_total || 0),
+        onChange: actions.changeItemPage,
+      }),
     ]),
   ]
 }

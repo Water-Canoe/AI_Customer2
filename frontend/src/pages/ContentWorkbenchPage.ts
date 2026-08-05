@@ -16,6 +16,7 @@ import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
+import { COMPACT_PAGE_SIZE, DEFAULT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
 
@@ -181,7 +182,7 @@ export default defineComponent({
     const view = computed(() => String(route.name || 'content-create'))
     const assets = ref<Dict[]>([])
     const voiceProfiles = ref<Dict[]>([])
-    const jobs = ref<Dict>({ items: [], total: 0, page: 1, page_size: 100 })
+    const jobs = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
     const publishAccounts = ref<Dict[]>([])
     const publishTasks = ref<Dict[]>([])
     const selectedJob = ref<Dict | null>(null)
@@ -198,6 +199,11 @@ export default defineComponent({
     const materialPage = ref(1)
     const assetFilter = ref({ search: '' })
     const assetSegment = ref('all')
+    const assetPage = ref(1)
+    const assetPageSize = ref(DEFAULT_PAGE_SIZE)
+    const voicePage = ref(1)
+    const generatedPage = ref(1)
+    const generatedPageSize = ref(DEFAULT_PAGE_SIZE)
     const recordSearch = ref('')
     const voiceProvider = ref('edge')
     const voices = ref<string[]>([])
@@ -225,23 +231,25 @@ export default defineComponent({
     const audioAssets = computed(() => assets.value.filter(item => String(item.asset_type) === 'audio'))
     const backgroundMusicAssets = computed(() => assets.value.filter(item => assetMatchesSegment(item, 'background_music')))
     const visibleAssets = computed(() => assets.value.filter(asset => assetMatchesSegment(asset, assetSegment.value)))
+    const assetPagination = computed(() => paginateItems(visibleAssets.value, assetPage.value, assetPageSize.value))
     const selectedMaterials = computed(() => selectedAssetIds.value
       .map(id => materialAssets.value.find(item => item.id === id))
       .filter(Boolean) as Dict[])
-    const activeJobs = computed(() => (jobs.value.items || []).filter((job: Dict) => ['queued', 'running'].includes(String(job.status))))
+    const activeJobCount = computed(() => Number(jobs.value.active || 0))
     const voiceRuntime = computed(() => environment.value.voice_models?.voxcpm2 || {})
     const voiceRuntimeJob = computed(() => voiceRuntime.value.install_job || {})
     const voiceRuntimeInstalling = computed(() => ['queued', 'running'].includes(String(voiceRuntimeJob.value.status || '')))
-    const generatedItems = computed(() => {
+    const generatedItems = computed<Dict[]>(() => {
       const query = recordSearch.value.trim().toLowerCase()
       return (jobs.value.items || []).flatMap((job: Dict) => (job.outputs || []).map((output: Dict) => ({ job, output })))
         .filter(({ job, output }: Dict) => !query || `${job.subject || ''} ${output.name || ''}`.toLowerCase().includes(query))
     })
+    const generatedPagination = computed(() => paginateItems(generatedItems.value, generatedPage.value, generatedPageSize.value))
 
     onMounted(() => {
       void loadPage()
       refreshTimer = window.setInterval(() => {
-        if (activeJobs.value.length && ['content-create', 'content-records'].includes(view.value)) void loadJobs(false)
+        if (activeJobCount.value && ['content-create', 'content-records'].includes(view.value)) void loadJobs(false)
         if (view.value === 'content-records') void loadPublishTasks()
         if (view.value === 'content-settings' && voiceRuntimeInstalling.value) void loadEnvironment()
       }, 3000)
@@ -255,6 +263,8 @@ export default defineComponent({
     })
     watch(view, () => void loadPage())
     watch(() => props.refreshSeq, () => void loadPage())
+    watch(assetSegment, () => { assetPage.value = 1; voicePage.value = 1 })
+    watch(recordSearch, () => { generatedPage.value = 1 })
 
     async function loadPage() {
       if (view.value === 'content-create') await Promise.all([loadAssets(), loadVoiceProfiles(), loadJobs(false), loadVoices(), loadPublishAccounts()])
@@ -767,8 +777,9 @@ export default defineComponent({
           ]),
         ]),
         side: () => h('aside', { class: 'pane side-pane content-create-side' }, [
-          sectionTitle({ title: '生成队列', subtitle: `${activeJobs.value.length} 个进行中`, icon: Tickets, tone: 'blue', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新生成队列', 'aria-label': '刷新生成队列', onClick: () => loadJobs(false) }, [h(Refresh)]) }),
-          renderJobList((jobs.value.items || []).slice(0, 10)),
+          sectionTitle({ title: '生成队列', subtitle: `${activeJobCount.value} 个进行中`, icon: Tickets, tone: 'blue', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新生成队列', 'aria-label': '刷新生成队列', onClick: () => loadJobs(false) }, [h(Refresh)]) }),
+          renderJobList(jobs.value.items || []),
+          renderJobPagination(true),
         ]),
       })
     }
@@ -783,7 +794,6 @@ export default defineComponent({
             class: materialKind.value === value ? 'active' : '',
             onClick: () => { materialKind.value = value; materialPage.value = 1 },
           }, `${label} ${filterMaterialAssets(materialAssets.value, value).length}`))),
-          h('small', `第 ${materialPage.value} / ${materialPageCount.value} 页`),
         ]),
         materialAssets.value.length
           ? h('div', { class: 'content-material-picker' }, pagedMaterialAssets.value.map(asset => h('button', {
@@ -791,11 +801,13 @@ export default defineComponent({
               onClick: () => toggleMaterial(String(asset.id)),
             }, [renderAssetThumb(asset), h('div', { class: 'content-material-option-copy' }, [h('span', String(asset.name || '未命名')), h('small', asset.asset_type === 'video' ? '视频' : '图片')])])))
           : emptyState({ title: '还没有视频或图片资产', description: '请先到内容资产页面导入', icon: Collection }),
-        filteredMaterialAssets.value.length > MATERIAL_PAGE_SIZE ? h('div', { class: 'content-material-pagination' }, [
-          h('button', { disabled: materialPage.value <= 1, onClick: () => materialPage.value -= 1 }, '上一页'),
-          h('span', `${materialPage.value} / ${materialPageCount.value}`),
-          h('button', { disabled: materialPage.value >= materialPageCount.value, onClick: () => materialPage.value += 1 }, '下一页'),
-        ]) : null,
+        h(ListPagination, {
+          page: materialPage.value,
+          pageSize: MATERIAL_PAGE_SIZE,
+          total: filteredMaterialAssets.value.length,
+          compact: true,
+          onChange: (payload: PageChange) => { materialPage.value = payload.page },
+        }),
         selectedMaterials.value.length ? h('div', { class: 'content-material-order' }, selectedMaterials.value.map((asset, index) => h('div', {
           class: 'content-material-order-item',
           draggable: true,
@@ -860,7 +872,7 @@ export default defineComponent({
         h('div', { class: 'table-library-bar' }, [
           sectionTitle({ title: '内容资产', subtitle: `${assets.value.length} 项客户自有素材`, icon: Collection, tone: 'amber' }),
           h('div', { class: 'table-filters content-asset-filters' }, [
-            h('input', { placeholder: '搜索资产名称', value: assetFilter.value.search, onInput: (event: Event) => assetFilter.value.search = (event.target as HTMLInputElement).value }),
+            h('input', { placeholder: '搜索资产名称', value: assetFilter.value.search, onInput: (event: Event) => { assetFilter.value.search = (event.target as HTMLInputElement).value; assetPage.value = 1 } }),
             h('button', { class: 'filter-button', onClick: loadAssets }, '搜索'),
             selectedPublishAssetIds.value.length ? h('button', { class: 'secondary-action', onClick: () => openAssetPublishSettings(selectedPublishAssetIds.value) }, `发布图文（${selectedPublishAssetIds.value.length}）`) : null,
             h('label', { class: ['primary-action content-asset-upload', uploading.value ? 'disabled' : ''] }, [
@@ -879,8 +891,17 @@ export default defineComponent({
         assetSegment.value === 'voice_reference' ? renderVoiceRecorder() : null,
         assetSegment.value === 'voice_reference' ? renderVoiceProfiles() : null,
         assetSegment.value === 'voice_reference' ? null : visibleAssets.value.length
-          ? h('div', { class: 'content-asset-grid' }, visibleAssets.value.map(renderAssetCard))
+          ? h('div', { class: 'content-asset-grid' }, assetPagination.value.items.map(renderAssetCard))
           : emptyState({ title: `暂无${assetSegmentLabel(assetSegment.value)}资产`, description: '点击右上角按钮导入，克隆音频也可以直接录制', icon: Collection, tone: 'amber' }),
+        assetSegment.value === 'voice_reference' ? null : h(ListPagination, {
+          page: assetPagination.value.page,
+          pageSize: assetPagination.value.pageSize,
+          total: assetPagination.value.total,
+          onChange: (payload: PageChange) => {
+            assetPage.value = payload.page
+            assetPageSize.value = payload.page_size
+          },
+        }),
       ])
     }
 
@@ -972,11 +993,19 @@ export default defineComponent({
           ]),
         ])),
       ]
+      const page = paginateItems(cards, voicePage.value, COMPACT_PAGE_SIZE)
       return h('section', { class: 'content-voice-library' }, [
-        sectionTitle({ title: '克隆音色', subtitle: `${voiceProfiles.value.length} 个可复用音色`, icon: MagicStick, tone: 'purple', compact: true }),
+        sectionTitle({ title: '克隆音色', subtitle: `${cards.length} 条音色与参考录音`, icon: MagicStick, tone: 'purple', compact: true }),
         cards.length
-          ? h('div', { class: 'content-voice-grid' }, cards)
+          ? h('div', { class: 'content-voice-grid' }, page.items)
           : h('p', { class: 'content-voice-empty' }, '使用上方录音功能，或导入一段参考音频后创建克隆音色。'),
+        h(ListPagination, {
+          page: page.page,
+          pageSize: page.pageSize,
+          total: page.total,
+          compact: true,
+          onChange: (payload: PageChange) => { voicePage.value = payload.page },
+        }),
       ])
     }
 
@@ -991,7 +1020,7 @@ export default defineComponent({
         default: () => h('section', { class: 'pane content-pane content-record-gallery' }, [
           sectionTitle({
             title: '生成内容',
-            subtitle: `${generatedItems.value.length} 个视频成品`,
+            subtitle: `${generatedPagination.value.total} 个视频成品`,
             icon: VideoPlay,
             tone: 'purple',
             aside: h('div', { class: 'content-record-toolbar' }, [
@@ -1000,8 +1029,17 @@ export default defineComponent({
             ]),
           }),
           generatedItems.value.length
-            ? h('div', { class: 'content-generated-grid' }, generatedItems.value.map(renderGeneratedCard))
+            ? h('div', { class: 'content-generated-grid' }, generatedPagination.value.items.map(renderGeneratedCard))
             : emptyState({ title: '暂无生成内容', description: '生成成功的视频会统一展示在这里', icon: VideoPlay }),
+          h(ListPagination, {
+            page: generatedPagination.value.page,
+            pageSize: generatedPagination.value.pageSize,
+            total: generatedPagination.value.total,
+            onChange: (payload: PageChange) => {
+              generatedPage.value = payload.page
+              generatedPageSize.value = payload.page_size
+            },
+          }),
         ]),
         side: () => h('aside', { class: 'pane side-pane content-record-list' }, [
           sectionTitle({ title: '生成记录', subtitle: `共 ${jobs.value.total || 0} 条`, icon: Tickets, tone: 'blue', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新生成记录', 'aria-label': '刷新生成记录', onClick: () => loadJobs(true) }, [h(Refresh)]) }),
@@ -1073,14 +1111,19 @@ export default defineComponent({
       ])
     }
 
-    function renderJobPagination() {
-      const page = Number(jobs.value.page || 1)
-      const pages = Math.max(1, Math.ceil(Number(jobs.value.total || 0) / Number(jobs.value.page_size || 20)))
-      return h('div', { class: 'table-page-controls content-job-pagination' }, [
-        h('button', { disabled: page <= 1, onClick: () => { jobs.value.page = page - 1; void loadJobs(true) } }, '上一页'),
-        h('span', `${page} / ${pages}`),
-        h('button', { disabled: page >= pages, onClick: () => { jobs.value.page = page + 1; void loadJobs(true) } }, '下一页'),
-      ])
+    function renderJobPagination(compact = false) {
+      return h(ListPagination, {
+        page: Number(jobs.value.page || 1),
+        pageSize: Number(jobs.value.page_size || DEFAULT_PAGE_SIZE),
+        total: Number(jobs.value.total || 0),
+        compact,
+        onChange: (payload: PageChange) => {
+          jobs.value.page = payload.page
+          jobs.value.page_size = payload.page_size
+          generatedPage.value = 1
+          void loadJobs(true)
+        },
+      })
     }
 
     function renderSettingsPage() {
@@ -1225,8 +1268,7 @@ export function filterMaterialAssets(assets: Dict[], kind: string) {
 }
 
 export function paginateMaterialAssets(assets: Dict[], page: number, pageSize: number) {
-  const start = (Math.max(1, page) - 1) * pageSize
-  return assets.slice(start, start + pageSize)
+  return paginateItems(assets, page, pageSize).items
 }
 
 function fileNameWithExtension(name: string, originalName: string) {

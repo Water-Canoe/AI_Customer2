@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { api } from '../../shared/api'
 import type { Dict } from '../../shared/types'
+import { ListPagination, paginateItems, type PageChange } from '../ui/ListPagination'
 import { sectionTitle } from '../ui/Workbench'
 
 
@@ -156,19 +157,19 @@ function renderBackups(
           ]),
         ])))
       : h('div', { class: 'diagnostic-empty' }, loading ? '正在读取备份...' : '暂无可恢复备份'),
-    backups.totalPages > 1 ? h('div', { class: 'table-page-controls backup-pages' }, [
-      h('button', { disabled: backups.page <= 1, onClick: () => changePage(backups.page - 1) }, '上一页'),
-      h('span', `${backups.page} / ${backups.totalPages}`),
-      h('button', { disabled: backups.page >= backups.totalPages, onClick: () => changePage(backups.page + 1) }, '下一页'),
-    ]) : null,
+    h(ListPagination, {
+      page: backups.page,
+      pageSize: BACKUP_PAGE_SIZE,
+      total: (value.items || []).length,
+      compact: true,
+      onChange: (payload: PageChange) => changePage(payload.page),
+    }),
   ]
 }
 
 
 function renderTombstones(summary: Dict, tombstones: Dict, filters: Dict, load: (filters: Dict) => void) {
   const items = tombstones.items || []
-  const page = Number(tombstones.page || 1)
-  const totalPages = Number(tombstones.total_pages || 1)
   return [
     sectionTitle({ title: '防重复记录', subtitle: `共 ${summary.total || 0} 条`, icon: Delete, tone: 'amber' }),
     h('div', { class: 'quality-summary tombstone-summary' }, [
@@ -200,20 +201,19 @@ function renderTombstones(summary: Dict, tombstones: Dict, filters: Dict, load: 
       h('p', item.snapshot_summary || '无快照摘要'),
       h('small', `${item.source || '未标记来源'} · ${item.updated_at || item.created_at || ''}`),
     ]))) : h('div', { class: 'diagnostic-empty' }, '当前没有防重复记录'),
-    h('div', { class: 'table-page-controls tombstone-pages' }, [
-      h('button', { disabled: page <= 1, onClick: () => load({ page: Math.max(1, page - 1) }) }, '上一页'),
-      h('span', `${page} / ${totalPages}`),
-      h('button', { disabled: page >= totalPages, onClick: () => load({ page: Math.min(totalPages, page + 1) }) }, '下一页'),
-    ]),
+    h(ListPagination, {
+      page: Number(tombstones.page || 1),
+      pageSize: Number(tombstones.page_size || filters.page_size || 20),
+      total: Number(tombstones.total || 0),
+      onChange: (payload: PageChange) => load({ page: payload.page, page_size: payload.page_size }),
+    }),
   ]
 }
 
 
 export function paginateBackups(items: Dict[], page: number, pageSize: number) {
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize))
-  const currentPage = Math.min(Math.max(1, page), totalPages)
-  const start = (currentPage - 1) * pageSize
-  return { items: items.slice(start, start + pageSize), page: currentPage, totalPages }
+  const result = paginateItems(items, page, pageSize)
+  return { items: result.items, page: result.page, totalPages: result.totalPages }
 }
 
 

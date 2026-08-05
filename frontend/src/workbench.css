@@ -1828,6 +1828,20 @@ button.filter-button,
   color: #64748b;
 }
 
+.list-pagination {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  width: 100%;
+  margin-top: 16px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.list-pagination.is-compact {
+  margin-top: 10px;
+}
+
 .table-page-size,
 .table-page-controls {
   display: inline-flex;

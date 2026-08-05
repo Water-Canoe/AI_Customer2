@@ -4817,6 +4817,25 @@ def test_message_workbench_auto_message_batch_uses_fixed_script(tmp_path: Path) 
     assert batch["items"][0]["script"] == "批量统一话术"
 
 
+def test_message_workbench_auto_message_batch_list_is_paginated(tmp_path: Path) -> None:
+    prepare_project(tmp_path)
+    from app import database
+    from app.services import message_workbench
+
+    with database.connect() as conn:
+        for index in range(12):
+            conn.execute(
+                "INSERT INTO message_batches(id, status, created_at) VALUES(?, 'completed', ?)",
+                (f"batch-{index:02d}", f"2026-01-01 00:{index:02d}:00"),
+            )
+
+    result = message_workbench.list_auto_message_batches(page=2, page_size=5)
+
+    assert result["total"] == 12
+    assert result["page"] == 2
+    assert [batch["id"] for batch in result["batches"]] == ["batch-06", "batch-05", "batch-04", "batch-03", "batch-02"]
+
+
 def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database

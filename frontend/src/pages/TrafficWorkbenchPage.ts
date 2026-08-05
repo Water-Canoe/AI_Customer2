@@ -18,6 +18,7 @@ import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
+import { COMPACT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, metricTile, sectionTitle } from '../components/ui/Workbench'
 
 const defaultPlan = () => ({
@@ -75,6 +76,9 @@ export default defineComponent({
     const runArchiveFilter = ref('active')
     const planPage = ref(1)
     const runPage = ref(1)
+    const detailRecordPage = ref(1)
+    const textPage = ref(1)
+    const imagePage = ref(1)
     const recordFilters = ref({ query: '', platform: '', status: '', action: '', page: 1, page_size: 20 })
     const loading = ref(false)
     const trafficLogRef = ref<HTMLElement | null>(null)
@@ -95,6 +99,9 @@ export default defineComponent({
     })
     const pagedSourceVideos = computed(() => pageSlice(filteredSourceVideos.value, sourceVideoPage.value))
     const pagedSourceKeywords = computed(() => pageSlice(keywords.value, sourceKeywordPage.value))
+    const detailRecordPagination = computed(() => paginateItems<Dict>((selectedRun.value?.records || []) as Dict[], detailRecordPage.value, COMPACT_PAGE_SIZE))
+    const textPagination = computed(() => paginateItems(textDraft.value, textPage.value, COMPACT_PAGE_SIZE))
+    const imagePagination = computed(() => paginateItems(imageDraft.value, imagePage.value, COMPACT_PAGE_SIZE))
     const availableAccounts = computed(() => accounts.value.filter(account =>
       account.platform === planDraft.value.platform && isAccountFeatureReady(account, 'traffic')
     ))
@@ -153,11 +160,11 @@ export default defineComponent({
     async function selectRun(id: string) {
       const { data } = await api.get(`/traffic/runs/${id}`)
       selectedRun.value = data
+      detailRecordPage.value = 1
     }
 
     function pageSlice(rows: Dict[], page: number) {
-      const safePage = Math.min(Math.max(page, 1), Math.max(1, Math.ceil(rows.length / SIDE_PAGE_SIZE)))
-      return rows.slice((safePage - 1) * SIDE_PAGE_SIZE, safePage * SIDE_PAGE_SIZE)
+      return paginateItems(rows, page, SIDE_PAGE_SIZE).items
     }
 
     async function loadRecords() {
@@ -459,8 +466,15 @@ export default defineComponent({
               run.stop_suggestion ? h('li', run.stop_suggestion) : null,
             ]) : null,
             h('div', { class: 'traffic-log-list', ref: trafficLogRef, onScroll: updateTrafficLogFollowState }, (run.logs || []).length ? run.logs.map(renderLogLine) : [h('p', '暂无日志')]),
-            sectionTitle({ title: '已处理视频', subtitle: `${(run.records || []).length} 条`, icon: VideoPlay, tone: 'green', compact: true }),
-            h('div', { class: 'table-scroll traffic-detail-table' }, renderRecordsTable(run.records || [], '暂无视频记录')),
+            sectionTitle({ title: '已处理视频', subtitle: `${detailRecordPagination.value.total} 条`, icon: VideoPlay, tone: 'green', compact: true }),
+            h('div', { class: 'table-scroll traffic-detail-table' }, renderRecordsTable(detailRecordPagination.value.items, '暂无视频记录')),
+            h(ListPagination, {
+              page: detailRecordPagination.value.page,
+              pageSize: detailRecordPagination.value.pageSize,
+              total: detailRecordPagination.value.total,
+              compact: true,
+              onChange: (payload: PageChange) => { detailRecordPage.value = payload.page },
+            }),
           ] : emptyState({ title: '请选择批次', description: '右侧选择一个批次查看日志', icon: Monitor }),
         ]),
         side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
@@ -475,8 +489,6 @@ export default defineComponent({
     }
 
     function renderRecordsPage() {
-      const page = records.value.page || 1
-      const totalPages = records.value.total_pages || 1
       return h('section', { class: 'pane table-workspace traffic-records-workspace' }, [
         h('div', { class: 'table-library-bar traffic-record-bar' }, [
           sectionTitle({ title: '操作记录', subtitle: `共 ${records.value.total || 0} 条`, icon: DataLine, tone: 'green' }),
@@ -509,22 +521,16 @@ export default defineComponent({
         h('div', { class: 'table-content' }, [
           sectionTitle({ title: '记录表', subtitle: `${records.value.rows?.length || 0} / ${records.value.total || 0} 条`, icon: DataLine, tone: 'teal', compact: true }),
           h('div', { class: 'table-scroll' }, renderRecordsTable(records.value.rows || [], '暂无操作记录')),
-          h('div', { class: 'table-pagination' }, [
-            h('div', { class: 'table-page-size' }, [
-              h('span', '每页'),
-              h('select', { value: String(recordFilters.value.page_size), onChange: (event: Event) => { recordFilters.value.page_size = Number((event.target as HTMLSelectElement).value); recordFilters.value.page = 1; loadRecords() } }, [
-                h('option', { value: '10' }, '10'),
-                h('option', { value: '20' }, '20'),
-                h('option', { value: '50' }, '50'),
-              ]),
-              h('span', '条'),
-            ]),
-            h('div', { class: 'table-page-controls' }, [
-              h('button', { disabled: page <= 1, onClick: () => { recordFilters.value.page -= 1; loadRecords() } }, '上一页'),
-              h('span', `${page} / ${totalPages}`),
-              h('button', { disabled: page >= totalPages, onClick: () => { recordFilters.value.page += 1; loadRecords() } }, '下一页'),
-            ]),
-          ]),
+          h(ListPagination, {
+            page: Number(records.value.page || 1),
+            pageSize: Number(records.value.page_size || recordFilters.value.page_size),
+            total: Number(records.value.total || 0),
+            onChange: (payload: PageChange) => {
+              recordFilters.value.page = payload.page
+              recordFilters.value.page_size = payload.page_size
+              void loadRecords()
+            },
+          }),
         ]),
       ])
     }
@@ -714,18 +720,15 @@ export default defineComponent({
       ])
     }
 
-    function renderSidePagination(total: number, pageRef: { value: number }, label: string) {
+    function renderSidePagination(total: number, pageRef: { value: number }, _label: string) {
       if (!total) return null
-      const totalPages = Math.max(1, Math.ceil(total / SIDE_PAGE_SIZE))
-      const page = Math.min(Math.max(pageRef.value, 1), totalPages)
-      return h('div', { class: 'table-pagination traffic-side-pagination' }, [
-        h('span', `${label} ${Math.min((page - 1) * SIDE_PAGE_SIZE + 1, total)}-${Math.min(page * SIDE_PAGE_SIZE, total)} / ${total}`),
-        h('div', { class: 'table-page-controls' }, [
-          h('button', { disabled: page <= 1, onClick: () => pageRef.value = page - 1 }, '上一页'),
-          h('span', `${page} / ${totalPages}`),
-          h('button', { disabled: page >= totalPages, onClick: () => pageRef.value = page + 1 }, '下一页'),
-        ]),
-      ])
+      return h(ListPagination, {
+        page: Math.min(Math.max(1, pageRef.value), Math.max(1, Math.ceil(total / SIDE_PAGE_SIZE))),
+        pageSize: SIDE_PAGE_SIZE,
+        total,
+        compact: true,
+        onChange: (payload: PageChange) => { pageRef.value = payload.page },
+      })
     }
 
     function renderLogLine(log: Dict) {
@@ -868,25 +871,34 @@ export default defineComponent({
         h('div', { class: 'table-scroll traffic-material-scroll' }, [
           h('table', { class: 'data-table resizable-table traffic-material-table' }, [
             h('thead', [h('tr', ['序号', '文案内容', '启用', '操作'].map(text => h('th', text)))]),
-            h('tbody', textDraft.value.length ? textDraft.value.map((item, index) => h('tr', { key: index }, [
-              h('td', String(index + 1)),
+            h('tbody', textDraft.value.length ? textPagination.value.items.map((item, index) => {
+              const itemIndex = textPagination.value.start + index
+              return h('tr', { key: itemIndex }, [
+              h('td', String(itemIndex + 1)),
               h('td', h('input', {
                 value: item.text,
-                placeholder: `文案 ${index + 1}`,
-                onInput: (event: Event) => updateTextDraft(index, { text: (event.target as HTMLInputElement).value }),
+                placeholder: `文案 ${itemIndex + 1}`,
+                onInput: (event: Event) => updateTextDraft(itemIndex, { text: (event.target as HTMLInputElement).value }),
               })),
               h('td', h('label', { class: 'traffic-switch' }, [
                 h('input', {
                   type: 'checkbox',
                   checked: Boolean(item.enabled),
-                  onChange: (event: Event) => updateTextDraft(index, { enabled: (event.target as HTMLInputElement).checked }),
+                  onChange: (event: Event) => updateTextDraft(itemIndex, { enabled: (event.target as HTMLInputElement).checked }),
                 }),
                 '启用',
               ])),
-              h('td', h('button', { class: 'text-icon-button danger', type: 'button', title: '删除文案', onClick: () => removeTextDraft(index) }, [h(Delete, { class: 'inline-icon' }), '删除'])),
-            ])) : [emptyTableRow(4, '还没有文案。添加后执行评论时会随机抽取一条。')]),
+              h('td', h('button', { class: 'text-icon-button danger', type: 'button', title: '删除文案', onClick: () => removeTextDraft(itemIndex) }, [h(Delete, { class: 'inline-icon' }), '删除'])),
+            ])}) : [emptyTableRow(4, '还没有文案。添加后执行评论时会随机抽取一条。')]),
           ]),
         ]),
+        h(ListPagination, {
+          page: textPagination.value.page,
+          pageSize: textPagination.value.pageSize,
+          total: textPagination.value.total,
+          compact: true,
+          onChange: (payload: PageChange) => { textPage.value = payload.page },
+        }),
       ])
     }
 
@@ -926,25 +938,34 @@ export default defineComponent({
         h('div', { class: 'table-scroll traffic-material-scroll' }, [
           h('table', { class: 'data-table resizable-table traffic-material-table' }, [
             h('thead', [h('tr', ['预览', '文件名/路径', '启用', '操作'].map(text => h('th', text)))]),
-            h('tbody', imageDraft.value.length ? imageDraft.value.map((item, index) => h('tr', { key: item.path || index }, [
+            h('tbody', imageDraft.value.length ? imagePagination.value.items.map((item, index) => {
+              const itemIndex = imagePagination.value.start + index
+              return h('tr', { key: item.path || itemIndex }, [
               h('td', item.preview_url ? h('img', { class: 'traffic-image-thumb', src: item.preview_url, alt: imageName(item.path) }) : h('span', { class: 'table-muted-text' }, '无预览')),
               h('td', h('input', {
                 value: item.path,
                 placeholder: '本地图片路径',
-                onInput: (event: Event) => updateImageDraft(index, { path: (event.target as HTMLInputElement).value }),
+                onInput: (event: Event) => updateImageDraft(itemIndex, { path: (event.target as HTMLInputElement).value }),
               })),
               h('td', h('label', { class: 'traffic-switch' }, [
                 h('input', {
                   type: 'checkbox',
                   checked: Boolean(item.enabled),
-                  onChange: (event: Event) => updateImageDraft(index, { enabled: (event.target as HTMLInputElement).checked }),
+                  onChange: (event: Event) => updateImageDraft(itemIndex, { enabled: (event.target as HTMLInputElement).checked }),
                 }),
                 '启用',
               ])),
-              h('td', h('button', { class: 'text-icon-button danger', type: 'button', title: '删除图片', onClick: () => removeImageDraft(index) }, [h(Delete, { class: 'inline-icon' }), '删除'])),
-            ])) : [emptyTableRow(4, '上传图片后会显示预览；也可以新增后手动填写本地路径。')]),
+              h('td', h('button', { class: 'text-icon-button danger', type: 'button', title: '删除图片', onClick: () => removeImageDraft(itemIndex) }, [h(Delete, { class: 'inline-icon' }), '删除'])),
+            ])}) : [emptyTableRow(4, '上传图片后会显示预览；也可以新增后手动填写本地路径。')]),
           ]),
         ]),
+        h(ListPagination, {
+          page: imagePagination.value.page,
+          pageSize: imagePagination.value.pageSize,
+          total: imagePagination.value.total,
+          compact: true,
+          onChange: (payload: PageChange) => { imagePage.value = payload.page },
+        }),
         h('button', { class: 'secondary-action traffic-add-row-button', type: 'button', onClick: addImageDraft }, [h(Plus, { class: 'inline-icon' }), '新增路径']),
       ])
     }

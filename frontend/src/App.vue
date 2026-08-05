@@ -214,6 +214,8 @@ const {
   batches: messageBatches,
   load: loadMessageWorkbench,
   loadBatches: loadMessageBatches,
+  changeBatchPage: changeMessageBatchPage,
+  changeBatchItemPage: changeMessageBatchItemPage,
   changeFilter: changeMessageWorkbenchFilter,
   selectCustomer: selectMessageWorkbenchCustomer,
   closeDetail: closeMessageWorkbenchDetail,
@@ -331,6 +333,9 @@ const routeProps = computed(() => {
   if (activeView.value === 'tasks') {
     return {
       tasks: tasks.value,
+      page: taskPage.value,
+      pageSize: taskPageSize.value,
+      total: taskTotal.value,
       settings: settings.value,
       retryDraft: retryDraft.value || undefined,
     }
@@ -365,7 +370,6 @@ const routeProps = computed(() => {
       page: taskPage.value,
       pageSize: taskPageSize.value,
       total: taskTotal.value,
-      totalPages: taskTotalPages.value,
       query: taskQuery.value,
     }
   }
@@ -377,7 +381,6 @@ const routeProps = computed(() => {
       page: tablePage.value,
       pageSize: tablePageSize.value,
       total: tableTotal.value,
-      totalPages: tableTotalPages.value,
       statusFilter: tableStatus.value,
       keywordFilter: tableKeyword.value,
     }
@@ -422,6 +425,7 @@ const routeListeners = computed(() => {
       'create-task': createTask,
       'open-logs': openTaskLogs,
       'consume-retry-draft': consumeRetryDraft,
+      'change-task-page': changeTaskPage,
     }
   }
   if (activeView.value === 'overview') {
@@ -466,7 +470,9 @@ const routeListeners = computed(() => {
   }
   if (activeView.value === 'message-batches') {
     return {
-      'select-auto-message-batch': (batch: Dict) => loadMessageBatches(String(batch.id || '')),
+      'select-auto-message-batch': (batch: Dict) => loadMessageBatches(String(batch.id || ''), { item_page: 1 }),
+      'change-auto-message-batch-page': changeMessageBatchPage,
+      'change-auto-message-item-page': changeMessageBatchItemPage,
       'cancel-auto-message-batch': cancelMessageAutoBatch,
       'retry-auto-message-batch': retryMessageAutoBatch,
       'delete-auto-message-batch': deleteMessageAutoBatch,

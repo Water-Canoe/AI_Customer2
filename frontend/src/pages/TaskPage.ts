@@ -9,15 +9,19 @@ import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, joinTags, splitTagText } from '../components/ui/TagInput'
+import { ListPagination, type PageChange } from '../components/ui/ListPagination'
 import { iconBadge, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 export default defineComponent({
   props: {
     tasks: { type: Array, required: true },
+    page: { type: Number, default: 1 },
+    pageSize: { type: Number, default: 20 },
+    total: { type: Number, default: 0 },
     settings: { type: Object, required: true },
     retryDraft: { type: Object, default: null }
   },
-  emits: ['create-task', 'open-logs', 'consume-retry-draft'],
+  emits: ['create-task', 'open-logs', 'consume-retry-draft', 'change-task-page'],
   setup(props, { emit }) {
     const modes: Array<{ key: string, title: string, note: string, badge: string, icon: Component, tone: WorkbenchTone }> = [
       { key: 'competitor_discovery', title: '竞品账号采集', note: '找候选竞品账号', badge: '找账号', icon: Aim, tone: 'teal' },
@@ -281,11 +285,18 @@ export default defineComponent({
       side: () => [
       h('aside', { class: 'pane side-pane' }, [
         sectionTitle({ title: '最近任务', subtitle: '确认采集是否跑通', icon: Tickets, tone: 'blue' }),
-        h('div', { class: 'task-list' }, (props.tasks as Dict[]).slice(0, 8).map(task => h('button', { class: 'task-row', onClick: () => emit('open-logs', task.id) }, [
+        h('div', { class: 'task-list' }, (props.tasks as Dict[]).map(task => h('button', { class: 'task-row', onClick: () => emit('open-logs', task.id) }, [
           h('strong', `${task.id} · ${task.name}`),
           h('span', `${task.platform} / ${task.mode}`),
           h('em', { class: `status ${task.status}` }, task.status)
-        ])))
+        ]))),
+        h(ListPagination, {
+          page: props.page,
+          pageSize: props.pageSize,
+          total: props.total,
+          compact: true,
+          onChange: (payload: PageChange) => emit('change-task-page', payload),
+        }),
       ])
       ]
     })

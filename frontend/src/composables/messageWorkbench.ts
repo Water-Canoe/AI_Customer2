@@ -18,17 +18,31 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
   const detail = ref<Dict>({})
   const loading = ref(false)
   const filters = ref<Dict>({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 })
-  const batches = ref<Dict>({ batches: [], active: null, items: [] })
+  const batches = ref<Dict>({ batches: [], active: null, items: [], page: 1, page_size: 10, total: 0, item_page: 1, item_page_size: 20, item_total: 0 })
 
-  async function loadBatches(batchId?: string) {
+  async function loadBatches(batchId?: string, pagination: Dict = {}) {
     // 未明确切换批次时保留当前选择，避免自动刷新跳回最新批次。
     const selectedId = batchId === undefined
       ? String(batches.value.selected_batch_id || '')
       : String(batchId || '')
     const { data } = await api.get('/message-workbench/auto-message-batches', {
-      params: selectedId ? { batch_id: selectedId } : {},
+      params: {
+        batch_id: selectedId,
+        page: Number(pagination.page || batches.value.page || 1),
+        page_size: Number(pagination.page_size || batches.value.page_size || 10),
+        item_page: Number(pagination.item_page || batches.value.item_page || 1),
+        item_page_size: Number(pagination.item_page_size || batches.value.item_page_size || 20),
+      },
     })
     batches.value = data
+  }
+
+  async function changeBatchPage(pagination: Dict) {
+    await loadBatches('', { ...pagination, item_page: 1 })
+  }
+
+  async function changeBatchItemPage(pagination: Dict) {
+    await loadBatches(undefined, { item_page: pagination.page, item_page_size: pagination.page_size })
   }
 
   async function load(silent = false) {
@@ -145,7 +159,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     try {
       const { data } = await api.post('/message-workbench/auto-message-batches', payload)
       ElMessage.success(`自动私信批次 ${data.id} 已启动`)
-      await loadBatches(String(data.id || ''))
+      await loadBatches(String(data.id || ''), { page: 1, item_page: 1 })
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '启动自动私信批次失败')
     }
@@ -169,7 +183,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     try {
       const { data } = await api.post(`/message-workbench/auto-message-batches/${batchId}/retry`)
       ElMessage.success(`已创建重试批次 ${data.id}`)
-      await loadBatches(String(data.id || ''))
+      await loadBatches(String(data.id || ''), { page: 1, item_page: 1 })
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '重试自动私信批次失败')
     }
@@ -198,6 +212,8 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     batches,
     load,
     loadBatches,
+    changeBatchPage,
+    changeBatchItemPage,
     changeFilter,
     selectCustomer,
     closeDetail,

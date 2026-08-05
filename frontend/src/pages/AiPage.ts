@@ -4,9 +4,8 @@ import { CircleCheck, CopyDocument, DataAnalysis, Delete, Finished, MagicStick, 
 import type { Dict } from '../shared/types'
 import { platformName } from '../shared/format'
 import { SplitPane } from '../components/ui/SplitPane'
+import { ListPagination, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, metricTile, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
-
-const PAGE_SIZE_OPTIONS = [10, 20, 50]
 
 export default defineComponent({
   props: {
@@ -27,7 +26,6 @@ export default defineComponent({
     const summary = computed(() => props.workbench?.summary || {})
     const rows = computed<Dict[]>(() => props.workbench?.items || [])
     const total = computed(() => Number(props.workbench?.total || 0))
-    const totalPages = computed(() => Number(props.workbench?.total_pages || 1))
 
     watch(() => props.workbench?.tab, tab => {
       if (['competitors', 'leads', 'failed', 'history'].includes(String(tab || ''))) {
@@ -119,7 +117,6 @@ export default defineComponent({
         renderPagination(
           filters,
           total.value,
-          totalPages.value,
           page => { filters.page = page; selected.value = null; requestRows(page) },
           pageSize => { filters.page = 1; filters.pageSize = pageSize; selected.value = null; requestRows(1, pageSize) },
         )
@@ -330,23 +327,17 @@ function renderHistoryRow(row: Dict, active: boolean, args: Dict) {
 function renderPagination(
   filters: Dict,
   total: number,
-  totalPages: number,
   changePage: (page: number) => void,
   changePageSize: (pageSize: number) => void,
 ) {
-  const start = total ? (filters.page - 1) * filters.pageSize + 1 : 0
-  const end = Math.min(total, filters.page * filters.pageSize)
-  return h('div', { class: 'table-pagination ai-pagination' }, [
-    h('div', { class: 'table-page-size' }, [
-      h('span', total ? `${start}-${end} / ${total}` : '0 条'),
-      h('select', { value: String(filters.pageSize), onChange: (event: Event) => changePageSize(Number((event.target as HTMLSelectElement).value)) }, PAGE_SIZE_OPTIONS.map(size => h('option', { value: String(size) }, `${size}条`)))
-    ]),
-    h('div', { class: 'table-page-controls' }, [
-      h('button', { type: 'button', disabled: filters.page <= 1, onClick: () => changePage(Math.max(1, filters.page - 1)) }, '上一页'),
-      h('span', `${Math.min(filters.page, totalPages)} / ${totalPages}`),
-      h('button', { type: 'button', disabled: filters.page >= totalPages, onClick: () => changePage(Math.min(totalPages, filters.page + 1)) }, '下一页')
-    ])
-  ])
+  return h(ListPagination, {
+    page: Number(filters.page || 1),
+    pageSize: Number(filters.pageSize || 10),
+    total,
+    onChange: (payload: PageChange) => payload.page_size === filters.pageSize
+      ? changePage(payload.page)
+      : changePageSize(payload.page_size),
+  })
 }
 
 function renderDetailPane(row: Dict | null, tab: string) {

@@ -65,8 +65,20 @@ def message_workbench_customer_auto_message(
 
 
 @router.get("/auto-message-batches")
-def message_workbench_auto_message_batches(batch_id: str = Query(default="")) -> dict[str, object]:
-    return message_workbench.list_auto_message_batches(batch_id=batch_id)
+def message_workbench_auto_message_batches(
+    batch_id: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    item_page: int = Query(default=1, ge=1),
+    item_page_size: int = Query(default=20, ge=1, le=100),
+) -> dict[str, object]:
+    return message_workbench.list_auto_message_batches(
+        batch_id=batch_id,
+        page=page,
+        page_size=page_size,
+        item_page=item_page,
+        item_page_size=item_page_size,
+    )
 
 
 @router.post("/auto-message-batches")

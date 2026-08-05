@@ -148,6 +148,25 @@ def test_video_job_subject_can_be_renamed(tmp_path, monkeypatch: pytest.MonkeyPa
     assert renamed["subject"] == "新主题"
 
 
+def test_video_job_pagination_reports_all_active_jobs(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app import database
+    from app.services import content_workbench
+
+    with database.connect() as conn:
+        for index, status in enumerate(("queued", "running", "succeeded")):
+            conn.execute(
+                "INSERT INTO video_jobs(id, subject, status) VALUES(?, ?, ?)",
+                (f"page-job-{index}", f"任务{index}", status),
+            )
+
+    result = content_workbench.list_video_jobs(page=1, page_size=1)
+
+    assert len(result["items"]) == 1
+    assert result["total"] == 3
+    assert result["active"] == 2
+
+
 def test_video_output_upload_status_can_be_updated(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_content_db(tmp_path, monkeypatch)
     from app import database

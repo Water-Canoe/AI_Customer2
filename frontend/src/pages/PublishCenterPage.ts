@@ -7,6 +7,7 @@ import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
+import { DEFAULT_PAGE_SIZE, ListPagination, type PageChange } from '../components/ui/ListPagination'
 
 
 export default defineComponent({
@@ -16,7 +17,7 @@ export default defineComponent({
     const route = useRoute()
     const router = useRouter()
     const accounts = ref<Dict[]>([])
-    const tasks = ref<Dict>({ items: [], total: 0, page: 1, page_size: 30 })
+    const tasks = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
     const taskStatus = ref('')
     const composer = ref<Dict>({
       open: false,
@@ -31,19 +32,13 @@ export default defineComponent({
     const loading = ref(false)
     let timer = 0
 
-    const active = computed(() => (tasks.value.items || []).filter((item: Dict) => ['waiting_media', 'queued', 'running'].includes(String(item.status))))
-    const stats = computed(() => ({
-      pending: (tasks.value.items || []).filter((item: Dict) => ['waiting_media', 'queued'].includes(String(item.status))).length,
-      running: (tasks.value.items || []).filter((item: Dict) => item.status === 'running').length,
-      succeeded: (tasks.value.items || []).filter((item: Dict) => item.status === 'succeeded').length,
-      review: (tasks.value.items || []).filter((item: Dict) => ['failed', 'review_required'].includes(String(item.status))).length,
-    }))
+    const stats = computed(() => tasks.value.summary || { pending: 0, running: 0, succeeded: 0, review: 0, active: 0 })
 
     onMounted(async () => {
       await loadAll()
       await loadComposerFromRoute()
       timer = window.setInterval(() => {
-        if (active.value.length || accounts.value.some(item => item.login_status?.creator?.status === 'checking')) void loadAll(false)
+        if (Number(stats.value.active || 0) || accounts.value.some(item => item.login_status?.creator?.status === 'checking')) void loadAll(false)
       }, 3000)
     })
     onUnmounted(() => window.clearInterval(timer))
@@ -54,7 +49,7 @@ export default defineComponent({
       try {
         const [accountResult, taskResult] = await Promise.all([
           api.get('/accounts', { params: { feature: 'publish' } }),
-          api.get('/content/publish-tasks', { params: { page: tasks.value.page || 1, page_size: 30, status: taskStatus.value } }),
+          api.get('/content/publish-tasks', { params: { page: tasks.value.page || 1, page_size: tasks.value.page_size || DEFAULT_PAGE_SIZE, status: taskStatus.value } }),
         ])
         accounts.value = accountResult.data
         tasks.value = taskResult.data
@@ -150,7 +145,7 @@ export default defineComponent({
       return h('section', { class: 'pane publish-center-pane' }, [
         sectionTitle({ title: '发布任务', subtitle: `共 ${tasks.value.total || 0} 条`, icon: Promotion, tone: 'blue', aside: h('div', { class: 'task-card-actions' }, [h('button', { class: 'secondary-action', onClick: () => router.push('/global-settings') }, '管理发布账号'), h('button', { class: 'secondary-action publish-refresh', onClick: () => loadAll() }, [h(Refresh, { class: 'inline-icon' }), '刷新'])]) }),
         h('div', { class: 'publish-stat-grid' }, [statCard('待发布', stats.value.pending), statCard('发布中', stats.value.running), statCard('已成功', stats.value.succeeded), statCard('需要处理', stats.value.review)]),
-        h('div', { class: 'publish-task-filter' }, [h('select', { value: taskStatus.value, onChange: (event: Event) => { taskStatus.value = (event.target as HTMLSelectElement).value; void loadAll() } }, [h('option', { value: '' }, '全部状态'), ...['queued', 'running', 'succeeded', 'failed', 'review_required', 'cancelled'].map(value => h('option', { value }, taskStatusLabel(value)))])]),
+        h('div', { class: 'publish-task-filter' }, [h('select', { value: taskStatus.value, onChange: (event: Event) => { taskStatus.value = (event.target as HTMLSelectElement).value; tasks.value.page = 1; void loadAll() } }, [h('option', { value: '' }, '全部状态'), ...['queued', 'running', 'succeeded', 'failed', 'review_required', 'cancelled'].map(value => h('option', { value }, taskStatusLabel(value)))])]),
         (tasks.value.items || []).length ? h('div', { class: 'publish-task-list' }, (tasks.value.items || []).map((task: Dict) => h('article', { class: 'publish-task-card' }, [
           h('div', { class: `publish-platform-mark platform-${task.platform}` }, platformLabel(task.platform).slice(0, 1)),
           h('div', { class: 'publish-task-copy' }, [h('strong', String(task.title)), h('span', `${platformLabel(task.platform)} · ${task.account_name}`), h('small', `${taskStageLabel(task.current_stage)} · ${task.progress || 0}% · ${task.scheduled_at || task.created_at}`), task.error ? h('p', { class: 'content-job-error' }, String(task.error)) : null]),
@@ -161,6 +156,16 @@ export default defineComponent({
             task.status === 'review_required' ? h('button', { class: 'text-icon-button', onClick: () => markPublished(task) }, '标记已发布') : null,
           ]),
         ]))) : emptyState({ title: '暂无发布任务', description: '从生成记录或内容资产发起第一次发布', icon: Promotion }),
+        h(ListPagination, {
+          page: Number(tasks.value.page || 1),
+          pageSize: Number(tasks.value.page_size || DEFAULT_PAGE_SIZE),
+          total: Number(tasks.value.total || 0),
+          onChange: (payload: PageChange) => {
+            tasks.value.page = payload.page
+            tasks.value.page_size = payload.page_size
+            void loadAll()
+          },
+        }),
       ])
     }
 

@@ -6,6 +6,7 @@ import { platformName } from '../shared/format'
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict } from '../shared/types'
+import { COMPACT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { iconBadge, sectionTitle } from '../components/ui/Workbench'
 
 // “已超时”是提醒视图，不改变客户原有跟进状态。
@@ -34,6 +35,8 @@ export default defineComponent({
     const intervalMax = ref(savedBatchConfig.max)
     const accounts = ref<Dict[]>([])
     const accountId = ref('')
+    const sourcePage = ref(1)
+    const eventPage = ref(1)
     async function loadAccounts() {
       try {
         const { data } = await api.get('/accounts', { params: { feature: 'message', platform: 'dy' } })
@@ -51,6 +54,10 @@ export default defineComponent({
     watch(() => props.keywords, () => {
       keywordPages.value = {}
     })
+    watch(() => String((props.detail as Dict)?.customer?.lead_id || ''), () => {
+      sourcePage.value = 1
+      eventPage.value = 1
+    })
     watch([batchCount, intervalMin, intervalMax], () => {
       saveAutoBatchConfig({ count: batchCount.value, min: intervalMin.value, max: intervalMax.value })
     })
@@ -59,7 +66,6 @@ export default defineComponent({
     const total = computed(() => Number((props.customers as Dict).total || 0))
     const page = computed(() => Number((props.customers as Dict).page || 1))
     const pageSize = computed(() => Number((props.customers as Dict).page_size || 20))
-    const totalPages = computed(() => Number((props.customers as Dict).total_pages || 1))
     const allKeyword = computed(() => (props.keywords as Dict[]).find(item => !String(item.platform || '') && !String(item.keyword || '')))
     const keywordGroups = computed(() => {
       const groups: Record<string, Dict[]> = {}
@@ -138,23 +144,18 @@ export default defineComponent({
           ])
         ]),
         renderCustomerTable(rows.value, props.loading, emit, props.settings as Dict, accountId.value),
-        h('div', { class: 'message-pagination' }, [
-          h('span', `共 ${total.value} 个客户`),
-          h('div', [
-            h('button', {
-              type: 'button',
-              disabled: page.value <= 1,
-              onClick: () => changeFilter({ page: page.value - 1 })
-            }, '上一页'),
-            h('strong', `${page.value} / ${totalPages.value}`),
-            h('button', {
-              type: 'button',
-              disabled: page.value >= totalPages.value,
-              onClick: () => changeFilter({ page: page.value + 1 })
-            }, '下一页')
-          ])
-        ]),
-        renderDetailDrawer(props.detail as Dict, emit)
+        h(ListPagination, {
+          page: page.value,
+          pageSize: pageSize.value,
+          total: total.value,
+          onChange: (payload: PageChange) => changeFilter({ page: payload.page, page_size: payload.page_size }),
+        }),
+        renderDetailDrawer(props.detail as Dict, emit, {
+          sourcePage: sourcePage.value,
+          eventPage: eventPage.value,
+          setSourcePage: (value: number) => { sourcePage.value = value },
+          setEventPage: (value: number) => { eventPage.value = value },
+        })
       ])
     })
   }
@@ -189,32 +190,20 @@ function renderKeywordGroup(
   page: number,
   setPage: (page: number) => void
 ) {
-  const totalPages = Math.max(1, Math.ceil(group.items.length / keywordPageSize))
-  const normalizedPage = Math.min(Math.max(1, page), totalPages)
-  const start = (normalizedPage - 1) * keywordPageSize
-  const items = group.items.slice(start, start + keywordPageSize)
+  const pagination = paginateItems(group.items, page, keywordPageSize)
   return h('details', { class: 'message-platform-group', open: true }, [
     h('summary', [
       h('strong', platformName(group.platform)),
       h('span', `${group.items.length} 个关键词`)
     ]),
-    h('div', { class: 'message-platform-keywords' }, items.map(keyword => renderKeywordButton(keyword, filters, changeFilter))),
-    h('div', { class: 'keyword-pagination compact' }, [
-      h('span', `${normalizedPage} / ${totalPages}`),
-      h('div', [
-        h('button', {
-          type: 'button',
-          disabled: normalizedPage <= 1,
-          onClick: () => setPage(normalizedPage - 1)
-        }, '上一页'),
-        h('strong', `${group.items.length}`),
-        h('button', {
-          type: 'button',
-          disabled: normalizedPage >= totalPages,
-          onClick: () => setPage(normalizedPage + 1)
-        }, '下一页')
-      ])
-    ])
+    h('div', { class: 'message-platform-keywords' }, pagination.items.map(keyword => renderKeywordButton(keyword, filters, changeFilter))),
+    h(ListPagination, {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      total: pagination.total,
+      compact: true,
+      onChange: (payload: PageChange) => setPage(payload.page),
+    }),
   ])
 }
 
@@ -397,11 +386,13 @@ function boundedNumber(value: unknown, fallback: number, min: number, max: numbe
   return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.trunc(number))) : fallback
 }
 
-function renderDetailDrawer(detail: Dict, emit: any) {
+function renderDetailDrawer(detail: Dict, emit: any, pagination: Dict) {
   if (!detail?.customer) return null
   const customer = detail.customer || {}
-  const sources = detail.sources || []
-  const events = detail.events || []
+  const sources = (detail.sources || []) as Dict[]
+  const events = (detail.events || []) as Dict[]
+  const sourcePagination = paginateItems(sources, pagination.sourcePage, COMPACT_PAGE_SIZE)
+  const eventPagination = paginateItems(events, pagination.eventPage, COMPACT_PAGE_SIZE)
   const rawScript = String(customer.script || '').trim()
   const script = rawScript || '暂无AI话术'
   return h('div', { class: 'message-detail-drawer' }, [
@@ -431,23 +422,37 @@ function renderDetailDrawer(detail: Dict, emit: any) {
     ]),
     h('div', { class: 'drawer-section' }, [
       h('h4', '来源证据'),
-      ...sources.map((source: Dict) => h('article', { class: 'source-card' }, [
+      ...sourcePagination.items.map((source: Dict) => h('article', { class: 'source-card' }, [
         h('strong', source.keyword || '未标记关键词'),
         h('p', source.comment_text || '无评论内容'),
         h('small', source.video_text || '无视频详情'),
         source.content_url ? h('a', { href: source.content_url, target: '_blank', rel: 'noreferrer' }, '打开视频') : null,
         source.source_account_name ? h('span', `来源账号：${source.source_account_name}`) : null
-      ]))
+      ])),
+      h(ListPagination, {
+        page: sourcePagination.page,
+        pageSize: sourcePagination.pageSize,
+        total: sourcePagination.total,
+        compact: true,
+        onChange: (payload: PageChange) => pagination.setSourcePage(payload.page),
+      }),
     ]),
     h('div', { class: 'drawer-section' }, [
       h('h4', '跟进时间线'),
       events.length
-        ? h('ol', { class: 'event-timeline' }, events.map((event: Dict) => h('li', [
+        ? h('ol', { class: 'event-timeline' }, eventPagination.items.map((event: Dict) => h('li', [
             h('strong', `${event.from_status || '-'} -> ${event.to_status || '-'}`),
             h('span', event.created_at || ''),
             event.note ? h('p', event.note) : null
           ])))
-        : h('p', '暂无人工跟进事件')
+        : h('p', '暂无人工跟进事件'),
+      h(ListPagination, {
+        page: eventPagination.page,
+        pageSize: eventPagination.pageSize,
+        total: eventPagination.total,
+        compact: true,
+        onChange: (payload: PageChange) => pagination.setEventPage(payload.page),
+      }),
     ])
   ])
 }

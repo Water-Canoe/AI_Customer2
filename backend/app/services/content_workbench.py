@@ -226,6 +226,9 @@ def list_video_jobs(page: int = 1, page_size: int = 20, include_archived: bool =
     where = "1 = 1" if include_archived else "archived = 0"
     with database.connect() as conn:
         total = int(conn.execute(f"SELECT COUNT(*) FROM video_jobs WHERE {where}").fetchone()[0])
+        active = int(conn.execute(
+            f"SELECT COUNT(*) FROM video_jobs WHERE {where} AND status IN ('queued', 'running')"
+        ).fetchone()[0])
         rows = conn.execute(
             f"SELECT * FROM video_jobs WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
             (safe_size, (safe_page - 1) * safe_size),
@@ -235,6 +238,7 @@ def list_video_jobs(page: int = 1, page_size: int = 20, include_archived: bool =
         "total": total,
         "page": safe_page,
         "page_size": safe_size,
+        "active": active,
     }
 
 

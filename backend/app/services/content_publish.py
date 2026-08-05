@@ -251,6 +251,16 @@ def list_tasks(page: int = 1, page_size: int = 30, status: str = "") -> dict[str
     where, params = ("WHERE t.status = ?", [status]) if status else ("", [])
     with database.connect() as conn:
         total = int(conn.execute(f"SELECT COUNT(*) FROM publish_tasks t {where}", params).fetchone()[0])
+        summary_row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN status IN ('waiting_media', 'queued') THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+                SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
+                SUM(CASE WHEN status IN ('failed', 'review_required') THEN 1 ELSE 0 END) AS review
+            FROM publish_tasks
+            """
+        ).fetchone()
         rows = conn.execute(
             f"""
             SELECT t.*, a.platform, a.name AS account_name
@@ -259,7 +269,9 @@ def list_tasks(page: int = 1, page_size: int = 30, status: str = "") -> dict[str
             """,
             [*params, page_size, (page - 1) * page_size],
         ).fetchall()
-    return {"items": [_format_task(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+    summary = {key: int(summary_row[key] or 0) for key in ("pending", "running", "succeeded", "review")}
+    summary["active"] = summary["pending"] + summary["running"]
+    return {"items": [_format_task(row) for row in rows], "total": total, "page": page, "page_size": page_size, "summary": summary}
 
 
 def get_task(task_id: str) -> dict[str, Any]:
