@@ -123,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
   Collection,
@@ -147,6 +147,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from './shared/api'
 import type { Dict } from './shared/types'
 import { competitorStatusLabel, platformName } from './shared/format'
+import { confirmBulkPreview } from './shared/bulkPreview'
+import { useAiWorkbench } from './composables/aiWorkbench'
 import { createAutoSyncController, type AutoSyncReason } from './composables/autoSync'
 import { selectDmScript, useMessageWorkbench } from './composables/messageWorkbench'
 import { useTaskWorkbench } from './composables/taskWorkbench'
@@ -165,8 +167,6 @@ const tablePageSize = ref(20)
 const tableTotal = ref(0)
 const tableTotalPages = ref(1)
 const overviewTree = ref<Dict[]>([])
-const aiWorkbench = ref<Dict>({})
-const aiQuery = ref<Dict>({ tab: 'competitors', keyword: '', status: '', result: '', page: 1, page_size: 10 })
 const settings = ref<Dict>({})
 const settingsDraftDirty = ref(false)
 const settingsSaving = ref(false)
@@ -223,6 +223,20 @@ const {
 } = useTaskWorkbench({
   router,
   refreshRelated: () => Promise.allSettled([loadOverview(), loadAiJobs()]),
+})
+
+const {
+  workbench: aiWorkbench,
+  load: loadAiJobs,
+  changeQuery: changeAiQuery,
+  createJob: createAiJob,
+  createBatchJobs: createBatchAiJobs,
+  deleteNonCompetitors: deleteAiWorkbenchNonCompetitors,
+  deleteNonCustomers: deleteAiWorkbenchNonCustomers,
+  retryJob: retryAiJob,
+  retryJobs: retryAiJobs,
+} = useAiWorkbench({
+  refreshRelated: () => Promise.allSettled([loadTable(activeLibrary.value), loadOverview()]),
 })
 
 const {
@@ -710,20 +724,6 @@ async function checkEnv() {
   env.value = data
 }
 
-async function loadAiJobs() {
-  const workbench = await api.get('/ai/workbench', { params: aiQuery.value })
-  aiWorkbench.value = workbench.data
-  if (!workbench.data.items?.length && Number(aiQuery.value.page || 1) > Number(workbench.data.total_pages || 1)) {
-    aiQuery.value.page = Number(workbench.data.total_pages || 1)
-    await loadAiJobs()
-  }
-}
-
-async function changeAiQuery(query: Dict) {
-  aiQuery.value = { ...aiQuery.value, ...query }
-  await loadAiJobs()
-}
-
 async function loadOverview() {
   const { data } = await api.get('/overview/tree')
   overviewTree.value = data
@@ -863,186 +863,6 @@ async function deleteRow(library: string, row: Dict, hard?: boolean) {
   await api.delete(`/tables/${library}/${row.id}`, { params: { hard } })
   ElMessage.success('删除完成')
   await loadTable(library)
-}
-
-async function createAiJob(targetType: string, targetId: number) {
-  try {
-    await api.post('/ai/jobs', { target_type: targetType, target_id: targetId, run_now: true })
-    ElMessage.success('AI分析完成')
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || 'AI分析失败')
-  } finally {
-    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadOverview()])
-  }
-}
-
-async function confirmBulkPreview(payload: Dict, title = '批量操作预览') {
-  const { data } = await api.post('/bulk-actions/preview', payload)
-  await ElMessageBox.confirm(renderBulkPreviewMessage(data), title, {
-    type: (data.tombstone_counts && Object.keys(data.tombstone_counts).length) ? 'warning' : 'info',
-    confirmButtonText: '确认执行',
-    cancelButtonText: '取消',
-    customClass: 'bulk-preview-message-box',
-  })
-  return data
-}
-
-function renderBulkPreviewMessage(data: Dict) {
-  return h('div', { class: 'bulk-preview-message' }, [
-    h('p', { class: 'bulk-preview-confirm' }, data.confirm_text || '确认执行当前批量操作？'),
-    h('div', { class: 'bulk-preview-metrics' }, [
-      bulkPreviewMetric('符合条件', data.eligible_count || 0, 'success'),
-      bulkPreviewMetric('跳过', data.skipped_count || 0, 'muted'),
-    ]),
-    bulkPreviewCountSection('预计影响', data.affected_counts || {}),
-    bulkPreviewCountSection('预计写入墓碑', data.tombstone_counts || {}),
-    bulkPreviewSamples(data.sample_rows || []),
-    bulkPreviewWarnings(data.warnings || []),
-  ].filter(Boolean))
-}
-
-function bulkPreviewMetric(label: string, value: unknown, tone = '') {
-  return h('div', { class: ['bulk-preview-metric', tone ? `is-${tone}` : ''] }, [
-    h('small', label),
-    h('strong', String(value)),
-  ])
-}
-
-function bulkPreviewCountSection(title: string, counts: Dict) {
-  const entries = Object.entries(counts).filter(([, value]) => Number(value) > 0)
-  return h('section', { class: 'bulk-preview-section' }, [
-    h('h4', title),
-    entries.length
-      ? h('div', { class: 'bulk-preview-counts' }, entries.map(([key, value]) => (
-        h('span', { class: 'bulk-preview-count' }, [
-          h('em', bulkPreviewLabel(key)),
-          h('strong', String(value)),
-        ])
-      )))
-      : h('span', { class: 'bulk-preview-empty' }, '无'),
-  ])
-}
-
-function bulkPreviewSamples(rows: Dict[]) {
-  if (!rows.length) return null
-  return h('section', { class: 'bulk-preview-section' }, [
-    h('h4', '样例对象'),
-    h('ul', { class: 'bulk-preview-samples' }, rows.map((row) => (
-      h('li', [
-        h('span', { title: String(row.name || row.id || '-') }, row.name || row.id || '-'),
-        row.status ? h('em', row.status) : null,
-      ])
-    ))),
-  ])
-}
-
-function bulkPreviewWarnings(items: string[]) {
-  if (!items.length) return null
-  return h('section', { class: 'bulk-preview-warning' }, [
-    h('h4', '注意'),
-    h('ul', items.map((item) => h('li', item))),
-  ])
-}
-
-function bulkPreviewLabel(key: string) {
-  const labels: Dict = {
-    accounts: '账号',
-    author_account: '作者账号墓碑',
-    comments: '评论',
-    comment: '评论墓碑',
-    contents: '内容',
-    content: '内容墓碑',
-    leads: '线索',
-    analysis_jobs: 'AI任务',
-  }
-  return labels[key] || key
-}
-
-async function createBatchAiJobs(targetType: string, targetIds: number[]) {
-  const ids = Array.from(new Set(targetIds.map(Number).filter(Boolean)))
-  if (!ids.length) {
-    ElMessage.info('当前筛选范围没有可分析对象')
-    return
-  }
-  try {
-    await confirmBulkPreview({ action: 'ai_analyze', target_type: targetType, target_ids: ids }, 'AI批量分析预览')
-    const { data } = await api.post('/ai/jobs/batch', { target_type: targetType, target_ids: ids, run_now: true })
-    ElMessage.success(`已完成 ${data.length} 个AI分析任务`)
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '批量AI分析失败')
-  } finally {
-    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadOverview()])
-  }
-}
-
-async function deleteAiWorkbenchNonCompetitors(targetIds: number[]) {
-  const ids = Array.from(new Set(targetIds.map(Number).filter(Boolean)))
-  if (!ids.length) {
-    ElMessage.info('当前筛选范围没有可删除的非竞品')
-    return
-  }
-  try {
-    await confirmBulkPreview({ action: 'delete_non_competitors', target_type: 'competitor', target_ids: ids }, '删除非竞品预览')
-    const { data } = await api.post('/ai/workbench/non-competitors/delete', { target_ids: ids })
-    if (data.deleted) ElMessage.success(`已删除 ${data.deleted} 个非竞品账号`)
-    else ElMessage.info('没有删除任何非竞品账号')
-    if (data.skipped?.length) ElMessage.warning(`已跳过 ${data.skipped.length} 个不符合删除条件的账号`)
-    if (data.failed?.length) ElMessage.error(`有 ${data.failed.length} 个账号删除失败`)
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close') return
-    ElMessage.error(error?.response?.data?.detail || '删除非竞品失败')
-  } finally {
-    await Promise.allSettled([loadAiJobs(), loadOverview(), loadTable(activeLibrary.value)])
-  }
-}
-
-async function deleteAiWorkbenchNonCustomers(targetIds: number[]) {
-  const ids = Array.from(new Set(targetIds.map(Number).filter(Boolean)))
-  if (!ids.length) {
-    ElMessage.info('当前筛选范围没有可删除的非客户')
-    return
-  }
-  try {
-    await confirmBulkPreview({ action: 'delete_non_customers', target_type: 'lead', target_ids: ids }, '删除非客户预览')
-    const { data } = await api.post('/ai/workbench/non-customers/delete', { target_ids: ids })
-    if (data.deleted) ElMessage.success(`已删除 ${data.deleted} 个非客户`)
-    else ElMessage.info('没有删除任何非客户')
-    if (data.skipped?.length) ElMessage.warning(`已跳过 ${data.skipped.length} 个不符合删除条件的客户`)
-    if (data.failed?.length) ElMessage.error(`有 ${data.failed.length} 个客户删除失败`)
-  } catch (error: any) {
-    if (error === 'cancel' || error === 'close') return
-    ElMessage.error(error?.response?.data?.detail || '删除非客户失败')
-  } finally {
-    await Promise.allSettled([loadAiJobs(), loadOverview(), loadTable(activeLibrary.value)])
-  }
-}
-
-async function retryAiJob(jobId: string) {
-  try {
-    await api.post(`/ai/jobs/${jobId}/retry`)
-    ElMessage.success('重试完成')
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '重试失败')
-  } finally {
-    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadOverview()])
-  }
-}
-
-async function retryAiJobs(jobIds: string[]) {
-  const ids = Array.from(new Set(jobIds.map(String).filter(Boolean)))
-  if (!ids.length) {
-    ElMessage.info('当前没有可重试的失败任务')
-    return
-  }
-  try {
-    await confirmBulkPreview({ action: 'retry_failed_ai', target_type: 'ai_job', target_ids: ids }, 'AI失败重试预览')
-    await Promise.all(ids.map(id => api.post(`/ai/jobs/${id}/retry`)))
-    ElMessage.success(`已重试 ${ids.length} 个AI任务`)
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.detail || '批量重试失败')
-  } finally {
-    await Promise.allSettled([loadAiJobs(), loadTable(activeLibrary.value), loadOverview()])
-  }
 }
 
 async function analyzeTableRow(library: string, row: Dict) {

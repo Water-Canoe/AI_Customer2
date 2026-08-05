@@ -120,6 +120,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 采集任务的列表、分页、选中详情、诊断、重试及增删操作集中在 `frontend/src/composables/taskWorkbench.ts`；`App.vue` 只消费该 composable 暴露的状态和跨页面刷新入口，不再实现采集任务业务流程。
 
+AI 分析工作台的查询、分页、单项/批量分析、删除和失败重试集中在 `frontend/src/composables/aiWorkbench.ts`；复用的批量影响预览集中在 `frontend/src/shared/bulkPreview.ts`，总览树与 AI 页面不再分别维护同一套确认渲染逻辑。
+
 前端业务记录统一使用分页展示：服务端已经支持分页的接口继续传递 `page / page_size`，本地配置数组使用 `frontend/src/components/ui/ListPagination.ts` 的 `paginateItems` 切片，新增和整改的普通列表通过 `ListPagination` 渲染统一页码；树节点内联分页等特殊布局可保留等价的紧凑分页控件。默认每页 20 条，窄侧栏和嵌套明细默认每页 10 条；新增长度会随业务增长的表格、卡片流或历史记录时必须同时接入分页，不允许用 `slice(0, N)` 隐藏剩余记录。当前已覆盖采集任务、自动化计划及执行明细、客户与来源时间线、自动私信批次及客户明细、引流计划/批次/操作记录/视频明细/评论素材、内容资产/音色/生成任务/生成成品/发布任务、账号、备份、防重复记录、AI记录、数据表和统一运行队列。固定枚举选项、指标卡、账号勾选器、实时追加日志和明确标注为诊断摘要的少量预览不是可翻页业务列表，不强制分页。
 
 自动私信批次接口 `/api/message-workbench/auto-message-batches` 使用 `page / page_size` 分页批次，并使用 `item_page / item_page_size` 独立分页当前批次的客户执行明细；响应同时返回两组 `total / total_pages` 元数据，不再只保留最近 20 个批次。
