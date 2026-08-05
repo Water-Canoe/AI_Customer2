@@ -16,8 +16,10 @@ def prepare_queue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AI_CUSTOMER_DB", str(tmp_path / "ai_customer.sqlite3"))
     from app import database
+    from app.services import job_handlers, job_queue
 
     database.init_db()
+    job_queue.configure_handlers(job_handlers)
 
 
 def wait_for_job(job_id: str, expected: set[str], timeout: float = 3.0) -> dict[str, object]:

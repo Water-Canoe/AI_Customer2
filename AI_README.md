@@ -114,6 +114,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 统一账号的记录增删改查、功能绑定、登录状态、Profile 路径和二维码读取由 `backend/app/services/account_center.py` 负责；内容发布服务只消费账号中心，不再反向提供通用账号能力。数据库继续保留历史表名 `publish_accounts`，避免无业务收益的高风险表迁移；表名不再代表服务职责归属。
 
+`backend/app/services/job_queue.py` 只负责持久化队列、资源并发、线程调度、心跳和运行状态，不再导入采集、AI、自动化、私信、引流或内容业务服务。任务类型分派、授权、领域结果判断、取消和恢复规则集中在 `job_handlers.py`，由 FastAPI lifespan 启动层显式注入队列；业务服务可以入队，但队列核心不会反向调用具体业务模块。
+
 `backend/tests/test_api_routes.py` 校验接口方法/路径不重复，并检查关键接口由正确业务路由拥有；其余服务和接口行为由现有后端测试覆盖。
 
 ## 前端结构
