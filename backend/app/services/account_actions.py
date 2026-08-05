@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from app import database
 from app.schemas import TaskCreate
-from app.services import account_center, ai_service, crawler_adapter, deletion
+from app.services import account_center, ai_service, crawler_adapter, deletion, message_attempts
 from app.services import tombstones
 
 
@@ -815,9 +815,7 @@ def update_customer_follow_status(
             )
     if record_message_attempt and follow_status == "已私信":
         # 手工点击发生在浏览器外，状态落库时同步计入软件额度统计。
-        from app.services import message_workbench
-
-        message_workbench.record_manual_message_attempt(lead_id, "follow-status")
+        message_attempts.record_manual_message_attempt(lead_id, "follow-status")
     return {
         "ok": True,
         "lead_id": lead_id,

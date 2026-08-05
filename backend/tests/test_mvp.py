@@ -3422,7 +3422,7 @@ def test_auto_analyze_competitors_queues_creator_batch_after_search(tmp_path: Pa
     prepare_project(tmp_path)
     from app import database
     from app.schemas import TaskCreate
-    from app.services import crawler_adapter, job_queue
+    from app.services import crawler_adapter, job_handlers, job_queue
 
     with database.connect() as conn:
         database.set_setting(conn, "auto_analyze_competitors", "true")
@@ -3439,7 +3439,7 @@ def test_auto_analyze_competitors_queues_creator_batch_after_search(tmp_path: Pa
     task = crawler_adapter.create_task(
         TaskCreate(mode="competitor_discovery", platform="dy", keywords="AI客服", execute_crawler=False)
     )
-    crawler_adapter.run_task(str(task["id"]))
+    crawler_adapter.run_task(str(task["id"]), after_success=job_handlers.run_post_crawl_automation)
 
     assert called["account_ids"]
     with database.connect() as conn:

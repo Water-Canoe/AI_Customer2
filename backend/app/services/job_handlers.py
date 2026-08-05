@@ -39,9 +39,12 @@ def execute_job(job: dict[str, Any]) -> Any:
     elif kind in {"account_login", "account_check"}:
         license_service.ensure_authorized()
     if kind == "crawl_task":
-        return crawler_adapter.run_task(str(payload["task_id"]))
+        return crawler_adapter.run_task(str(payload["task_id"]), after_success=run_post_crawl_automation)
     if kind == "crawl_batch":
-        return crawler_adapter.run_tasks_serially([str(value) for value in payload.get("task_ids", [])])
+        return crawler_adapter.run_tasks_serially(
+            [str(value) for value in payload.get("task_ids", [])],
+            after_success=run_post_crawl_automation,
+        )
     if kind in {"account_analysis", "keyword_account_analysis"}:
         account_ids = [int(value) for value in payload.get("account_ids", [])]
         task_id = str(payload["task_id"])
@@ -105,6 +108,60 @@ def execute_job(job: dict[str, Any]) -> Any:
             cancelled=lambda: job_queue.cancel_requested(job_id),
         )
     raise ValueError(f"不支持的运行任务类型：{kind}")
+
+
+def run_post_crawl_automation(task_id: str) -> None:
+    from app.services import account_actions, ai_service, crawler_adapter, job_queue
+
+    with database.connect() as conn:
+        task = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
+        if not task or int(task["automation_managed"] or 0):
+            return
+        auto_competitor = database.get_setting(conn, "auto_analyze_competitors", "false") == "true"
+        auto_lead = database.get_setting(conn, "auto_analyze_leads", "false") == "true"
+        task_mode = str(task["mode"])
+        if auto_competitor and task_mode == "competitor_discovery":
+            crawler_adapter.log_task(conn, task_id, "info", "已开启自动分析竞品账号，开始创建账号分析任务")
+
+    if auto_competitor and task_mode == "competitor_discovery":
+        try:
+            result = account_actions.create_task_account_analysis_task(task_id)
+            if not result.get("task_ids"):
+                with database.connect() as conn:
+                    crawler_adapter.log_task(conn, task_id, "info", f"自动分析竞品账号未创建任务：待分析账号 {result.get('account_count', 0)} 个，跳过 {len(result.get('skipped', []))} 个")
+                return
+            analysis_task_id = str(result["task_ids"][0])
+            account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
+            with database.connect() as conn:
+                crawler_adapter.log_task(conn, task_id, "info", f"已创建自动账号分析任务 {analysis_task_id}，账号 {len(account_ids)} 个")
+            runtime_job = job_queue.enqueue_account_analysis(account_ids, analysis_task_id)
+            with database.connect() as conn:
+                crawler_adapter.log_task(conn, task_id, "info", f"账号分析已加入运行队列：{runtime_job['id']}")
+        except Exception as exc:
+            with database.connect() as conn:
+                crawler_adapter.log_task(conn, task_id, "error", f"自动分析竞品账号失败：{exc}")
+
+    if auto_lead and task_mode in ("competitor_crawl", "own_account", "demand_content"):
+        with database.connect() as conn:
+            crawler_adapter.log_task(conn, task_id, "info", "已开启自动分析线索用户，开始执行 AI 筛选")
+        try:
+            result = ai_service.prepare_auto_lead_analysis_jobs(task_id)
+            job_ids = [str(value) for value in result.get("job_ids", [])]
+            runtime_job = job_queue.enqueue_ai_batch(job_ids, entity_id=f"auto-lead:{task_id}") if job_ids else None
+            with database.connect() as conn:
+                crawler_adapter.log_task(
+                    conn,
+                    task_id,
+                    "info",
+                    f"自动线索 AI 分析已排队：目标 {result['target_count']} 个，任务 {len(job_ids)} 个，创建失败 {len(result['errors'])} 个",
+                )
+                if result["errors"]:
+                    crawler_adapter.log_task(conn, task_id, "error", f"自动线索 AI 任务创建失败明细：{result['errors']}")
+                if runtime_job:
+                    crawler_adapter.log_task(conn, task_id, "info", f"线索 AI 分析已加入运行队列：{runtime_job['id']}")
+        except Exception as exc:
+            with database.connect() as conn:
+                crawler_adapter.log_task(conn, task_id, "error", f"自动分析线索用户失败：{exc}")
 
 
 def mark_domain_failed(job: dict[str, Any], error: str) -> None:

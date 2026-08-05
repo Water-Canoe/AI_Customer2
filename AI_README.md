@@ -118,6 +118,8 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 视频工作台可以编排内容发布任务；内容发布服务读取成品时直接使用自身已有的视频任务查询和受限路径解析，不再反向导入 `content_workbench.py`。依赖方向固定为“视频生成 -> 内容发布”。
 
+采集成功后的自动竞品/线索分析属于跨领域流程，集中由 `job_handlers.run_post_crawl_automation()` 编排，并通过 `crawler_adapter.run_task(..., after_success=...)` 显式传入；采集适配器不再反向导入账号业务。私信额度、发送尝试预占和人工私信计数集中在 `message_attempts.py`，账号业务与私信工作台都只依赖该记录服务。后端测试会解析全部 `services/*.py` 的 AST（Abstract Syntax Tree，抽象语法树）并拒绝任何新循环依赖。
+
 `backend/tests/test_api_routes.py` 校验接口方法/路径不重复，并检查关键接口由正确业务路由拥有；其余服务和接口行为由现有后端测试覆盖。
 
 ## 前端结构

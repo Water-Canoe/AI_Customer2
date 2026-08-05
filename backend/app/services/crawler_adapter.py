@@ -416,10 +416,10 @@ def create_profile_enrichment_batch(limit: int = 10) -> dict[str, object]:
     }
 
 
-def run_tasks_serially(task_ids: list[str]) -> None:
+def run_tasks_serially(task_ids: list[str], after_success: Callable[[str], None] | None = None) -> None:
     # 批量补资料串行执行，避免同时启动多个 MyCrawler 子进程。
     for task_id in task_ids:
-        run_task(str(task_id))
+        run_task(str(task_id), after_success=after_success)
 
 
 def get_task(task_id: str) -> dict[str, object] | None:
@@ -581,12 +581,20 @@ def _task_cancelled(task_id: str) -> bool:
     return bool(row and row["status"] == "cancelled")
 
 
-def run_task_background(task_id: str, after_log: Callable[[str], None] | None = None) -> None:
-    thread = threading.Thread(target=run_task, args=(task_id, after_log), daemon=True)
+def run_task_background(
+    task_id: str,
+    after_log: Callable[[str], None] | None = None,
+    after_success: Callable[[str], None] | None = None,
+) -> None:
+    thread = threading.Thread(target=run_task, args=(task_id, after_log, after_success), daemon=True)
     thread.start()
 
 
-def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> None:
+def run_task(
+    task_id: str,
+    after_log: Callable[[str], None] | None = None,
+    after_success: Callable[[str], None] | None = None,
+) -> None:
     task = get_task(task_id)
     if not task:
         return
@@ -602,7 +610,7 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
         log_task(conn, task_id, "info", "任务开始执行")
 
     if not task["execute_crawler"]:
-        _finish_without_crawler(task_id)
+        _finish_without_crawler(task_id, after_success)
         return
 
     with database.connect() as conn:
@@ -735,7 +743,8 @@ def run_task(task_id: str, after_log: Callable[[str], None] | None = None) -> No
             """,
             (task_id,),
         )
-    _run_post_success_automation(task_id)
+    if after_success:
+        after_success(task_id)
 
 
 def _ensure_media_crawler_sqlite_schema(media_dir: Path, platform_value: str, env: dict[str, str]) -> str | None:
@@ -881,7 +890,7 @@ def _wait_for_tcp_port(host: str, port: int, timeout_seconds: int) -> bool:
     return False
 
 
-def _finish_without_crawler(task_id: str) -> None:
+def _finish_without_crawler(task_id: str, after_success: Callable[[str], None] | None = None) -> None:
     try:
         result = import_for_task(task_id)
         status = "succeeded"
@@ -900,65 +909,8 @@ def _finish_without_crawler(task_id: str) -> None:
             (status, "" if status == "succeeded" else message, task_id),
         )
     if status == "succeeded":
-        _run_post_success_automation(task_id)
-
-
-def _run_post_success_automation(task_id: str) -> None:
-    with database.connect() as conn:
-        task = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
-        if not task:
-            return
-        if int(task["automation_managed"] or 0):
-            return
-        auto_competitor = database.get_setting(conn, "auto_analyze_competitors", "false") == "true"
-        auto_lead = database.get_setting(conn, "auto_analyze_leads", "false") == "true"
-        task_mode = str(task["mode"])
-        if auto_competitor and task_mode == "competitor_discovery":
-            log_task(conn, task_id, "info", "已开启自动分析竞品账号，开始创建账号分析任务")
-
-    if auto_competitor and task_mode == "competitor_discovery":
-        try:
-            from app.services import account_actions, job_queue
-
-            result = account_actions.create_task_account_analysis_task(task_id)
-            if not result.get("task_ids"):
-                with database.connect() as conn:
-                    log_task(conn, task_id, "info", f"自动分析竞品账号未创建任务：待分析账号 {result.get('account_count', 0)} 个，跳过 {len(result.get('skipped', []))} 个")
-                return
-            analysis_task_id = str(result["task_ids"][0])
-            account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
-            with database.connect() as conn:
-                log_task(conn, task_id, "info", f"已创建自动账号分析任务 {analysis_task_id}，账号 {len(account_ids)} 个")
-            runtime_job = job_queue.enqueue_account_analysis(account_ids, analysis_task_id)
-            with database.connect() as conn:
-                log_task(conn, task_id, "info", f"账号分析已加入运行队列：{runtime_job['id']}")
-        except Exception as exc:
-            with database.connect() as conn:
-                log_task(conn, task_id, "error", f"自动分析竞品账号失败：{exc}")
-
-    if auto_lead and task_mode in ("competitor_crawl", "own_account", "demand_content"):
-        with database.connect() as conn:
-            log_task(conn, task_id, "info", "已开启自动分析线索用户，开始执行 AI 筛选")
-        try:
-            from app.services import ai_service, job_queue
-
-            result = ai_service.prepare_auto_lead_analysis_jobs(task_id)
-            job_ids = [str(value) for value in result.get("job_ids", [])]
-            runtime_job = job_queue.enqueue_ai_batch(job_ids, entity_id=f"auto-lead:{task_id}") if job_ids else None
-            with database.connect() as conn:
-                log_task(
-                    conn,
-                    task_id,
-                    "info",
-                    f"自动线索 AI 分析已排队：目标 {result['target_count']} 个，任务 {len(job_ids)} 个，创建失败 {len(result['errors'])} 个",
-                )
-                if result["errors"]:
-                    log_task(conn, task_id, "error", f"自动线索 AI 任务创建失败明细：{result['errors']}")
-                if runtime_job:
-                    log_task(conn, task_id, "info", f"线索 AI 分析已加入运行队列：{runtime_job['id']}")
-        except Exception as exc:
-            with database.connect() as conn:
-                log_task(conn, task_id, "error", f"自动分析线索用户失败：{exc}")
+        if after_success:
+            after_success(task_id)
 
 
 def _media_crawler_subprocess_env(base_env: dict[str, str], task: dict[str, object], media_dir: Path | None = None) -> dict[str, str]:
