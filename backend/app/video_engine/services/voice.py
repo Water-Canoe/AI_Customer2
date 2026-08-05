@@ -375,6 +375,7 @@ def tts(
             sub_maker=sub_maker,
             text=text,
             audio_duration_seconds=duration_seconds,
+            requires_audio_alignment=False,
         )
 
     if is_azure_v2_voice(voice_name):
@@ -513,7 +514,11 @@ def ensure_legacy_submaker_fields(sub_maker: SubMaker) -> SubMaker:
 
 
 def populate_legacy_submaker_with_full_text(
-    sub_maker: SubMaker, text: str, audio_duration_seconds: float
+    sub_maker: SubMaker,
+    text: str,
+    audio_duration_seconds: float,
+    *,
+    requires_audio_alignment: bool = True,
 ) -> SubMaker:
     """
     用整段文本填充项目历史沿用的 `subs/offset` 字幕结构。
@@ -530,11 +535,14 @@ def populate_legacy_submaker_with_full_text(
         sub_maker: 需要写入兼容字段的字幕对象
         text: 原始脚本文本
         audio_duration_seconds: 音频总时长，单位秒
+        requires_audio_alignment: 是否必须根据最终音频重新识别真实时间轴
 
     Returns:
         已填充兼容字幕数据的 SubMaker 对象
     """
     sub_maker = ensure_legacy_submaker_fields(sub_maker)
+    # 只有字符比例估算的时间轴不能用于最终字幕，任务层会据此改用音频识别。
+    sub_maker.requires_audio_alignment = requires_audio_alignment
 
     # 清空旧值，避免调用方重复复用对象时出现脏数据叠加。
     sub_maker.subs = []
@@ -861,6 +869,7 @@ def siliconflow_tts(
 
                 # 这里仍然沿用项目原有的字幕结构，因此需要补齐旧字段。
                 sub_maker = ensure_legacy_submaker_fields(SubMaker())
+                sub_maker.requires_audio_alignment = True
 
                 # 获取音频文件的实际长度
                 try:

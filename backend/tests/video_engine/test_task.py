@@ -256,6 +256,47 @@ class TestTaskService(unittest.TestCase):
         create_subtitle.assert_not_called()
         whisper_create.assert_not_called()
 
+    def test_generate_subtitle_rejects_empty_whisper_timeline(self):
+        """Whisper失败时不能继续生成零时间字幕或无字幕成片。"""
+        task_id = "test-empty-whisper-subtitle"
+        params = VideoParams(
+            video_subject="cloned voice",
+            video_script="Hello world.",
+            subtitle_enabled=True,
+        )
+        sub_maker = type("SubMaker", (), {"requires_audio_alignment": True})()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            task_dir = Path(tmp_dir) / task_id
+            task_dir.mkdir()
+            audio_file = str(task_dir / "audio.mp3")
+            Path(audio_file).write_bytes(b"fake audio")
+            # 旧字幕不能掩盖本次 Whisper 没有输出的问题。
+            (task_dir / "subtitle.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nstale\n\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.object(tm.utils, "task_dir", return_value=str(task_dir)),
+                patch.object(
+                    tm.config,
+                    "app",
+                    dict(tm.config.app, subtitle_provider="edge"),
+                ),
+                patch.object(tm.subtitle, "create"),
+                patch.object(tm.subtitle, "correct") as correct,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "未生成有效时间轴"):
+                    tm.generate_subtitle(
+                        task_id=task_id,
+                        params=params,
+                        video_script="Hello world.",
+                        sub_maker=sub_maker,
+                        audio_file=audio_file,
+                    )
+
+        correct.assert_not_called()
+
     @unittest.skipUnless(
         RUN_INTEGRATION_TESTS,
         "AI_CUSTOMER_VIDEO_INTEGRATION_TESTS not set",

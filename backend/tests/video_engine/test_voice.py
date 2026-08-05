@@ -99,6 +99,7 @@ class TestVoiceService(unittest.TestCase):
         self.assertIsNotNone(sub_maker)
         self.assertEqual(getattr(sub_maker, "subs", []), ["第一句话", "Second sentence"])
         self.assertEqual(len(getattr(sub_maker, "offset", [])), 2)
+        self.assertFalse(getattr(sub_maker, "requires_audio_alignment", True))
         self.assertGreater(vs.get_audio_duration(sub_maker), 0)
 
     def test_get_audio_duration_accepts_non_mp3_files(self):
@@ -657,10 +658,10 @@ class TestVoiceService(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(post.call_count, 3)
 
-    def test_generate_subtitle_keeps_edge_provider_for_gemini_legacy_submaker(self):
+    def test_generate_subtitle_aligns_estimated_timeline_from_final_audio(self):
         """
-        验证 Gemini TTS 返回的 legacy 字幕结构在 edge provider 下可以直接产出
-        SRT，不会因为匹配失败而回退到 Whisper。
+        没有原生语音边界的 TTS 只能产生估算时间轴，最终字幕必须从变速后的
+        音频重新识别，避免停顿和语速变化导致字幕漂移。
         """
         script = "Gemini subtitle generation should work now. Testing multiple lines."
         sub_maker = vs.populate_legacy_submaker_with_full_text(
@@ -669,11 +670,24 @@ class TestVoiceService(unittest.TestCase):
             2.4,
         )
 
+        def fake_whisper_create(audio_file, subtitle_file):
+            self.assertEqual(audio_file, "final-audio.mp3")
+            Path(subtitle_file).write_text(
+                "1\n00:00:00,250 --> 00:00:01,200\n"
+                "Gemini subtitle generation should work now.\n\n"
+                "2\n00:00:01,500 --> 00:00:02,300\n"
+                "Testing multiple lines.\n\n",
+                encoding="utf-8",
+            )
+
         with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
             task_service.config,
             "app",
             dict(task_service.config.app, subtitle_provider="edge"),
-        ), patch("app.video_engine.services.subtitle.create") as whisper_create, patch(
+        ), patch(
+            "app.video_engine.services.subtitle.create",
+            side_effect=fake_whisper_create,
+        ) as whisper_create, patch(
             "app.video_engine.utils.utils.task_dir",
             lambda tid="": str(Path(tmp_dir) / tid) if tid else str(Path(tmp_dir)),
         ):
@@ -684,12 +698,14 @@ class TestVoiceService(unittest.TestCase):
                 params=type("Params", (), {"subtitle_enabled": True})(),
                 video_script=script,
                 sub_maker=sub_maker,
-                audio_file="",
+                audio_file="final-audio.mp3",
             )
 
             self.assertTrue(subtitle_path.endswith("subtitle.srt"))
             self.assertTrue(Path(subtitle_path).exists())
-            self.assertFalse(whisper_create.called)
+            whisper_create.assert_called_once_with(
+                audio_file="final-audio.mp3", subtitle_file=subtitle_path
+            )
             subtitle_content = Path(subtitle_path).read_text(encoding="utf-8")
             self.assertIn("Gemini subtitle generation should work now", subtitle_content)
             self.assertIn("Testing multiple lines", subtitle_content)

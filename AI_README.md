@@ -431,6 +431,8 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 
 克隆音色采用独立的 `voice_profiles` 业务实体，不隶属于视频任务。通用入口 `backend/app/services/voice_synthesis.py::synthesize_profile()` 只接收音色ID、文字、输出路径、语速和音量；视频引擎通过 `voxcpm2:<profile-id>` 调用，后续数字人模块直接复用同一入口，不重复实现声音克隆。VoxCPM2使用官方 `voxcpm==2.0.3` Python API，但PyTorch、CUDA DLL和VoxCPM代码不再加载进主程序：`VoxCPM_Runtime.exe --serve` 使用逐行JSON协议提供本地推理，第一次合成时加载模型并在独立进程内缓存；组件退出、无效响应和15分钟超时都会返回明确错误。
 
+克隆音色以及 Gemini、MiMo、ElevenLabs、Chatterbox、SiliconFlow 等无法返回原生语音边界的供应商，不再把“按字符数分配总时长”的估算结果用于成片字幕。即使内容设置选择“TTS时间轴”，任务也会对完成语速和音量处理后的最终配音运行 Faster Whisper，以真实语音边界生成字幕；无配音模式仍使用静音占位时间轴。Whisper没有生成有效时间轴时任务会明确失败，不再继续生成零时间字幕或无字幕成片。
+
 VoxCPM2组件采用轻量混合构建：`packaging/voxcpm_runtime.py` 在临时构建目录中改为唯一模块名，并只用Nuitka模块模式编译为本机扩展，保护项目自研的模型调用与通信入口；PyInstaller只负责收集外部PyTorch、CUDA、Transformers和VoxCPM2运行环境，不把这些大型第三方依赖交给Nuitka转译。组件清单必须同时标记 `compiler: nuitka`、`runtime_packager: pyinstaller` 和实际存在的 `native_module`，环境组装也会复验该原生模块；旧的纯PyInstaller组件或误收源码入口的组件不会再被选中。这样不会缩小最终第三方运行环境，但可避免为数千个第三方模块生成C代码造成的超长构建和巨量临时目录。
 
 2026-07-20已完成VoxCPM2组件 `1.0.2` 的真实验证：Nuitka只编译5个C文件，组件中的原生入口为 `r/ai_customer_voxcpm_native.cp311-win_amd64.pyd`（256,512字节），组件不含 `voxcpm_runtime.py`；第三方运行环境约4.94GB。使用现有4.62GB VoxCPM2模型和真实参考录音完成一次GPU克隆推理，生成48kHz、单声道、16位、1.12秒的有效WAV。第一次加载和合成约106.5秒，后续同一工作进程继续复用模型。

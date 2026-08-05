@@ -68,6 +68,26 @@ class TestSubtitleService(unittest.TestCase):
         self.assertEqual(items[0][2], "Hello")
         self.assertEqual(items[1][2], "World")
 
+    def test_correct_keeps_whisper_timeline_when_script_has_more_segments(self):
+        """缺少真实时间边界时保留识别结果，不能补零时间字幕。"""
+        original_srt = (
+            "1\n"
+            "00:00:00,250 --> 00:00:02,000\n"
+            "第一句话 第二句话\n\n"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            subtitle_file = Path(tmp_dir) / "subtitle.srt"
+            subtitle_file.write_text(original_srt, encoding="utf-8")
+            subtitle.correct(
+                subtitle_file=str(subtitle_file),
+                video_script="第一句话。第二句话。",
+            )
+            corrected_srt = subtitle_file.read_text(encoding="utf-8")
+
+        self.assertEqual(corrected_srt, original_srt)
+        self.assertNotIn("00:00:00,000 --> 00:00:00,000", corrected_srt)
+
     def test_file_to_subtitles_parses_blocks_with_trailing_newline(self):
         """A normal SRT ending in a blank line still parses all blocks."""
         srt_with_trailing_blank = (

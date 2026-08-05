@@ -276,13 +276,12 @@ def correct(subtitle_file, video_script):
             )
             subtitle_index += 1
         else:
-            new_subtitle_items.append(
-                (
-                    len(new_subtitle_items) + 1,
-                    "00:00:00,000 --> 00:00:00,000",
-                    script_lines[script_index],
-                )
+            # 识别分段少于脚本分段时没有可靠时间可补，保留原始识别字幕更安全。
+            logger.warning(
+                "subtitle timeline is shorter than the script; "
+                "keeping the original Whisper transcription"
             )
+            return
         script_index += 1
         corrected = True
 

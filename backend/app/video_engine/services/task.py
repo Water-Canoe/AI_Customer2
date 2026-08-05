@@ -200,6 +200,12 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
 
     subtitle_path = path.join(utils.task_dir(task_id), "subtitle.srt")
     subtitle_provider = config.app.get("subtitle_provider", "edge").strip().lower()
+    if subtitle_provider == "edge" and getattr(
+        sub_maker, "requires_audio_alignment", False
+    ):
+        # 克隆音色等供应商没有原生语音边界，必须对最终变速音频重新识别。
+        subtitle_provider = "whisper"
+        logger.info("estimated TTS timeline detected, align subtitles from final audio")
     logger.info(f"\n\n## generating subtitle, provider: {subtitle_provider}")
 
     if sub_maker is None and subtitle_provider != "whisper":
@@ -222,7 +228,12 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
             logger.warning("subtitle file not found, fallback to whisper")
 
     if subtitle_provider == "whisper" or subtitle_fallback:
+        # 重试前清除旧结果，避免本次识别失败却误用上一次的时间轴。
+        if os.path.exists(subtitle_path):
+            os.remove(subtitle_path)
         subtitle.create(audio_file=audio_file, subtitle_file=subtitle_path)
+        if not subtitle.file_to_subtitles(subtitle_path):
+            raise RuntimeError("Whisper字幕识别失败，未生成有效时间轴")
         logger.info("\n\n## correcting subtitle")
         subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
 
