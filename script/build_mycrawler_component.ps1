@@ -22,6 +22,11 @@ foreach ($RequiredFile in @($Python, $VerifierPython, $Entrypoint, (Join-Path $C
 if ($LASTEXITCODE -ne 0) {
     throw "Nuitka is missing from MyCrawler/.venv"
 }
+$SourceRevision = (& git -C $CrawlerRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $SourceRevision -notmatch '^[0-9a-f]{40,64}$') {
+    throw "MyCrawler source revision cannot be determined"
+}
+$SourceDirty = @(& git -C $CrawlerRoot status --short).Count -gt 0
 
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $BuildRoot = Join-Path $ProjectRoot "output\mycrawler_${Version}_$Stamp"
@@ -95,6 +100,9 @@ $Info = [ordered]@{
     version = $Version
     entrypoint = "MyCrawler.exe"
     compiler = "nuitka"
+    source_revision = $SourceRevision
+    source_dirty = $SourceDirty
+    entrypoint_sha256 = (Get-FileHash -LiteralPath (Join-Path $ComponentDir "MyCrawler.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
     built_at = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
 }
 $Info | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ComponentDir "component-info.json") -Encoding utf8

@@ -14,6 +14,8 @@ from pathlib import Path, PurePosixPath
 APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
 PROGRAM_APPLICATION_ENTRIES = {"AI_Customer_App.exe", "app", "frontend_dist"}
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+REVISION_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CRAWLER_IGNORED_DIRS = {
     ".git",
     ".venv",
@@ -60,6 +62,17 @@ def _hash(path: Path) -> str:
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _valid_component_provenance(root: Path, info: dict[str, object], artifacts: dict[str, Path]) -> bool:
+    if not REVISION_PATTERN.fullmatch(str(info.get("source_revision") or "")) or not isinstance(info.get("source_dirty"), bool):
+        return False
+    for field, relative in artifacts.items():
+        expected = str(info.get(field) or "").lower()
+        artifact = root / relative
+        if not SHA256_PATTERN.fullmatch(expected) or not artifact.is_file() or _hash(artifact) != expected:
+            return False
+    return True
 
 
 def _program_manifest(program_root: Path, version: str, environment_version: str, schema_version: int) -> dict[str, object]:
@@ -171,6 +184,11 @@ def assemble(
         or crawler_info.get("compiler") != "nuitka"
         or crawler_info.get("entrypoint") != "MyCrawler.exe"
         or not VERSION_PATTERN.fullmatch(str(crawler_info.get("version") or ""))
+        or not _valid_component_provenance(
+            crawler_component_root,
+            crawler_info,
+            {"entrypoint_sha256": Path("MyCrawler.exe")},
+        )
     ):
         raise RuntimeError("MyCrawler 组件清单无效")
     crawler_destination = environment_runtime / "MyCrawler"
@@ -190,6 +208,14 @@ def assemble(
         or not re.fullmatch(r"r/ai_customer_voxcpm_native[^/]*\.pyd", native_module)
         or not (vox_component_root / Path(*PurePosixPath(native_module).parts)).is_file()
         or not VERSION_PATTERN.fullmatch(component_version)
+        or not _valid_component_provenance(
+            vox_component_root,
+            component_info,
+            {
+                "entrypoint_sha256": Path("VoxCPM_Runtime.exe"),
+                "native_module_sha256": Path(*PurePosixPath(native_module).parts),
+            },
+        )
     ):
         raise RuntimeError("VoxCPM2 组件清单无效")
     component_destination = environment_runtime / "components" / "voxcpm2"

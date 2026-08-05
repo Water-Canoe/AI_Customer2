@@ -23,6 +23,11 @@ foreach ($RequiredFile in @($Python, $NativeEntrypoint, $RuntimeLoader)) {
 if ($LASTEXITCODE -ne 0) {
     throw "Nuitka or the VoxCPM2 CUDA runtime is incomplete. Install backend/requirements-dev.txt and run script/install_voxcpm.ps1."
 }
+$SourceRevision = (& git -C $ProjectRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $SourceRevision -notmatch '^[0-9a-f]{40,64}$') {
+    throw "Project source revision cannot be determined"
+}
+$SourceDirty = @(& git -C $ProjectRoot status --short).Count -gt 0
 
 # Keep every component build in a unique directory for comparison and rollback.
 $BuildTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -104,6 +109,10 @@ $Info = [ordered]@{
     compiler = "nuitka"
     runtime_packager = "pyinstaller"
     native_module = $PackagedNativeModule.FullName.Substring($ComponentDir.Length + 1).Replace("\", "/")
+    source_revision = $SourceRevision
+    source_dirty = $SourceDirty
+    entrypoint_sha256 = (Get-FileHash -LiteralPath (Join-Path $ComponentDir "VoxCPM_Runtime.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+    native_module_sha256 = (Get-FileHash -LiteralPath $PackagedNativeModule.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     built_at = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
 }
 $Info | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ComponentDir "component-info.json") -Encoding utf8

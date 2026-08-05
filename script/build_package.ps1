@@ -47,15 +47,22 @@ $CloakBrowserDir = ""
 if (-not $ProgramOnly) {
     if (-not $MyCrawlerComponentPath) {
         $ComponentRoot = Join-Path $ProjectRoot "dist\components"
-        $MyCrawlerComponentPath = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+        $MyCrawlerCandidates = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
             $InfoPath = Join-Path $_.FullName "component-info.json"
             if (-not (Test-Path -LiteralPath $InfoPath -PathType Leaf)) { return $false }
             $Info = Get-Content -LiteralPath $InfoPath -Raw -Encoding utf8 | ConvertFrom-Json
             [string]$Info.component -eq "mycrawler" -and
             [string]$Info.compiler -eq "nuitka" -and
             [string]$Info.entrypoint -eq "MyCrawler.exe" -and
+            [string]$Info.source_revision -match '^[0-9a-f]{40,64}$' -and
+            $Info.source_dirty -is [bool] -and
+            [string]$Info.entrypoint_sha256 -match '^[0-9a-f]{64}$' -and
             (Test-Path -LiteralPath (Join-Path $_.FullName "MyCrawler.exe") -PathType Leaf)
-        } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0].FullName
+        })
+        if ($MyCrawlerCandidates.Count -gt 1) {
+            throw "Multiple valid MyCrawler components were found. Specify -MyCrawlerComponentPath explicitly."
+        }
+        if ($MyCrawlerCandidates.Count -eq 1) { $MyCrawlerComponentPath = $MyCrawlerCandidates[0].FullName }
     }
     $MyCrawlerInfoPath = if ($MyCrawlerComponentPath) { Join-Path $MyCrawlerComponentPath "component-info.json" } else { "" }
     $MyCrawlerInfo = if ($MyCrawlerInfoPath -and (Test-Path -LiteralPath $MyCrawlerInfoPath -PathType Leaf)) {
@@ -66,6 +73,9 @@ if (-not $ProgramOnly) {
         [string]$MyCrawlerInfo.component -ne "mycrawler" -or
         [string]$MyCrawlerInfo.compiler -ne "nuitka" -or
         [string]$MyCrawlerInfo.entrypoint -ne "MyCrawler.exe" -or
+        [string]$MyCrawlerInfo.source_revision -notmatch '^[0-9a-f]{40,64}$' -or
+        $MyCrawlerInfo.source_dirty -isnot [bool] -or
+        [string]$MyCrawlerInfo.entrypoint_sha256 -notmatch '^[0-9a-f]{64}$' -or
         -not (Test-Path -LiteralPath (Join-Path $MyCrawlerComponentPath "MyCrawler.exe") -PathType Leaf)
     ) {
         throw "A completed Nuitka MyCrawler component is required. Run script/build_mycrawler_component.ps1 first."
@@ -81,7 +91,7 @@ if (-not $ProgramOnly) {
     }
     if (-not $VoxComponentPath) {
         $ComponentRoot = Join-Path $ProjectRoot "dist\components"
-        $VoxComponentPath = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
+        $VoxCandidates = @(Get-ChildItem -LiteralPath $ComponentRoot -Directory -ErrorAction SilentlyContinue | Where-Object {
             $InfoPath = Join-Path $_.FullName "component-info.json"
             if (-not (Test-Path -LiteralPath $InfoPath -PathType Leaf)) { return $false }
             $Info = Get-Content -LiteralPath $InfoPath -Raw -Encoding utf8 | ConvertFrom-Json
@@ -90,9 +100,17 @@ if (-not $ProgramOnly) {
             [string]$Info.runtime_packager -eq "pyinstaller" -and
             [string]$Info.entrypoint -eq "VoxCPM_Runtime.exe" -and
             [string]$Info.native_module -match '^r/ai_customer_voxcpm_native[^/]*\.pyd$' -and
+            [string]$Info.source_revision -match '^[0-9a-f]{40,64}$' -and
+            $Info.source_dirty -is [bool] -and
+            [string]$Info.entrypoint_sha256 -match '^[0-9a-f]{64}$' -and
+            [string]$Info.native_module_sha256 -match '^[0-9a-f]{64}$' -and
             (Test-Path -LiteralPath (Join-Path $_.FullName ([string]$Info.native_module)) -PathType Leaf) -and
             (Test-Path -LiteralPath (Join-Path $_.FullName "VoxCPM_Runtime.exe") -PathType Leaf)
-        } | Sort-Object LastWriteTime -Descending | Select-Object -First 1)[0].FullName
+        })
+        if ($VoxCandidates.Count -gt 1) {
+            throw "Multiple valid VoxCPM2 components were found. Specify -VoxComponentPath explicitly."
+        }
+        if ($VoxCandidates.Count -eq 1) { $VoxComponentPath = $VoxCandidates[0].FullName }
     }
     $VoxInfoPath = if ($VoxComponentPath) { Join-Path $VoxComponentPath "component-info.json" } else { "" }
     $VoxInfo = if ($VoxInfoPath -and (Test-Path -LiteralPath $VoxInfoPath -PathType Leaf)) {
@@ -106,6 +124,10 @@ if (-not $ProgramOnly) {
         [string]$VoxInfo.runtime_packager -ne "pyinstaller" -or
         [string]$VoxInfo.entrypoint -ne "VoxCPM_Runtime.exe" -or
         $VoxNativeModule -notmatch '^r/ai_customer_voxcpm_native[^/]*\.pyd$' -or
+        [string]$VoxInfo.source_revision -notmatch '^[0-9a-f]{40,64}$' -or
+        $VoxInfo.source_dirty -isnot [bool] -or
+        [string]$VoxInfo.entrypoint_sha256 -notmatch '^[0-9a-f]{64}$' -or
+        [string]$VoxInfo.native_module_sha256 -notmatch '^[0-9a-f]{64}$' -or
         -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath $VoxNativeModule) -PathType Leaf) -or
         -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath "VoxCPM_Runtime.exe") -PathType Leaf)
     ) {

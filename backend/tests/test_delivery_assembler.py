@@ -49,6 +49,7 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     _file(crawler / "database" / "sqlite_tables.db", b"generated")
     _file(crawler / "playwright" / "driver" / "node.exe")
     _file(crawler / "wordcloud" / "stopwords")
+    crawler_hash = assembler._hash(crawler / "MyCrawler.exe")
     (crawler / "component-info.json").write_text(
         json.dumps(
             {
@@ -58,6 +59,9 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
                 "version": "1.0.0",
                 "entrypoint": "MyCrawler.exe",
                 "compiler": "nuitka",
+                "source_revision": "a" * 40,
+                "source_dirty": False,
+                "entrypoint_sha256": crawler_hash,
             }
         ),
         encoding="utf-8",
@@ -68,6 +72,8 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
     _file(component / "VoxCPM_Runtime.exe")
     native_module = "r/ai_customer_voxcpm_native.cp311-win_amd64.pyd"
     _file(component / native_module)
+    component_hash = assembler._hash(component / "VoxCPM_Runtime.exe")
+    native_hash = assembler._hash(component / native_module)
     (component / "component-info.json").write_text(
         json.dumps(
             {
@@ -79,6 +85,10 @@ def test_two_zip_delivery_separates_program_from_reusable_environment(tmp_path: 
                 "compiler": "nuitka",
                 "runtime_packager": "pyinstaller",
                 "native_module": native_module,
+                "source_revision": "b" * 40,
+                "source_dirty": False,
+                "entrypoint_sha256": component_hash,
+                "native_module_sha256": native_hash,
             }
         ),
         encoding="utf-8",
@@ -158,3 +168,17 @@ def test_program_only_delivery_skips_environment_sources(tmp_path: Path) -> None
     assert program_zip.is_file()
     assert not any(path.name.startswith("AI_Customer_Environment_") for path in program_zip.parent.iterdir())
     assert _verifier_module().verify(str(program_zip), "1.2.4")["environment_version"] == "1.0.0"
+
+
+def test_component_provenance_rejects_modified_artifact(tmp_path: Path) -> None:
+    assembler = _module()
+    executable = _file(tmp_path / "component" / "MyCrawler.exe", b"original")
+    info = {
+        "source_revision": "a" * 40,
+        "source_dirty": False,
+        "entrypoint_sha256": assembler._hash(executable),
+    }
+
+    assert assembler._valid_component_provenance(executable.parent, info, {"entrypoint_sha256": Path(executable.name)})
+    executable.write_bytes(b"modified")
+    assert not assembler._valid_component_provenance(executable.parent, info, {"entrypoint_sha256": Path(executable.name)})

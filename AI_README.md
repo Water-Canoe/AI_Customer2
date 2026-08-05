@@ -53,7 +53,7 @@
 
 `docs/AI_Customer_Blind_Watermark_统一规范.md` 记录两个 Windows 桌面项目在 CloakBrowser、设备身份与授权、统一运行队列、稳定启动器、双 ZIP 交付、Sealos 发布更新和数据保护方面的共同标准。该文档用于指导 Blind_Watermark 移植已验证的共性机制，同时明确保留其浏览器专用线程、候选版本健康检查和整目录回滚等更强实现，不要求两个不同打包器使用相同内部目录。
 
-后端依赖分为 `requirements.txt` 运行依赖和 `requirements-dev.txt` 开发/测试/打包工具；开发环境安装后者，客户环境只使用打包后的运行组件。主程序和稳定启动器使用 `Nuitka[onefile]` 4.1.3，onefile extra 提供稳定启动器压缩所需的 Zstandard；PyInstaller 6.21.0 暂时只服务于现有 VoxCPM2 组件，不参与主程序构建。Pytest、两种打包器与仅供 Starlette 测试客户端使用的 HTTPX2 都不进入客户运行依赖。FastAPI 固定为 0.139.0、Starlette 固定为 1.3.1，使主服务与 VoxCPM 间接安装的 Gradio 共用同一依赖版本，避免开发环境冲突和安装结果漂移。
+后端依赖分为 `requirements.txt` 运行依赖和 `requirements-dev.txt` 开发/测试/打包工具；开发环境安装后者，客户环境只使用打包后的运行组件。主程序和稳定启动器使用 `Nuitka[onefile]` 4.1.3，onefile extra 提供稳定启动器压缩所需的 Zstandard；PyInstaller 6.21.0 暂时只服务于现有 VoxCPM2 组件，不参与主程序构建。Pytest、两种打包器与仅供 Starlette 测试客户端使用的 HTTPX2 都不进入客户运行依赖。FastAPI 固定为 0.139.0、Starlette 固定为 1.3.1，TwelveLabs 固定为 1.2.9，使开发、测试和打包安装结果保持一致，并让主服务与 VoxCPM 间接安装的 Gradio 共用同一依赖版本。
 
 后端只从已经解析的前端 `dist` 目录提供静态文件；请求路径必须在该目录的父子关系内，不能使用 `..` 读取名称前缀相同的相邻目录。未匹配到真实静态文件时只返回前端 `index.html`。
 
@@ -540,7 +540,7 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 .\script\build_package.ps1 -Version 1.2.12 -EnvironmentVersion 1.0.2
 ```
 
-脚本先执行前端测试与生产构建、完整后端测试，再使用 Nuitka 4.1.3 编译主程序和稳定启动器；MyCrawler 由 `build_mycrawler_component.ps1` 独立构建，完整交付默认选择最新的有效组件，也可通过 `-MyCrawlerComponentPath` 指定。VoxCPM2/PyTorch/CUDA 不参与 MyCrawler 或主程序的 Nuitka 编译，继续复用现有独立推理组件。两个桌面 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。缺少 Nuitka、MyCrawler 组件、应用图标或构建资源时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
+脚本先执行前端测试与生产构建、完整后端测试，再使用 Nuitka 4.1.3 编译主程序和稳定启动器；MyCrawler 由 `build_mycrawler_component.ps1` 独立构建。组件清单记录源码 Git 提交、源码是否有未提交修改及关键产物 SHA-256（Secure Hash Algorithm 256-bit，256位安全散列算法），组装和发布时复验文件哈希。完整交付只在同类组件恰好有一个有效候选时自动选择；存在多个候选会停止，必须通过 `-MyCrawlerComponentPath` 和 `-VoxComponentPath` 明确指定，旧的无来源或无哈希组件需要重新构建。VoxCPM2/PyTorch/CUDA 不参与 MyCrawler 或主程序的 Nuitka 编译，继续复用现有独立推理组件。两个桌面 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。缺少 Nuitka、MyCrawler 组件、应用图标或构建资源时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
 
 程序 ZIP 保存经常变化并允许远程更新的文件：最外层稳定入口 `AI_Customer.exe`、`runtime/application/AI_Customer_App.exe`、`runtime/application/app/`、`runtime/frontend_dist/`、说明和发布清单。环境 ZIP 保存体积大且较少变化的依赖：主程序 Nuitka standalone 运行库、Playwright、CloakBrowser 浏览器、Nuitka 版 `runtime/MyCrawler/MyCrawler.exe` 及其运行库、VoxCPM2/PyTorch/CUDA 推理组件和模型。新环境包不再携带 MyCrawler 便携 Python、`.py` 源码或原始 site-packages；MyCrawler 上游 `LICENSE` 仍随组件保留。
 

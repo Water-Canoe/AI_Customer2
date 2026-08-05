@@ -34,11 +34,20 @@ function Write-Utf8NoBom([string]$Path, [string]$Content) {
     [System.IO.File]::WriteAllText($Path, $Content, $Encoding)
 }
 
-function Find-LatestComponent([string]$RootPath) {
+function Find-SingleComponent([string]$RootPath) {
     $Candidates = @(Get-ChildItem -LiteralPath $RootPath -Directory -ErrorAction SilentlyContinue | Where-Object {
-        Test-Path -LiteralPath (Join-Path $_.FullName "component-info.json") -PathType Leaf
-    } | Sort-Object LastWriteTime -Descending)
+        $InfoPath = Join-Path $_.FullName "component-info.json"
+        if (-not (Test-Path -LiteralPath $InfoPath -PathType Leaf)) { return $false }
+        $Info = Get-Content -LiteralPath $InfoPath -Raw -Encoding utf8 | ConvertFrom-Json
+        [string]$Info.component -eq "voxcpm2" -and
+        [string]$Info.entrypoint -eq "VoxCPM_Runtime.exe" -and
+        [string]$Info.source_revision -match '^[0-9a-f]{40,64}$' -and
+        $Info.source_dirty -is [bool] -and
+        [string]$Info.entrypoint_sha256 -match '^[0-9a-f]{64}$' -and
+        [string]$Info.native_module_sha256 -match '^[0-9a-f]{64}$'
+    })
     if ($Candidates.Count -eq 0) { throw "No completed VoxCPM2 component was found under $RootPath" }
+    if ($Candidates.Count -gt 1) { throw "Multiple VoxCPM2 components were found. Specify -ComponentPath explicitly." }
     return $Candidates[0].FullName
 }
 
@@ -89,6 +98,14 @@ function Read-Component([string]$Path, [string]$ExpectedVersion) {
     if ([string]$Info.entrypoint -ne "VoxCPM_Runtime.exe" -or -not (Test-Path -LiteralPath ([System.IO.Path]::Combine($AccessPath, "VoxCPM_Runtime.exe")) -PathType Leaf)) {
         throw "Component executable is missing"
     }
+    if ([string]$Info.source_revision -notmatch '^[0-9a-f]{40,64}$' -or $Info.source_dirty -isnot [bool]) {
+        throw "Component source provenance is missing"
+    }
+    $EntrypointHash = (Get-FileHash -LiteralPath ([System.IO.Path]::Combine($AccessPath, "VoxCPM_Runtime.exe")) -Algorithm SHA256).Hash.ToLowerInvariant()
+    $NativeHash = (Get-FileHash -LiteralPath $NativePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([string]$Info.entrypoint_sha256 -ne $EntrypointHash -or [string]$Info.native_module_sha256 -ne $NativeHash) {
+        throw "Component artifact hash does not match component-info.json"
+    }
     if ($ExpectedVersion -and [string]$Info.version -ne $ExpectedVersion) { throw "Component version does not match -Version" }
     $Files = @(Get-ChildItem -LiteralPath $AccessPath -Recurse -File -Force)
     foreach ($File in $Files) {
@@ -119,7 +136,7 @@ function New-ComponentArchive([string]$SourcePath, [string]$DestinationPath, [ob
 
 $IsPrepareOnly = [bool]$PrepareOnly -or (-not $Upload -and -not $Enable)
 if ($PrepareOnly -and ($Upload -or $Enable)) { throw "-PrepareOnly cannot be combined with -Upload or -Enable" }
-if (-not $ComponentPath) { $ComponentPath = Find-LatestComponent (Join-Path $ProjectRoot "dist\components") }
+if (-not $ComponentPath) { $ComponentPath = Find-SingleComponent (Join-Path $ProjectRoot "dist\components") }
 $Component = Read-Component $ComponentPath $Version
 if (-not $Version) { $Version = [string]$Component.Info.version }
 Assert-SemVer $Version "Version"
