@@ -4,104 +4,114 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AI拓客授权管理</title>
+  <link rel="icon" href="data:,">
   <style>
-    :root{color-scheme:light;font-family:Inter,"Microsoft YaHei",sans-serif;color:#16322d;background:#f3f7f6;--primary:#087f6d;--primary-dark:#056657;--line:#dce8e5;--muted:#6c7f7b;--danger:#b42318;--warning:#a15c00}
-    *{box-sizing:border-box}body{margin:0;padding:24px}main{max-width:1240px;margin:auto}h1,h2,h3,p{margin-top:0}h1{font-size:25px;margin-bottom:6px}h2{font-size:18px;margin-bottom:6px}h3{font-size:15px;margin-bottom:10px}p{color:var(--muted);margin-bottom:14px}.panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:16px;box-shadow:0 8px 28px rgba(19,70,61,.05)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.field{display:grid;gap:6px;font-size:13px;color:#526864}.field-title{font-weight:600;color:#36534d}input,select,textarea,button{font:inherit}input,select,textarea{width:100%;padding:10px 12px;border:1px solid #cddbd8;border-radius:10px;background:#fff;color:#18332f;outline:none}input:focus,select:focus,textarea:focus{border-color:#4aa997;box-shadow:0 0 0 3px rgba(8,127,109,.1)}textarea{min-height:78px;resize:vertical}button{border:1px solid transparent;border-radius:9px;padding:9px 14px;cursor:pointer;background:#e8f1ef;color:#173f38;transition:.15s}button:hover:not(:disabled){background:#dcebe8}button.primary{background:var(--primary);color:#fff}button.primary:hover:not(:disabled){background:var(--primary-dark)}button.danger{background:#fff1f0;color:var(--danger);border-color:#ffd3cf}button.warning{background:#fff6e8;color:#895000;border-color:#f4d6a1}button.ghost{background:#fff;border-color:#d5e2df}button.small{padding:6px 9px;font-size:12px}button:disabled{opacity:.5;cursor:not-allowed}.actions,.checks,.toolbar,.section-title{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.actions{margin-top:12px}.checks{margin-top:12px}.checks label{display:flex;align-items:center;gap:5px;font-size:13px;color:#526864}.checks input{width:auto}.section-title{justify-content:space-between;margin-bottom:14px}.section-title h2,.section-title p{margin-bottom:0}.input-with-button{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.connection{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted)}.dot{width:9px;height:9px;border-radius:50%;background:#9aa9a6}.dot.ok{background:#0b9b6f}.dot.error{background:#d92d20}.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:16px}.stat{background:#fff;border:1px solid var(--line);border-radius:13px;padding:14px}.stat strong{display:block;font-size:23px;margin-top:4px}.stat span{font-size:12px;color:var(--muted)}.toolbar{justify-content:space-between;margin-bottom:12px}.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.filters input{width:240px}.filters select{width:auto;min-width:120px}.count{font-size:12px;color:var(--muted)}.scroll{overflow:auto;border:1px solid #edf2f1;border-radius:11px}table{width:100%;border-collapse:collapse;font-size:13px;min-width:820px}th,td{text-align:left;padding:11px 9px;border-bottom:1px solid #e7efed;vertical-align:middle}tr:last-child td{border-bottom:0}th{color:#637773;background:#f8fbfa;font-weight:600;white-space:nowrap}td code{font-size:12px;word-break:break-all}.badge,.chip{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:12px;white-space:nowrap}.badge.active{background:#e8f8f1;color:#087a57}.badge.disabled{background:#f0f1f1;color:#66736f}.badge.expired,.badge.revoked{background:#fff0ef;color:#b42318}.chip{background:#eef5f3;color:#42615b;margin:2px 3px 2px 0}.device-over{color:var(--danger);font-weight:600}.muted{color:#7a8d89}.danger-text{color:var(--danger)}.warning-box{padding:10px 12px;border-radius:10px;background:#fff8eb;color:#835100;font-size:13px;margin:10px 0}.created{display:none;padding:14px;margin-top:12px;border-radius:11px;background:#ecfaf6;border:1px solid #bce7d9}.created code{display:block;margin:8px 0;padding:10px;background:#fff;border-radius:8px;user-select:all;word-break:break-all;font-size:14px}.editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.device-summary{display:flex;gap:8px;margin:10px 0 12px}.device-summary span{font-size:12px;background:#f1f6f5;padding:5px 9px;border-radius:999px}#log{white-space:pre-wrap;max-height:190px;overflow:auto;font-size:12px;background:#142522;color:#d7ebe6;padding:12px;border-radius:9px;margin:0}.toast{position:fixed;right:24px;bottom:24px;max-width:360px;padding:12px 16px;border-radius:11px;background:#173f38;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translateY(8px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{background:#9f241b}@media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}.grid.three{grid-template-columns:1fr 1fr}}@media(max-width:680px){body{padding:12px}.grid,.grid.three{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}.filters,.filters input,.filters select{width:100%}.toolbar{align-items:stretch}.editor-head{display:block}}
+    :root{color-scheme:light;font-family:Inter,"Microsoft YaHei",sans-serif;color:#172b28;background:#f4f7f6;--primary:#087f6d;--primary-dark:#066554;--ink:#172b28;--muted:#647773;--line:#dce7e4;--soft:#eef5f3;--danger:#b42318;--warning:#a15c00}
+    *{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#eaf3f1 0,#f4f7f6 280px);min-height:100vh}button,input,select,textarea{font:inherit}button{border:1px solid transparent;border-radius:10px;padding:10px 15px;cursor:pointer;background:#e7f0ee;color:#173f38;transition:background .15s,border-color .15s,transform .15s}button:hover:not(:disabled){background:#dbeae7}button:active:not(:disabled){transform:translateY(1px)}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid rgba(8,127,109,.2);outline-offset:2px}button.primary{background:var(--primary);color:#fff}button.primary:hover:not(:disabled){background:var(--primary-dark)}button.danger{background:#fff1f0;color:var(--danger);border-color:#ffd3cf}button.warning{background:#fff6e8;color:#895000;border-color:#f4d6a1}button.ghost{background:#fff;border-color:#d5e2df}button.small{padding:7px 10px;font-size:12px}button:disabled{opacity:.48;cursor:not-allowed}.shell{max-width:1440px;margin:auto;padding:24px}.topbar{display:flex;justify-content:space-between;gap:24px;align-items:center;padding:24px 26px;border-radius:20px;background:#132f2b;color:#fff;box-shadow:0 18px 42px rgba(16,53,46,.16)}.brand{display:flex;gap:14px;align-items:center}.brand-mark{display:grid;place-items:center;width:44px;height:44px;border-radius:13px;background:#21a78f;color:#fff;font-size:17px;font-weight:800;letter-spacing:-1px}.topbar h1{font-size:24px;line-height:1.2;margin:0 0 5px}.topbar p{margin:0;color:#b8d0cb;font-size:13px}.top-actions,.actions,.checks,.toolbar,.section-title,.filters,.device-summary{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.top-actions{justify-content:flex-end}.top-actions button.ghost{color:#dcece8;background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.16)}.top-actions button.ghost:hover{background:rgba(255,255,255,.14)}.connection{display:inline-flex;align-items:center;gap:8px}.dot{width:8px;height:8px;border-radius:50%;background:#9aa9a6;box-shadow:0 0 0 4px rgba(255,255,255,.06)}.dot.ok{background:#32d49b}.dot.error{background:#ff746a}.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin:18px 0}.stat{position:relative;text-align:left;padding:16px 17px;background:#fff;border:1px solid var(--line);border-radius:15px;color:var(--ink);box-shadow:0 7px 24px rgba(24,70,62,.05)}.stat:hover:not(:disabled){background:#fff;border-color:#9bcac1}.stat.active-filter{border-color:var(--primary);box-shadow:0 0 0 2px rgba(8,127,109,.1)}.stat span{display:block;color:var(--muted);font-size:12px}.stat strong{display:block;font-size:26px;line-height:1.15;margin-top:8px}.stat.soon strong{color:var(--warning)}.stat.bad strong{color:var(--danger)}.panel{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:0 8px 28px rgba(24,70,62,.05)}.section-title{justify-content:space-between;margin-bottom:16px}.section-title h2,.section-title h3,.section-title p{margin:0}.section-title h2{font-size:18px}.section-title h3{font-size:15px}.section-title p{color:var(--muted);font-size:13px;margin-top:5px}.count{font-size:12px;color:var(--muted)}.toolbar{justify-content:space-between;padding:12px;border-radius:13px;background:#f5f8f7;margin-bottom:14px}.filters{flex:1}.filters input{width:min(340px,100%)}.filters select{width:auto;min-width:130px}.field{display:grid;gap:7px;font-size:13px;color:#526864}.field-title{font-weight:650;color:#36534d}input,select,textarea{width:100%;padding:10px 12px;border:1px solid #cad9d6;border-radius:10px;background:#fff;color:var(--ink);outline:none}input:focus,select:focus,textarea:focus{border-color:#4aa997;box-shadow:0 0 0 3px rgba(8,127,109,.1)}textarea{min-height:82px;resize:vertical}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.input-with-button{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.actions{margin-top:14px}.checks{margin:14px 0}.checks strong{font-size:13px}.checks label{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid #d9e5e2;border-radius:999px;color:#47615c;font-size:13px;cursor:pointer}.checks label:has(input:checked){border-color:#8bc8bc;background:#edf8f5;color:#076a5a}.checks input{width:auto}.scroll{overflow:auto;border:1px solid #e6eeec;border-radius:13px}table{width:100%;border-collapse:collapse;font-size:13px;min-width:940px}th,td{text-align:left;padding:13px 12px;border-bottom:1px solid #e8efed;vertical-align:middle}tr:last-child td{border-bottom:0}tbody tr:hover{background:#fbfdfc}th{color:#60736f;background:#f6f9f8;font-weight:650;white-space:nowrap}td code{display:block;max-width:240px;overflow:hidden;text-overflow:ellipsis;font-size:12px;white-space:nowrap}.remark{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.badge,.chip{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:12px;white-space:nowrap}.badge.active{background:#e8f8f1;color:#087a57}.badge.soon{background:#fff4dd;color:#895000;margin-left:5px}.badge.disabled{background:#f0f1f1;color:#66736f}.badge.expired,.badge.revoked{background:#fff0ef;color:#b42318}.chip{background:#eef5f3;color:#42615b;margin:2px 3px 2px 0}.device-over{color:var(--danger);font-weight:700}.muted{color:#7a8d89}.warning-box{padding:11px 13px;border-radius:11px;background:#fff8eb;color:#835100;font-size:13px;margin:12px 0}.created{display:none;padding:16px;margin-top:16px;border-radius:13px;background:#ecfaf6;border:1px solid #bce7d9}.created code{display:block;margin:10px 0;padding:12px;background:#fff;border:1px dashed #93cfc3;border-radius:9px;user-select:all;word-break:break-all;font-size:14px}.editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.device-summary{margin:10px 0 12px}.device-summary span{font-size:12px;background:#f1f6f5;padding:6px 10px;border-radius:999px}.log-panel{margin-top:14px;border:1px solid var(--line);border-radius:14px;background:#fff}.log-panel summary{display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:13px 16px;font-size:13px;font-weight:650;color:#36534d}.log-panel summary::after{content:"展开";font-size:12px;font-weight:400;color:var(--muted)}.log-panel[open] summary::after{content:"收起"}.log-body{padding:0 14px 14px}#log{white-space:pre-wrap;max-height:190px;overflow:auto;font-size:12px;background:#132522;color:#d7ebe6;padding:12px;border-radius:9px;margin:0}dialog{width:min(720px,calc(100% - 28px));max-height:92vh;padding:0;border:0;border-radius:19px;color:var(--ink);box-shadow:0 26px 80px rgba(10,37,32,.3)}dialog.wide{width:min(1180px,calc(100% - 28px))}dialog::backdrop{background:rgba(12,35,31,.54);backdrop-filter:blur(3px)}.dialog-head{position:sticky;top:0;z-index:2;display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:19px 21px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.96)}.dialog-head h2{font-size:19px;margin:0 0 4px}.dialog-head p{font-size:13px;color:var(--muted);margin:0}.dialog-body{padding:20px;overflow:auto}.dialog-footer{display:flex;justify-content:flex-end;gap:9px;margin-top:18px;padding-top:16px;border-top:1px solid #e8efed}.close-icon{min-width:36px;padding:7px 10px;background:#f1f5f4;font-size:18px;line-height:1}.modal-section+.modal-section{border-top:1px solid #e4ecea;margin-top:22px;padding-top:20px}.modal-section h3{margin:0 0 5px}.modal-section>p{margin:0 0 14px;color:var(--muted);font-size:13px}.toast{position:fixed;right:24px;bottom:24px;z-index:20;max-width:360px;padding:12px 16px;border-radius:11px;background:#173f38;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translateY(8px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{background:#9f241b}@media(max-width:1080px){.stats{grid-template-columns:repeat(3,1fr)}.grid.three{grid-template-columns:1fr 1fr}}@media(max-width:720px){.shell{padding:12px}.topbar{align-items:flex-start;padding:19px;flex-direction:column}.top-actions{width:100%;justify-content:flex-start}.top-actions button{flex:1}.stats{grid-template-columns:repeat(2,1fr)}.grid,.grid.three{grid-template-columns:1fr}.toolbar{align-items:stretch}.filters,.filters input,.filters select{width:100%}.filters select{flex:1}.editor-head{display:block}.dialog-head,.dialog-body{padding:16px}.remark{max-width:160px}}
+    dialog[open]{display:flex;flex-direction:column}.dialog-body{min-height:0}@media(max-width:720px){.top-actions{display:grid;grid-template-columns:1fr 1fr}.top-actions button{width:100%;white-space:nowrap}#openConnectionBtn{grid-column:1/-1}}
   </style>
 </head>
 <body>
-<main>
-  <section class="panel">
-    <div class="section-title">
-      <div><h1>AI拓客授权管理</h1><p>管理产品授权、功能权益、有效期和设备名额。完整授权码只在创建时展示一次。</p></div>
-      <div class="connection"><span class="dot" id="connectionDot"></span><span id="connectionText">尚未连接</span></div>
+<main class="shell">
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">AI</span><div><h1>授权控制台</h1><p>集中管理 AI Customer 产品授权、功能权益与激活设备</p></div></div>
+    <div class="top-actions">
+      <button class="ghost connection" id="openConnectionBtn" type="button"><span class="dot" id="connectionDot"></span><span id="connectionText">尚未连接</span></button>
+      <button class="ghost" id="refreshBtn" type="button">刷新数据</button>
+      <button class="primary" id="openCreateBtn" type="button">＋ 创建授权</button>
     </div>
-    <div class="grid">
-      <label class="field"><span class="field-title">Sealos API Base</span><input id="apiBase" value="https://tfwqsfaegbdj.sealosbja.site/ai-customer" spellcheck="false"></label>
-      <label class="field"><span class="field-title">管理 Token（仅保存在当前页面内存）</span><span class="input-with-button"><input id="adminToken" type="password" autocomplete="off" spellcheck="false"><button class="ghost" id="toggleTokenBtn" type="button">显示</button></span></label>
-    </div>
-    <div class="actions"><button class="primary" id="refreshBtn">连接并刷新</button><button class="ghost" id="healthBtn">健康检查</button><button class="ghost" id="exportBtn" disabled>导出授权列表</button></div>
-  </section>
+  </header>
 
   <section class="stats" aria-label="授权统计">
-    <div class="stat"><span>授权总数</span><strong id="statTotal">0</strong></div>
-    <div class="stat"><span>正常授权</span><strong id="statActive">0</strong></div>
-    <div class="stat"><span>已停用</span><strong id="statDisabled">0</strong></div>
-    <div class="stat"><span>已过期</span><strong id="statExpired">0</strong></div>
+    <button class="stat active-filter" type="button" data-license-filter="all"><span>全部授权</span><strong id="statTotal">0</strong></button>
+    <button class="stat" type="button" data-license-filter="active"><span>正常授权</span><strong id="statActive">0</strong></button>
+    <button class="stat soon" type="button" data-license-filter="expiring"><span>30 天内到期</span><strong id="statExpiring">0</strong></button>
+    <button class="stat bad" type="button" data-license-filter="expired"><span>已过期</span><strong id="statExpired">0</strong></button>
+    <button class="stat" type="button" data-license-filter="disabled"><span>已停用</span><strong id="statDisabled">0</strong></button>
     <div class="stat"><span>已激活设备</span><strong id="statDevices">0</strong></div>
   </section>
 
   <section class="panel">
-    <div class="section-title"><div><h2>创建授权</h2><p>创建后请立即复制或保存授权码，服务端不会再次返回完整授权码。</p></div></div>
-    <div class="checks">
-      <strong>开通功能：</strong>
-      <label><input type="checkbox" name="entitlement" value="lead" checked>拓客</label>
-      <label><input type="checkbox" name="entitlement" value="traffic" checked>引流</label>
-      <label><input type="checkbox" name="entitlement" value="content" checked>内容</label>
+    <div class="section-title">
+      <div><h2>授权列表</h2><p>优先通过状态卡片和筛选器定位需要处理的授权，服务端单次最多返回最近 200 条。</p></div>
+      <div class="actions" style="margin-top:0"><span class="count" id="licenseCount">0 条</span><button class="small ghost" id="exportBtn" type="button" disabled>导出 CSV</button></div>
     </div>
-    <div class="grid" style="margin-top:12px">
+    <div class="toolbar">
+      <div class="filters">
+        <input id="licenseSearch" type="search" aria-label="搜索授权" placeholder="搜索授权前缀、ID 或客户备注">
+        <select id="licenseStatusFilter" aria-label="按授权状态筛选"><option value="all">全部状态</option><option value="active">正常</option><option value="expiring">30 天内到期</option><option value="disabled">已停用</option><option value="expired">已过期</option></select>
+        <select id="licenseFeatureFilter" aria-label="按功能权益筛选"><option value="all">全部功能</option><option value="lead">拓客</option><option value="traffic">引流</option><option value="content">内容</option></select>
+        <button class="small ghost" id="clearFiltersBtn" type="button">清除筛选</button>
+      </div>
+    </div>
+    <div class="scroll"><table><thead><tr><th>授权</th><th>状态</th><th>功能</th><th>设备</th><th>有效期</th><th>客户备注</th><th>操作</th></tr></thead><tbody id="licenseRows"><tr><td colspan="7" class="muted">请先连接授权服务并加载数据</td></tr></tbody></table></div>
+  </section>
+
+  <details class="log-panel"><summary>操作日志</summary><div class="log-body"><div class="section-title"><span class="count">仅保留在当前页面</span><button class="small ghost" id="clearLogBtn" type="button">清空日志</button></div><pre id="log">等待操作</pre></div></details>
+</main>
+
+<dialog id="connectionDialog" aria-labelledby="connectionTitle">
+  <div class="dialog-head"><div><h2 id="connectionTitle">连接授权服务</h2><p>管理 Token 仅保存在当前页面内存，关闭或刷新页面后会清空。</p></div><button class="close-icon" id="closeConnectionBtn" type="button" aria-label="关闭">×</button></div>
+  <div class="dialog-body">
+    <div class="grid">
+      <label class="field"><span class="field-title">Sealos API Base</span><input id="apiBase" value="https://tfwqsfaegbdj.sealosbja.site/ai-customer" spellcheck="false"></label>
+      <label class="field"><span class="field-title">管理 Token</span><span class="input-with-button"><input id="adminToken" type="password" autocomplete="off" spellcheck="false"><button class="ghost" id="toggleTokenBtn" type="button">显示</button></span></label>
+    </div>
+    <div class="dialog-footer"><button class="ghost" id="healthBtn" type="button">检查服务</button><button class="primary" id="connectBtn" type="button">连接并加载</button></div>
+  </div>
+</dialog>
+
+<dialog id="createDialog" aria-labelledby="createTitle">
+  <div class="dialog-head"><div><h2 id="createTitle">创建新授权</h2><p>完整授权码只在创建成功后展示一次，请立即交付或保存。</p></div><button class="close-icon" id="closeCreateBtn" type="button" aria-label="关闭">×</button></div>
+  <div class="dialog-body">
+    <div class="checks"><strong>开通功能</strong><label><input type="checkbox" name="entitlement" value="lead" checked>拓客</label><label><input type="checkbox" name="entitlement" value="traffic" checked>引流</label><label><input type="checkbox" name="entitlement" value="content" checked>内容</label></div>
+    <div class="grid">
       <label class="field"><span class="field-title">最大设备数</span><input id="createMax" type="number" min="1" max="100" value="3"></label>
       <label class="field"><span class="field-title">过期时间（留空为长期）</span><input id="createExpiry" type="datetime-local"></label>
     </div>
-    <div class="actions"><button class="small ghost" data-expiry-target="createExpiry" data-expiry-days="30">30天</button><button class="small ghost" data-expiry-target="createExpiry" data-expiry-days="365">1年</button><button class="small ghost" data-expiry-target="createExpiry" data-expiry-days="0">长期</button></div>
-    <label class="field" style="margin-top:12px"><span class="field-title">备注</span><textarea id="createRemark" maxlength="1000" placeholder="客户名称、订单号、联系人等"></textarea></label>
-    <div class="actions"><button class="primary" id="createBtn">创建授权</button><button class="ghost" id="resetCreateBtn">重置</button></div>
+    <div class="actions"><button class="small ghost" type="button" data-expiry-target="createExpiry" data-expiry-days="30">30 天</button><button class="small ghost" type="button" data-expiry-target="createExpiry" data-expiry-days="365">1 年</button><button class="small ghost" type="button" data-expiry-target="createExpiry" data-expiry-days="0">长期</button></div>
+    <label class="field" style="margin-top:14px"><span class="field-title">客户备注</span><textarea id="createRemark" maxlength="1000" placeholder="建议填写客户名称、订单号和联系人，便于后续搜索"></textarea></label>
+    <div class="dialog-footer"><button class="ghost" id="resetCreateBtn" type="button">重置</button><button class="primary" id="createBtn" type="button">确认创建</button></div>
     <div class="created" id="createdBox">
-      <strong>授权创建成功</strong><span class="muted" id="createdMeta"></span>
-      <code id="createdCode"></code>
-      <div class="actions"><button class="primary" id="copyCodeBtn">复制授权码</button><button class="ghost" id="saveCodeBtn">保存为文件</button><button class="ghost" id="dismissCodeBtn">关闭</button></div>
+      <strong>授权创建成功</strong><span class="muted" id="createdMeta"></span><code id="createdCode"></code>
+      <div class="actions"><button class="primary" id="copyCodeBtn" type="button">复制授权码</button><button class="ghost" id="saveCodeBtn" type="button">保存为文件</button><button class="ghost" id="dismissCodeBtn" type="button">我已保存</button></div>
     </div>
-  </section>
+  </div>
+</dialog>
 
-  <section class="panel">
-    <div class="section-title"><div><h2>授权列表</h2><p>最多显示服务端最近返回的200条授权。</p></div><span class="count" id="licenseCount">0 条</span></div>
-    <div class="toolbar">
-      <div class="filters">
-        <input id="licenseSearch" type="search" placeholder="搜索授权前缀、ID或备注">
-        <select id="licenseStatusFilter"><option value="all">全部状态</option><option value="active">正常</option><option value="disabled">已停用</option><option value="expired">已过期</option></select>
-        <select id="licenseFeatureFilter"><option value="all">全部功能</option><option value="lead">拓客</option><option value="traffic">引流</option><option value="content">内容</option></select>
+<dialog class="wide" id="editor" aria-labelledby="editorTitle">
+  <div class="dialog-head editor-head">
+    <div><h2 id="editorTitle">授权详情</h2><p id="selectedHint"></p></div>
+    <div class="actions" style="margin-top:0"><button class="small ghost" id="copyLicenseIdBtn" type="button">复制授权 ID</button><button class="close-icon" id="closeEditorBtn" type="button" aria-label="关闭">×</button></div>
+  </div>
+  <div class="dialog-body">
+    <section class="modal-section">
+      <div class="warning-box">完整授权码无法找回；客户遗失时需要创建新授权。停用授权会让全部设备在下次联网校验时失去授权。</div>
+      <div class="grid three">
+        <label class="field"><span class="field-title">授权状态</span><select id="editStatus"><option value="active">启用</option><option value="disabled">停用</option></select></label>
+        <label class="field"><span class="field-title">最大设备数</span><input id="editMax" type="number" min="1" max="100"></label>
+        <label class="field"><span class="field-title">过期时间（留空为长期）</span><input id="editExpiry" type="datetime-local"></label>
       </div>
-    </div>
-    <div class="scroll"><table><thead><tr><th>授权</th><th>状态</th><th>功能</th><th>设备</th><th>有效期</th><th>备注</th><th>操作</th></tr></thead><tbody id="licenseRows"></tbody></table></div>
-  </section>
+      <div class="actions"><button class="small ghost" type="button" data-expiry-target="editExpiry" data-expiry-days="30">延长至 30 天后</button><button class="small ghost" type="button" data-expiry-target="editExpiry" data-expiry-days="365">延长至 1 年后</button><button class="small ghost" type="button" data-expiry-target="editExpiry" data-expiry-days="0">改为长期</button></div>
+      <div class="checks"><strong>功能权益</strong><label><input type="checkbox" name="editEntitlement" value="lead">拓客</label><label><input type="checkbox" name="editEntitlement" value="traffic">引流</label><label><input type="checkbox" name="editEntitlement" value="content">内容</label></div>
+      <label class="field"><span class="field-title">客户备注</span><textarea id="editRemark" maxlength="1000"></textarea></label>
+      <div class="actions"><button class="primary" id="saveBtn" type="button">保存修改</button><button class="ghost" id="resetEditBtn" type="button">撤销未保存修改</button></div>
+    </section>
 
-  <section class="panel" id="editor" hidden>
-    <div class="editor-head">
-      <div><h2>授权详情</h2><p id="selectedHint"></p></div>
-      <div class="actions" style="margin-top:0"><button class="small ghost" id="copyLicenseIdBtn">复制授权ID</button><button class="small ghost" id="closeEditorBtn">关闭</button></div>
-    </div>
-    <div class="warning-box">完整授权码无法找回。如客户遗失，需要创建新授权；这里可以修改现有授权的状态、权益、有效期和设备上限。</div>
-    <div class="grid three">
-      <label class="field"><span class="field-title">授权状态</span><select id="editStatus"><option value="active">启用</option><option value="disabled">停用</option></select></label>
-      <label class="field"><span class="field-title">最大设备数</span><input id="editMax" type="number" min="1" max="100"></label>
-      <label class="field"><span class="field-title">过期时间（留空为长期）</span><input id="editExpiry" type="datetime-local"></label>
-    </div>
-    <div class="actions"><button class="small ghost" data-expiry-target="editExpiry" data-expiry-days="30">从现在起30天</button><button class="small ghost" data-expiry-target="editExpiry" data-expiry-days="365">从现在起1年</button><button class="small ghost" data-expiry-target="editExpiry" data-expiry-days="0">改为长期</button></div>
-    <div class="checks">
-      <strong>功能权益：</strong>
-      <label><input type="checkbox" name="editEntitlement" value="lead">拓客</label>
-      <label><input type="checkbox" name="editEntitlement" value="traffic">引流</label>
-      <label><input type="checkbox" name="editEntitlement" value="content">内容</label>
-    </div>
-    <label class="field" style="margin-top:12px"><span class="field-title">备注</span><textarea id="editRemark" maxlength="1000"></textarea></label>
-    <div class="actions"><button class="primary" id="saveBtn">保存修改</button><button class="ghost" id="resetEditBtn">撤销未保存修改</button></div>
-
-    <div class="section-title" style="margin-top:24px"><div><h3>授权设备</h3><p>撤销会立即释放名额；恢复设备要求授权正常且仍有空余名额。</p></div><button class="small ghost" id="loadDevicesBtn">刷新设备</button></div>
-    <div class="device-summary"><span id="deviceTotal">共 0 台</span><span id="deviceActive">正常 0 台</span><span id="deviceRevoked">已撤销 0 台</span></div>
-    <div class="toolbar">
-      <div class="filters"><input id="deviceSearch" type="search" placeholder="搜索设备码、设备名或版本"><select id="deviceStatusFilter"><option value="all">全部设备</option><option value="active">正常</option><option value="revoked">已撤销</option></select></div>
-    </div>
-    <div class="scroll"><table><thead><tr><th>设备</th><th>名称/版本</th><th>状态</th><th>首次激活</th><th>最近续租</th><th>最近状态变更</th><th>操作</th></tr></thead><tbody id="deviceRows"></tbody></table></div>
-  </section>
-
-  <section class="panel"><div class="section-title"><h2>操作日志</h2><button class="small ghost" id="clearLogBtn">清空日志</button></div><pre id="log">等待操作</pre></section>
-</main>
+    <section class="modal-section">
+      <div class="section-title"><div><h3>激活设备</h3><p>撤销会立即释放名额；恢复要求授权正常、未过期且仍有空余名额。</p></div><button class="small ghost" id="loadDevicesBtn" type="button">刷新设备</button></div>
+      <div class="device-summary"><span id="deviceTotal">共 0 台</span><span id="deviceActive">正常 0 台</span><span id="deviceRevoked">已撤销 0 台</span></div>
+      <div class="toolbar"><div class="filters"><input id="deviceSearch" type="search" aria-label="搜索设备" placeholder="搜索设备码、设备名或版本"><select id="deviceStatusFilter" aria-label="按设备状态筛选"><option value="all">全部设备</option><option value="active">正常</option><option value="revoked">已撤销</option></select></div></div>
+      <div class="scroll"><table><thead><tr><th>设备</th><th>名称 / 版本</th><th>状态</th><th>首次激活</th><th>最近续租</th><th>最近状态变更</th><th>操作</th></tr></thead><tbody id="deviceRows"></tbody></table></div>
+    </section>
+  </div>
+</dialog>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
   const byId = id => document.getElementById(id)
   const state = { licenses: [], selectedId: '', devices: [], created: null }
   const TRUSTED_API_HOSTS = new Set(['tfwqsfaegbdj.sealosbja.site', '127.0.0.1', 'localhost'])
-  const STATUS = { active:['正常','active'], disabled:['已停用','disabled'], expired:['已过期','expired'], revoked:['已撤销','revoked'] }
+  const STATUS = { active:['正常','active'], expiring:['即将到期','soon'], soon:['即将到期','soon'], disabled:['已停用','disabled'], expired:['已过期','expired'], revoked:['已撤销','revoked'] }
   const FEATURES = { lead:'拓客', traffic:'引流', content:'内容' }
 
   // API 返回内容只通过 textContent 渲染，避免把服务端数据当作 HTML 执行。
@@ -182,6 +192,13 @@
     return Number.isNaN(date.getTime()) ? empty : date.toLocaleString()
   }
 
+  // 仅用于管理页提醒；服务端仍是授权状态的唯一判断来源。
+  function isExpiringSoon(item) {
+    if (item.status !== 'active' || !item.expiresAt) return false
+    const remaining = new Date(item.expiresAt).getTime() - Date.now()
+    return remaining > 0 && remaining <= 30 * 86400000
+  }
+
   function localInputTime(value) {
     if (!value) return ''
     const date = new Date(value)
@@ -216,6 +233,7 @@
   function renderStats() {
     byId('statTotal').textContent = state.licenses.length
     byId('statActive').textContent = state.licenses.filter(item => item.status === 'active').length
+    byId('statExpiring').textContent = state.licenses.filter(isExpiringSoon).length
     byId('statDisabled').textContent = state.licenses.filter(item => item.status === 'disabled').length
     byId('statExpired').textContent = state.licenses.filter(item => item.status === 'expired').length
     byId('statDevices').textContent = state.licenses.reduce((sum,item) => sum + Number(item.activeDeviceCount || 0), 0)
@@ -228,8 +246,15 @@
     const feature = byId('licenseFeatureFilter').value
     return state.licenses.filter(item => {
       const searchable = `${item.codePrefix || ''} ${item.licenseId || ''} ${item.remark || ''}`.toLowerCase()
-      return (!query || searchable.includes(query)) && (status === 'all' || item.status === status) && (feature === 'all' || (item.entitlements || []).includes(feature))
+      const statusMatches = status === 'all' || (status === 'expiring' ? isExpiringSoon(item) : item.status === status)
+      return (!query || searchable.includes(query)) && statusMatches && (feature === 'all' || (item.entitlements || []).includes(feature))
     })
+  }
+
+  function setLicenseFilter(status) {
+    byId('licenseStatusFilter').value = status
+    document.querySelectorAll('[data-license-filter]').forEach(button => button.classList.toggle('active-filter', button.dataset.licenseFilter === status))
+    renderLicenses()
   }
 
   function renderLicenses() {
@@ -238,10 +263,11 @@
     const nodes = items.map(item => {
       const identity = element('td', {}, [element('code', { text:item.codePrefix }), element('div', { text:item.licenseId, className:'muted', title:item.licenseId })])
       const status = element('td', {}, [badge(item.status)])
+      if (isExpiringSoon(item)) status.append(badge('soon'))
       const devicesClass = Number(item.activeDeviceCount) > Number(item.maxDevices) ? 'device-over' : ''
       const devices = textCell(`${item.activeDeviceCount}/${item.maxDevices}`, devicesClass)
       const expiry = element('td', {}, [element('div', { text:formatTime(item.expiresAt, '长期') }), element('div', { text:`创建：${formatTime(item.createdAt)}`, className:'muted' })])
-      const remark = textCell(item.remark || '—')
+      const remark = element('td', { text:item.remark || '—', className:'remark', title:item.remark || '' })
       const actions = element('td', {}, [actionButton('管理','ghost',() => selectLicense(item.licenseId))])
       return element('tr', {}, [identity,status,featureCell(item.entitlements),devices,expiry,remark,actions])
     })
@@ -254,7 +280,7 @@
   async function refresh({ quiet = false, reloadDevices = false } = {}) {
     const result = await request('/admin/licenses')
     state.licenses = Array.isArray(result.data) ? result.data : []
-    if (state.selectedId && !selectedLicense()) { state.selectedId = ''; state.devices = []; byId('editor').hidden = true }
+    if (state.selectedId && !selectedLicense()) { state.selectedId = ''; state.devices = []; if (byId('editor').open) byId('editor').close() }
     renderStats(); renderLicenses()
     if (selectedLicense()) { populateEditor(); if (reloadDevices) await loadDevices() }
     setConnection(true, '已连接')
@@ -267,6 +293,7 @@
   }
 
   async function createLicense() {
+    if (state.created?.licenseCode) throw new Error('请先保存当前授权码，再创建下一条授权')
     const entitlements = checked('entitlement')
     if (!entitlements.length) throw new Error('至少选择一项功能权益')
     const result = await request('/admin/licenses', { method:'POST', body:{ entitlements, maxDevices:validateMax('createMax'), expiresAt:expiryValue('createExpiry'), remark:byId('createRemark').value.trim() } })
@@ -274,6 +301,8 @@
     byId('createdCode').textContent = result.data.licenseCode
     byId('createdMeta').textContent = ` · ${result.data.codePrefix} · ${result.data.licenseId}`
     byId('createdBox').style.display = 'block'
+    byId('createBtn').hidden = true
+    byId('resetCreateBtn').hidden = true
     writeLog('授权已创建；完整授权码不会再次从服务端返回', { licenseId:result.data.licenseId, codePrefix:result.data.codePrefix })
     showToast('授权创建成功，请立即保存授权码')
     await refresh({ quiet:true })
@@ -293,9 +322,8 @@
   async function selectLicense(id) {
     state.selectedId = id
     state.devices = []
-    byId('editor').hidden = false
     populateEditor(); renderDevices()
-    byId('editor').scrollIntoView({ behavior:'smooth', block:'start' })
+    byId('editor').showModal()
     await loadDevices()
   }
 
@@ -396,9 +424,13 @@
   }
 
   document.querySelectorAll('[data-expiry-target]').forEach(button => button.addEventListener('click', () => setExpiry(button.dataset.expiryTarget, Number(button.dataset.expiryDays))))
-  ;['licenseSearch','licenseStatusFilter','licenseFeatureFilter'].forEach(id => byId(id).addEventListener('input', renderLicenses))
+  ;['licenseSearch','licenseFeatureFilter'].forEach(id => byId(id).addEventListener('input', renderLicenses))
+  byId('licenseStatusFilter').addEventListener('input', () => setLicenseFilter(byId('licenseStatusFilter').value))
   ;['deviceSearch','deviceStatusFilter'].forEach(id => byId(id).addEventListener('input', renderDevices))
-  bindAction('refreshBtn', () => refresh())
+  document.querySelectorAll('[data-license-filter]').forEach(button => button.addEventListener('click', () => setLicenseFilter(button.dataset.licenseFilter)))
+  byId('clearFiltersBtn').addEventListener('click', () => { byId('licenseSearch').value = ''; byId('licenseFeatureFilter').value = 'all'; setLicenseFilter('all') })
+  bindAction('refreshBtn', async () => { if (!byId('adminToken').value.trim()) { byId('connectionDialog').showModal(); return } await refresh() })
+  bindAction('connectBtn', async () => { await refresh(); byId('connectionDialog').close() })
   bindAction('healthBtn', async () => { const result = await request('/healthz', { auth:false }); setConnection(true,'服务正常'); writeLog('健康检查通过', result.data); showToast('Sealos 授权服务正常') })
   bindAction('createBtn', createLicense)
   bindAction('saveBtn', saveSelected)
@@ -406,10 +438,15 @@
   bindAction('copyCodeBtn', () => copyText(state.created?.licenseCode,'授权码已复制'))
   bindAction('copyLicenseIdBtn', () => copyText(state.selectedId,'授权ID已复制'))
   bindAction('saveCodeBtn', async () => { if (!state.created?.licenseCode) throw new Error('没有可保存的授权码'); downloadText(`AI_Customer_${state.created.codePrefix}.txt`, `授权码：${state.created.licenseCode}\n授权ID：${state.created.licenseId}\n`); writeLog('授权码已保存为文件') })
-  byId('dismissCodeBtn').addEventListener('click', () => { state.created = null; byId('createdCode').textContent = ''; byId('createdBox').style.display = 'none' })
+  byId('dismissCodeBtn').addEventListener('click', () => { state.created = null; byId('createdCode').textContent = ''; byId('createdBox').style.display = 'none'; byId('createBtn').hidden = false; byId('resetCreateBtn').hidden = false; resetCreate(); byId('createDialog').close() })
   byId('resetCreateBtn').addEventListener('click', resetCreate)
   byId('resetEditBtn').addEventListener('click', populateEditor)
-  byId('closeEditorBtn').addEventListener('click', () => { state.selectedId = ''; state.devices = []; byId('editor').hidden = true })
+  byId('openConnectionBtn').addEventListener('click', () => byId('connectionDialog').showModal())
+  byId('closeConnectionBtn').addEventListener('click', () => byId('connectionDialog').close())
+  byId('openCreateBtn').addEventListener('click', () => { if (!byId('adminToken').value.trim()) { byId('connectionDialog').showModal(); return } byId('createDialog').showModal() })
+  byId('closeCreateBtn').addEventListener('click', () => byId('createDialog').close())
+  byId('closeEditorBtn').addEventListener('click', () => byId('editor').close())
+  byId('editor').addEventListener('close', () => { state.selectedId = ''; state.devices = [] })
   byId('clearLogBtn').addEventListener('click', () => { byId('log').textContent = '等待操作' })
   byId('exportBtn').addEventListener('click', exportLicenses)
   byId('toggleTokenBtn').addEventListener('click', () => { const input = byId('adminToken'); const reveal = input.type === 'password'; input.type = reveal ? 'text' : 'password'; byId('toggleTokenBtn').textContent = reveal ? '隐藏' : '显示' })
