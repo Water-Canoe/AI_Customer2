@@ -3707,6 +3707,42 @@ def test_cdp_existing_mode_auto_launches_browser(tmp_path: Path, monkeypatch: py
     assert launch_calls[0]["viewport"] is None
 
 
+def test_packaged_cdp_auto_launches_without_source_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import crawler_adapter
+
+    media_dir = tmp_path / "runtime" / "MyCrawler"
+    crawler_executable = media_dir / "MyCrawler.exe"
+    crawler_executable.parent.mkdir(parents=True)
+    crawler_executable.touch()
+    monkeypatch.setenv("AI_CUSTOMER_CRAWLER_EXECUTABLE", str(crawler_executable))
+
+    launch_calls: list[dict[str, object]] = []
+
+    class FakeContext:
+        def close(self) -> None:
+            pass
+
+    def fake_launch_persistent_context(profile_dir: str, **kwargs: object) -> FakeContext:
+        launch_calls.append({"profile_dir": profile_dir, **kwargs})
+        return FakeContext()
+
+    fake_cloakbrowser = types.ModuleType("cloakbrowser")
+    fake_cloakbrowser.launch_persistent_context = fake_launch_persistent_context
+    monkeypatch.setattr(crawler_adapter, "_is_tcp_port_open", lambda host, port: False)
+    monkeypatch.setattr(crawler_adapter, "_wait_for_tcp_port", lambda host, port, timeout_seconds: True)
+    monkeypatch.setitem(sys.modules, "cloakbrowser", fake_cloakbrowser)
+
+    message = crawler_adapter._ensure_cdp_browser_for_existing_mode(
+        media_dir,
+        headless=True,
+        user_data_dir=tmp_path / "account-profile",
+    )
+
+    assert "9222" in str(message)
+    assert launch_calls[0]["headless"] is True
+    assert "--remote-debugging-port=9222" in launch_calls[0]["args"]
+
+
 def test_media_crawler_sqlite_schema_auto_initializes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import crawler_adapter
 

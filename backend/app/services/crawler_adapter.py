@@ -856,6 +856,10 @@ def _close_cdp_browser_context() -> None:
 def _read_media_crawler_cdp_config(media_dir: Path) -> dict[str, object]:
     config_path = media_dir / "config" / "base_config.py"
     if not config_path.exists():
+        # Nuitka 组件不携带源码配置，但构建时固定启用了现有 CDP 浏览器模式。
+        packaged_executable = os.getenv("AI_CUSTOMER_CRAWLER_EXECUTABLE", "").strip()
+        if packaged_executable and Path(packaged_executable).is_file():
+            return {"enabled": True, "connect_existing": True, "debug_port": 9222}
         return {"enabled": False, "connect_existing": False, "debug_port": 9222}
     text = config_path.read_text(encoding="utf-8", errors="ignore")
     return {
