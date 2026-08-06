@@ -590,7 +590,7 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 
 2026-08-06 已使用 `-ProgramOnly` 生成 `deliverables/1.2.14/AI_Customer_Program_1.2.14.zip`：大小 216,462,008 字节，SHA-256 为 `e4cbc7e0192222f92a42239da5875da4afd60304cf4b2d248d96cded337eb906`，schema 为 12，继续要求 Environment `1.0.3`，未重建或上传 Environment ZIP。前端 29 项、后端 444 项通过，8 项联网测试跳过；Program ZIP 白名单、发布清单、文件哈希和 Ed25519 签名均通过独立验证。`AI_Customer_App.exe` 与稳定启动器的 Windows PE Subsystem 均为 2（Windows GUI），打包版不再创建后端控制台，应用与 Uvicorn 访问日志统一写入 `data/logs/app.log`，页面“安全退出”继续走 Uvicorn 正常关停流程。Program ZIP 已上传到 `releases/1.2.14/AI_Customer_1.2.14_windows_x64.zip`；Sealos `stable` 已按测试发布启用、非强制、灰度 100%。发布时本机已有 1.2.13 客户端运行并持有单实例锁，因此未强制关闭现有客户端做双开冒烟测试，保留该客户端用于真实更新提示、下载、重启和版本切换验证。
 
-2026-08-06 已使用 `-ProgramOnly` 生成 `deliverables/1.2.15/AI_Customer_Program_1.2.15.zip`：大小 216,463,058 字节，SHA-256 为 `0b198800ac81729697899e286935e5a14c8cb1fb3599eeacb15ce9dc00fa27b3`，schema 为 12，继续要求 Environment `1.0.3`，未重建 Environment ZIP。前端 29 项、后端 446 项通过，8 项联网测试跳过；Program ZIP 已通过独立白名单、发布清单、版本、环境声明和文件哈希校验。本版修复 Nuitka 打包版缺少 MyCrawler 源码配置时未自动预启动 CloakBrowser CDP 端口的问题。
+2026-08-06 已使用 `-ProgramOnly` 生成 `deliverables/1.2.15/AI_Customer_Program_1.2.15.zip`：大小 216,463,058 字节，SHA-256 为 `0b198800ac81729697899e286935e5a14c8cb1fb3599eeacb15ce9dc00fa27b3`，schema 为 12，继续要求 Environment `1.0.3`，未重建 Environment ZIP。前端 29 项、后端 446 项通过，8 项联网测试跳过；Program ZIP 已通过独立白名单、发布清单、版本、环境声明和文件哈希校验。本版修复 Nuitka 打包版缺少 MyCrawler 源码配置时未自动预启动 CloakBrowser CDP 端口的问题。Program ZIP 已上传到 `releases/1.2.15/AI_Customer_1.2.15_windows_x64.zip`；Sealos `stable` 已启用、非强制、灰度 100%，远端包大小与 SHA-256 和本地一致。
 
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。平台登录作为统一账号任务在后端浏览器队列中运行，不再启动带 `--internal-platform-login` 参数的第二个主程序；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
 
