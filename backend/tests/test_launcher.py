@@ -59,20 +59,40 @@ def test_launcher_health_rejects_development_workbench(monkeypatch) -> None:
 
 def test_packaged_launcher_writes_rotating_log(tmp_path: Path) -> None:
     launcher = _launcher_module()
-    log_path = launcher.configure_persistent_logging(tmp_path)
-    handlers = [
-        handler
-        for handler in logging.getLogger().handlers
-        if getattr(handler, "baseFilename", "") == str(log_path)
-    ]
+    logger_names = ("", "uvicorn", "uvicorn.error", "uvicorn.access")
+    loggers = {name: logging.getLogger(name) for name in logger_names}
+    original = {
+        name: (list(logger.handlers), logger.level, logger.propagate)
+        for name, logger in loggers.items()
+    }
+    file_handlers: set[logging.Handler] = set()
     try:
-        logging.getLogger("ai-customer-test").warning("persistent-log-proof")
-        for handler in handlers:
+        launcher.uvicorn.Config("app.main:app")
+        log_path = launcher.configure_persistent_logging(tmp_path)
+        file_handlers = {
+            handler
+            for logger in loggers.values()
+            for handler in logger.handlers
+            if getattr(handler, "baseFilename", "") == str(log_path)
+        }
+        assert file_handlers
+        for name in ("uvicorn", "uvicorn.access"):
+            assert loggers[name].handlers == list(file_handlers)
+
+        logging.getLogger("ai-customer-test").info("application-log-proof")
+        logging.getLogger("uvicorn.error").error("server-log-proof")
+        logging.getLogger("uvicorn.access").info("access-log-proof")
+        for handler in file_handlers:
             handler.flush()
-        assert "persistent-log-proof" in log_path.read_text(encoding="utf-8")
+        content = log_path.read_text(encoding="utf-8")
+        assert "application-log-proof" in content
+        assert "server-log-proof" in content
+        assert "access-log-proof" in content
     finally:
-        for logger in (logging.getLogger(), logging.getLogger("uvicorn.error"), logging.getLogger("uvicorn.access")):
-            for handler in handlers:
-                logger.removeHandler(handler)
-        for handler in handlers:
+        for name, logger in loggers.items():
+            handlers, level, propagate = original[name]
+            logger.handlers[:] = handlers
+            logger.setLevel(level)
+            logger.propagate = propagate
+        for handler in file_handlers:
             handler.close()

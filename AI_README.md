@@ -549,14 +549,14 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 
 `deliverables/<程序版本>/` 是唯一可以发给客户或上传的目录，只包含四项：`AI_Customer_Program_<程序版本>.zip`、`AI_Customer_Environment_<环境版本>.zip`、`SHA256.txt` 和 `README.txt`。`dist/releases/` 和 `output/` 中的历史文件都不是新架构交付物。`output/` 仍是被 Git 忽略的 Nuitka、组装、签名和测试中间工作区；脚本不自动删除历史文件，维护人员需要清理时必须逐个确认明确目录。
 
-当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.13`；前端 `package.json` 和 `package-lock.json` 不再重复保存产品版本，页面显示值只读取后端 `/api/health`。`-Version` 省略时自动读取后端版本，显式传入不同值时构建会停止，避免 EXE、页面与发布清单不一致。本轮重建 MyCrawler shim 和带来源校验的新组件，因此环境版本提升为 `1.0.3`。只有明确要求正式打包时才执行：
+当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.14`；前端 `package.json` 和 `package-lock.json` 不再重复保存产品版本，页面显示值只读取后端 `/api/health`。`-Version` 省略时自动读取后端版本，显式传入不同值时构建会停止，避免 EXE、页面与发布清单不一致。本轮只调整程序启动与日志行为，继续使用 Environment `1.0.3`。只有明确要求正式打包时才执行：
 
 ```powershell
-# 生成程序 ZIP 和环境 ZIP；程序版本默认读取 backend/app/version.py。
-.\script\build_package.ps1 -Version 1.2.13 -EnvironmentVersion 1.0.3
+# 复用 Environment 1.0.3，只生成用于远程更新的程序 ZIP。
+.\script\build_package.ps1 -Version 1.2.14 -EnvironmentVersion 1.0.3 -ProgramOnly
 ```
 
-脚本先执行前端测试与生产构建、完整后端测试，再使用 Nuitka 4.1.3 编译主程序和稳定启动器；MyCrawler 由 `build_mycrawler_component.ps1` 独立构建。组件清单记录源码 Git 提交、源码是否有未提交修改及关键产物 SHA-256（Secure Hash Algorithm 256-bit，256位安全散列算法），组装和发布时复验文件哈希。完整交付只在同类组件恰好有一个有效候选时自动选择；存在多个候选会停止，必须通过 `-MyCrawlerComponentPath` 和 `-VoxComponentPath` 明确指定，旧的无来源或无哈希组件需要重新构建。VoxCPM2/PyTorch/CUDA 不参与 MyCrawler 或主程序的 Nuitka 编译，继续复用现有独立推理组件。两个桌面 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。缺少 Nuitka、MyCrawler 组件、应用图标或构建资源时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
+脚本先执行前端测试与生产构建、完整后端测试，再使用 Nuitka 4.1.3 编译主程序和稳定启动器；MyCrawler 由 `build_mycrawler_component.ps1` 独立构建。组件清单记录源码 Git 提交、源码是否有未提交修改及关键产物 SHA-256（Secure Hash Algorithm 256-bit，256位安全散列算法），组装和发布时复验文件哈希。完整交付只在同类组件恰好有一个有效候选时自动选择；存在多个候选会停止，必须通过 `-MyCrawlerComponentPath` 和 `-VoxComponentPath` 明确指定，旧的无来源或无哈希组件需要重新构建。VoxCPM2/PyTorch/CUDA 不参与 MyCrawler 或主程序的 Nuitka 编译，继续复用现有独立推理组件。两个桌面 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。打包版后端使用 Windows 图形界面模式，不显示命令行窗口；应用日志和 Uvicorn 访问日志统一写入 `data/logs/app.log`，用户通过页面“安全退出”正常停止服务。缺少 Nuitka、MyCrawler 组件、应用图标或构建资源时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
 
 程序 ZIP 保存经常变化并允许远程更新的文件：最外层稳定入口 `AI_Customer.exe`、`runtime/application/AI_Customer_App.exe`、`runtime/application/app/`、`runtime/frontend_dist/`、说明和发布清单。环境 ZIP 保存体积大且较少变化的依赖：主程序 Nuitka standalone 运行库、Playwright、CloakBrowser 浏览器、Nuitka 版 `runtime/MyCrawler/MyCrawler.exe` 及其运行库、VoxCPM2/PyTorch/CUDA 推理组件和模型。新环境包不再携带 MyCrawler 便携 Python、`.py` 源码或原始 site-packages；MyCrawler 上游 `LICENSE` 仍随组件保留。
 

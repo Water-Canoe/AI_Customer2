@@ -118,9 +118,23 @@ def configure_persistent_logging(data_dir: Path) -> Path:
     log_path = log_dir / "app.log"
     handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    logging.getLogger().addHandler(handler)
-    for name in ("uvicorn.error", "uvicorn.access"):
-        logging.getLogger(name).addHandler(handler)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(handler)
+    for name in ("uvicorn", "uvicorn.access"):
+        logger = logging.getLogger(name)
+        for existing in list(logger.handlers):
+            logger.removeHandler(existing)
+            existing.close()
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        logger.addHandler(handler)
+    error_logger = logging.getLogger("uvicorn.error")
+    for existing in list(error_logger.handlers):
+        error_logger.removeHandler(existing)
+        existing.close()
+    error_logger.setLevel(logging.INFO)
+    error_logger.propagate = True
     return log_path
 
 
@@ -168,11 +182,10 @@ def main() -> None:
 
     port = choose_port()
     url = f"http://127.0.0.1:{port}"
-    threading.Thread(target=open_browser_when_ready, args=(url,), daemon=True).start()
-    print(f"AI拓客工具已启动：{url}")
-    print("关闭这个窗口即可停止本地服务。")
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info")
     log_path = configure_persistent_logging(Path(os.environ["AI_CUSTOMER_DATA_DIR"]))
+    logging.getLogger(__name__).info("AI拓客工具已启动：%s", url)
+    threading.Thread(target=open_browser_when_ready, args=(url,), daemon=True).start()
     server = uvicorn.Server(config)
     app.state.uvicorn_server = server
     try:

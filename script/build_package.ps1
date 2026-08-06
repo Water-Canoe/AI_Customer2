@@ -1,6 +1,6 @@
 param(
     [string]$Version = "",
-    [string]$EnvironmentVersion = "1.0.2",
+    [string]$EnvironmentVersion = "1.0.3",
     [string]$MyCrawlerComponentPath = "",
     [string]$VoxComponentPath = "",
     [string]$VoiceModelsPath = "",
@@ -175,7 +175,7 @@ try {
         --mode=standalone `
         --output-dir=$BuildDist `
         --output-filename=AI_Customer_App.exe `
-        --windows-console-mode=force `
+        --windows-console-mode=disable `
         --windows-icon-from-ico=$AppIcon `
         --assume-yes-for-downloads `
         --python-flag=no_docstrings `
