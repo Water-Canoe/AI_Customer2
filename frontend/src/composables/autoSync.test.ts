@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createAutoSyncController } from './autoSync'
+import { createAutoSyncController, shouldAutoSyncView, shouldReplaceDraft } from './autoSync'
 
 
 describe('createAutoSyncController', () => {
@@ -41,5 +41,23 @@ describe('createAutoSyncController', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     await Promise.resolve()
     expect(sync).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('settings draft protection', () => {
+  it('loads settings on entry but does not poll configuration editors', () => {
+    for (const view of ['settings', 'message-settings', 'traffic-settings', 'content-settings', 'global-settings']) {
+      expect(shouldAutoSyncView(view, 'route')).toBe(true)
+      expect(shouldAutoSyncView(view, 'auto')).toBe(false)
+      expect(shouldAutoSyncView(view, 'visible')).toBe(false)
+    }
+    expect(shouldAutoSyncView('traffic-monitor', 'auto')).toBe(true)
+  })
+
+  it('rejects stale responses while a draft is dirty or saving', () => {
+    expect(shouldReplaceDraft(false, false, 2, 2)).toBe(true)
+    expect(shouldReplaceDraft(true, false, 2, 2)).toBe(false)
+    expect(shouldReplaceDraft(false, true, 2, 2)).toBe(false)
+    expect(shouldReplaceDraft(false, false, 1, 2)).toBe(false)
   })
 })

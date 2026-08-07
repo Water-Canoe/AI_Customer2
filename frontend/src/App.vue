@@ -113,8 +113,8 @@
       :checking="licenseChecking"
       :info="licenseInfo"
       :code="licenseCodeDraft"
-      @update:code="licenseCodeDraft = $event"
-      @close="licenseDialogOpen = false"
+      @update:code="updateLicenseCodeDraft"
+      @close="closeLicenseDialog"
       @save="saveLicenseCode"
       @check="checkLicense"
       @copy-device="copyDeviceCode"
@@ -147,7 +147,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from './shared/api'
 import type { Dict } from './shared/types'
 import { useAiWorkbench } from './composables/aiWorkbench'
-import { createAutoSyncController, type AutoSyncReason } from './composables/autoSync'
+import { createAutoSyncController, shouldAutoSyncView, shouldReplaceDraft, type AutoSyncReason } from './composables/autoSync'
 import { useMessageWorkbench } from './composables/messageWorkbench'
 import { useOverviewWorkbench } from './composables/overviewWorkbench'
 import { useTableWorkbench } from './composables/tableWorkbench'
@@ -167,6 +167,7 @@ const licenseDialogOpen = ref(false)
 const licenseLoading = ref(false)
 const licenseChecking = ref(false)
 const licenseCodeDraft = ref('')
+const licenseDraftDirty = ref(false)
 const updateChecking = ref(false)
 const exitRequested = ref(false)
 const appVersion = ref('')
@@ -185,6 +186,7 @@ const tombstones = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20, tota
 const tombstoneFilters = ref<Dict>({ entity_type: '', platform: '', source: '', query: '', page: 1, page_size: 20 })
 const sidebarMenu = ref<any>(null)
 let settingsMutationSeq = 0
+let licenseMutationSeq = 0
 
 const {
   tasks,
@@ -552,7 +554,7 @@ const routeListeners = computed(() => {
   if (activeView.value === 'message-settings') {
     return {
       save: saveSettings,
-      'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
+      'settings-dirty-change': updateSettingsDraftDirty,
     }
   }
   if (activeView.value === 'logs') {
@@ -589,7 +591,7 @@ const routeListeners = computed(() => {
   if (activeView.value === 'settings') {
     return {
       save: saveSettings,
-      'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
+      'settings-dirty-change': updateSettingsDraftDirty,
       'check-env': checkEnv,
     }
   }
@@ -597,7 +599,7 @@ const routeListeners = computed(() => {
   if (activeView.value.startsWith('content-')) return {}
   return {
     save: saveSettings,
-    'settings-dirty-change': (dirty: boolean) => settingsDraftDirty.value = dirty,
+    'settings-dirty-change': updateSettingsDraftDirty,
     'check-env': checkEnv,
     'load-tombstones': loadTombstones,
     'clear-data': clearAllData,
@@ -626,10 +628,13 @@ async function refreshAll(notifyFailure = false) {
 }
 
 async function loadLicense(silent = false) {
+  const requestSeq = licenseMutationSeq
   try {
     const { data } = await api.get('/license')
     licenseInfo.value = data
-    licenseCodeDraft.value = String(data.license_code || '')
+    if (shouldReplaceDraft(licenseDraftDirty.value, licenseChecking.value, requestSeq, licenseMutationSeq)) {
+      licenseCodeDraft.value = String(data.license_code || '')
+    }
   } catch (error: any) {
     if (!silent) ElMessage.error(error?.response?.data?.detail || '授权信息加载失败')
   }
@@ -637,12 +642,25 @@ async function loadLicense(silent = false) {
 
 async function openLicenseDialog() {
   licenseDialogOpen.value = true
+  licenseDraftDirty.value = false
+  licenseMutationSeq += 1
   licenseLoading.value = true
   try {
     await loadLicense()
   } finally {
     licenseLoading.value = false
   }
+}
+
+function updateLicenseCodeDraft(value: string) {
+  licenseCodeDraft.value = value
+  licenseDraftDirty.value = true
+  licenseMutationSeq += 1
+}
+
+function closeLicenseDialog() {
+  licenseDialogOpen.value = false
+  licenseDraftDirty.value = false
 }
 
 async function checkForUpdates() {
@@ -691,10 +709,14 @@ function closeFrontendPage() {
 
 async function saveLicenseCode() {
   licenseChecking.value = true
+  const saveSeq = ++licenseMutationSeq
   try {
     const { data } = await api.put('/license', { license_code: licenseCodeDraft.value })
     licenseInfo.value = data
-    licenseCodeDraft.value = String(data.license_code || '')
+    if (saveSeq === licenseMutationSeq) {
+      licenseCodeDraft.value = String(data.license_code || '')
+      licenseDraftDirty.value = false
+    }
     ElMessage.success('授权码已保存')
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.detail || '授权码保存失败')
@@ -705,10 +727,14 @@ async function saveLicenseCode() {
 
 async function checkLicense() {
   licenseChecking.value = true
+  const saveSeq = ++licenseMutationSeq
   try {
     const { data } = await api.post('/license/check', { license_code: licenseCodeDraft.value })
     licenseInfo.value = data
-    licenseCodeDraft.value = String(data.license_code || '')
+    if (saveSeq === licenseMutationSeq) {
+      licenseCodeDraft.value = String(data.license_code || '')
+      licenseDraftDirty.value = false
+    }
     if (data.authorized) ElMessage.success(data.message || '授权校验通过')
     else ElMessage.error(data.message || '授权校验失败')
   } catch (error: any) {
@@ -752,7 +778,8 @@ async function loadSettings() {
   const { data } = await api.get('/settings')
   // 保存中或已有本地草稿时，忽略可能较旧的设置响应。
   if (requestSeq !== settingsMutationSeq) return
-  if (activeView.value === 'settings' && (settingsDraftDirty.value || settingsSaving.value)) return
+  if (['settings', 'message-settings'].includes(activeView.value)
+    && !shouldReplaceDraft(settingsDraftDirty.value, settingsSaving.value, requestSeq, settingsMutationSeq)) return
   settings.value = data
 }
 
@@ -830,26 +857,34 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
 
 async function syncCurrentView(reason: AutoSyncReason) {
   const includeStatic = reason === 'route'
+  const refreshView = shouldAutoSyncView(activeView.value, reason)
   const loaders = [
     ...(isGlobalSettingsView.value ? [] : [loadWorkbenchStatus]),
-    ...currentViewLoaders(includeStatic, !isContentView.value),
+    ...(refreshView ? currentViewLoaders(includeStatic, !isContentView.value) : []),
   ]
   await Promise.allSettled(loaders.map(loader => loader()))
 }
 
 async function saveSettings(values: Dict) {
   settingsSaving.value = true
-  settingsMutationSeq += 1
+  const saveSeq = ++settingsMutationSeq
   try {
     const { data } = await api.put('/settings', { values })
     settings.value = data
-    settingsDraftDirty.value = false
-    settingsSaveRevision.value += 1
+    if (saveSeq === settingsMutationSeq) {
+      settingsDraftDirty.value = false
+      settingsSaveRevision.value += 1
+    }
     ElMessage.success('设置已保存')
     await checkEnv()
   } finally {
     settingsSaving.value = false
   }
+}
+
+function updateSettingsDraftDirty(dirty: boolean) {
+  settingsDraftDirty.value = dirty
+  if (dirty) settingsMutationSeq += 1
 }
 
 async function clearAllData() {

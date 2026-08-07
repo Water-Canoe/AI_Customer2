@@ -1,9 +1,25 @@
 export type AutoSyncReason = 'auto' | 'route' | 'visible'
 
+const DRAFT_PROTECTED_VIEWS = new Set([
+  'settings',
+  'message-settings',
+  'traffic-settings',
+  'content-settings',
+  'global-settings',
+])
+
 type AutoSyncOptions = {
   sync: (reason: AutoSyncReason) => Promise<unknown>
   interval: () => number
   tickMs?: number
+}
+
+export function shouldAutoSyncView(view: string, reason: AutoSyncReason) {
+  return reason === 'route' || !DRAFT_PROTECTED_VIEWS.has(view)
+}
+
+export function shouldReplaceDraft(dirty: boolean, saving: boolean, requestRevision: number, currentRevision: number) {
+  return !dirty && !saving && requestRevision === currentRevision
 }
 
 

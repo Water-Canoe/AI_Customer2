@@ -17,6 +17,7 @@ import {
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict, PlatformAccount } from '../shared/types'
+import { shouldReplaceDraft } from '../composables/autoSync'
 import { SplitPane } from '../components/ui/SplitPane'
 import { COMPACT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, metricTile, sectionTitle } from '../components/ui/Workbench'
@@ -68,6 +69,8 @@ export default defineComponent({
     const imageDraft = ref<Dict[]>([])
     const uploadedImages = ref<Dict[]>([])
     const imageUploading = ref(false)
+    const settingsDirty = ref(false)
+    const settingsSaving = ref(false)
     const trafficEnv = ref<Dict>({})
     const accounts = ref<PlatformAccount[]>([])
     const envInstalling = ref(false)
@@ -84,6 +87,7 @@ export default defineComponent({
     const trafficLogRef = ref<HTMLElement | null>(null)
     const trafficLogAutoFollow = ref(true)
     const LOG_BOTTOM_THRESHOLD = 28
+    let settingsMutationSeq = 0
 
     const view = computed(() => String(route.name || 'traffic-plans'))
     // 归档数据默认隐藏，只有用户切换到“已归档”时才展示。
@@ -173,7 +177,9 @@ export default defineComponent({
     }
 
     async function loadSettings() {
+      const requestSeq = settingsMutationSeq
       const { data } = await api.get('/traffic/settings')
+      if (!shouldReplaceDraft(settingsDirty.value, settingsSaving.value || imageUploading.value, requestSeq, settingsMutationSeq)) return
       settings.value = data
       uploadedImages.value = []
       settingsDraft.value = { ...(data.values || {}) }
@@ -340,14 +346,25 @@ export default defineComponent({
     }
 
     async function saveSettings() {
+      settingsSaving.value = true
+      const saveSeq = ++settingsMutationSeq
       const texts = textDraft.value
         .map(item => ({ text: String(item.text || '').trim(), enabled: Boolean(item.enabled) }))
         .filter(item => item.text)
       const images = imageLines().map(item => ({ path: item.path, enabled: Boolean(item.enabled) }))
-      const { data } = await api.put('/traffic/settings', { values: settingsDraft.value, texts, images })
-      settings.value = data
-      uploadedImages.value = []
-      ElMessage.success('引流设置已保存')
+      try {
+        const { data } = await api.put('/traffic/settings', { values: { ...settingsDraft.value }, texts, images })
+        settings.value = data
+        if (saveSeq === settingsMutationSeq) {
+          settingsDirty.value = false
+          uploadedImages.value = []
+        }
+        ElMessage.success('引流设置已保存')
+      } catch (error: any) {
+        ElMessage.error(error?.response?.data?.detail || '引流设置保存失败')
+      } finally {
+        settingsSaving.value = false
+      }
     }
 
     async function uploadImages(event: Event) {
@@ -546,9 +563,9 @@ export default defineComponent({
     function renderSettingsPage() {
       return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 320, minSideWidth: 280, maxSideWidth: 420 }, {
         default: () => h('section', { class: 'pane content-pane traffic-settings-pane traffic-split-main' }, [
-          sectionTitle({ title: '引流设置', subtitle: '文案、图片和执行限额统一在这里维护', icon: Setting, tone: 'teal' }),
+          sectionTitle({ title: '引流设置', subtitle: settingsDirty.value ? '有未保存修改，自动刷新不会覆盖当前草稿' : '文案、图片和执行限额统一在这里维护', icon: Setting, tone: settingsDirty.value ? 'amber' : 'teal' }),
           h('div', { class: 'task-card-actions traffic-settings-actions' }, [
-            h('button', { class: 'primary-action', onClick: saveSettings }, '保存设置'),
+            h('button', { class: 'primary-action', disabled: settingsSaving.value, onClick: saveSettings }, settingsSaving.value ? '保存中...' : '保存设置'),
           ]),
           h('div', { class: 'form-grid traffic-settings-form' }, [
             settingInput('traffic_daily_action_limit', '每日动作上限'),
@@ -836,7 +853,10 @@ export default defineComponent({
     }
 
     function settingInput(key: string, text: string) {
-      return labelInput(text, settingsDraft.value[key] || '', value => settingsDraft.value[key] = value)
+      return labelInput(text, settingsDraft.value[key] || '', value => {
+        settingsDraft.value[key] = value
+        markSettingsDirty()
+      })
     }
 
     function settingToggle(key: string, text: string) {
@@ -844,7 +864,10 @@ export default defineComponent({
       return h('label', [h('input', {
         type: 'checkbox',
         checked: !['0', 'false', 'no', 'off'].includes(value),
-        onChange: (event: Event) => settingsDraft.value[key] = (event.target as HTMLInputElement).checked ? 'true' : 'false',
+        onChange: (event: Event) => {
+          settingsDraft.value[key] = (event.target as HTMLInputElement).checked ? 'true' : 'false'
+          markSettingsDirty()
+        },
       }), text])
     }
 
@@ -904,26 +927,32 @@ export default defineComponent({
 
     function addTextDraft() {
       textDraft.value = [...textDraft.value, { text: '', enabled: true }]
+      markSettingsDirty()
     }
 
     function updateTextDraft(index: number, patch: Dict) {
       textDraft.value = textDraft.value.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)
+      markSettingsDirty()
     }
 
     function removeTextDraft(index: number) {
       textDraft.value = textDraft.value.filter((_, itemIndex) => itemIndex !== index)
+      markSettingsDirty()
     }
 
     function addImageDraft() {
       imageDraft.value = [...imageDraft.value, { path: '', preview_url: '', enabled: true }]
+      markSettingsDirty()
     }
 
     function updateImageDraft(index: number, patch: Dict) {
       imageDraft.value = imageDraft.value.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)
+      markSettingsDirty()
     }
 
     function removeImageDraft(index: number) {
       imageDraft.value = imageDraft.value.filter((_, itemIndex) => itemIndex !== index)
+      markSettingsDirty()
     }
 
     function renderImageManager() {
@@ -1122,7 +1151,13 @@ export default defineComponent({
       const lines = imageLines()
       if (!lines.some(item => item.path === path)) {
         imageDraft.value = [{ path, preview_url: typeof image === 'string' ? '' : String(image.preview_url || ''), enabled: true }, ...imageDraft.value]
+        markSettingsDirty()
       }
+    }
+
+    function markSettingsDirty() {
+      settingsDirty.value = true
+      settingsMutationSeq += 1
     }
 
     function imageName(path: string) {

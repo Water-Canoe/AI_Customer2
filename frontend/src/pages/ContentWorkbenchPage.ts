@@ -15,6 +15,7 @@ import {
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict, PlatformAccount } from '../shared/types'
+import { shouldReplaceDraft } from '../composables/autoSync'
 import { SplitPane } from '../components/ui/SplitPane'
 import { COMPACT_PAGE_SIZE, DEFAULT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
@@ -188,6 +189,8 @@ export default defineComponent({
     const selectedJob = ref<Dict | null>(null)
     const settings = ref<Dict>({})
     const settingsDraft = ref<Dict>({})
+    const settingsDirty = ref(false)
+    const settingsSaving = ref(false)
     const environment = ref<Dict>({})
     const videoDraft = ref<Dict>(defaultVideoDraft())
     const selectedAssetIds = ref<string[]>([])
@@ -219,6 +222,7 @@ export default defineComponent({
     const voiceScriptLoading = ref(false)
     const voiceRecordingSaving = ref(false)
     let refreshTimer = 0
+    let settingsMutationSeq = 0
     let voiceRecordingTimer = 0
     let mediaRecorder: MediaRecorder | null = null
     let mediaStream: MediaStream | null = null
@@ -308,7 +312,9 @@ export default defineComponent({
     }
 
     async function loadSettings() {
+      const requestSeq = settingsMutationSeq
       const { data } = await api.get('/content/settings')
+      if (!shouldReplaceDraft(settingsDirty.value, settingsSaving.value, requestSeq, settingsMutationSeq)) return
       settings.value = data
       settingsDraft.value = JSON.parse(JSON.stringify(data))
     }
@@ -720,14 +726,22 @@ export default defineComponent({
     }
 
     async function saveSettings() {
+      settingsSaving.value = true
+      const saveSeq = ++settingsMutationSeq
       try {
-        const { data } = await api.put('/content/settings', { values: settingsDraft.value })
+        const values = JSON.parse(JSON.stringify(settingsDraft.value))
+        const { data } = await api.put('/content/settings', { values })
         settings.value = data
-        settingsDraft.value = JSON.parse(JSON.stringify(data))
+        if (saveSeq === settingsMutationSeq) {
+          settingsDraft.value = JSON.parse(JSON.stringify(data))
+          settingsDirty.value = false
+        }
         ElMessage.success('内容设置已保存')
         await loadEnvironment()
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '内容设置保存失败')
+      } finally {
+        settingsSaving.value = false
       }
     }
 
@@ -1129,7 +1143,7 @@ export default defineComponent({
     function renderSettingsPage() {
       return h(SplitPane, { class: 'content-card-split', storageKey: 'content-settings', side: 'right', defaultSideWidth: 340, minSideWidth: 300 }, {
         default: () => h('section', { class: 'pane content-pane content-settings-pane' }, [
-          sectionTitle({ title: '内容设置', subtitle: '视频AI与拓客AI完全独立', icon: Setting, tone: 'teal', aside: h('button', { class: 'primary-action', onClick: saveSettings }, '保存设置') }),
+          sectionTitle({ title: '内容设置', subtitle: settingsDirty.value ? '有未保存修改，自动刷新不会覆盖当前草稿' : '视频AI与拓客AI完全独立', icon: Setting, tone: settingsDirty.value ? 'amber' : 'teal', aside: h('button', { class: 'primary-action', disabled: settingsSaving.value, onClick: saveSettings }, settingsSaving.value ? '保存中...' : '保存设置') }),
           ...settingGroups.map(group => h('details', { class: 'settings-fold', open: group.title === '素材与基础处理' }, [
             h('summary', [h('strong', group.title), h('span', `${group.fields.length} 项配置`)]),
             h('div', { class: 'settings-fold-body form-grid content-settings-grid' }, group.fields.map(renderSettingField)),
@@ -1144,12 +1158,18 @@ export default defineComponent({
 
     function renderSettingField(field: SettingField) {
       const value = getPath(settingsDraft.value, field.path)
-      if (field.type === 'boolean') return formSelect(field.label, String(Boolean(value)), [['true', '开启'], ['false', '关闭']], selected => setPath(settingsDraft.value, field.path, selected === 'true'))
-      if (field.options) return formSelect(field.label, String(value ?? ''), field.options, selected => setPath(settingsDraft.value, field.path, selected))
-      if (field.type === 'list') return formTextarea(field.label, Array.isArray(value) ? value.join('\n') : String(value || ''), selected => setPath(settingsDraft.value, field.path, selected.split(/[\n,]+/).map(item => item.trim()).filter(Boolean)))
-      if (field.type === 'textarea') return formTextarea(field.label, String(value || ''), selected => setPath(settingsDraft.value, field.path, selected), 'field-full')
-      if (field.type === 'number') return formNumber(field.label, Number(value || 0), selected => setPath(settingsDraft.value, field.path, selected))
-      return formInput(field.label, String(value ?? ''), selected => setPath(settingsDraft.value, field.path, selected), '', field.type === 'password' ? 'password' : 'text')
+      if (field.type === 'boolean') return formSelect(field.label, String(Boolean(value)), [['true', '开启'], ['false', '关闭']], selected => updateSetting(field.path, selected === 'true'))
+      if (field.options) return formSelect(field.label, String(value ?? ''), field.options, selected => updateSetting(field.path, selected))
+      if (field.type === 'list') return formTextarea(field.label, Array.isArray(value) ? value.join('\n') : String(value || ''), selected => updateSetting(field.path, selected.split(/[\n,]+/).map(item => item.trim()).filter(Boolean)))
+      if (field.type === 'textarea') return formTextarea(field.label, String(value || ''), selected => updateSetting(field.path, selected), 'field-full')
+      if (field.type === 'number') return formNumber(field.label, Number(value || 0), selected => updateSetting(field.path, selected))
+      return formInput(field.label, String(value ?? ''), selected => updateSetting(field.path, selected), '', field.type === 'password' ? 'password' : 'text')
+    }
+
+    function updateSetting(path: string, value: unknown) {
+      setPath(settingsDraft.value, path, value)
+      settingsDirty.value = true
+      settingsMutationSeq += 1
     }
 
     function renderEnvironment() {

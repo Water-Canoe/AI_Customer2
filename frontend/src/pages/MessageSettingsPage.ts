@@ -3,6 +3,7 @@ import { ChatDotRound, Check, Refresh, Timer } from '@element-plus/icons-vue'
 import { ElAlert, ElMessage } from 'element-plus'
 
 import { sectionTitle } from '../components/ui/Workbench'
+import { shouldReplaceDraft } from '../composables/autoSync'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 
@@ -30,6 +31,8 @@ export default defineComponent({
     const limitDraft = reactive({ daily_limit: 100, hourly_limit: 40 })
     const settingsDirty = ref(false)
     const limitSaving = ref(false)
+    const limitsDirty = ref(false)
+    let limitMutationSeq = 0
 
     function syncSettings() {
       if (settingsDirty.value) return
@@ -46,8 +49,10 @@ export default defineComponent({
     }
 
     async function loadLimits(showError = true) {
+      const requestSeq = limitMutationSeq
       try {
         const { data } = await api.get('/message-workbench/limits')
+        if (!shouldReplaceDraft(limitsDirty.value, limitSaving.value, requestSeq, limitMutationSeq)) return
         limits.value = data || {}
         limitDraft.daily_limit = Number(data.daily_limit || 100)
         limitDraft.hourly_limit = Number(data.hourly_limit || 40)
@@ -58,15 +63,27 @@ export default defineComponent({
 
     async function saveLimits() {
       limitSaving.value = true
+      const saveSeq = ++limitMutationSeq
       try {
-        const { data } = await api.put('/message-workbench/limits', limitDraft)
+        const payload = { daily_limit: limitDraft.daily_limit, hourly_limit: limitDraft.hourly_limit }
+        const { data } = await api.put('/message-workbench/limits', payload)
         limits.value = data
+        if (saveSeq === limitMutationSeq) {
+          limitDraft.daily_limit = Number(data.daily_limit || 100)
+          limitDraft.hourly_limit = Number(data.hourly_limit || 40)
+          limitsDirty.value = false
+        }
         ElMessage.success('私信频率额度已保存')
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '私信频率额度保存失败')
       } finally {
         limitSaving.value = false
       }
+    }
+
+    function markLimitsDirty() {
+      limitsDirty.value = true
+      limitMutationSeq += 1
     }
 
     watch(() => props.settings, syncSettings, { immediate: true, deep: true })
@@ -130,14 +147,14 @@ export default defineComponent({
       h('section', { class: 'pane message-limit-pane' }, [
         sectionTitle({
           title: '私信频率额度',
-          subtitle: '单客户、批量和定时私信统一占用，失败或结果不明确也会计数',
+          subtitle: limitsDirty.value ? '有未保存修改，自动刷新不会覆盖当前草稿' : '单客户、批量和定时私信统一占用，失败或结果不明确也会计数',
           icon: Timer,
-          tone: 'blue',
+          tone: limitsDirty.value ? 'amber' : 'blue',
           aside: h('button', { class: 'secondary-action', onClick: () => loadLimits() }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
         }),
         h('div', { class: 'message-limit-grid' }, [
-          numberControl('每日不同用户上限', limitDraft.daily_limit, 1, 100, value => { limitDraft.daily_limit = value }),
-          numberControl('每小时不同用户上限', limitDraft.hourly_limit, 1, 40, value => { limitDraft.hourly_limit = value }),
+          numberControl('每日不同用户上限', limitDraft.daily_limit, 1, 100, value => { limitDraft.daily_limit = value; markLimitsDirty() }),
+          numberControl('每小时不同用户上限', limitDraft.hourly_limit, 1, 40, value => { limitDraft.hourly_limit = value; markLimitsDirty() }),
           limitMetric('本小时已占用', limits.value.configured ? limits.value.used_hour : '未配置', limits.value.configured ? `剩余 ${limits.value.remaining_hour}` : ''),
           limitMetric('今日已占用', limits.value.configured ? limits.value.used_today : '未配置', limits.value.configured ? `剩余 ${limits.value.remaining_today}` : ''),
         ]),
@@ -153,6 +170,7 @@ export default defineComponent({
         ]),
       ]),
     ])
+
   },
 })
 

@@ -42,11 +42,17 @@ export default defineComponent({
     async function loadAccounts(showError = true) {
       try {
         const { data } = await api.get<PlatformAccount[]>('/accounts')
+        if (accountEditorFocused()) return
         accounts.value = data
         accountPage.value = Math.min(accountPage.value, Math.max(1, Math.ceil(accounts.value.length / ACCOUNT_PAGE_SIZE)))
       } catch (error: any) {
         if (showError) ElMessage.error(error?.response?.data?.detail || '账号列表加载失败')
       }
+    }
+
+    function accountEditorFocused() {
+      const active = document.activeElement as HTMLElement | null
+      return Boolean(active?.closest('.account-center-card') && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName))
     }
 
     async function createAccount() {
