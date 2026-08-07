@@ -6295,17 +6295,24 @@ def test_task_diagnostics_classifies_missing_raw_table_and_empty_success(tmp_pat
     blocked = crawler_adapter.create_task(
         TaskCreate(mode="competitor_discovery", platform="dy", keywords="策略拦截", execute_crawler=False)
     )
+    network = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-2", execute_crawler=False)
+    )
     with database.connect() as conn:
         conn.execute("UPDATE crawl_jobs SET status = 'failed', error = 'sqlite3.OperationalError: no such table: douyin_aweme' WHERE id = ?", (failed["id"],))
         crawler_adapter.log_task(conn, str(failed["id"]), "error", "sqlalchemy.exc.OperationalError: no such table: douyin_aweme")
         conn.execute("UPDATE crawl_jobs SET status = 'succeeded' WHERE id = ?", (empty["id"],))
         conn.execute("UPDATE crawl_jobs SET status = 'failed', error = 'error: Failed to spawn: `python` Caused by: 应用程序控制策略已阻止此文件。 (os error 4551)' WHERE id = ?", (blocked["id"],))
         crawler_adapter.log_task(conn, str(blocked["id"]), "error", "Caused by: 应用程序控制策略已阻止此文件。 (os error 4551)")
+        conn.execute("UPDATE crawl_jobs SET status = 'failed', error = 'MyCrawler exit code 1' WHERE id = ?", (network["id"],))
+        crawler_adapter.log_task(conn, str(network["id"]), "info", "[CDPBrowserManager] Browser connection disconnected")
+        crawler_adapter.log_task(conn, str(network["id"]), "error", "httpx.ConnectError")
 
     client = TestClient(app)
     failed_response = client.get(f"/api/tasks/{failed['id']}/diagnostics")
     empty_response = client.get(f"/api/tasks/{empty['id']}/diagnostics")
     blocked_response = client.get(f"/api/tasks/{blocked['id']}/diagnostics")
+    network_response = client.get(f"/api/tasks/{network['id']}/diagnostics")
 
     assert failed_response.status_code == 200
     assert failed_response.json()["category"] == "数据库缺表"
@@ -6316,6 +6323,8 @@ def test_task_diagnostics_classifies_missing_raw_table_and_empty_success(tmp_pat
     assert blocked_response.status_code == 200
     assert blocked_response.json()["category"] == "路径配置"
     assert "应用控制策略" in blocked_response.json()["summary"]
+    assert network_response.status_code == 200
+    assert network_response.json()["category"] == "网络代理"
 
 
 def test_tombstone_summary_list_and_task_dedup_summary(tmp_path: Path) -> None:

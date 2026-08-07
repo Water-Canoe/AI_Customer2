@@ -176,6 +176,7 @@ def verify_upstream_compatibility() -> None:
         (kuaishou_client.KuaiShouClient.get_video_comments, ("self", "photo_id", "pcursor")),
         (kuaishou_client.KuaiShouClient.get_video_sub_comments, ("self", "photo_id", "root_comment_id", "pcursor")),
         (douyin_client.DouYinClient.get_all_user_aweme_posts, ("self", "sec_user_id", "callback")),
+        (douyin_client.DouYinClient.get_user_info, ("self", "sec_user_id")),
         (xhs_client.XiaoHongShuClient.get_all_notes_by_creator, ("self", "user_id", "crawl_interval", "callback", "xsec_token", "xsec_source")),
         (kuaishou_client.KuaiShouClient.get_all_videos_by_creator, ("self", "user_id", "crawl_interval", "callback")),
         (douyin_core.DouYinCrawler.get_aweme_detail, ("self", "aweme_id", "semaphore")),
@@ -494,6 +495,28 @@ def _patch_douyin_http_resilience() -> None:
 
         resilient_get_user_aweme_posts._ai_customer_http_resilient = True  # type: ignore[attr-defined]
         douyin_client.DouYinClient.get_user_aweme_posts = resilient_get_user_aweme_posts
+
+    get_user_info = douyin_client.DouYinClient.get_user_info
+    _require_signature(get_user_info, ("self", "sec_user_id"))
+    if not getattr(get_user_info, "_ai_customer_http_resilient", False):
+
+        async def resilient_get_user_info(self, sec_user_id: str):
+            for attempt in range(3):
+                try:
+                    return await get_user_info(self, sec_user_id)
+                except httpx.HTTPError as exc:
+                    if attempt == 2:
+                        utils.logger.error(
+                            f"[AI_Customer.http_resilience] skip creator info {sec_user_id}: {exc.__class__.__name__} {exc}"
+                        )
+                        return {}
+                    utils.logger.warning(
+                        f"[AI_Customer.http_resilience] retry creator info {sec_user_id} ({attempt + 1}/2): {exc.__class__.__name__} {exc}"
+                    )
+                    await asyncio.sleep(attempt + 1)
+
+        resilient_get_user_info._ai_customer_http_resilient = True  # type: ignore[attr-defined]
+        douyin_client.DouYinClient.get_user_info = resilient_get_user_info
 
 
 def _patch_douyin_sleep_interval() -> None:

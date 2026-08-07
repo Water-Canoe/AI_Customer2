@@ -22,7 +22,7 @@ DIAGNOSTIC_RULES: list[Rule] = [
     ),
     (
         "浏览器CDP",
-        ("cdp port", "remote debugging", "chrome://inspect", "browser connection disconnected", "still waiting for browser"),
+        ("cdp port", "remote debugging", "chrome://inspect", "still waiting for browser"),
         "浏览器远程调试端口不可用或连接中断，MyCrawler 没有拿到稳定的登录浏览器环境。",
         ["安全退出软件后重新打开，再重试任务", "系统会自动启动 9222 调试浏览器，无需手动配置 Chrome", "如果仍然失败，请确认程序包与环境包版本匹配且 CloakBrowser 环境完整"],
         True,
