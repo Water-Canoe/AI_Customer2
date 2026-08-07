@@ -722,16 +722,20 @@ def _can_resume(kind: str) -> bool:
 
 def _format_job(row: Any) -> dict[str, Any]:
     value = database.row_to_dict(row) or dict(row)
+    # 队列接口约定这两个 JSON 字段始终为对象。
     for key in ("payload", "result"):
         try:
-            value[key] = json.loads(value.get(key) or "{}")
-        except json.JSONDecodeError:
-            value[key] = {}
+            parsed = json.loads(value.get(key) or "{}")
+        except (TypeError, json.JSONDecodeError):
+            parsed = {}
+        value[key] = parsed if isinstance(parsed, dict) else {}
     value["cancel_requested"] = bool(value.get("cancel_requested"))
     return value
 
 
-def _json_safe(value: Any) -> Any:
+def _json_safe(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
     try:
         json.dumps(value, ensure_ascii=False)
         return value

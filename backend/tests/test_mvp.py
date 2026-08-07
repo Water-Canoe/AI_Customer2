@@ -2079,10 +2079,15 @@ def test_account_login_route_enqueues_generic_job(tmp_path: Path, monkeypatch: p
 
 def test_account_and_runtime_lists_match_response_contracts(tmp_path: Path) -> None:
     prepare_project(tmp_path)
+    from app import database
     from app.main import app
     from app.services import job_queue
 
     job_queue.enqueue("contract_check", entity_id="contract-1")
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO runtime_jobs(id, kind, entity_id, status, result) VALUES('contract-null', 'contract_check', 'contract-null', 'failed', 'null')"
+        )
     client = TestClient(app)
     accounts = client.get("/api/accounts")
     jobs = client.get("/api/runtime/jobs")
@@ -2091,6 +2096,7 @@ def test_account_and_runtime_lists_match_response_contracts(tmp_path: Path) -> N
     assert {"id", "features", "feature_status", "login_status"} <= accounts.json()[0].keys()
     assert jobs.status_code == 200
     assert jobs.json()["items"][0]["id"]
+    assert next(item for item in jobs.json()["items"] if item["id"] == "contract-null")["result"] == {}
     assert {"items", "total", "page", "page_size", "active"} <= jobs.json().keys()
 
 
