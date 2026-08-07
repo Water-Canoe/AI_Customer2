@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.metadata
+import importlib.util
 import json
 import os
 import re
 import shutil
+import sys
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
@@ -41,12 +44,14 @@ def status() -> dict[str, Any]:
     root = component_root()
     pointer = _read_current_pointer()
     executable = worker_executable(required=False)
+    development_script = _development_worker_script() if executable is None else None
     return {
         "component": COMPONENT_NAME,
-        "installed": bool(executable),
-        "version": str(pointer.get("version") or "") if pointer else "",
+        "installed": bool(executable or development_script),
+        "version": str(pointer.get("version") or "") if executable else _development_version(),
+        "mode": "component" if executable else "development" if development_script else "missing",
         "path": str(root),
-        "executable": str(executable or ""),
+        "executable": str(executable or (sys.executable if development_script else "")),
     }
 
 
@@ -66,7 +71,41 @@ def worker_executable(*, required: bool = True) -> Path | None:
     return executable
 
 
+def worker_command(*, required: bool = True) -> list[str] | None:
+    executable = worker_executable(required=False)
+    if executable is not None:
+        return [str(executable), "--serve"]
+    development_script = _development_worker_script()
+    if development_script is not None:
+        # Source development reuses the verified virtual environment instead of a release component.
+        return [sys.executable, "-X", "utf8", str(development_script), "--serve"]
+    if required:
+        raise RuntimeError("音色克隆组件未安装，请先在内容设置中安装")
+    return None
+
+
+def _development_worker_script() -> Path | None:
+    if os.getenv("AI_CUSTOMER_PACKAGED") == "1" or importlib.util.find_spec("voxcpm") is None:
+        return None
+    script = database.WORKSPACE_ROOT / "packaging" / "voxcpm_runtime.py"
+    return script if script.is_file() else None
+
+
+def _development_version() -> str:
+    if _development_worker_script() is None:
+        return ""
+    try:
+        return importlib.metadata.version("voxcpm")
+    except importlib.metadata.PackageNotFoundError:
+        return "development"
+
+
 def install(progress: ProgressCallback, cancelled: CancelCallback) -> dict[str, Any]:
+    if _development_worker_script() is not None:
+        result = _progress("installed", "开发环境中的音色克隆运行时已就绪", 100)
+        result.update({"version": _development_version(), "path": str(_development_worker_script())})
+        progress(result)
+        return result
     progress(_progress("checking", "正在检查可用组件", 0))
     if cancelled():
         raise RuntimeError("组件安装已取消")

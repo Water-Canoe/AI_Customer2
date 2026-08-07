@@ -121,8 +121,8 @@ def _ensure_worker() -> subprocess.Popen[str]:
     if _worker is not None and _worker.poll() is None:
         return _worker
     _stop_worker()
-    executable = voice_runtime.worker_executable()
-    if executable is None:
+    command = voice_runtime.worker_command()
+    if command is None:
         raise RuntimeError("音色克隆组件未安装")
     log_path = database.get_data_root() / "voxcpm_runtime.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +130,7 @@ def _ensure_worker() -> subprocess.Popen[str]:
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
         _worker = subprocess.Popen(
-            [str(executable), "--serve"],
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=_worker_log,

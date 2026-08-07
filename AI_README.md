@@ -439,7 +439,7 @@ Figma 重新设计文件已创建：`https://www.figma.com/design/rdTNj01Q3OkbN3
 - `data/video_generation/models`：按需下载的Whisper模型；默认模型为 `large-v3`，发布包不预装。
 - `data/video_generation/tasks/<job-id>/attempt-N`：单次生成脚本、音频、字幕、中间视频和最终视频。
 - `runtime/models/VoxCPM2`：便携交付中的VoxCPM2模型；来自环境 ZIP，不随程序更新删除。源码开发环境仍使用 `data/voice_models/VoxCPM2`。
-- `runtime/components/voxcpm2`：便携交付中的音色克隆推理组件、后续断点下载文件和当前组件指针；来自环境 ZIP，不进入业务数据备份。源码开发环境仍使用根目录 `runtimes/voxcpm2`。
+- `runtime/components/voxcpm2`：便携交付中的音色克隆推理组件、后续断点下载文件和当前组件指针；来自环境 ZIP，不进入业务数据备份。源码开发环境直接使用当前虚拟环境中的 `voxcpm` 和 `packaging/voxcpm_runtime.py`，不要求额外安装独立组件。
 - `data/social_publish/accounts`：平台登录状态文件，数据库和API只保存/返回账号业务信息，不返回Cookie内容或路径。
 - `data/social_publish/qrcode`：扫码登录二维码；`data/social_publish/tasks/<task-id>` 保存当次失败截图和诊断文件。
 

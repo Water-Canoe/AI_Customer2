@@ -1192,10 +1192,15 @@ export default defineComponent({
       const runtime = voiceRuntime.value
       const job = voiceRuntimeJob.value
       const progress = Number(job.result?.percent || 0)
-      const detail = runtime.installed
+      const development = runtime.mode === 'development'
+      const detail = development
+        ? `开发环境 VoxCPM2 ${runtime.version || ''} 已就绪${runtime.downloaded ? '，模型已下载' : '，模型将在首次使用时下载'}`
+        : runtime.installed
         ? `组件 ${runtime.version || ''} 已安装${runtime.downloaded ? '，模型已就绪' : '，模型将在首次使用时下载'}`
         : String(job.error || job.result?.message || '可按需下载安装，不占用主程序下载体积')
-      const action = voiceRuntimeInstalling.value
+      const action = development
+        ? null
+        : voiceRuntimeInstalling.value
         ? h('button', { type: 'button', class: 'ghost-button', onClick: cancelVoiceRuntimeInstall }, '取消')
         : h('button', { type: 'button', class: runtime.installed ? 'ghost-button' : 'primary-action content-runtime-install', onClick: installVoiceRuntime }, runtime.installed ? '检查更新' : '安装')
       return h('div', { class: ['content-env-row', 'content-runtime-row', runtime.installed ? 'ok' : 'warn'] }, [

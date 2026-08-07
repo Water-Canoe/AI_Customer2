@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import sys
 import zipfile
 
 import pytest
@@ -75,6 +76,29 @@ def test_component_archive_extracts_and_activates(tmp_path, monkeypatch: pytest.
 
     assert voice_runtime.status()["installed"] is True
     assert voice_runtime.worker_executable() == installed / "VoxCPM_Runtime.exe"
+
+
+def test_source_development_uses_current_python_runtime(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import voice_runtime
+
+    monkeypatch.delenv("AI_CUSTOMER_PACKAGED", raising=False)
+    monkeypatch.setenv("AI_CUSTOMER_RUNTIME_DIR", str(tmp_path / "runtimes"))
+    monkeypatch.setattr(voice_runtime.importlib.util, "find_spec", lambda name: object() if name == "voxcpm" else None)
+    monkeypatch.setattr(voice_runtime.importlib.metadata, "version", lambda name: "2.0.3" if name == "voxcpm" else "")
+
+    script = voice_runtime.database.WORKSPACE_ROOT / "packaging" / "voxcpm_runtime.py"
+    assert voice_runtime.worker_command() == [sys.executable, "-X", "utf8", str(script), "--serve"]
+    assert voice_runtime.status()["mode"] == "development"
+
+
+def test_packaged_runtime_never_uses_source_python(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import voice_runtime
+
+    monkeypatch.setenv("AI_CUSTOMER_PACKAGED", "1")
+    monkeypatch.setenv("AI_CUSTOMER_RUNTIME_DIR", str(tmp_path / "runtimes"))
+
+    assert voice_runtime.worker_command(required=False) is None
+    assert voice_runtime.status()["installed"] is False
 
 
 def test_component_download_resumes_partial_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
