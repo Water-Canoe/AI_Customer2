@@ -1007,6 +1007,9 @@ def test_traffic_run_uses_plan_round_video_limit(tmp_path: Path, monkeypatch: py
     class FakePage:
         url = "https://www.douyin.com/video/1"
 
+        def evaluate(self, *_: object) -> None:
+            return None
+
         def wait_for_timeout(self, _: int) -> None:
             return None
 
@@ -1890,6 +1893,49 @@ def test_traffic_advance_closes_comment_panel_before_scroll(monkeypatch: pytest.
     assert page.blurred is True
     assert page.keyboard.pressed == ["x"]
     assert page.mouse.clicks == [(1100, 150)]
+
+
+def test_traffic_advance_dismisses_douyin_video_guide(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services import traffic_workbench
+
+    class Keyboard:
+        def __init__(self) -> None:
+            self.pressed: list[str] = []
+
+        def press(self, key: str) -> None:
+            self.pressed.append(key)
+
+    class Mouse:
+        def __init__(self) -> None:
+            self.clicks: list[tuple[int, int]] = []
+
+        def click(self, x: int, y: int) -> None:
+            self.clicks.append((x, y))
+
+        def wheel(self, *_: object) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.keyboard = Keyboard()
+            self.mouse = Mouse()
+
+        def evaluate(self, script: str, *_: object) -> dict[str, int] | None:
+            if "查看更多推荐视频" in script and "我知道了" in script:
+                return {"x": 450, "y": 410}
+            return None
+
+        def wait_for_timeout(self, _: int) -> None:
+            return None
+
+    monkeypatch.setattr(traffic_workbench, "_detect_douyin_page_mode", lambda *_: "home_grid")
+    monkeypatch.setattr(traffic_workbench, "_read_active_video", lambda *_: {"video_id": "new-video"})
+
+    page = FakePage()
+
+    assert traffic_workbench._advance_video(page, "old-video") is True
+    assert page.mouse.clicks == [(450, 410)]
+    assert page.keyboard.pressed == ["ArrowDown"]
 
 
 def test_traffic_random_feed_recovers_when_loaded_feed_cannot_advance(monkeypatch: pytest.MonkeyPatch) -> None:

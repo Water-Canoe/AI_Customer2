@@ -672,6 +672,7 @@ def _run_with_playwright(run_id: str, plan: dict[str, Any]) -> dict[str, str]:
             max_seen_count = limit * 10 + warmup_skip_count
             while handled_count < limit:
                 _raise_if_stop_requested(run_id)
+                _dismiss_douyin_video_guide(page)
                 video = _read_active_video(page, video_cache)
                 if not video["video_id"]:
                     no_progress_count += 1
@@ -2639,6 +2640,7 @@ def _payload_has_any_key(value: Any, keys: set[str]) -> bool:
 
 
 def _advance_video(page: Any, previous_video_id: str, video_cache: dict[str, Any] | None = None) -> bool:
+    _dismiss_douyin_video_guide(page)
     _close_comment_panel(page)
     mode = _detect_douyin_page_mode(page)
     actions = ("detail_next", "arrow_down", "wheel", "page_down", "visible_link") if mode in {"video_detail", "jingxuan_modal_feed"} else ("arrow_down", "wheel", "page_down")
@@ -2683,6 +2685,37 @@ def _wait_for_video_change(page: Any, previous_video_id: str, reader: Any, video
             return True
         page.wait_for_timeout(100)
     return False
+
+
+def _dismiss_douyin_video_guide(page: Any) -> bool:
+    # 抖音首次视频流引导层会吞掉滚轮和方向键，先点“我知道了”再执行翻页。
+    point = page.evaluate(
+        """
+        () => {
+          const pageText = (document.body?.innerText || '').replace(/\\s+/g, ' ');
+          if (!/滚动.*鼠标|键盘上下键|查看更多推荐视频/.test(pageText)) return null;
+          const visible = el => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 20 && rect.height > 12 && rect.top >= 0 && rect.bottom <= innerHeight
+              && style.display !== 'none' && style.visibility !== 'hidden';
+          };
+          const textOf = el => (el.innerText || el.textContent || '').replace(/\\s+/g, '').trim();
+          for (const el of document.querySelectorAll('button, [role="button"], div, span')) {
+            if (!visible(el) || textOf(el) !== '我知道了') continue;
+            const target = el.closest('button, [role="button"]') || el;
+            const rect = target.getBoundingClientRect();
+            return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+          }
+          return null;
+        }
+        """
+    )
+    if not point:
+        return False
+    page.mouse.click(point["x"], point["y"])
+    page.wait_for_timeout(300)
+    return True
 
 
 def _record_video(
