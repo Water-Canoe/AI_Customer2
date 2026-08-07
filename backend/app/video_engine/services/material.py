@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import threading
 from typing import List
 from urllib.parse import urlencode
@@ -189,52 +190,94 @@ def search_videos_coverr(
     GET 这个 URL 本身就被 Coverr 当作一次合法的 download 事件计入统计,
     无需再调用 PATCH /videos/:id/stats/downloads。
     """
+    search_term = search_term.strip()
+    if not search_term:
+        return []
+
     api_key = get_api_key("coverr_api_keys")
     headers = {"Authorization": f"Bearer {api_key}"}
-    params = {
-        "query": search_term,
-        "page_size": 20,
-        "urls": "true",
-        "sort": "popular",
+
+    # Coverr 对长句命中率较低：先保留原词搜索，再按有效单词逐个缩短。
+    generic_terms = {
+        "ai",
+        "artificial",
+        "intelligence",
+        "stock",
+        "tool",
+        "tools",
+        "video",
+        "videos",
     }
-    query_url = f"https://api.coverr.co/videos?{urlencode(params)}"
-    logger.info(f"searching videos: {query_url}, with proxies: {config.proxy}")
+    words = re.findall(r"[^\W_]+", search_term, flags=re.UNICODE)
+    words.sort(key=lambda word: word.casefold() in generic_terms)
+    query_candidates = [search_term]
+    seen_candidates = {search_term.casefold()}
+    if len(words) > 1:
+        for word in words:
+            normalized = word.casefold()
+            if normalized not in seen_candidates:
+                query_candidates.append(word)
+                seen_candidates.add(normalized)
 
     try:
-        r = requests.get(
-            query_url,
-            headers=headers,
-            proxies=config.proxy,
-            verify=_get_tls_verify(),
-            timeout=(30, 60),
-        )
-        response = r.json()
-        video_items: List[MaterialInfo] = []
+        for query in query_candidates:
+            params = {
+                "query": query,
+                "page_size": 20,
+                "urls": "true",
+                "sort": "popular",
+            }
+            query_url = f"https://api.coverr.co/videos?{urlencode(params)}"
+            logger.info(
+                f"searching videos: {query_url}, with proxies: {config.proxy}"
+            )
+            r = requests.get(
+                query_url,
+                headers=headers,
+                proxies=config.proxy,
+                verify=_get_tls_verify(),
+                timeout=(30, 60),
+            )
+            status_code = getattr(r, "status_code", 200)
+            if isinstance(status_code, int) and status_code >= 400:
+                if status_code in (401, 403):
+                    raise RuntimeError("Coverr API Key 无效或无权访问")
+                if status_code == 429:
+                    raise RuntimeError("Coverr API 请求已达到限额，请稍后重试")
+                raise RuntimeError(f"Coverr API 请求失败（HTTP {status_code}）")
 
-        if not isinstance(response, dict) or "hits" not in response:
-            logger.error(f"search videos failed: {response}")
-            return video_items
+            response = r.json()
+            video_items: List[MaterialInfo] = []
+            if not isinstance(response, dict) or "hits" not in response:
+                logger.error(f"search videos failed: {response}")
+                return video_items
 
-        for v in response["hits"]:
-            # duration 在不同响应里可能是 number(11.625) 或 string("10.500000")
-            try:
-                duration = int(float(v.get("duration") or 0))
-            except (TypeError, ValueError):
-                continue
-            if duration < minimum_duration:
-                continue
+            for v in response["hits"]:
+                # duration 在不同响应里可能是 number 或 string。
+                try:
+                    duration = int(float(v.get("duration") or 0))
+                except (TypeError, ValueError):
+                    continue
+                if duration < minimum_duration:
+                    continue
 
-            video_id = v.get("id")
-            mp4_download_url = (v.get("urls") or {}).get("mp4_download")
-            if not video_id or not mp4_download_url:
-                continue
+                video_id = v.get("id")
+                mp4_download_url = (v.get("urls") or {}).get("mp4_download")
+                if not video_id or not mp4_download_url:
+                    continue
 
-            item = MaterialInfo()
-            item.provider = "coverr"
-            item.url = mp4_download_url
-            item.duration = duration
-            video_items.append(item)
-        return video_items
+                item = MaterialInfo()
+                item.provider = "coverr"
+                item.url = mp4_download_url
+                item.duration = duration
+                video_items.append(item)
+
+            if video_items:
+                return video_items
+
+        return []
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error(f"search videos failed: {str(e)}")
 
@@ -337,6 +380,7 @@ def download_videos(
     valid_video_items = []
     valid_video_urls = []
     found_duration = 0.0
+    required_duration = max(float(audio_duration), float(max_clip_duration))
     for search_term in search_terms:
         video_items = search_videos(
             search_term=search_term,
@@ -349,7 +393,11 @@ def download_videos(
             if item.url not in valid_video_urls:
                 valid_video_items.append(item)
                 valid_video_urls.append(item.url)
-                found_duration += item.duration
+                found_duration += min(max_clip_duration, item.duration)
+
+        # 已有素材足够覆盖音频时，不再消耗后续素材接口配额。
+        if found_duration >= required_duration:
+            break
 
     logger.info(
         f"found total videos: {len(valid_video_items)}, required duration: {audio_duration} seconds, found duration: {found_duration} seconds"
@@ -372,7 +420,7 @@ def download_videos(
                 video_paths.append(saved_video_path)
                 seconds = min(max_clip_duration, item.duration)
                 total_duration += seconds
-                if total_duration > audio_duration:
+                if total_duration >= audio_duration:
                     logger.info(
                         f"total duration of downloaded videos: {total_duration} seconds, skip downloading more"
                     )

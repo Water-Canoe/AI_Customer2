@@ -314,6 +314,50 @@ class TestCoverrProvider(unittest.TestCase):
         self.assertEqual(results[0].duration, 10)
         self.assertEqual(results[0].url, "https://example.com/b.mp4")
 
+    def test_search_coverr_retries_long_query_with_specific_word(self):
+        config.app["coverr_api_keys"] = ["coverr-key"]
+        config.proxy.clear()
+        responses = [
+            SimpleNamespace(status_code=200, json=lambda: {"hits": []}),
+            SimpleNamespace(
+                status_code=200,
+                json=lambda: {
+                    "hits": [
+                        {
+                            "id": "customer-video",
+                            "duration": 10,
+                            "urls": {
+                                "mp4_download": "https://example.com/customer.mp4"
+                            },
+                        }
+                    ]
+                },
+            ),
+        ]
+
+        with patch(
+            "app.video_engine.services.material.requests.get",
+            side_effect=responses,
+        ) as get:
+            results = material.search_videos_coverr(
+                "AI customer acquisition", minimum_duration=5
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("query=customer", get.call_args_list[1].args[0])
+
+    def test_search_coverr_reports_rate_limit(self):
+        config.app["coverr_api_keys"] = ["coverr-key"]
+        config.proxy.clear()
+        fake_response = SimpleNamespace(status_code=429, json=lambda: {})
+
+        with patch(
+            "app.video_engine.services.material.requests.get",
+            return_value=fake_response,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "请求已达到限额"):
+                material.search_videos_coverr("nature", minimum_duration=5)
+
     def test_search_coverr_skips_invalid_items(self):
         """缺 id 或缺 urls.mp4_download 的条目应被跳过,不应抛异常。"""
         config.app["coverr_api_keys"] = ["coverr-key"]
@@ -424,6 +468,29 @@ class TestCoverrProvider(unittest.TestCase):
 
         # 3. 返回值正确
         self.assertEqual(result, ["/tmp/coverr-saved.mp4"])
+
+    def test_download_videos_stops_searching_when_duration_is_enough(self):
+        fake_item = material.MaterialInfo(
+            provider="coverr",
+            url="https://example.com/first.mp4",
+            duration=10,
+        )
+
+        with patch.dict(config.app, {"material_directory": ""}), patch.object(
+            material, "search_videos_coverr", return_value=[fake_item]
+        ) as search, patch.object(
+            material, "save_video", return_value="/tmp/first.mp4"
+        ):
+            result = material.download_videos(
+                task_id="coverr-quota",
+                search_terms=["first", "unused"],
+                source="coverr",
+                audio_duration=5,
+                max_clip_duration=5,
+            )
+
+        self.assertEqual(result, ["/tmp/first.mp4"])
+        search.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -253,10 +253,7 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
         )
         if not materials:
             sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
-            logger.error(
-                "no valid materials found, please check the materials and try again."
-            )
-            return None
+            raise RuntimeError("本地素材中没有可用的视频或图片，请重新选择素材")
         return [material_info.url for material_info in materials]
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
@@ -278,10 +275,10 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
         )
         if not downloaded_videos:
             sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
-            logger.error(
-                "failed to download videos, maybe the network is not available. if you are in China, please use a VPN."
+            source_name = str(params.video_source).capitalize()
+            raise RuntimeError(
+                f"{source_name} 未找到可用视频素材，请检查接口配额、API Key 和素材关键词"
             )
-            return None
         return downloaded_videos
 
 
