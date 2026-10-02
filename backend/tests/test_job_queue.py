@@ -104,6 +104,35 @@ def test_queued_runtime_job_marks_workbench_active(tmp_path: Path, monkeypatch: 
     assert workbench_status.get_status("lead")["active"] is True
 
 
+@pytest.mark.parametrize("browser_blocked_by", ["running_job", "interactive_login"])
+def test_browser_backlog_does_not_starve_ai_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, browser_blocked_by: str
+) -> None:
+    # 浏览器积压超过旧查询上限时，独立的 AI 资源仍应能够领取任务。
+    prepare_queue(tmp_path, monkeypatch)
+    from app import database
+    from app.services import job_queue, profile_manager
+
+    with database.connect() as conn:
+        conn.executemany(
+            "INSERT INTO runtime_jobs(id, kind, resource, priority) VALUES(?, 'test_job', 'browser', 100)",
+            [(f"browser-backlog-{index}",) for index in range(101)],
+        )
+        conn.execute("INSERT INTO runtime_jobs(id, kind, resource) VALUES('ai-ready', 'test_job', 'ai')")
+    monkeypatch.setattr(job_queue, "active_summary", lambda: {"browser": int(browser_blocked_by == "running_job")})
+    monkeypatch.setattr(
+        profile_manager, "status",
+        lambda: {"interactive_active": browser_blocked_by == "interactive_login", "runtime_active": False},
+    )
+    monkeypatch.setattr(profile_manager, "acquire_runtime", lambda _job_id: False)
+
+    claimed = job_queue._claim_next_job()
+
+    assert claimed is not None and claimed["id"] == "ai-ready"
+    with database.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runtime_jobs WHERE resource = 'browser' AND status = 'queued'").fetchone()[0] == 101
+
+
 def test_cancelling_queued_runtime_job_updates_domain_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_queue(tmp_path, monkeypatch)
     from app import database

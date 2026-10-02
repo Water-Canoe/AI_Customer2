@@ -582,21 +582,28 @@ def _dispatch_loop() -> None:
 def _claim_next_job() -> dict[str, Any] | None:
     from app.services import profile_manager
 
-    with _STATE_LOCK:
-        usage = active_summary()
+    usage = active_summary()
+    available = [resource for resource, limit in RESOURCE_LIMITS.items() if usage.get(resource, 0) < limit]
+    if "browser" in available:
+        profile = profile_manager.status()
+        if profile["interactive_active"] or profile["runtime_active"]:
+            available.remove("browser")
+    if not available:
+        return None
+    # 先过滤已占用的资源，避免前 100 个浏览器任务挡住独立的 AI、视频任务。
+    placeholders = ",".join("?" for _ in available)
     with database.connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT * FROM runtime_jobs
-            WHERE status = 'queued' AND cancel_requested = 0
+            WHERE status = 'queued' AND cancel_requested = 0 AND resource IN ({placeholders})
             ORDER BY priority DESC, created_at, id
             LIMIT 100
-            """
+            """,
+            available,
         ).fetchall()
         for row in rows:
             resource = str(row["resource"])
-            if usage.get(resource, 0) >= RESOURCE_LIMITS.get(resource, 1):
-                continue
             reserved_browser = resource == "browser" and profile_manager.acquire_runtime(str(row["id"]))
             if resource == "browser" and not reserved_browser:
                 continue
