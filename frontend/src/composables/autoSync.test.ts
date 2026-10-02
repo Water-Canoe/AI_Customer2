@@ -42,6 +42,58 @@ describe('createAutoSyncController', () => {
     await Promise.resolve()
     expect(sync).toHaveBeenCalledTimes(1)
   })
+
+  it('coalesces route changes during a request and refreshes the latest view once', async () => {
+    let finish!: () => void
+    let view = 'tasks'
+    const loadedViews: string[] = []
+    const sync = vi.fn(async () => {
+      loadedViews.push(view)
+      if (loadedViews.length === 1) await new Promise<void>(resolve => { finish = resolve })
+    })
+    const controller = createAutoSyncController({ sync, interval: () => 3000 })
+    const running = controller.trigger('route')
+    view = 'ai'
+    await controller.trigger('route')
+    view = 'settings'
+    await controller.trigger('route')
+    await controller.trigger('auto')
+    expect(sync).toHaveBeenCalledTimes(1)
+
+    finish()
+    await running
+    expect(loadedViews).toEqual(['tasks', 'settings'])
+    expect(sync).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops a pending route refresh when stopped', async () => {
+    let finish!: () => void
+    const sync = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+    const controller = createAutoSyncController({ sync, interval: () => 3000 })
+    controller.start()
+    const running = controller.trigger('route')
+    await controller.trigger('route')
+    controller.stop()
+    finish()
+    await running
+
+    expect(sync).toHaveBeenCalledTimes(1)
+  })
+
+  it('defers a hidden route entry until the page becomes visible', async () => {
+    const sync = vi.fn(async () => undefined)
+    const controller = createAutoSyncController({ sync, interval: () => 3000 })
+    controller.start()
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    await controller.trigger('route')
+    expect(sync).not.toHaveBeenCalled()
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    expect(sync).toHaveBeenCalledExactlyOnceWith('route')
+    controller.stop()
+  })
 })
 
 describe('settings draft protection', () => {

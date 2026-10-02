@@ -26,11 +26,17 @@ export function shouldReplaceDraft(dirty: boolean, saving: boolean, requestRevis
 export function createAutoSyncController(options: AutoSyncOptions) {
   let timer: number | null = null
   let running = false
+  let pendingRoute = false
   let lastSyncAt = 0
 
   async function trigger(reason: AutoSyncReason) {
-    if (running || document.hidden) return false
+    if (running || document.hidden) {
+      // 路由切换合并为一次补刷新，普通轮询继续跳过，避免请求叠加。
+      if (reason === 'route') pendingRoute = true
+      return false
+    }
     if (reason === 'auto' && Date.now() - lastSyncAt < options.interval()) return false
+    if (reason === 'route') pendingRoute = false
     running = true
     try {
       await options.sync(reason)
@@ -38,11 +44,15 @@ export function createAutoSyncController(options: AutoSyncOptions) {
     } finally {
       lastSyncAt = Date.now()
       running = false
+      if (pendingRoute) {
+        pendingRoute = false
+        await trigger('route')
+      }
     }
   }
 
   function handleVisibilityChange() {
-    if (!document.hidden) void trigger('visible')
+    if (!document.hidden) void trigger(pendingRoute ? 'route' : 'visible')
   }
 
   function start() {
@@ -54,6 +64,7 @@ export function createAutoSyncController(options: AutoSyncOptions) {
   function stop() {
     if (timer) window.clearInterval(timer)
     timer = null
+    pendingRoute = false
     document.removeEventListener('visibilitychange', handleVisibilityChange)
   }
 
