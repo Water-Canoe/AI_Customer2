@@ -125,12 +125,13 @@ def resolve_custom_audio_file(task_id: str, custom_audio_file: str | None) -> st
     return server_audio_file
 
 
-def generate_audio(task_id, params, video_script):
+def generate_audio(task_id, params, video_script, *, defer_volume: bool = False):
     '''
     Generate audio for the video script.
     If a custom audio file is provided, it will be used directly.
     There will be no subtitle maker object returned in this case.
     Otherwise, TTS will be used to generate the audio.
+    Full video generation defers volume adjustment to the final audio mix.
     Returns:
         - audio_file: path to the generated or provided audio file
         - audio_duration: duration of the audio in seconds
@@ -160,7 +161,8 @@ def generate_audio(task_id, params, video_script):
             voice_name=voice.parse_voice_name(params.voice_name),
             voice_rate=params.voice_rate,
             voice_file=audio_file,
-            voice_volume=params.voice_volume,
+            # 成片合成会统一调整音量；独立配音继续沿用用户设置。
+            voice_volume=1.0 if defer_volume else params.voice_volume,
         )
         if sub_maker is None:
             sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
@@ -376,7 +378,7 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
 
     # 3. Generate audio
     audio_file, audio_duration, sub_maker = generate_audio(
-        task_id, params, video_script
+        task_id, params, video_script, defer_volume=stop_at == "video"
     )
     if not audio_file:
         sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)

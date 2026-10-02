@@ -106,6 +106,34 @@ class TestTaskService(unittest.TestCase):
         self.assertIsNone(sub_maker)
         tts.assert_not_called()
 
+    def test_video_defers_tts_volume_without_changing_standalone_audio(self):
+        # 克隆音色和硅基流动都会在 TTS 内调音，完整成片必须只在最终合成调一次。
+        for voice_name in ("voxcpm2:profile", "siliconflow:model:voice"):
+            for stop_at, expected_volume in (("audio", 0.5), ("video", 1.0)):
+                with self.subTest(voice_name=voice_name, stop_at=stop_at):
+                    params = VideoParams(
+                        video_subject="音量回归", video_script="旁白",
+                        video_source="local", voice_name=voice_name,
+                        voice_volume=0.5, voice_rate=1.2, subtitle_enabled=False,
+                    )
+                    with (
+                        patch.object(tm.voice, "tts", return_value=object()) as tts,
+                        patch.object(tm.voice, "get_audio_duration", return_value=2.5),
+                        patch.object(tm, "get_video_materials", return_value=["material.mp4"]),
+                        patch.object(tm.video, "combine_videos"),
+                        patch.object(tm.video, "generate_video") as render,
+                    ):
+                        result = tm.start("voice-volume-task", params, stop_at=stop_at)
+                    self.assertEqual(tts.call_args.kwargs["voice_volume"], expected_volume)
+                    self.assertEqual(tts.call_args.kwargs["voice_rate"], 1.2)
+                    self.assertEqual(params.voice_volume, 0.5)
+                    if stop_at == "video":
+                        self.assertEqual(render.call_args.kwargs["params"].voice_volume, 0.5)
+                        self.assertEqual(len(result["videos"]), 1)
+                    else:
+                        render.assert_not_called()
+                        self.assertEqual(result["audio_duration"], 3)
+
     def test_generate_audio_accepts_server_side_custom_file(self):
         task_id = "test-custom-audio-server-side"
         task_dir = utils.task_dir(task_id)
