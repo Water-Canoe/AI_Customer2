@@ -126,7 +126,8 @@ def test_login_profile_migration_resets_only_user_features(tmp_path: Path, monke
     account_center.set_account_state(account["id"], "checking")
     account_center.set_feature_status(account["id"], "publish", "checking")
     with database.connect() as conn:
-        migrations.MIGRATIONS[-1].action(conn, database.SCHEMA_SQL)
+        # 固定验证登录态迁移，新增索引等迁移不能改变这项测试的目标。
+        next(migration for migration in migrations.MIGRATIONS if migration.version == 12).action(conn, database.SCHEMA_SQL)
 
     updated = account_center.get_account(account["id"])
     assert updated["feature_status"]["message"]["status"] == "unknown"

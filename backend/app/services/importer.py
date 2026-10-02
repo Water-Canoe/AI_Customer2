@@ -304,38 +304,17 @@ def _upsert_account(
         sec_uid = platform_user_id
     profile_url = _profile_url(platform, platform_user_id, sec_uid)
     raw_json = json.dumps(raw_payload or {}, ensure_ascii=False, default=str)
-    existing = conn.execute(
-        """
-        SELECT id
-        FROM user_accounts
-        WHERE platform = ?
-          AND (
-            platform_user_id = ?
-            OR (? <> '' AND sec_uid = ?)
-            OR (? <> '' AND profile_url = ?)
-          )
-        ORDER BY
-          CASE
-            WHEN ? <> '' AND sec_uid = ? THEN 0
-            WHEN ? <> '' AND profile_url = ? THEN 1
-            ELSE 2
-          END,
-          id
-        LIMIT 1
-        """,
-        (
-            platform,
-            platform_user_id,
-            sec_uid,
-            sec_uid,
-            profile_url,
-            profile_url,
-            sec_uid,
-            sec_uid,
-            profile_url,
-            profile_url,
-        ),
-    ).fetchone()
+    existing = None
+    # 按原身份优先级逐项走索引，避免 OR 查询扫描同平台的全部账号。
+    for column, value in (("sec_uid", sec_uid), ("profile_url", profile_url), ("platform_user_id", platform_user_id)):
+        if not value:
+            continue
+        existing = conn.execute(
+            f"SELECT id FROM user_accounts WHERE platform = ? AND {column} = ? ORDER BY id LIMIT 1",
+            (platform, value),
+        ).fetchone()
+        if existing:
+            break
     if existing:
         # creator 表常用 sec_uid；优先回写到已有账号，避免总览树挂在旧账号上。
         conn.execute(

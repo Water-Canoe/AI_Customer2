@@ -586,6 +586,12 @@ def _separate_platform_login_profiles(conn: sqlite3.Connection, _: str) -> None:
     )
 
 
+def _add_account_identity_indexes(conn: sqlite3.Connection, _: str) -> None:
+    # 作者采集和主页补采可能使用不同账号标识；索引保留重复标识，归并仍取最早账号。
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_accounts_platform_sec_uid ON user_accounts(platform, sec_uid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_user_accounts_platform_profile_url ON user_accounts(platform, profile_url)")
+
+
 MIGRATIONS = (
     Migration(1, "initial_business_schema", _create_initial_schema),
     Migration(2, "drop_removed_agent_tables", _drop_removed_agent_tables),
@@ -599,6 +605,7 @@ MIGRATIONS = (
     Migration(10, "extend_automation_with_traffic", _extend_automation_with_traffic),
     Migration(11, "create_platform_account_center", _create_platform_account_center),
     Migration(12, "separate_platform_login_profiles", _separate_platform_login_profiles),
+    Migration(13, "add_account_identity_indexes", _add_account_identity_indexes),
 )
 
 

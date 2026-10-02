@@ -407,8 +407,10 @@ def test_migration_10_preserves_existing_automation_data(tmp_path: Path) -> None
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        for migration in migrations.MIGRATIONS[:9]:
-            migration.action(conn, database.SCHEMA_SQL)
+        # 按版本准备迁移前结构，避免把列表位置当成迁移版本。
+        for migration in migrations.MIGRATIONS:
+            if migration.version <= 9:
+                migration.action(conn, database.SCHEMA_SQL)
         conn.execute(
             """
             INSERT INTO automation_plans(id, name, plan_type, weekdays, run_time, config, sort_order)
@@ -425,7 +427,7 @@ def test_migration_10_preserves_existing_automation_data(tmp_path: Path) -> None
         conn.execute("INSERT INTO traffic_plans(id, name) VALUES('normal-traffic', '普通引流计划')")
         conn.commit()
 
-        migrations.MIGRATIONS[9].action(conn, database.SCHEMA_SQL)
+        next(migration for migration in migrations.MIGRATIONS if migration.version == 10).action(conn, database.SCHEMA_SQL)
 
         preserved_plan = conn.execute("SELECT name, sort_order FROM automation_plans WHERE id = 'old-plan'").fetchone()
         assert (preserved_plan["name"], preserved_plan["sort_order"]) == ("旧自动化计划", 4)
