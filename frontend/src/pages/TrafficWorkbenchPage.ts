@@ -157,14 +157,15 @@ export default defineComponent({
       }
       if (selectedRun.value && !visibleRuns.value.some(run => run.id === selectedRun.value?.id)) selectedRun.value = null
       const firstVisible = visibleRuns.value[0]
-      if (!selectedRun.value && firstVisible) await selectRun(firstVisible.id)
-      if (selectedRun.value) await selectRun(selectedRun.value.id)
+      const selectedId = selectedRun.value?.id || firstVisible?.id
+      if (selectedId) await selectRun(selectedId)
     }
 
     async function selectRun(id: string) {
       const { data } = await api.get(`/traffic/runs/${id}`)
+      // 轮询只更新当前批次的数据，用户切换批次时才回到第一页。
+      if (selectedRun.value?.id !== data.id) detailRecordPage.value = 1
       selectedRun.value = data
-      detailRecordPage.value = 1
     }
 
     function pageSlice(rows: Dict[], page: number) {
