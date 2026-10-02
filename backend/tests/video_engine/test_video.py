@@ -8,8 +8,9 @@ import types
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from moviepy import (
+    AudioClip,
     VideoFileClip,
 )
 # add project root to python path
@@ -349,6 +350,7 @@ class TestVideoService(unittest.TestCase):
                 raise RuntimeError("failed to read duration")
 
         fake_audio_clip = _BrokenAudioClip()
+        reader = fake_audio_clip.reader
 
         with patch.object(vd, "AudioFileClip", return_value=fake_audio_clip):
             with self.assertRaises(RuntimeError):
@@ -358,7 +360,66 @@ class TestVideoService(unittest.TestCase):
                     audio_file="/tmp/unused-audio.mp3",
                 )
 
-        self.assertTrue(fake_audio_clip.reader.closed)
+        self.assertTrue(reader.closed)
+
+    def test_close_clip_closes_composite_readers_once_without_full_gc(self):
+        # 浅复制、音轨、遮罩和循环引用共存时，每个 reader 仍应只关闭一次。
+        shared_reader, audio_reader, mask_reader = Mock(), Mock(), Mock()
+        source = types.SimpleNamespace(reader=shared_reader)
+        copied = types.SimpleNamespace(reader=shared_reader)
+        audio = types.SimpleNamespace(reader=audio_reader)
+        mask = types.SimpleNamespace(reader=mask_reader)
+        clip = types.SimpleNamespace(
+            clips=[source, copied],
+            audio=types.SimpleNamespace(clips=[audio]),
+            mask=mask,
+            bg=source,
+        )
+        clip.clips.append(clip)
+        with patch("gc.collect") as collect:
+            vd.close_clip(clip)
+        for reader in (shared_reader, audio_reader, mask_reader):
+            reader.close.assert_called_once_with()
+        collect.assert_not_called()
+
+    def test_generate_video_closes_original_readers_on_success_and_failure(self):
+        # 使用真实 MoviePy 浅复制与复合对象，模拟写出阶段，无需实际编码。
+        for fails in (False, True):
+            with self.subTest(encoding_fails=fails):
+                readers = [Mock(), Mock(), Mock()]
+                source = vd.ColorClip(size=(16, 16), color=(0, 0, 0)).with_duration(1)
+                source.reader = readers[0]
+                voice = AudioClip(lambda t: vd.np.array([0.0]), duration=1, fps=8000)
+                voice.reader = readers[1]
+                bgm = AudioClip(lambda t: vd.np.array([0.0]), duration=1, fps=8000)
+                bgm.reader = readers[2]
+                params = vd.VideoParams(video_subject="资源回归", subtitle_enabled=False, bgm_type="custom", bgm_file="bgm.wav")
+
+                def write_video(*args, **kwargs):
+                    # reader 必须保持到全部渲染结束，不能在浅复制阶段提前关闭。
+                    for reader in readers:
+                        reader.close.assert_not_called()
+                    self.assertIsInstance(args[0], vd.CompositeVideoClip)
+                    self.assertIsInstance(args[0].audio, vd.CompositeAudioClip)
+                    if fails:
+                        raise RuntimeError("encoding failed")
+
+                with patch.object(vd, "_open_video_clip_quietly", return_value=source), \
+                    patch.object(vd, "AudioFileClip", side_effect=[voice, bgm]), \
+                    patch.object(vd, "get_bgm_file", return_value="bgm.wav"), \
+                    patch.object(vd.os.path, "exists", return_value=True), \
+                    patch.object(vd, "SubtitlesClip", return_value=types.SimpleNamespace(subtitles=[])), \
+                    patch.object(vd, "_get_temp_audio_dir", return_value="unused"), \
+                    patch.object(vd, "_write_videofile_with_codec_fallback", side_effect=write_video), \
+                    patch("gc.collect") as collect:
+                    if fails:
+                        with self.assertRaisesRegex(RuntimeError, "encoding failed"):
+                            vd.generate_video("source.mp4", "voice.wav", "subtitle.srt", "final.mp4", params)
+                    else:
+                        vd.generate_video("source.mp4", "voice.wav", "subtitle.srt", "final.mp4", params)
+                for reader in readers:
+                    reader.close.assert_called_once_with()
+                collect.assert_not_called()
 
     def test_combine_videos_handles_none_transition_mode(self):
         """

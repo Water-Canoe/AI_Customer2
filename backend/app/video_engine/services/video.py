@@ -3,12 +3,11 @@ import itertools
 import io
 import os
 import random
-import gc
 import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import redirect_stdout
+from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
 from typing import List
 from loguru import logger
@@ -435,41 +434,25 @@ def _open_video_clip_quietly(video_path: str, audio: bool = False) -> VideoFileC
 
 
 def close_clip(clip):
-    if clip is None:
-        return
-
-    try:
-        # close main resources
-        if hasattr(clip, 'reader') and clip.reader is not None:
-            clip.reader.close()
-
-        # close audio resources
-        if hasattr(clip, 'audio') and clip.audio is not None:
-            if hasattr(clip.audio, 'reader') and clip.audio.reader is not None:
-                clip.audio.reader.close()
-            del clip.audio
-
-        # close mask resources
-        if hasattr(clip, 'mask') and clip.mask is not None:
-            if hasattr(clip.mask, 'reader') and clip.mask.reader is not None:
-                clip.mask.reader.close()
-            del clip.mask
-
-        # handle child clips in composite clips
-        if hasattr(clip, 'clips') and clip.clips:
-            for child_clip in clip.clips:
-                if child_clip is not clip:  # avoid possible circular references
-                    close_clip(child_clip)
-
-        # clear clip list
-        if hasattr(clip, 'clips'):
-            clip.clips = []
-
-    except Exception as e:
-        logger.error(f"failed to close clip: {str(e)}")
-
-    del clip
-    gc.collect()
+    # 仅在片段使用结束后遍历整个对象图，浅复制共享的 reader 只关闭一次。
+    pending = [clip]
+    closed = set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in closed:
+            continue
+        closed.add(id(current))
+        pending.extend(getattr(current, "clips", None) or [])
+        pending.extend(getattr(current, name, None) for name in ("audio", "mask", "bg"))
+        reader = getattr(current, "reader", None)
+        if reader is not None:
+            try:
+                if id(reader) not in closed:
+                    closed.add(id(reader))
+                    reader.close()
+                current.reader = None
+            except Exception as exc:
+                logger.error(f"failed to close clip: {str(exc)}")
 
 def delete_files(files: List[str] | str):
     if isinstance(files, str):
@@ -1079,60 +1062,62 @@ def generate_video(
             _clip = _clip.with_position(("center", "center"))
         return _clip
 
-    video_clip = _open_video_clip_quietly(video_path)
-    audio_clip = AudioFileClip(audio_path).with_effects(
-        [afx.MultiplyVolume(params.voice_volume)]
-    )
+    with ExitStack() as resources:
+        # 登记原始文件对象，浅复制和复合片段不会代替它们释放 FFmpeg reader。
+        video_clip = _open_video_clip_quietly(video_path)
+        resources.callback(close_clip, video_clip)
+        audio_source = AudioFileClip(audio_path)
+        resources.callback(close_clip, audio_source)
+        audio_clip = audio_source.with_effects([afx.MultiplyVolume(params.voice_volume)])
 
-    def make_textclip(text):
-        return TextClip(
-            text=text,
-            font=font_path,
-            font_size=params.font_size,
-        )
-
-    if subtitle_path and os.path.exists(subtitle_path):
-        sub = SubtitlesClip(
-            subtitles=subtitle_path, encoding="utf-8", make_textclip=make_textclip
-        )
-        text_clips = []
-        for item in sub.subtitles:
-            clip = create_text_clip(subtitle_item=item)
-            text_clips.append(clip)
-        video_clip = CompositeVideoClip([video_clip, *text_clips])
-
-    bgm_file = get_bgm_file(bgm_type=params.bgm_type, bgm_file=params.bgm_file)
-    if bgm_file:
-        try:
-            bgm_clip = AudioFileClip(bgm_file).with_effects(
-                [
-                    afx.MultiplyVolume(params.bgm_volume),
-                    afx.AudioFadeOut(3),
-                    afx.AudioLoop(duration=video_clip.duration),
-                ]
+        def make_textclip(text):
+            return TextClip(
+                text=text,
+                font=font_path,
+                font_size=params.font_size,
             )
-            audio_clip = CompositeAudioClip([audio_clip, bgm_clip])
-        except Exception as e:
-            logger.error(f"failed to add bgm: {str(e)}")
 
-    video_clip = video_clip.with_audio(audio_clip)
-    # 显式沿用输入音频的采样率；如果取不到，再回退到 MoviePy 默认的 44100Hz。
-    # 这样可以减少不同运行环境，尤其是 Docker 环境中再次重采样带来的音质波动。
-    output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
-    _write_videofile_with_codec_fallback(
-        video_clip,
-        output_file=output_file,
-        codec=_get_configured_video_codec(),
-        audio_codec=audio_codec,
-        audio_fps=output_audio_fps,
-        audio_bitrate=audio_bitrate,
-        temp_audiofile_path=_get_temp_audio_dir(output_dir),
-        threads=params.n_threads or 2,
-        logger=None,
-        fps=fps,
-    )
-    video_clip.close()
-    del video_clip
+        if subtitle_path and os.path.exists(subtitle_path):
+            sub = SubtitlesClip(
+                subtitles=subtitle_path, encoding="utf-8", make_textclip=make_textclip
+            )
+            text_clips = []
+            for item in sub.subtitles:
+                clip = create_text_clip(subtitle_item=item)
+                text_clips.append(clip)
+            video_clip = CompositeVideoClip([video_clip, *text_clips])
+
+        bgm_file = get_bgm_file(bgm_type=params.bgm_type, bgm_file=params.bgm_file)
+        if bgm_file:
+            try:
+                bgm_source = AudioFileClip(bgm_file)
+                resources.callback(close_clip, bgm_source)
+                bgm_clip = bgm_source.with_effects(
+                    [
+                        afx.MultiplyVolume(params.bgm_volume),
+                        afx.AudioFadeOut(3),
+                        afx.AudioLoop(duration=video_clip.duration),
+                    ]
+                )
+                audio_clip = CompositeAudioClip([audio_clip, bgm_clip])
+            except Exception as e:
+                logger.error(f"failed to add bgm: {str(e)}")
+
+        video_clip = video_clip.with_audio(audio_clip)
+        # 沿用输入音频的采样率，减少再次重采样带来的音质波动。
+        output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
+        _write_videofile_with_codec_fallback(
+            video_clip,
+            output_file=output_file,
+            codec=_get_configured_video_codec(),
+            audio_codec=audio_codec,
+            audio_fps=output_audio_fps,
+            audio_bitrate=audio_bitrate,
+            temp_audiofile_path=_get_temp_audio_dir(output_dir),
+            threads=params.n_threads or 2,
+            logger=None,
+            fps=fps,
+        )
 
 
 def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
