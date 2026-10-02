@@ -908,24 +908,47 @@ def test_product_license_is_shared_across_workbenches(tmp_path: Path) -> None:
     assert license_service.license_overview_for("lead")["device_code"] == license_service.license_overview_for("traffic")["device_code"]
 
 
-def test_new_database_uses_current_traffic_run_schema(tmp_path: Path) -> None:
+def test_new_database_uses_current_traffic_run_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from contextlib import contextmanager
+
     project_db = tmp_path / "current.sqlite3"
     os.environ["AI_CUSTOMER_DB"] = str(project_db)
 
     from app import database
-    from app.schemas import TrafficPlanCreate
+    from app.schemas import TrafficAutomationPlanConfig, TrafficPlanCreate
     from app.services import traffic_workbench
 
     database.init_db()
-    create_ready_test_account()
+    account = create_ready_test_account()
     with database.connect() as conn:
         columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(traffic_runs)").fetchall()}
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'traffic_campaigns'").fetchone() is None
 
-    assert {"plan_id", "browsed_count", "stop_requested"} <= columns
+    assert {"plan_id", "account_id", "browsed_count", "stop_requested"} <= columns
+    assert not {"campaign_id", "counts", "error"} & columns
     assert traffic_workbench.list_runs() == []
-    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="旧表启动", platform="dy"))
+    plan = traffic_workbench.create_plan(TrafficPlanCreate(name="新建计划", platform="dy"))
+
+    queries: list[str] = []
+    original_connect = database.connect
+
+    @contextmanager
+    def traced_connect(*args, **kwargs):
+        # 记录业务查询，连接本身的 SQLite 配置已在回调前完成。
+        with original_connect(*args, **kwargs) as conn:
+            conn.set_trace_callback(queries.append)
+            yield conn
+
+    monkeypatch.setattr(database, "connect", traced_connect)
     run = traffic_workbench.create_run(plan["id"])
     assert run["status"] == "queued"
+    assert run["plan_id"] == plan["id"]
+    assert run["account_id"] == account["id"]
+    automatic = traffic_workbench.create_automation_run("test-auto", "自动计划", TrafficAutomationPlanConfig(platform="dy"))
+    assert automatic["status"] == "queued"
+    assert automatic["account_id"] == account["id"]
+    assert automatic["plan_id"] == "automation:test-auto"
+    assert all("pragma table_info" not in query.lower() and "traffic_campaigns" not in query.lower() for query in queries)
 
 
 def test_traffic_browse_only_plan_can_start_and_logs_user_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1191,6 +1214,7 @@ def test_traffic_clear_records_removes_workbench_data_and_keeps_settings_materia
     assert result["runs"] == 1
     assert result["records"] == 1
     assert result["dedup"] == 1
+    assert set(result) == {"cleared", "plans", "runs", "records", "dedup"}
 
     with database.connect() as conn:
         for table in ["traffic_plans", "traffic_runs", "traffic_run_items", "traffic_action_logs", "traffic_records", "traffic_dedup_ledger"]:
@@ -4763,6 +4787,42 @@ def test_message_workbench_keyword_queue_and_global_follow_status(tmp_path: Path
         assert replied["rows"][0]["reply_at"]
 
 
+def test_message_workbench_creator_keyword_and_soft_hide_restore(tmp_path: Path) -> None:
+    _, raw_db = prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import account_actions, crawler_adapter, deletion, message_workbench
+    from app.services.importer import import_for_task
+
+    discovery = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_discovery", platform="dy", keywords="AI客服", execute_crawler=False)
+    )
+    import_for_task(str(discovery["id"]))
+    # 主页新采内容不带搜索词，仍使用此前发现该账号的关键词。
+    with sqlite3.connect(raw_db) as conn:
+        conn.execute("UPDATE douyin_aweme SET aweme_id = 10002, source_keyword = ''")
+        conn.execute("UPDATE douyin_aweme_comment SET comment_id = 90002, aweme_id = 10002")
+    crawl = crawler_adapter.create_task(
+        TaskCreate(mode="competitor_crawl", platform="dy", creator_id="creator-1", execute_crawler=False)
+    )
+    assert crawl["keywords"] == ""
+    assert import_for_task(str(crawl["id"]))["leads"] == 1
+    with database.connect() as conn:
+        source = conn.execute("SELECT * FROM lead_sources LIMIT 1").fetchone()
+        assert source["keyword"] == ""
+        assert conn.execute("SELECT source_keyword FROM contents WHERE id = ?", (source["content_id"],)).fetchone()["source_keyword"] == ""
+        lead_id = int(source["lead_account_id"])
+
+    account_actions.update_customer_follow_status(lead_id, "未私信")
+    customers = message_workbench.list_customers(keyword="AI客服")
+    assert [row["lead_id"] for row in customers["rows"]] == [lead_id]
+    deletion.soft_hide_target(lead_id)
+    assert message_workbench.list_customers(keyword="AI客服")["total"] == 0
+    # “已移出”属于当前软删除流程，恢复后证据和关键词仍然可用。
+    account_actions.update_customer_follow_status(lead_id, "未私信")
+    assert message_workbench.list_customers(keyword="AI客服")["total"] == 1
+
+
 def test_message_workbench_auto_message_uses_shared_profile_and_marks_sent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database
@@ -5071,10 +5131,11 @@ def test_message_workbench_auto_message_batch_reuses_one_browser(tmp_path: Path,
         assert {row["follow_status"] for row in rows} == {"已私信"}
 
 
-def test_message_workbench_auto_message_batch_retry_failed_items(tmp_path: Path) -> None:
+@pytest.mark.parametrize("retry_follow_status", ["未私信", "待筛选"])
+def test_message_workbench_auto_message_batch_retry_failed_items(tmp_path: Path, retry_follow_status: str) -> None:
     prepare_project(tmp_path)
     from app import database
-    from app.services import message_workbench
+    from app.services import account_actions, message_workbench
 
     lead_ids: list[int] = []
     with database.connect() as conn:
@@ -5098,9 +5159,13 @@ def test_message_workbench_auto_message_batch_retry_failed_items(tmp_path: Path)
         items = conn.execute("SELECT id, lead_account_id, script FROM message_batch_items WHERE batch_id = ? ORDER BY id", (batch["id"],)).fetchall()
         conn.execute("UPDATE message_batches SET status = 'failed' WHERE id = ?", (batch["id"],))
         conn.execute("UPDATE message_batch_items SET status = 'failed', error = '测试失败' WHERE id = ?", (items[0]["id"],))
-        conn.execute("UPDATE message_batch_items SET status = 'succeeded' WHERE id = ?", (items[1]["id"],))
+        conn.execute("UPDATE message_batch_items SET status = 'failed', error = '测试失败' WHERE id = ?", (items[1]["id"],))
         message_workbench._refresh_batch_counts(conn, str(batch["id"]))
 
+    # 重置筛选后仍能重试；失败后已由人工发送的客户不重复发送。
+    if retry_follow_status == "待筛选":
+        account_actions.update_customer_follow_status(int(items[0]["lead_account_id"]), retry_follow_status)
+    account_actions.update_customer_follow_status(int(items[1]["lead_account_id"]), "已私信")
     retry = message_workbench.retry_auto_message_batch(str(batch["id"]))
 
     assert retry["status"] == "pending"

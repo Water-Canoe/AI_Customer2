@@ -285,7 +285,7 @@ function renderOverviewCustomerRow(node: Dict, level: number, handlers: Overview
   const commentText = overviewSampleText(metrics.comment_samples, metrics.signature || '暂无评论摘要')
   const firstContentUrl = firstOverviewSample(metrics.content_urls)
   const aiStatus = customerAiAnalysisStatus(metrics)
-  const followStatus = String(metrics.follow_status || metrics.screening_status || '待筛选')
+  const followStatus = String(metrics.follow_status)
   const screeningStage = customerScreeningStage(metrics)
   return h('div', { class: ['overview-row', 'overview-customer-row', `level-${level}`, node.kind] }, [
     h('div', { class: 'account-cell account-identity customer-identity', style: { paddingLeft: `${level * 34}px` } }, [
@@ -438,8 +438,7 @@ function renderCustomerFollowStatusDropdown(node: Dict, followStatus: string, ha
   })
 }
 
-function customerFollowActions(status: string) {
-  const current = status || '待筛选'
+function customerFollowActions(current: string) {
   if (current === '未私信') {
     return [
       { status: '已私信', label: '标记已私信' },
@@ -704,11 +703,11 @@ function customerFollowStatusClass(status: string) {
   if (['已成交'].includes(status)) return 'is-won'
   if (['已回复'].includes(status)) return 'is-replied'
   if (['未回复', '已私信'].includes(status)) return 'is-waiting'
-  if (['未私信', '目标客户'].includes(status)) return 'is-unmessaged'
+  if (status === '未私信') return 'is-unmessaged'
   if (['未成交'].includes(status)) return 'is-lost'
   if (['非客户', '无需跟进'].includes(status)) return 'is-not-customer'
-  if (['已移出', '隐藏'].includes(status)) return 'is-removed'
-  if (['待筛选', '未分析'].includes(status)) return 'is-screening'
+  if (status === '已移出') return 'is-removed'
+  if (status === '待筛选') return 'is-screening'
   return 'is-unknown'
 }
 

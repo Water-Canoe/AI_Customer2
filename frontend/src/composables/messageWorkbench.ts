@@ -116,8 +116,9 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
       homepage.opener = null
       await navigator.clipboard.writeText(script.text)
 
-      const currentStatus = String(row.follow_status || row.screening_status || '未私信')
-      if (['待筛选', '未分析', '目标客户', '未私信'].includes(currentStatus)) {
+      // 跟进流程使用独立状态，筛选结果不参与私信状态流转。
+      const currentStatus = String(row.follow_status)
+      if (['待筛选', '未私信'].includes(currentStatus)) {
         await api.patch(`/overview/customers/${leadId}/follow-status`, {
           follow_status: '已私信',
           note: `私信工作台：复制${script.label}并打开客户主页`,

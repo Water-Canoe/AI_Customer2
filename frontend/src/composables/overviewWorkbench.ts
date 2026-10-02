@@ -67,7 +67,7 @@ export function useOverviewWorkbench(options: OverviewWorkbenchOptions) {
       ElMessage.error('当前客户缺少线索ID，无法修改跟进状态')
       return
     }
-    const currentStatus = String(node.metrics?.follow_status || node.metrics?.screening_status || '待筛选')
+    const currentStatus = String(node.metrics?.follow_status)
     if (currentStatus === status) return
     try {
       if (['已成交', '未成交'].includes(currentStatus)) {
@@ -108,8 +108,9 @@ export function useOverviewWorkbench(options: OverviewWorkbenchOptions) {
       homepage.opener = null
       await navigator.clipboard.writeText(scriptSelection.text)
 
-      const currentStatus = String(node.metrics?.follow_status || node.metrics?.screening_status || '待筛选')
-      if (['待筛选', '未分析', '目标客户', '未私信'].includes(currentStatus)) {
+      // AI 筛选与人工跟进分开，已进入后续阶段的客户不回退。
+      const currentStatus = String(node.metrics?.follow_status)
+      if (['待筛选', '未私信'].includes(currentStatus)) {
         await api.patch(`/overview/customers/${leadId}/follow-status`, {
           follow_status: '已私信',
           note: `点击私信按钮：复制${scriptSelection.label}并打开客户主页`,

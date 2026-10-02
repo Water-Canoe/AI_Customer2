@@ -791,7 +791,7 @@ def update_customer_follow_status(
         if not row:
             raise ValueError("客户账号不存在，无法修改跟进状态")
 
-        current_status = str(row["follow_status"] or "待筛选")
+        current_status = str(row["follow_status"])
         allowed_targets = _allowed_customer_follow_targets(current_status)
         if follow_status not in allowed_targets:
             allowed_text = " / ".join(allowed_targets)
@@ -834,8 +834,8 @@ def _screening_status_for_follow_status(follow_status: str) -> str:
 
 
 def _allowed_customer_follow_targets(current_status: str) -> list[str]:
-    current_status = current_status or "待筛选"
-    if current_status in ("待筛选", "未分析", "目标客户"):
+    # 筛选结果使用独立字段，跟进流程从“待筛选”或“未私信”开始。
+    if current_status == "待筛选":
         return ["未私信", "已私信", "非客户"]
     if current_status == "未私信":
         return ["已私信", "未回复", "非客户", "待筛选"]
@@ -847,9 +847,9 @@ def _allowed_customer_follow_targets(current_status: str) -> list[str]:
         return ["已成交", "已回复", "未回复", "未私信", "非客户", "待筛选"]
     if current_status == "已成交":
         return ["已回复", "未成交", "未回复", "未私信", "非客户", "待筛选"]
-    if current_status in ("非客户", "无需跟进", "已移出", "隐藏"):
+    if current_status in ("非客户", "无需跟进", "已移出"):
         return ["待筛选", "未私信"]
-    return ["待筛选", "未私信", "非客户"]
+    return []
 
 
 def _customer_lead_rows_for_account(conn: sqlite3.Connection, account_id: int) -> list[sqlite3.Row]:

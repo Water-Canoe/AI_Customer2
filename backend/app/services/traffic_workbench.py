@@ -282,32 +282,11 @@ def create_run(plan_id: str) -> dict[str, Any]:
 
 
 def _insert_run(conn: Any, run_id: str, plan_id: str, account_id: str) -> None:
-    columns = {"id": run_id, "plan_id": plan_id, "status": "queued", "account_id": account_id}
-    table_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(traffic_runs)").fetchall()}
-    if "campaign_id" in table_columns:
-        # 早期原型表保留了 NOT NULL 旧列；写入占位值即可，不参与新版逻辑。
-        columns.update({"campaign_id": _legacy_campaign_id(conn), "counts": "{}", "error": ""})
-    active_columns = [key for key in columns if key in table_columns]
-    placeholders = ", ".join("?" for _ in active_columns)
+    # 批次统一使用当前计划和执行账号字段。
     conn.execute(
-        f"INSERT INTO traffic_runs({', '.join(active_columns)}) VALUES({placeholders})",
-        [columns[key] for key in active_columns],
+        "INSERT INTO traffic_runs(id, plan_id, status, account_id) VALUES(?, ?, 'queued', ?)",
+        (run_id, plan_id, account_id),
     )
-
-
-def _legacy_campaign_id(conn: Any) -> int:
-    table = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'traffic_campaigns'").fetchone()
-    if not table:
-        return 0
-    row = conn.execute("SELECT id FROM traffic_campaigns WHERE name = ? LIMIT 1", ("__traffic_plan_bridge__",)).fetchone()
-    if row:
-        return int(row["id"])
-    return int(conn.execute(
-        """
-        INSERT INTO traffic_campaigns(name, mode, source_type, keyword, action_like, action_follow, action_comment)
-        VALUES('__traffic_plan_bridge__', 'random_feed', 'compat', '', 0, 0, 0)
-        """
-    ).lastrowid)
 
 
 def list_runs(include_archived: bool = False) -> list[dict[str, Any]]:
@@ -525,19 +504,12 @@ def clear_records() -> dict[str, Any]:
             "runs": conn.execute("SELECT COUNT(*) AS c FROM traffic_runs").fetchone()["c"],
             "dedup": conn.execute("SELECT COUNT(*) AS c FROM traffic_dedup_ledger").fetchone()["c"],
         }
-        legacy_campaigns = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'traffic_campaigns'"
-        ).fetchone()
-        if legacy_campaigns:
-            counts["campaigns"] = conn.execute("SELECT COUNT(*) AS c FROM traffic_campaigns").fetchone()["c"]
         conn.execute("DELETE FROM traffic_dedup_ledger")
         conn.execute("DELETE FROM traffic_records")
         conn.execute("DELETE FROM traffic_action_logs")
         conn.execute("DELETE FROM traffic_run_items")
         conn.execute("DELETE FROM traffic_runs")
         conn.execute("DELETE FROM traffic_plans")
-        if legacy_campaigns:
-            conn.execute("DELETE FROM traffic_campaigns")
         conn.execute("UPDATE traffic_material_texts SET used_count = 0")
         conn.execute("UPDATE traffic_material_images SET used_count = 0")
         conn.execute("DELETE FROM settings WHERE key = ?", (TRAFFIC_LAST_VIDEO_URL_KEY,))

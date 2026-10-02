@@ -181,7 +181,7 @@ def hard_delete(entity_type: str, table: str, entity_id: int) -> dict[str, Any]:
         tombstone_counts = _record_entity_tombstones(conn, entity_type, table, entity_id, "table_delete")
         refs = conn.execute(
             "SELECT * FROM raw_source_refs WHERE entity_type = ? AND entity_id = ?",
-            (entity_type if entity_type != "lead" else "account", _lead_account_id(conn, entity_id) if entity_type == "lead" else entity_id),
+            (entity_type, entity_id),
         ).fetchall()
         if entity_type == "content":
             comment_ids = _select_ids(conn, "SELECT id FROM comments WHERE content_id = ?", (entity_id,))
@@ -194,7 +194,7 @@ def hard_delete(entity_type: str, table: str, entity_id: int) -> dict[str, Any]:
                         comment_ids,
                     ).fetchall(),
                 ]
-        _delete_project_entity(conn, entity_type, table, entity_id)
+        conn.execute(f"DELETE FROM {table} WHERE id = ?", (entity_id,))
         _delete_by_ids(conn, "raw_source_refs", {int(ref["id"]) for ref in refs})
         conn.execute(
             "INSERT INTO deletion_audit(entity_type, entity_id, hard_delete, detail) VALUES(?, ?, 1, ?)",
@@ -606,13 +606,6 @@ def _in_clause(column: str, ids: list[int] | set[int]) -> tuple[str, list[int]]:
     return f"{column} IN ({placeholders})", sorted(ids)
 
 
-def _lead_account_id(conn, lead_id: int) -> int:
-    row = conn.execute("SELECT account_id FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="客户不存在")
-    return int(row["account_id"])
-
-
 def _record_entity_tombstones(
     conn: sqlite3.Connection,
     entity_type: str,
@@ -638,33 +631,11 @@ def _record_entity_tombstones(
         if not row:
             raise HTTPException(status_code=404, detail="评论不存在")
         counts["comments"] += tombstones.record_comment_row(conn, row, source)
-    elif entity_type == "lead":
-        _lead_account_id(conn, entity_id)
     else:
         row = conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (entity_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="数据不存在")
     return counts
-
-
-def _delete_project_entity(conn, entity_type: str, table: str, entity_id: int) -> None:
-    if entity_type == "lead":
-        active_sources = conn.execute(
-            "SELECT COUNT(*) AS c FROM lead_sources WHERE lead_account_id = ? AND active = 1",
-            (entity_id,),
-        ).fetchone()["c"]
-        if int(active_sources) > 1:
-            conn.execute("UPDATE lead_sources SET active = 0 WHERE lead_account_id = ? LIMIT 1", (entity_id,))
-            conn.execute(
-                "UPDATE lead_user_accounts SET follow_status = '已移出', updated_at = datetime('now', 'localtime') WHERE id = ?",
-                (entity_id,),
-            )
-            return
-        account_id = _lead_account_id(conn, entity_id)
-        conn.execute("DELETE FROM lead_user_accounts WHERE id = ?", (entity_id,))
-        conn.execute("DELETE FROM user_accounts WHERE id = ?", (account_id,))
-        return
-    conn.execute(f"DELETE FROM {table} WHERE id = ?", (entity_id,))
 
 
 def delete_task(task_id: str) -> dict[str, Any]:

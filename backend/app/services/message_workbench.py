@@ -330,7 +330,7 @@ def retry_auto_message_batch(batch_id: str) -> dict[str, Any]:
                 JOIN lead_user_accounts lua ON lua.id = mbi.lead_account_id
                 WHERE mbi.batch_id = ?
                   AND mbi.status IN ('failed', 'skipped', 'pending')
-                  AND COALESCE(lua.follow_status, '') IN ('', '待筛选', '未分析', '目标客户', '未私信')
+                  AND lua.follow_status IN ('待筛选', '未私信')
                 ORDER BY mbi.id ASC
                 """,
                 (batch_id,),
@@ -446,8 +446,8 @@ async def auto_message_customer(
         raise
 
     follow_update: dict[str, Any] | None = None
-    current_status = customer["follow_status"] or customer["screening_status"]
-    if not effective_dry_run and current_status in {"待筛选", "未分析", "目标客户", "未私信"}:
+    # 跟进状态与筛选结果分开处理，只有尚未发送的客户进入“已私信”。
+    if not effective_dry_run and customer["follow_status"] in {"待筛选", "未私信"}:
         from app.services import account_actions
 
         follow_update = account_actions.update_customer_follow_status(
@@ -905,7 +905,7 @@ def _target_source_rows(conn, lead_id: int | None = None) -> list[Any]:
             lua.screening_status = '目标客户'
             OR lua.follow_status IN ({target_placeholders})
           )
-          AND lua.follow_status NOT IN ('非客户', '无需跟进', '已移出', '隐藏')
+          AND lua.follow_status NOT IN ('非客户', '无需跟进', '已移出')
           {lead_clause}
         ORDER BY lua.updated_at DESC, ls.created_at DESC, ls.id DESC
         """,
