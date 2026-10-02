@@ -6,6 +6,7 @@ import { Promotion, Refresh } from '@element-plus/icons-vue'
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict, PlatformAccount } from '../shared/types'
+import { createAutoSyncController } from '../composables/autoSync'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 import { DEFAULT_PAGE_SIZE, ListPagination, type PageChange } from '../components/ui/ListPagination'
 
@@ -30,19 +31,30 @@ export default defineComponent({
       scheduled_at: '',
     })
     const loading = ref(false)
-    let timer = 0
+    let pageActive = true
 
     const stats = computed(() => tasks.value.summary || { pending: 0, running: 0, succeeded: 0, review: 0, active: 0 })
 
-    onMounted(async () => {
-      await loadAll()
-      await loadComposerFromRoute()
-      timer = window.setInterval(() => {
-        if (Number(stats.value.active || 0) || accounts.value.some(item => item.login_status?.creator?.status === 'checking')) void loadAll(false)
-      }, 3000)
+    const refresh = createAutoSyncController({
+      interval: () => 3000,
+      sync: async reason => {
+        if (reason === 'route' || Number(stats.value.active || 0) || accounts.value.some(item => item.login_status?.creator?.status === 'checking')) {
+          await loadAll(reason === 'route')
+          if (reason === 'route' && pageActive && !composer.value.open) await loadComposerFromRoute()
+        }
+      },
     })
-    onUnmounted(() => window.clearInterval(timer))
-    watch(() => props.refreshSeq, () => void loadAll())
+
+    onMounted(() => {
+      // 同步启动控制器，避免首次慢请求结束时在已卸载页面遗留定时器。
+      refresh.start()
+      void refresh.trigger('route')
+    })
+    onUnmounted(() => {
+      pageActive = false
+      refresh.stop()
+    })
+    watch(() => props.refreshSeq, () => void refresh.trigger('route'))
     watch(() => route.fullPath, () => void loadComposerFromRoute())
 
     async function loadAll(showError = true) {

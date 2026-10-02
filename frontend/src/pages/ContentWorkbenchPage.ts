@@ -15,7 +15,7 @@ import {
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict, PlatformAccount } from '../shared/types'
-import { shouldReplaceDraft } from '../composables/autoSync'
+import { createAutoSyncController, shouldReplaceDraft } from '../composables/autoSync'
 import { SplitPane } from '../components/ui/SplitPane'
 import { COMPACT_PAGE_SIZE, DEFAULT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
@@ -221,7 +221,6 @@ export default defineComponent({
     const voiceRecordingUrl = ref('')
     const voiceScriptLoading = ref(false)
     const voiceRecordingSaving = ref(false)
-    let refreshTimer = 0
     let settingsMutationSeq = 0
     let voiceRecordingTimer = 0
     let mediaRecorder: MediaRecorder | null = null
@@ -250,23 +249,32 @@ export default defineComponent({
     })
     const generatedPagination = computed(() => paginateItems(generatedItems.value, generatedPage.value, generatedPageSize.value))
 
+    const refresh = createAutoSyncController({
+      interval: () => 3000,
+      sync: async reason => {
+        if (reason === 'route') return loadPage()
+        const requests: Promise<unknown>[] = []
+        if (activeJobCount.value && ['content-create', 'content-records'].includes(view.value)) requests.push(loadJobs(false))
+        if (view.value === 'content-records') requests.push(loadPublishTasks())
+        if (view.value === 'content-settings' && voiceRuntimeInstalling.value) requests.push(loadEnvironment())
+        // 等所有后台查询结束后再允许下一轮，某个查询失败也不会叠加请求。
+        await Promise.allSettled(requests)
+      },
+    })
+
     onMounted(() => {
-      void loadPage()
-      refreshTimer = window.setInterval(() => {
-        if (activeJobCount.value && ['content-create', 'content-records'].includes(view.value)) void loadJobs(false)
-        if (view.value === 'content-records') void loadPublishTasks()
-        if (view.value === 'content-settings' && voiceRuntimeInstalling.value) void loadEnvironment()
-      }, 3000)
+      refresh.start()
+      void refresh.trigger('route')
     })
     onUnmounted(() => {
-      window.clearInterval(refreshTimer)
+      refresh.stop()
       window.clearInterval(voiceRecordingTimer)
       if (mediaRecorder?.state === 'recording') mediaRecorder.stop()
       mediaStream?.getTracks().forEach(track => track.stop())
       if (voiceRecordingUrl.value) URL.revokeObjectURL(voiceRecordingUrl.value)
     })
-    watch(view, () => void loadPage())
-    watch(() => props.refreshSeq, () => void loadPage())
+    watch(view, () => void refresh.trigger('route'))
+    watch(() => props.refreshSeq, () => void refresh.trigger('route'))
     watch(assetSegment, () => { assetPage.value = 1; voicePage.value = 1 })
     watch(recordSearch, () => { generatedPage.value = 1 })
 

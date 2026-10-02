@@ -5,6 +5,7 @@ import { DataAnalysis, Key, Plus, Refresh, User } from '@element-plus/icons-vue'
 import { DataProtectionPanel } from '../components/system/DataProtectionPanel'
 import { api } from '../shared/api'
 import type { Dict, PlatformAccount } from '../shared/types'
+import { createAutoSyncController } from '../composables/autoSync'
 import { ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
@@ -37,7 +38,14 @@ export default defineComponent({
     const loading = ref(false)
     const activeSection = ref<'system' | 'accounts' | 'data'>('system')
     const accountPage = ref(1)
-    let timer = 0
+    const refresh = createAutoSyncController({
+      interval: () => 3000,
+      sync: async reason => {
+        if (reason === 'route' || accounts.value.some(account => ['user', 'creator'].some(kind => account.login_status?.[kind]?.status === 'checking'))) {
+          await loadAccounts(reason === 'route')
+        }
+      },
+    })
 
     async function loadAccounts(showError = true) {
       try {
@@ -128,14 +136,13 @@ export default defineComponent({
       void updateAccount(account, { role, features, default_features: defaults })
     }
 
-    onMounted(async () => {
-      await loadAccounts()
-      timer = window.setInterval(() => {
-        if (accounts.value.some(account => ['user', 'creator'].some(kind => account.login_status?.[kind]?.status === 'checking'))) void loadAccounts(false)
-      }, 3000)
+    onMounted(() => {
+      // 首次加载也进入同一控制器，慢请求期间不再并发轮询。
+      refresh.start()
+      void refresh.trigger('route')
     })
-    onUnmounted(() => window.clearInterval(timer))
-    watch(() => props.refreshSeq, () => loadAccounts())
+    onUnmounted(() => refresh.stop())
+    watch(() => props.refreshSeq, () => void refresh.trigger('route'))
 
     return () => {
       const paged = paginateAccounts(accounts.value, accountPage.value, ACCOUNT_PAGE_SIZE)
