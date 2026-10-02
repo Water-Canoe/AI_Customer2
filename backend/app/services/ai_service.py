@@ -207,7 +207,7 @@ def ai_workbench(
     page = max(1, int(page or 1))
     page_size = max(1, min(100, int(page_size or 10)))
     with database.connect() as conn:
-        # 先在数据库中过滤和分页，只组装当前页，避免历史记录越多查询次数越多。
+        # 查询后只返回当前页；筛选仍逐行复用 Python 规则，避免 Unicode 和结果判断变化。
         if tab == "competitors":
             query = _workbench_competitors_query()
         elif tab == "leads":
@@ -484,16 +484,17 @@ def _workbench_leads_query() -> str:
                MAX(COALESCE(c.updated_at, ct.updated_at, ls.created_at, lua.updated_at)) AS latest_evidence_at
         FROM lead_user_accounts lua
         JOIN user_accounts ua ON ua.id = lua.account_id
-        LEFT JOIN lead_sources ls ON ls.lead_account_id = lua.id AND ls.active = 1
-        LEFT JOIN comments c ON c.id = ls.comment_id
-        LEFT JOIN contents ct ON ct.id = ls.content_id
-        LEFT JOIN user_accounts source_ua ON source_ua.id = COALESCE(ls.source_account_id, ct.author_account_id)
+        -- 先关联单条最新分析，再展开来源，避免每条证据重复查询分析历史。
         LEFT JOIN analysis_jobs aj ON aj.id = (
             SELECT latest.id FROM analysis_jobs latest
             WHERE latest.target_type = 'lead' AND latest.target_id = lua.id
             ORDER BY datetime(latest.updated_at) DESC, datetime(latest.created_at) DESC
             LIMIT 1
         )
+        LEFT JOIN lead_sources ls ON ls.lead_account_id = lua.id AND ls.active = 1
+        LEFT JOIN comments c ON c.id = ls.comment_id
+        LEFT JOIN contents ct ON ct.id = ls.content_id
+        LEFT JOIN user_accounts source_ua ON source_ua.id = COALESCE(ls.source_account_id, ct.author_account_id)
         WHERE lua.hidden = 0
         GROUP BY lua.id
         """

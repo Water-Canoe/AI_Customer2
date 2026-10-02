@@ -94,3 +94,53 @@ def test_history_paginates_without_per_job_queries_or_full_json_parsing(
     assert oldest["items"][0]["target_summary"] == "对象已删除"
     assert "platform" not in oldest["items"][0]
     assert ai_service.ai_workbench(tab, result="竞品")["total"] == 0
+
+
+def test_lead_page_does_not_repeat_analysis_history_lookup_for_each_evidence(workbench_db: sqlite3.Connection) -> None:
+    workbench_db.executemany(
+        "INSERT INTO user_accounts(id, platform, platform_user_id, nickname) VALUES(?, 'dy', ?, ?)",
+        [(index, str(index), f"客户{index}") for index in range(1, 201)],
+    )
+    workbench_db.execute(
+        "INSERT INTO lead_user_accounts(id, account_id, screening_status, reason, updated_at) "
+        "SELECT id, id, '目标客户', '既有结论', '2026-01-01 00:00:00' FROM user_accounts"
+    )
+    workbench_db.execute(
+        "INSERT INTO contents(id, platform, content_id, author_account_id, title) "
+        "SELECT id, platform, platform_user_id, id, '来源视频' FROM user_accounts"
+    )
+    workbench_db.executemany(
+        "INSERT INTO comments(id, platform, comment_id, content_id, body) VALUES(?, 'dy', ?, ?, ?)",
+        [((lead_id - 1) * 25 + index + 1, f"{lead_id}-{index}", lead_id, f"证据{index}")
+         for lead_id in range(1, 201) for index in range(25)],
+    )
+    workbench_db.execute(
+        "INSERT INTO lead_sources(lead_account_id, source_account_id, content_id, comment_id, source_type) "
+        "SELECT content_id, content_id, content_id, id, 'comment' FROM comments"
+    )
+    workbench_db.executemany(
+        "INSERT INTO analysis_jobs(id, target_type, target_id, status, output_payload, updated_at, created_at) "
+        "VALUES(?, 'lead', ?, 'succeeded', ?, ?, ?)",
+        [(f"job-{lead_id}-{index}", lead_id, json.dumps({"is_customer": index != 19, "reason": f"分析{index}"}),
+          f"2026-01-02 00:00:{index:02d}", f"2026-01-02 00:00:{index:02d}")
+         for lead_id in range(1, 201) for index in range(20)],
+    )
+    steps = 0
+
+    def count_steps() -> int:
+        nonlocal steps
+        steps += 1000
+        return 0
+
+    # VM 步数不受机器快慢影响；逐条证据重查分析历史会超过 200 万步。
+    workbench_db.set_progress_handler(count_steps, 1000)
+    page = ai_service.ai_workbench("leads", page_size=10)
+    workbench_db.set_progress_handler(None, 0)
+
+    assert steps < 700_000
+    assert page["total"] == 200 and [item["id"] for item in page["items"]] == list(range(200, 190, -1))
+    for item in page["items"]:
+        assert item["job_id"] == f"job-{item['id']}-19"
+        assert item["analysis_status"] == "已分析" and item["result_label"] == "非客户"
+        assert item["result_reason"] == "分析19" and item["source_count"] == 25
+        assert set(item["comment_samples"].split(",")) == {f"证据{index}" for index in range(25)}
