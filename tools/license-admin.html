@@ -8,7 +8,7 @@
   <style>
     :root{color-scheme:light;font-family:Inter,"Microsoft YaHei",sans-serif;color:#172b28;background:#f4f7f6;--primary:#087f6d;--primary-dark:#066554;--ink:#172b28;--muted:#647773;--line:#dce7e4;--soft:#eef5f3;--danger:#b42318;--warning:#a15c00}
     *{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#eaf3f1 0,#f4f7f6 280px);min-height:100vh}button,input,select,textarea{font:inherit}button{border:1px solid transparent;border-radius:10px;padding:10px 15px;cursor:pointer;background:#e7f0ee;color:#173f38;transition:background .15s,border-color .15s,transform .15s}button:hover:not(:disabled){background:#dbeae7}button:active:not(:disabled){transform:translateY(1px)}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid rgba(8,127,109,.2);outline-offset:2px}button.primary{background:var(--primary);color:#fff}button.primary:hover:not(:disabled){background:var(--primary-dark)}button.danger{background:#fff1f0;color:var(--danger);border-color:#ffd3cf}button.warning{background:#fff6e8;color:#895000;border-color:#f4d6a1}button.ghost{background:#fff;border-color:#d5e2df}button.small{padding:7px 10px;font-size:12px}button:disabled{opacity:.48;cursor:not-allowed}.shell{max-width:1440px;margin:auto;padding:24px}.topbar{display:flex;justify-content:space-between;gap:24px;align-items:center;padding:24px 26px;border-radius:20px;background:#132f2b;color:#fff;box-shadow:0 18px 42px rgba(16,53,46,.16)}.brand{display:flex;gap:14px;align-items:center}.brand-mark{display:grid;place-items:center;width:44px;height:44px;border-radius:13px;background:#21a78f;color:#fff;font-size:17px;font-weight:800;letter-spacing:-1px}.topbar h1{font-size:24px;line-height:1.2;margin:0 0 5px}.topbar p{margin:0;color:#b8d0cb;font-size:13px}.top-actions,.actions,.checks,.toolbar,.section-title,.filters,.device-summary{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.top-actions{justify-content:flex-end}.top-actions button.ghost{color:#dcece8;background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.16)}.top-actions button.ghost:hover{background:rgba(255,255,255,.14)}.connection{display:inline-flex;align-items:center;gap:8px}.dot{width:8px;height:8px;border-radius:50%;background:#9aa9a6;box-shadow:0 0 0 4px rgba(255,255,255,.06)}.dot.ok{background:#32d49b}.dot.error{background:#ff746a}.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin:18px 0}.stat{position:relative;text-align:left;padding:16px 17px;background:#fff;border:1px solid var(--line);border-radius:15px;color:var(--ink);box-shadow:0 7px 24px rgba(24,70,62,.05)}.stat:hover:not(:disabled){background:#fff;border-color:#9bcac1}.stat.active-filter{border-color:var(--primary);box-shadow:0 0 0 2px rgba(8,127,109,.1)}.stat span{display:block;color:var(--muted);font-size:12px}.stat strong{display:block;font-size:26px;line-height:1.15;margin-top:8px}.stat.soon strong{color:var(--warning)}.stat.bad strong{color:var(--danger)}.panel{background:#fff;border:1px solid var(--line);border-radius:18px;padding:20px;box-shadow:0 8px 28px rgba(24,70,62,.05)}.section-title{justify-content:space-between;margin-bottom:16px}.section-title h2,.section-title h3,.section-title p{margin:0}.section-title h2{font-size:18px}.section-title h3{font-size:15px}.section-title p{color:var(--muted);font-size:13px;margin-top:5px}.count{font-size:12px;color:var(--muted)}.toolbar{justify-content:space-between;padding:12px;border-radius:13px;background:#f5f8f7;margin-bottom:14px}.filters{flex:1}.filters input{width:min(340px,100%)}.filters select{width:auto;min-width:130px}.field{display:grid;gap:7px;font-size:13px;color:#526864}.field-title{font-weight:650;color:#36534d}input,select,textarea{width:100%;padding:10px 12px;border:1px solid #cad9d6;border-radius:10px;background:#fff;color:var(--ink);outline:none}input:focus,select:focus,textarea:focus{border-color:#4aa997;box-shadow:0 0 0 3px rgba(8,127,109,.1)}textarea{min-height:82px;resize:vertical}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.input-with-button{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.actions{margin-top:14px}.checks{margin:14px 0}.checks strong{font-size:13px}.checks label{display:flex;align-items:center;gap:6px;padding:7px 10px;border:1px solid #d9e5e2;border-radius:999px;color:#47615c;font-size:13px;cursor:pointer}.checks label:has(input:checked){border-color:#8bc8bc;background:#edf8f5;color:#076a5a}.checks input{width:auto}.scroll{overflow:auto;border:1px solid #e6eeec;border-radius:13px}table{width:100%;border-collapse:collapse;font-size:13px;min-width:940px}th,td{text-align:left;padding:13px 12px;border-bottom:1px solid #e8efed;vertical-align:middle}tr:last-child td{border-bottom:0}tbody tr:hover{background:#fbfdfc}th{color:#60736f;background:#f6f9f8;font-weight:650;white-space:nowrap}td code{display:block;max-width:240px;overflow:hidden;text-overflow:ellipsis;font-size:12px;white-space:nowrap}.remark{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.badge,.chip{display:inline-flex;align-items:center;border-radius:999px;padding:4px 8px;font-size:12px;white-space:nowrap}.badge.active{background:#e8f8f1;color:#087a57}.badge.soon{background:#fff4dd;color:#895000;margin-left:5px}.badge.disabled{background:#f0f1f1;color:#66736f}.badge.expired,.badge.revoked{background:#fff0ef;color:#b42318}.chip{background:#eef5f3;color:#42615b;margin:2px 3px 2px 0}.device-over{color:var(--danger);font-weight:700}.muted{color:#7a8d89}.warning-box{padding:11px 13px;border-radius:11px;background:#fff8eb;color:#835100;font-size:13px;margin:12px 0}.created{display:none;padding:16px;margin-top:16px;border-radius:13px;background:#ecfaf6;border:1px solid #bce7d9}.created code{display:block;margin:10px 0;padding:12px;background:#fff;border:1px dashed #93cfc3;border-radius:9px;user-select:all;word-break:break-all;font-size:14px}.editor-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.device-summary{margin:10px 0 12px}.device-summary span{font-size:12px;background:#f1f6f5;padding:6px 10px;border-radius:999px}.log-panel{margin-top:14px;border:1px solid var(--line);border-radius:14px;background:#fff}.log-panel summary{display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:13px 16px;font-size:13px;font-weight:650;color:#36534d}.log-panel summary::after{content:"展开";font-size:12px;font-weight:400;color:var(--muted)}.log-panel[open] summary::after{content:"收起"}.log-body{padding:0 14px 14px}#log{white-space:pre-wrap;max-height:190px;overflow:auto;font-size:12px;background:#132522;color:#d7ebe6;padding:12px;border-radius:9px;margin:0}dialog{width:min(720px,calc(100% - 28px));max-height:92vh;padding:0;border:0;border-radius:19px;color:var(--ink);box-shadow:0 26px 80px rgba(10,37,32,.3)}dialog.wide{width:min(1180px,calc(100% - 28px))}dialog::backdrop{background:rgba(12,35,31,.54);backdrop-filter:blur(3px)}.dialog-head{position:sticky;top:0;z-index:2;display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:19px 21px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.96)}.dialog-head h2{font-size:19px;margin:0 0 4px}.dialog-head p{font-size:13px;color:var(--muted);margin:0}.dialog-body{padding:20px;overflow:auto}.dialog-footer{display:flex;justify-content:flex-end;gap:9px;margin-top:18px;padding-top:16px;border-top:1px solid #e8efed}.close-icon{min-width:36px;padding:7px 10px;background:#f1f5f4;font-size:18px;line-height:1}.modal-section+.modal-section{border-top:1px solid #e4ecea;margin-top:22px;padding-top:20px}.modal-section h3{margin:0 0 5px}.modal-section>p{margin:0 0 14px;color:var(--muted);font-size:13px}.toast{position:fixed;right:24px;bottom:24px;z-index:20;max-width:360px;padding:12px 16px;border-radius:11px;background:#173f38;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translateY(8px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{background:#9f241b}@media(max-width:1080px){.stats{grid-template-columns:repeat(3,1fr)}.grid.three{grid-template-columns:1fr 1fr}}@media(max-width:720px){.shell{padding:12px}.topbar{align-items:flex-start;padding:19px;flex-direction:column}.top-actions{width:100%;justify-content:flex-start}.top-actions button{flex:1}.stats{grid-template-columns:repeat(2,1fr)}.grid,.grid.three{grid-template-columns:1fr}.toolbar{align-items:stretch}.filters,.filters input,.filters select{width:100%}.filters select{flex:1}.editor-head{display:block}.dialog-head,.dialog-body{padding:16px}.remark{max-width:160px}}
-    dialog[open]{display:flex;flex-direction:column}.dialog-body{min-height:0}@media(max-width:720px){.top-actions{display:grid;grid-template-columns:1fr 1fr}.top-actions button{width:100%;white-space:nowrap}#openConnectionBtn{grid-column:1/-1}}
+    dialog[open]{display:flex;flex-direction:column}.dialog-body{min-height:0}.license-code-row{display:flex;align-items:center;gap:7px}.license-code-row code{max-width:300px;user-select:all}.missing-code{margin-top:3px;color:var(--warning);font-size:11px}@media(max-width:720px){.top-actions{display:grid;grid-template-columns:1fr 1fr}.top-actions button{width:100%;white-space:nowrap}#openConnectionBtn{grid-column:1/-1}}
   </style>
 </head>
 <body>
@@ -38,13 +38,13 @@
     </div>
     <div class="toolbar">
       <div class="filters">
-        <input id="licenseSearch" type="search" aria-label="搜索授权" placeholder="搜索授权前缀、ID 或客户备注">
+        <input id="licenseSearch" type="search" aria-label="搜索授权" placeholder="搜索完整授权码、ID 或客户备注">
         <select id="licenseStatusFilter" aria-label="按授权状态筛选"><option value="all">全部状态</option><option value="active">正常</option><option value="expiring">30 天内到期</option><option value="disabled">已停用</option><option value="expired">已过期</option></select>
         <select id="licenseFeatureFilter" aria-label="按功能权益筛选"><option value="all">全部功能</option><option value="lead">拓客</option><option value="traffic">引流</option><option value="content">内容</option></select>
         <button class="small ghost" id="clearFiltersBtn" type="button">清除筛选</button>
       </div>
     </div>
-    <div class="scroll"><table><thead><tr><th>授权</th><th>状态</th><th>功能</th><th>设备</th><th>有效期</th><th>客户备注</th><th>操作</th></tr></thead><tbody id="licenseRows"><tr><td colspan="7" class="muted">请先连接授权服务并加载数据</td></tr></tbody></table></div>
+    <div class="scroll"><table><thead><tr><th>授权码</th><th>状态</th><th>功能</th><th>设备</th><th>有效期</th><th>客户备注</th><th>操作</th></tr></thead><tbody id="licenseRows"><tr><td colspan="7" class="muted">请先连接授权服务并加载数据</td></tr></tbody></table></div>
   </section>
 
   <details class="log-panel"><summary>操作日志</summary><div class="log-body"><div class="section-title"><span class="count">仅保留在当前页面</span><button class="small ghost" id="clearLogBtn" type="button">清空日志</button></div><pre id="log">等待操作</pre></div></details>
@@ -62,7 +62,7 @@
 </dialog>
 
 <dialog id="createDialog" aria-labelledby="createTitle">
-  <div class="dialog-head"><div><h2 id="createTitle">创建新授权</h2><p>完整授权码只在创建成功后展示一次，请立即交付或保存。</p></div><button class="close-icon" id="closeCreateBtn" type="button" aria-label="关闭">×</button></div>
+  <div class="dialog-head"><div><h2 id="createTitle">创建新授权</h2><p>创建成功后会直接显示在授权列表中，也可以立即复制或保存。</p></div><button class="close-icon" id="closeCreateBtn" type="button" aria-label="关闭">×</button></div>
   <div class="dialog-body">
     <div class="checks"><strong>开通功能</strong><label><input type="checkbox" name="entitlement" value="lead" checked>拓客</label><label><input type="checkbox" name="entitlement" value="traffic" checked>引流</label><label><input type="checkbox" name="entitlement" value="content" checked>内容</label></div>
     <div class="grid">
@@ -86,7 +86,7 @@
   </div>
   <div class="dialog-body">
     <section class="modal-section">
-      <div class="warning-box">完整授权码无法找回；客户遗失时需要创建新授权。停用授权会让全部设备在下次联网校验时失去授权。</div>
+      <div class="warning-box">完整授权码可在管理员列表中查看和复制。停用授权会让全部设备在下次联网校验时失去授权。</div>
       <div class="grid three">
         <label class="field"><span class="field-title">授权状态</span><select id="editStatus"><option value="active">启用</option><option value="disabled">停用</option></select></label>
         <label class="field"><span class="field-title">最大设备数</span><input id="editMax" type="number" min="1" max="100"></label>
@@ -230,6 +230,15 @@
   function textCell(value, className = '') { return element('td', { text:value, className }) }
   function featureCell(values) { const cell = element('td'); for (const value of values || []) cell.append(element('span', { text:FEATURES[value] || value, className:'chip' })); return cell }
 
+  function licenseIdentityCell(item) {
+    const code = item.licenseCode || item.codePrefix || '—'
+    const codeRow = element('div', { className:'license-code-row' }, [element('code', { text:code, title:code })])
+    if (item.licenseCode) codeRow.append(actionButton('复制','ghost',() => copyText(item.licenseCode,'授权码已复制')))
+    const children = [codeRow, element('div', { text:item.licenseId, className:'muted', title:item.licenseId })]
+    if (!item.licenseCode) children.push(element('div', { text:'历史授权无完整码', className:'missing-code' }))
+    return element('td', {}, children)
+  }
+
   function renderStats() {
     byId('statTotal').textContent = state.licenses.length
     byId('statActive').textContent = state.licenses.filter(item => item.status === 'active').length
@@ -245,7 +254,7 @@
     const status = byId('licenseStatusFilter').value
     const feature = byId('licenseFeatureFilter').value
     return state.licenses.filter(item => {
-      const searchable = `${item.codePrefix || ''} ${item.licenseId || ''} ${item.remark || ''}`.toLowerCase()
+      const searchable = `${item.licenseCode || ''} ${item.codePrefix || ''} ${item.licenseId || ''} ${item.remark || ''}`.toLowerCase()
       const statusMatches = status === 'all' || (status === 'expiring' ? isExpiringSoon(item) : item.status === status)
       return (!query || searchable.includes(query)) && statusMatches && (feature === 'all' || (item.entitlements || []).includes(feature))
     })
@@ -261,7 +270,7 @@
     const rows = byId('licenseRows')
     const items = filteredLicenses()
     const nodes = items.map(item => {
-      const identity = element('td', {}, [element('code', { text:item.codePrefix }), element('div', { text:item.licenseId, className:'muted', title:item.licenseId })])
+      const identity = licenseIdentityCell(item)
       const status = element('td', {}, [badge(item.status)])
       if (isExpiringSoon(item)) status.append(badge('soon'))
       const devicesClass = Number(item.activeDeviceCount) > Number(item.maxDevices) ? 'device-over' : ''
@@ -303,8 +312,8 @@
     byId('createdBox').style.display = 'block'
     byId('createBtn').hidden = true
     byId('resetCreateBtn').hidden = true
-    writeLog('授权已创建；完整授权码不会再次从服务端返回', { licenseId:result.data.licenseId, codePrefix:result.data.codePrefix })
-    showToast('授权创建成功，请立即保存授权码')
+    writeLog('授权已创建；完整授权码已加入管理员列表', { licenseId:result.data.licenseId, codePrefix:result.data.codePrefix })
+    showToast('授权创建成功，列表中可随时复制')
     await refresh({ quiet:true })
   }
 

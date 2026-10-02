@@ -28,3 +28,6 @@ def test_license_admin_page_prioritizes_daily_management_workflow() -> None:
     assert 'id="statExpiring"' in source
     assert 'data-license-filter="expiring"' in source
     assert "function isExpiringSoon(item)" in source
+    assert "item.licenseCode || item.codePrefix" in source
+    assert "授权码已复制" in source
+    assert "历史授权无完整码" in source

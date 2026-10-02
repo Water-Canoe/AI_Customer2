@@ -9,7 +9,8 @@ AI拓客接口统一使用 `/ai-customer` 前缀，服务端代码位于 Sealos 
 - 一个客户使用一个产品授权码，不再按工作台拆分授权码。
 - 一个 Windows 安装使用一个机器设备码：客户端从 DPAPI 机器级身份派生，不信任可复制的业务数据库设备码。
 - 授权权益支持 `lead`（拓客）、`traffic`（引流）、`content`（内容）。
-- `AI_Customer-License` 只保存授权码 HMAC-SHA-256 摘要与前缀，完整授权码只在创建时返回一次。
+- `AI_Customer-License` 保存用于匹配的 HMAC-SHA-256 摘要、可检索前缀和 AES-256-GCM 完整授权码密文；只有管理员列表接口会解密返回完整码。
+- 密文密钥使用 HKDF-SHA-256 从高熵 `AI_CUSTOMER_LICENSE_CODE_PEPPER` 派生并隔离用途，不新增可提交的秘密配置。改造前的历史授权没有密文，无法从摘要恢复完整码。
 - `AI_Customer-LicenseDevice` 保存激活设备，`licenseId + deviceId` 唯一。
 - 设备名额在 MongoDB 事务内原子占用和释放。
 - 服务端签发 72 小时 Ed25519 租约；客户端本地验签，签发超过 6 小时才尝试续租。
@@ -114,11 +115,11 @@ Token 不允许放在 URL，不应写入浏览器 `localStorage` 或日志。
 }
 ```
 
-`expiresAt` 可为 `null`，表示长期。响应中的 `licenseCode` 只展示一次，之后列表只返回 `codePrefix`。
+`expiresAt` 可为 `null`，表示长期。响应中的 `licenseCode` 会立即返回，并以 AES-256-GCM 密文写入数据库供管理员列表再次查看。
 
 ### 列表与修改
 
-- `GET /ai-customer/admin/licenses`：最近 200 个授权。
+- `GET /ai-customer/admin/licenses`：最近 200 个授权；新授权返回完整 `licenseCode`，无密文的历史授权返回 `licenseCode: null`。
 - `PATCH /ai-customer/admin/licenses/{licenseId}`：修改 `status / entitlements / maxDevices / expiresAt / remark`。
 
 `status` 只支持 `active` 或 `disabled`。`maxDevices` 不能低于当前已激活设备数，否则返回 `409 / MAX_DEVICES_BELOW_ACTIVE`。授权不提供硬删除；商业记录需要保留时使用停用。
@@ -131,7 +132,7 @@ Token 不允许放在 URL，不应写入浏览器 `localStorage` 或日志。
 
 恢复只接受 `revoked` 设备；授权已停用、已过期或名额已满时拒绝恢复。设备已经是 `active` 时重复调用不会重复增加设备计数。成功响应会返回 `restoredAt`，设备列表也会返回最近一次恢复时间。
 
-根目录 `tools/license-admin.html` 已接入以上接口，可直接在浏览器打开。页面包含授权统计、创建与一次性保存、搜索筛选、CSV 导出、授权编辑、设备撤销与恢复；完整授权码和管理 Token 都不会持久化到页面存储。
+根目录 `tools/license-admin.html` 已接入以上接口，可直接在浏览器打开。页面包含授权统计、完整授权码直接展示与复制、搜索筛选、CSV 导出、授权编辑、设备撤销与恢复；管理 Token 和授权码都不会写入浏览器持久化存储，完整授权码只由管理员接口从服务端密文解密后返回。
 
 ## 远程更新
 
