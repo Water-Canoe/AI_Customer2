@@ -1277,11 +1277,6 @@ def _goto_video_candidate(page: Any, run_id: str, url: str, message: str, silent
     _ensure_page_ready(page)
 
 
-def _random_project_video_url() -> str:
-    candidate = _random_project_video_candidate(0)
-    return candidate["url"] if candidate else ""
-
-
 def _split_source_values(value: str) -> list[str]:
     values: list[str] = []
     for item in re.split(r"[,\r\n]+", str(value or "")):

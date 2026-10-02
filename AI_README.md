@@ -313,7 +313,7 @@ npm run dev
 - `GET/POST /api/accounts`、`PATCH/DELETE /api/accounts/{account_id}`：统一账号中心的列表、新增、修改、功能绑定、默认用途和软删除。
 - `POST /api/accounts/{account_id}/login`、`POST /api/accounts/{account_id}/check`、`GET /api/accounts/{account_id}/qrcode`：使用账号独立 Profile 执行扫码登录、状态检查和二维码展示。旧的设置页、引流页和内容发布账号登录接口已经移除。
 - `POST /api/settings/clear-data`：清空项目业务库和当前设置指向的 MyCrawler SQLite 业务表，必须输入确认文本 `清空业务记录`。
-- `POST /api/accounts/{account_id}/profile-enrichment`：为抖音/小红书/快手账号创建主页资料补全任务。导入 creator 主页简介后会自动复判竞品关键词命中关系；快手由 MyCrawler 的 `kuaishou_creator` 表写入后再导入。
+- `POST /api/accounts/{account_id}/profile-enrichment`：为抖音/小红书/快手账号创建主页资料补全任务，只补充资料，不重新登记竞品来源或触发 AI；候选来源已经在关键词采集时登记。快手由 MyCrawler 的 `kuaishou_creator` 表写入后再导入。
 - `POST /api/accounts/profile-enrichment/batch`：批量创建主页资料补全任务，默认最多 10 个并串行执行；`limit` 最大 50，前端使用 10。
 - `POST /api/accounts/{account_id}/analysis`：总览树“账号分析”入口，创建 `account_analysis` 任务，采集主页资料和少量视频；任务成功后自动发起竞品 AI 分析。
 - `POST /api/accounts/{account_id}/find-customers`：总览树或数据表“找客户”入口，只允许已判定为竞品的账号创建客户发现任务；后端优先对已入库内容创建 detail 评论采集任务，已有内容不足时再创建 creator 补采任务。
@@ -612,6 +612,7 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 ## 代码优化与验证（2026-10-03）
 
 - 运行队列领取任务前先按剩余资源容量过滤候选，并排除正在人工登录或已被占用的浏览器资源。原实现只检查排在最前面的 100 条任务，101 条高优先级浏览器积压会阻止后面的 AI 任务执行；修复后 AI、视频等独立资源继续工作，浏览器任务仍保留互斥和原有优先级。两种阻塞场景已先复现失败，再通过修复验证；队列与浏览器会话回归共 16 项通过。
+- 采集导入删除已被两阶段竞品发现替代的全局历史简介复判，以及专供旧逻辑使用的关键词函数、无效参数和逐内容账号资料查询。当前采集仍直接登记候选与证据，补资料仍只更新资料；无关历史账号不会被重新写成竞品候选。新回归先复现了自家账号角色被覆盖，再验证修复；导入、账号资料、竞品发现和引流候选相关 29 项通过。另删除无调用者的旧引流 URL 包装函数，实际候选选择链路保持不变。
 
 ## 已知限制
 

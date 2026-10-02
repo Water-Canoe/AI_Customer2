@@ -150,7 +150,6 @@ def _import_with_connections(raw_conn: sqlite3.Connection, task_id: str) -> dict
             _import_contents(raw_conn, conn, platform, task, counts)
         if task["mode"] != "profile_enrichment" and task["collect_comments"]:
             _import_comments(raw_conn, conn, platform, task, counts)
-        counts["competitor_candidates"] += _refresh_competitor_candidates_from_profiles(conn)
     return counts
 
 
@@ -268,21 +267,6 @@ def _content_native_passes_cutoff(
     result = _content_passes_cutoff(row, mapping, cutoff_ts)
     cache[content_native_id] = result
     return result
-
-
-def _keyword_terms(keyword_source: str) -> list[str]:
-    normalized = str(keyword_source or "")
-    for separator in ("，", ",", "；", ";", "\n", "\t"):
-        normalized = normalized.replace(separator, " ")
-    return [term.lower() for term in normalized.split() if term]
-
-
-def _matches_keyword(texts: list[str], keyword_source: str) -> bool:
-    terms = _keyword_terms(keyword_source)
-    if not terms:
-        return True
-    haystack = "\n".join(str(text or "") for text in texts).lower()
-    return any(term in haystack for term in terms)
 
 
 def _profile_url(platform: str, platform_user_id: str, sec_uid: str = "") -> str:
@@ -545,9 +529,6 @@ def _import_contents(
         if account_id is None:
             continue
         _mark_own_account(conn, account_id, task)
-        account_row = conn.execute("SELECT nickname, signature FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
-        effective_nickname = str(account_row["nickname"] or author_nickname) if account_row else author_nickname
-        effective_signature = str(account_row["signature"] or author_signature) if account_row else author_signature
         existing_content = conn.execute(
             "SELECT id FROM contents WHERE platform = ? AND content_id = ?",
             (platform, content_native_id),
@@ -594,7 +575,7 @@ def _import_contents(
         if search_limit is not None:
             per_keyword_counts[keyword_key] = per_keyword_counts.get(keyword_key, 0) + 1
         if task["mode"] in ("competitor_discovery", "demand_content"):
-            if _handle_keyword_author(conn, task, account_id, content_id, str(_value(row, mapping["keyword"])), effective_nickname, effective_signature):
+            if _handle_keyword_author(conn, task, account_id, content_id, str(_value(row, mapping["keyword"]))):
                 counts["competitor_candidates"] += 1
 
 
@@ -604,8 +585,6 @@ def _handle_keyword_author(
     account_id: int,
     content_id: int,
     keyword: str,
-    nickname: str,
-    signature: str,
 ) -> bool:
     keyword_source = keyword or task["keywords"]
     if task["mode"] == "competitor_discovery":
@@ -646,55 +625,6 @@ def _handle_keyword_author(
             (lead_id, content_id, keyword_source, task["id"]),
         )
     return False
-
-
-def _refresh_competitor_candidates_from_profiles(conn: sqlite3.Connection) -> int:
-    """Promote keyword authors after profile enrichment fills homepage signatures."""
-    rows = conn.execute(
-        """
-        SELECT c.id AS content_id, c.source_keyword, j.id AS task_id, j.keywords,
-               ua.id AS account_id, ua.nickname, ua.signature
-        FROM contents c
-        JOIN crawl_jobs j ON j.id = c.task_id
-        JOIN user_accounts ua ON ua.id = c.author_account_id
-        WHERE j.mode = 'competitor_discovery'
-          AND COALESCE(ua.signature, '') <> ''
-        """
-    ).fetchall()
-    promoted = 0
-    for row in rows:
-        keyword_source = str(row["source_keyword"] or row["keywords"] or "")
-        if not _matches_keyword([str(row["nickname"] or ""), str(row["signature"] or "")], keyword_source):
-            continue
-        exists = conn.execute(
-            """
-            SELECT 1 FROM account_sources
-            WHERE account_id = ? AND content_id = ? AND keyword = ? AND task_id = ? AND source_kind = 'keyword_author'
-            """,
-            (row["account_id"], row["content_id"], keyword_source, row["task_id"]),
-        ).fetchone()
-        conn.execute(
-            """
-            UPDATE user_accounts
-            SET account_role = CASE
-                WHEN account_role = 'competitor' THEN account_role
-                ELSE 'competitor_candidate'
-            END,
-            updated_at = datetime('now', 'localtime')
-            WHERE id = ?
-            """,
-            (row["account_id"],),
-        )
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO account_sources(account_id, content_id, keyword, task_id, source_kind)
-            VALUES(?, ?, ?, ?, 'keyword_author')
-            """,
-            (row["account_id"], row["content_id"], keyword_source, row["task_id"]),
-        )
-        if not exists:
-            promoted += 1
-    return promoted
 
 
 def _import_comments(

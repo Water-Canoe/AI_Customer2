@@ -2739,6 +2739,43 @@ def test_competitor_discovery_keeps_search_authors_as_candidates_before_profile(
     assert content["task_id"] == discovery["id"]
 
 
+def test_import_does_not_rewrite_unrelated_historical_account(tmp_path: Path) -> None:
+    # 新采集只处理当前来源，历史搜索证据不能覆盖后来设置的自家账号角色。
+    prepare_project(tmp_path)
+    from app import database
+    from app.schemas import TaskCreate
+    from app.services import crawler_adapter
+    from app.services.importer import import_for_task
+
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO crawl_jobs(id, name, mode, platform, login_type, crawler_type, keywords) "
+            "VALUES('historical-search', '历史搜索', 'competitor_discovery', 'dy', 'qrcode', 'search', 'EV')"
+        )
+        account_id = conn.execute(
+            "INSERT INTO user_accounts(platform, platform_user_id, signature, account_role, is_own_account, updated_at) "
+            "VALUES('dy', 'historical-own', 'EV store', 'own_account', 1, '2000-01-01 00:00:00')"
+        ).lastrowid
+        content_id = conn.execute(
+            "INSERT INTO contents(platform, content_id, author_account_id, source_keyword, task_id) "
+            "VALUES('dy', 'historical-video', ?, 'EV', 'historical-search')", (account_id,)
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO account_sources(account_id, content_id, keyword, task_id, source_kind) "
+            "VALUES(?, ?, 'EV', 'historical-search', 'keyword_author')", (account_id, content_id)
+        )
+
+    task = crawler_adapter.create_task(TaskCreate(
+        mode="competitor_discovery", platform="dy", keywords="NEW", execute_crawler=False
+    ))
+    import_for_task(str(task["id"]))
+
+    with database.connect() as conn:
+        account = conn.execute("SELECT account_role, updated_at FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
+        assert dict(account) == {"account_role": "own_account", "updated_at": "2000-01-01 00:00:00"}
+        assert conn.execute("SELECT COUNT(*) FROM account_sources WHERE account_id = ?", (account_id,)).fetchone()[0] == 1
+
+
 def test_account_analysis_task_imports_profile_and_recent_contents(tmp_path: Path) -> None:
     _, raw_db = prepare_project(tmp_path)
     from app import database
