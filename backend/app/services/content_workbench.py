@@ -174,6 +174,9 @@ def run_video_job(video_job_id: str) -> dict[str, Any]:
     def on_progress(snapshot: dict[str, Any]) -> None:
         if job_queue.is_entity_cancel_requested("video_generation", video_job_id):
             raise VideoJobCancelled("用户取消视频生成")
+        # 引擎发送局部更新；仅状态通知不能把已有进度重置为零。
+        if "progress" not in snapshot:
+            return
         progress = max(0, min(100, int(snapshot.get("progress") or 0)))
         with database.connect() as conn:
             conn.execute(
@@ -191,20 +194,18 @@ def run_video_job(video_job_id: str) -> dict[str, Any]:
         if not result or not result.get("videos"):
             raise RuntimeError("视频生成未产生有效成品，请查看任务错误后重试")
         outputs = [_format_output(video_job_id, path) for path in result.get("videos", [])]
-        publish_results = []
         with database.connect() as conn:
             conn.execute(
                 """
                 UPDATE video_jobs
                 SET status = 'succeeded', progress = 100, current_stage = 'completed',
-                    script = ?, outputs = ?, publish_results = ?, error = '',
+                    script = ?, outputs = ?, error = '',
                     finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
                 WHERE id = ?
                 """,
                 (
                     str(result.get("script") or params.video_script or ""),
                     json.dumps(outputs, ensure_ascii=False),
-                    json.dumps(publish_results, ensure_ascii=False),
                     video_job_id,
                 ),
             )
@@ -513,14 +514,12 @@ def _runtime_settings() -> dict[str, Any]:
     app_values["local_material_directory"] = str(database.get_content_assets_root() / "originals")
     app_values["bgm_directory"] = str(database.get_content_assets_root() / "originals")
     app_values["material_directory"] = str(database.get_video_generation_root() / "cache_videos")
-    app_values["enable_redis"] = False
-    app_values["max_concurrent_tasks"] = 1
     return values
 
 
 def _format_video_job(row: Any) -> dict[str, Any]:
     item = database.row_to_dict(row) or {}
-    for key, fallback in (("params", {}), ("outputs", []), ("publish_results", [])):
+    for key, fallback in (("params", {}), ("outputs", [])):
         try:
             item[key] = json.loads(str(item.get(key) or json.dumps(fallback)))
         except json.JSONDecodeError:

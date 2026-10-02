@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -81,10 +80,7 @@ def restore_backup(backup_id: str, confirm: str) -> dict[str, Any]:
 def active_jobs() -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     with database.connect() as conn:
-        tables = _table_names(conn)
         for table, condition in ACTIVE_JOB_QUERIES:
-            if table not in tables:
-                continue
             count = int(conn.execute(f"SELECT COUNT(*) AS c FROM {table} WHERE {condition}").fetchone()["c"])
             if count:
                 results.append({"table": table, "count": count})
@@ -125,8 +121,3 @@ def maintenance_window(action: str) -> Iterator[None]:
                 from app.services import automation_workbench
 
                 automation_workbench.start_scheduler()
-
-
-def _table_names(conn: sqlite3.Connection) -> set[str]:
-    rows = conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
-    return {str(row["name"]) for row in rows}

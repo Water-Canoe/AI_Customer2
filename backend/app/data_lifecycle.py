@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app import migrations
+
 
 DATABASE_FILE = "ai_customer.sqlite3"
 MEDIA_CRAWLER_DATABASE_FILE = "media_crawler.sqlite3"
@@ -106,7 +108,10 @@ def restore_backup(
     media_crawler_target: Path | None = None,
 ) -> dict[str, Any]:
     manifest, backup_dir, source_db = load_backup(backup_root, backup_id)
-    _validate_database(source_db, str(manifest.get("database_sha256") or ""), "业务数据库")
+    version = migrations.latest_version()
+    if manifest.get("schema_version") != version:
+        raise ValueError(f"备份结构版本与当前版本 {version} 不一致，已拒绝恢复")
+    _validate_database(source_db, str(manifest.get("database_sha256") or ""), "业务数据库", schema_version=version)
 
     media_source: Path | None = None
     media_metadata = manifest.get("media_crawler_database")
@@ -253,7 +258,7 @@ def _backup_database(source_path: Path, destination_path: Path) -> None:
         source.close()
 
 
-def _validate_database(path: Path, expected_hash: str, label: str) -> None:
+def _validate_database(path: Path, expected_hash: str, label: str, *, schema_version: int | None = None) -> None:
     if not path.is_file() or not expected_hash or _sha256(path) != expected_hash:
         raise ValueError(f"{label}校验失败，已拒绝恢复")
     source = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
@@ -261,6 +266,8 @@ def _validate_database(path: Path, expected_hash: str, label: str) -> None:
         integrity = source.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise ValueError(f"{label}完整性检查失败：{integrity}")
+        if schema_version is not None and migrations.current_version(source) != schema_version:
+            raise ValueError(f"{label}结构版本与当前版本 {schema_version} 不一致，已拒绝恢复")
     finally:
         source.close()
 

@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from app import data_lifecycle, migrations
+from app import migrations
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -115,13 +115,13 @@ def quote_identifier(identifier: str) -> str:
 
 
 SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS settings (
+CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
-CREATE TABLE IF NOT EXISTS crawl_jobs (
+CREATE TABLE crawl_jobs (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     mode TEXT NOT NULL,
@@ -152,9 +152,9 @@ CREATE TABLE IF NOT EXISTS crawl_jobs (
     finished_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
+, automation_managed INTEGER NOT NULL DEFAULT 0, account_id TEXT NOT NULL DEFAULT '');
 
-CREATE TABLE IF NOT EXISTS task_logs (
+CREATE TABLE task_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
     level TEXT NOT NULL DEFAULT 'info',
@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS task_logs (
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS user_accounts (
+CREATE TABLE user_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     platform TEXT NOT NULL,
     platform_user_id TEXT NOT NULL,
@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     UNIQUE(platform, platform_user_id)
 );
 
-CREATE TABLE IF NOT EXISTS contents (
+CREATE TABLE contents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     platform TEXT NOT NULL,
     content_id TEXT NOT NULL,
@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS contents (
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS comments (
+CREATE TABLE comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     platform TEXT NOT NULL,
     comment_id TEXT NOT NULL,
@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS comments (
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS account_sources (
+CREATE TABLE account_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER NOT NULL,
     content_id INTEGER,
@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS account_sources (
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS lead_user_accounts (
+CREATE TABLE lead_user_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER NOT NULL UNIQUE,
     screening_status TEXT NOT NULL DEFAULT '待筛选',
@@ -257,7 +257,7 @@ CREATE TABLE IF NOT EXISTS lead_user_accounts (
     FOREIGN KEY(account_id) REFERENCES user_accounts(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS lead_sources (
+CREATE TABLE lead_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     lead_account_id INTEGER NOT NULL,
     source_account_id INTEGER,
@@ -276,7 +276,7 @@ CREATE TABLE IF NOT EXISTS lead_sources (
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS lead_status_events (
+CREATE TABLE lead_status_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     lead_account_id INTEGER NOT NULL,
     from_status TEXT NOT NULL DEFAULT '',
@@ -286,7 +286,7 @@ CREATE TABLE IF NOT EXISTS lead_status_events (
     FOREIGN KEY(lead_account_id) REFERENCES lead_user_accounts(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS message_batches (
+CREATE TABLE message_batches (
     id TEXT PRIMARY KEY,
     platform TEXT NOT NULL DEFAULT 'dy',
     keyword TEXT NOT NULL DEFAULT '',
@@ -307,9 +307,9 @@ CREATE TABLE IF NOT EXISTS message_batches (
     finished_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
+, source TEXT NOT NULL DEFAULT 'manual', automation_run_id TEXT NOT NULL DEFAULT '', account_id TEXT NOT NULL DEFAULT '');
 
-CREATE TABLE IF NOT EXISTS message_batch_items (
+CREATE TABLE message_batch_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     batch_id TEXT NOT NULL,
     lead_account_id INTEGER NOT NULL,
@@ -326,13 +326,13 @@ CREATE TABLE IF NOT EXISTS message_batch_items (
     FOREIGN KEY(lead_account_id) REFERENCES lead_user_accounts(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_message_batches_status_created
+CREATE INDEX idx_message_batches_status_created
 ON message_batches(status, created_at);
 
-CREATE INDEX IF NOT EXISTS idx_message_batch_items_batch_status
+CREATE INDEX idx_message_batch_items_batch_status
 ON message_batch_items(batch_id, status, id);
 
-CREATE TABLE IF NOT EXISTS raw_source_refs (
+CREATE TABLE raw_source_refs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_type TEXT NOT NULL,
     entity_id INTEGER NOT NULL,
@@ -345,7 +345,7 @@ CREATE TABLE IF NOT EXISTS raw_source_refs (
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS deleted_identities (
+CREATE TABLE deleted_identities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_type TEXT NOT NULL,
     platform TEXT NOT NULL,
@@ -358,53 +358,52 @@ CREATE TABLE IF NOT EXISTS deleted_identities (
     UNIQUE(entity_type, platform, identifier_type, identifier_value)
 );
 
-CREATE INDEX IF NOT EXISTS idx_deleted_identities_lookup
+CREATE INDEX idx_deleted_identities_lookup
 ON deleted_identities(entity_type, platform, identifier_type, identifier_value);
 
--- 拓客工作台高频读路径：任务、总览树、AI、私信队列和删除预览。
-CREATE INDEX IF NOT EXISTS idx_crawl_jobs_status_archived_created
+CREATE INDEX idx_crawl_jobs_status_archived_created
 ON crawl_jobs(status, archived, created_at);
 
-CREATE INDEX IF NOT EXISTS idx_task_logs_task_id_id
+CREATE INDEX idx_task_logs_task_id_id
 ON task_logs(task_id, id);
 
-CREATE INDEX IF NOT EXISTS idx_contents_author_updated
+CREATE INDEX idx_contents_author_updated
 ON contents(author_account_id, updated_at);
 
-CREATE INDEX IF NOT EXISTS idx_comments_content_updated
+CREATE INDEX idx_comments_content_updated
 ON comments(content_id, updated_at);
 
-CREATE INDEX IF NOT EXISTS idx_account_sources_account_active
+CREATE INDEX idx_account_sources_account_active
 ON account_sources(account_id, active);
 
-CREATE INDEX IF NOT EXISTS idx_account_sources_task_active
+CREATE INDEX idx_account_sources_task_active
 ON account_sources(task_id, active);
 
-CREATE INDEX IF NOT EXISTS idx_lead_sources_lead_active
+CREATE INDEX idx_lead_sources_lead_active
 ON lead_sources(lead_account_id, active);
 
-CREATE INDEX IF NOT EXISTS idx_lead_sources_task_active
+CREATE INDEX idx_lead_sources_task_active
 ON lead_sources(task_id, active);
 
-CREATE INDEX IF NOT EXISTS idx_lead_sources_content_active
+CREATE INDEX idx_lead_sources_content_active
 ON lead_sources(content_id, active);
 
-CREATE INDEX IF NOT EXISTS idx_lead_sources_comment_active
+CREATE INDEX idx_lead_sources_comment_active
 ON lead_sources(comment_id, active);
 
-CREATE INDEX IF NOT EXISTS idx_lead_sources_source_active
+CREATE INDEX idx_lead_sources_source_active
 ON lead_sources(source_account_id, active);
 
-CREATE INDEX IF NOT EXISTS idx_lead_user_follow_hidden_updated
+CREATE INDEX idx_lead_user_follow_hidden_updated
 ON lead_user_accounts(follow_status, hidden, updated_at);
 
-CREATE INDEX IF NOT EXISTS idx_lead_user_screening_hidden_updated
+CREATE INDEX idx_lead_user_screening_hidden_updated
 ON lead_user_accounts(screening_status, hidden, updated_at);
 
-CREATE INDEX IF NOT EXISTS idx_lead_status_events_lead_status_created
+CREATE INDEX idx_lead_status_events_lead_status_created
 ON lead_status_events(lead_account_id, to_status, created_at);
 
-CREATE TABLE IF NOT EXISTS analysis_jobs (
+CREATE TABLE analysis_jobs (
     id TEXT PRIMARY KEY,
     target_type TEXT NOT NULL,
     target_id INTEGER NOT NULL,
@@ -420,15 +419,15 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
     base_url TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
+, auto_delete INTEGER NOT NULL DEFAULT -1);
 
-CREATE INDEX IF NOT EXISTS idx_analysis_jobs_target_status
+CREATE INDEX idx_analysis_jobs_target_status
 ON analysis_jobs(target_type, target_id, status);
 
-CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status_updated
+CREATE INDEX idx_analysis_jobs_status_updated
 ON analysis_jobs(status, updated_at);
 
-CREATE TABLE IF NOT EXISTS deletion_audit (
+CREATE TABLE deletion_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_type TEXT NOT NULL,
     entity_id INTEGER NOT NULL,
@@ -437,7 +436,7 @@ CREATE TABLE IF NOT EXISTS deletion_audit (
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
-CREATE TABLE IF NOT EXISTS traffic_plans (
+CREATE TABLE traffic_plans (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     platform TEXT NOT NULL DEFAULT 'dy',
@@ -453,9 +452,9 @@ CREATE TABLE IF NOT EXISTS traffic_plans (
     archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-);
+, automation_managed INTEGER NOT NULL DEFAULT 0, account_id TEXT NOT NULL DEFAULT '');
 
-CREATE TABLE IF NOT EXISTS traffic_runs (
+CREATE TABLE traffic_runs (
     id TEXT PRIMARY KEY,
     plan_id TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
@@ -471,11 +470,11 @@ CREATE TABLE IF NOT EXISTS traffic_runs (
     started_at TEXT,
     finished_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')), account_id TEXT NOT NULL DEFAULT '',
     FOREIGN KEY(plan_id) REFERENCES traffic_plans(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS traffic_run_items (
+CREATE TABLE traffic_run_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
     video_id TEXT NOT NULL DEFAULT '',
@@ -493,7 +492,7 @@ CREATE TABLE IF NOT EXISTS traffic_run_items (
     FOREIGN KEY(run_id) REFERENCES traffic_runs(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS traffic_action_logs (
+CREATE TABLE traffic_action_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
     level TEXT NOT NULL DEFAULT 'info',
@@ -506,7 +505,7 @@ CREATE TABLE IF NOT EXISTS traffic_action_logs (
     FOREIGN KEY(run_id) REFERENCES traffic_runs(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS traffic_records (
+CREATE TABLE traffic_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id TEXT NOT NULL,
     plan_id TEXT NOT NULL,
@@ -529,7 +528,7 @@ CREATE TABLE IF NOT EXISTS traffic_records (
     FOREIGN KEY(plan_id) REFERENCES traffic_plans(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS traffic_material_texts (
+CREATE TABLE traffic_material_texts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     text TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
@@ -538,7 +537,7 @@ CREATE TABLE IF NOT EXISTS traffic_material_texts (
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
-CREATE TABLE IF NOT EXISTS traffic_material_images (
+CREATE TABLE traffic_material_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     path TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
@@ -547,7 +546,7 @@ CREATE TABLE IF NOT EXISTS traffic_material_images (
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
-CREATE TABLE IF NOT EXISTS traffic_dedup_ledger (
+CREATE TABLE traffic_dedup_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     platform TEXT NOT NULL,
     video_id TEXT NOT NULL DEFAULT '',
@@ -563,6 +562,300 @@ CREATE TABLE IF NOT EXISTS traffic_dedup_ledger (
     FOREIGN KEY(record_id) REFERENCES traffic_records(id) ON DELETE SET NULL
 );
 
+CREATE TABLE runtime_jobs (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    entity_id TEXT NOT NULL DEFAULT '',
+    resource TEXT NOT NULL DEFAULT 'default',
+    payload TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'queued',
+    priority INTEGER NOT NULL DEFAULT 0,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 1,
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL DEFAULT '{}',
+    lease_token TEXT NOT NULL DEFAULT '',
+    heartbeat_at TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX idx_runtime_jobs_status_priority
+ON runtime_jobs(status, priority DESC, created_at, id);
+
+CREATE INDEX idx_runtime_jobs_entity
+ON runtime_jobs(kind, entity_id, created_at DESC);
+
+CREATE UNIQUE INDEX idx_runtime_jobs_active_entity
+ON runtime_jobs(kind, entity_id)
+WHERE entity_id <> '' AND status IN ('queued', 'running');
+
+CREATE TABLE content_assets (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    asset_type TEXT NOT NULL CHECK(asset_type IN ('video', 'image', 'audio')),
+    relative_path TEXT NOT NULL UNIQUE,
+    thumbnail_path TEXT NOT NULL DEFAULT '',
+    mime_type TEXT NOT NULL DEFAULT '',
+    file_size INTEGER NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE,
+    width INTEGER,
+    height INTEGER,
+    duration REAL,
+    deleted_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+, purpose TEXT NOT NULL DEFAULT ''
+CHECK(purpose IN ('', 'background_music', 'voice_reference')));
+
+CREATE TABLE video_jobs (
+    id TEXT PRIMARY KEY,
+    runtime_job_id TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL,
+    script TEXT NOT NULL DEFAULT '',
+    params TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'queued',
+    progress INTEGER NOT NULL DEFAULT 0,
+    current_stage TEXT NOT NULL DEFAULT 'queued',
+    attempt INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    outputs TEXT NOT NULL DEFAULT '[]',
+    archived INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE video_job_assets (
+    video_job_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'material' CHECK(role IN ('material', 'audio', 'bgm')),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(video_job_id, asset_id, role),
+    FOREIGN KEY(video_job_id) REFERENCES video_jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY(asset_id) REFERENCES content_assets(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_content_assets_type_created
+ON content_assets(asset_type, deleted_at, created_at DESC);
+
+CREATE INDEX idx_video_jobs_status_created
+ON video_jobs(status, archived, created_at DESC);
+
+CREATE INDEX idx_video_job_assets_order
+ON video_job_assets(video_job_id, role, sort_order);
+
+CREATE TABLE voice_profiles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    reference_asset_id TEXT NOT NULL,
+    prompt_text TEXT NOT NULL DEFAULT '',
+    style_prompt TEXT NOT NULL DEFAULT '',
+    consent_confirmed INTEGER NOT NULL DEFAULT 0,
+    consent_confirmed_at TEXT,
+    deleted_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(reference_asset_id) REFERENCES content_assets(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_voice_profiles_provider_created
+ON voice_profiles(provider, deleted_at, created_at DESC);
+
+CREATE INDEX idx_content_assets_purpose_created
+ON content_assets(purpose, deleted_at, created_at DESC);
+
+CREATE TABLE publish_accounts (
+id TEXT PRIMARY KEY,
+platform TEXT NOT NULL CHECK(platform IN ('dy', 'ks', 'xhs')),
+name TEXT NOT NULL,
+auth_relative_path TEXT NOT NULL UNIQUE,
+status TEXT NOT NULL DEFAULT 'login_required'
+    CHECK(status IN ('login_required', 'checking', 'ready', 'expired', 'error')),
+is_default INTEGER NOT NULL DEFAULT 0,
+enabled INTEGER NOT NULL DEFAULT 1,
+last_checked_at TEXT,
+last_error TEXT NOT NULL DEFAULT '',
+qrcode_relative_path TEXT NOT NULL DEFAULT '',
+deleted_at TEXT,
+created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+        , role TEXT NOT NULL DEFAULT 'brand'
+CHECK(role IN ('brand', 'service', 'operations', 'traffic', 'test')), platform_user_id TEXT NOT NULL DEFAULT '');
+
+CREATE UNIQUE INDEX idx_publish_accounts_active_name
+ON publish_accounts(platform, name) WHERE deleted_at IS NULL;
+
+CREATE INDEX idx_publish_accounts_status
+ON publish_accounts(enabled, status, platform, created_at DESC);
+
+CREATE TABLE publish_tasks (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL,
+    runtime_job_id TEXT NOT NULL DEFAULT '',
+    account_id TEXT NOT NULL,
+    source_type TEXT NOT NULL CHECK(source_type IN ('video_output', 'asset_video', 'asset_images')),
+    content_type TEXT NOT NULL CHECK(content_type IN ('video', 'note')),
+    video_job_id TEXT,
+    output_index INTEGER NOT NULL DEFAULT 0,
+    output_name TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    tags TEXT NOT NULL DEFAULT '[]',
+    publish_strategy TEXT NOT NULL DEFAULT 'immediate'
+        CHECK(publish_strategy IN ('immediate', 'scheduled')),
+    scheduled_at TEXT,
+    platform_options TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK(status IN ('waiting_media', 'queued', 'running', 'succeeded', 'failed', 'review_required', 'cancelled')),
+    current_stage TEXT NOT NULL DEFAULT 'queued',
+    progress INTEGER NOT NULL DEFAULT 0,
+    attempt INTEGER NOT NULL DEFAULT 0,
+    result TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    published_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(account_id) REFERENCES publish_accounts(id) ON DELETE RESTRICT,
+    FOREIGN KEY(video_job_id) REFERENCES video_jobs(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_publish_tasks_status_created
+ON publish_tasks(status, created_at DESC);
+
+CREATE INDEX idx_publish_tasks_video_output
+ON publish_tasks(video_job_id, output_name, created_at DESC);
+
+CREATE TABLE publish_task_assets (
+    task_id TEXT NOT NULL,
+    asset_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'media'
+        CHECK(role IN ('media', 'cover', 'portrait_cover', 'landscape_cover')),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(task_id, asset_id, role),
+    FOREIGN KEY(task_id) REFERENCES publish_tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY(asset_id) REFERENCES content_assets(id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_publish_task_assets_order
+ON publish_task_assets(task_id, role, sort_order);
+
+CREATE TABLE automation_run_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    keyword TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    current_stage TEXT NOT NULL DEFAULT 'pending',
+    context TEXT NOT NULL DEFAULT '{}',
+    error TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(run_id) REFERENCES automation_runs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE message_send_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_account_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'reserved',
+    error TEXT NOT NULL DEFAULT '',
+    attempted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    finished_at TEXT,
+    FOREIGN KEY(lead_account_id) REFERENCES lead_user_accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_automation_run_items_run_status
+ON automation_run_items(run_id, status, id);
+
+CREATE INDEX idx_message_send_attempts_time
+ON message_send_attempts(attempted_at, lead_account_id);
+
+CREATE TABLE "automation_plans" (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    plan_type TEXT NOT NULL CHECK(plan_type IN ('keyword_lead', 'message', 'traffic')),
+    weekdays TEXT NOT NULL DEFAULT '[]',
+    run_time TEXT NOT NULL,
+    config TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 0,
+    archived INTEGER NOT NULL DEFAULT 0,
+    last_triggered_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE "automation_runs" (
+    id TEXT PRIMARY KEY,
+    plan_id TEXT,
+    plan_name TEXT NOT NULL,
+    plan_type TEXT NOT NULL CHECK(plan_type IN ('keyword_lead', 'message', 'traffic')),
+    trigger_type TEXT NOT NULL CHECK(trigger_type IN ('scheduled', 'manual')),
+    scheduled_at TEXT,
+    config_snapshot TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'queued',
+    current_stage TEXT NOT NULL DEFAULT 'queued',
+    runtime_job_id TEXT NOT NULL DEFAULT '',
+    total_count INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    message_batch_id TEXT NOT NULL DEFAULT '',
+    message_attempted_count INTEGER NOT NULL DEFAULT 0,
+    message_success_count INTEGER NOT NULL DEFAULT 0,
+    traffic_run_id TEXT NOT NULL DEFAULT '',
+    traffic_runtime_job_id TEXT NOT NULL DEFAULT '',
+    stop_requested INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(plan_id) REFERENCES automation_plans(id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX idx_automation_scheduled_once ON automation_runs(plan_id, scheduled_at) WHERE trigger_type = 'scheduled' AND scheduled_at IS NOT NULL;
+
+CREATE UNIQUE INDEX idx_automation_active_plan ON automation_runs(plan_id) WHERE plan_id IS NOT NULL AND status IN ('queued', 'running');
+
+CREATE INDEX idx_automation_plans_enabled_time ON automation_plans(enabled, archived, run_time);
+
+CREATE INDEX idx_automation_plans_sort_order ON automation_plans(archived, sort_order, id);
+
+CREATE INDEX idx_automation_runs_plan_status ON automation_runs(plan_id, status, created_at DESC);
+
+CREATE TABLE account_feature_bindings (
+    account_id TEXT NOT NULL,
+    feature TEXT NOT NULL CHECK(feature IN ('acquisition', 'message', 'traffic', 'publish')),
+    is_default INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'unknown'
+        CHECK(status IN ('unknown', 'checking', 'ready', 'expired', 'error')),
+    last_checked_at TEXT,
+    last_error TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(account_id, feature),
+    FOREIGN KEY(account_id) REFERENCES publish_accounts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_account_feature_lookup
+ON account_feature_bindings(feature, is_default, status, account_id);
+
+CREATE UNIQUE INDEX idx_platform_account_user
+ON publish_accounts(platform, platform_user_id)
+WHERE deleted_at IS NULL AND platform_user_id <> '';
+
+CREATE INDEX idx_user_accounts_platform_sec_uid ON user_accounts(platform, sec_uid);
+
+CREATE INDEX idx_user_accounts_platform_profile_url ON user_accounts(platform, profile_url);
 """
 
 
@@ -631,19 +924,9 @@ DEFAULT_SETTINGS = {
 
 
 def init_db() -> None:
-    """Apply ordered schema migrations and seed default settings."""
-    path = get_db_path()
-    existed = path.exists() and path.stat().st_size > 0
-    with connect(path) as conn:
-        pending = migrations.pending_migrations(conn)
-        if existed and pending and migrations.has_business_data(conn):
-            data_lifecycle.create_backup(
-                conn,
-                get_backup_root(path),
-                reason=f"pre_migration_{pending[0].version}_{pending[-1].version}",
-                schema_version=migrations.current_version(conn),
-            )
-        migrations.apply_migrations(conn, SCHEMA_SQL)
+    """创建当前空库结构并填入默认设置；已有当前版本数据库只校验版本。"""
+    with connect() as conn:
+        migrations.initialize(conn, SCHEMA_SQL)
         for key, value in DEFAULT_SETTINGS.items():
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",

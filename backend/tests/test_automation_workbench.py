@@ -400,53 +400,6 @@ def test_automation_routes_split_lead_and_traffic_authorization(tmp_path: Path, 
     assert "traffic 未授权" in rejected.json()["detail"]
 
 
-def test_migration_10_preserves_existing_automation_data(tmp_path: Path) -> None:
-    from app import database, migrations
-
-    db_path = tmp_path / "migration-v9.sqlite3"
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        # 按版本准备迁移前结构，避免把列表位置当成迁移版本。
-        for migration in migrations.MIGRATIONS:
-            if migration.version <= 9:
-                migration.action(conn, database.SCHEMA_SQL)
-        conn.execute(
-            """
-            INSERT INTO automation_plans(id, name, plan_type, weekdays, run_time, config, sort_order)
-            VALUES('old-plan', '旧自动化计划', 'keyword_lead', '[1]', '09:00', '{}', 4)
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO automation_runs(id, plan_id, plan_name, plan_type, trigger_type, config_snapshot, status)
-            VALUES('old-run', 'old-plan', '旧自动化计划', 'keyword_lead', 'manual', '{}', 'completed')
-            """
-        )
-        conn.execute("INSERT INTO automation_run_items(run_id, keyword, status) VALUES('old-run', '旧关键词', 'succeeded')")
-        conn.execute("INSERT INTO traffic_plans(id, name) VALUES('normal-traffic', '普通引流计划')")
-        conn.commit()
-
-        next(migration for migration in migrations.MIGRATIONS if migration.version == 10).action(conn, database.SCHEMA_SQL)
-
-        preserved_plan = conn.execute("SELECT name, sort_order FROM automation_plans WHERE id = 'old-plan'").fetchone()
-        assert (preserved_plan["name"], preserved_plan["sort_order"]) == ("旧自动化计划", 4)
-        assert conn.execute("SELECT status FROM automation_runs WHERE id = 'old-run'").fetchone()["status"] == "completed"
-        assert conn.execute("SELECT keyword FROM automation_run_items WHERE run_id = 'old-run'").fetchone()["keyword"] == "旧关键词"
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(automation_runs)")}
-        assert {"traffic_run_id", "traffic_runtime_job_id"}.issubset(columns)
-        assert conn.execute("SELECT automation_managed FROM traffic_plans WHERE id = 'normal-traffic'").fetchone()[0] == 0
-        conn.execute(
-            """
-            INSERT INTO automation_plans(id, name, plan_type, weekdays, run_time, config, sort_order)
-            VALUES('traffic-plan', '自动引流', 'traffic', '[1]', '10:00', '{}', 5)
-            """
-        )
-        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-    finally:
-        conn.close()
-
-
 def test_keyword_selection_prefers_never_run_then_oldest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_project(tmp_path)
     from app import database

@@ -135,10 +135,6 @@ def load_config():
             return toml.loads(fp.read())
 
 
-def save_config():
-    return deepcopy(_cfg)
-
-
 _cfg = load_config()
 app = _cfg.get("app", {})
 whisper = _cfg.get("whisper", {})
@@ -163,11 +159,6 @@ project_name = _cfg.get("project_name", "AI Customer Video Engine")
 project_description = _cfg.get("project_description", "")
 project_version = _cfg.get("project_version", "1.3.1")
 reload_debug = False
-
-app["redis_host"] = os.getenv(
-    "AI_CUSTOMER_VIDEO_REDIS_HOST",
-    os.getenv("REDIS_HOST", app.get("redis_host", "localhost")),
-)
 
 imagemagick_path = app.get("imagemagick_path", "")
 if imagemagick_path and os.path.isfile(imagemagick_path):

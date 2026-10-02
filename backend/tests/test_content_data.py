@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import wave
@@ -16,7 +17,7 @@ def prepare_content_db(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     database.init_db()
 
 
-def test_content_migration_and_asset_dedup(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_current_content_schema_and_asset_dedup(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     prepare_content_db(tmp_path, monkeypatch)
     from app import database, migrations
     from app.services import content_assets
@@ -146,6 +147,44 @@ def test_video_job_subject_can_be_renamed(tmp_path, monkeypatch: pytest.MonkeyPa
 
     renamed = content_workbench.update_video_job("rename-job", "  新主题  ")
     assert renamed["subject"] == "新主题"
+
+
+def test_video_progress_listener_preserves_partial_updates(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prepare_content_db(tmp_path, monkeypatch)
+    from app import database
+    from app.services import content_workbench, job_queue
+    from app.video_engine.models import const
+    from app.video_engine.services import state, task
+
+    previous_outputs = [{"name": "previous.mp4"}]
+    with database.connect() as conn:
+        conn.execute(
+            "INSERT INTO video_jobs(id, subject, params, outputs) VALUES(?, ?, ?, ?)",
+            ("progress-job", "进度回归", json.dumps({"video_subject": "进度回归"}), json.dumps(previous_outputs)),
+        )
+    output = database.get_video_generation_root() / "final.mp4"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"generated-video")
+
+    def generate(task_id, _params, stop_at):
+        # 走真实内容任务监听器：只更新进度或状态时，数据库保留其余字段。
+        state.state.update_task(task_id, progress=35)
+        state.state.update_task(task_id, state=const.TASK_STATE_PROCESSING)
+        with database.connect() as conn:
+            row = conn.execute("SELECT status, progress, outputs FROM video_jobs WHERE id = 'progress-job'").fetchone()
+        assert row["status"] == "running"
+        assert row["progress"] == 35
+        assert json.loads(row["outputs"]) == previous_outputs
+        return {"videos": [str(output)], "script": "旁白"}
+
+    monkeypatch.setattr(task, "start", generate)
+    monkeypatch.setattr(job_queue, "is_entity_cancel_requested", lambda *_: False)
+    result = content_workbench.run_video_job("progress-job")
+    assert result["status"] == "succeeded"
+    assert result["progress"] == 100
+    assert result["outputs"][0]["name"] == "final.mp4"
+    assert "publish_results" not in result
+    assert state.state._listener is None
 
 
 def test_video_job_pagination_reports_all_active_jobs(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

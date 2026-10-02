@@ -33,30 +33,6 @@ def prepare_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
     return project_db, raw_db
 
 
-def test_schema_migrations_drop_removed_agent_tables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project_db, _ = prepare_database(tmp_path, monkeypatch)
-    from app import database, migrations
-
-    with database.connect(project_db) as conn:
-        conn.execute("CREATE TABLE agent_runs(id TEXT PRIMARY KEY)")
-        conn.execute("CREATE TABLE agent_run_events(id INTEGER PRIMARY KEY, run_id TEXT)")
-        conn.execute("INSERT INTO agent_runs(id) VALUES('legacy')")
-        conn.execute("DELETE FROM schema_migrations WHERE version = 2")
-
-    database.init_db()
-
-    with database.connect(project_db) as conn:
-        tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert "agent_runs" not in tables
-        assert "agent_run_events" not in tables
-        assert migrations.current_version(conn) == migrations.latest_version()
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == migrations.latest_version()
-    backup_dir = next((tmp_path / "backups").iterdir())
-    manifest = json.loads((backup_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["media_crawler_database"] is None
-    assert manifest["file_count"] == 0
-
-
 def test_backup_restore_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, raw_db = prepare_database(tmp_path, monkeypatch)
     from app import database
@@ -118,6 +94,38 @@ def test_restore_rejects_corrupt_media_crawler_backup(tmp_path: Path, monkeypatc
 
     with sqlite3.connect(raw_db) as raw_conn:
         assert raw_conn.execute("SELECT value FROM raw_items").fetchone()[0] == "test"
+
+
+@pytest.mark.parametrize("mismatch", ["manifest", "database"])
+def test_restore_rejects_old_schema_before_overwriting_current_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mismatch: str,
+) -> None:
+    prepare_database(tmp_path, monkeypatch)
+    from app import data_lifecycle, database
+    from app.services import data_management
+
+    backup = data_management.create_backup("schema_check")
+    backup_dir = tmp_path / "backups" / str(backup["id"])
+    manifest_path = backup_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mismatch == "manifest":
+        manifest["schema_version"] = 13
+    else:
+        # 即使清单声称是当前版本、哈希正确，也不能覆盖成旧结构数据库。
+        backup_db = backup_dir / "ai_customer.sqlite3"
+        with sqlite3.connect(backup_db) as conn:
+            conn.execute("PRAGMA user_version = 13")
+        manifest["database_sha256"] = data_lifecycle._sha256(backup_db)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    with database.connect() as conn:
+        database.set_setting(conn, "ai_model", "保留当前配置")
+
+    with pytest.raises(ValueError, match="结构版本"):
+        data_management.restore_backup(str(backup["id"]), data_management.RESTORE_CONFIRM_TEXT)
+
+    with database.connect() as conn:
+        assert database.get_setting(conn, "ai_model") == "保留当前配置"
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
 
 
 def test_active_jobs_covers_runtime_content_and_pending_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

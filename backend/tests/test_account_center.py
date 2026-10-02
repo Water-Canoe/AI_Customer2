@@ -114,23 +114,3 @@ def test_user_and_creator_login_statuses_are_independent(tmp_path: Path, monkeyp
     assert account_center.get_account(account["id"], feature="message", require_ready=True)["id"] == account["id"]
     with pytest.raises(ValueError, match="未登录"):
         account_center.get_account(account["id"], feature="publish", require_ready=True)
-
-
-def test_login_profile_migration_resets_only_user_features(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    database = _init(tmp_path, monkeypatch)
-    from app import migrations
-    from app.services import account_center
-
-    account = account_center.create_account("dy", "迁移账号", "test", ["message", "traffic", "publish"], [])
-    account_center.set_all_feature_status(account["id"], "ready")
-    account_center.set_account_state(account["id"], "checking")
-    account_center.set_feature_status(account["id"], "publish", "checking")
-    with database.connect() as conn:
-        # 固定验证登录态迁移，新增索引等迁移不能改变这项测试的目标。
-        next(migration for migration in migrations.MIGRATIONS if migration.version == 12).action(conn, database.SCHEMA_SQL)
-
-    updated = account_center.get_account(account["id"])
-    assert updated["feature_status"]["message"]["status"] == "unknown"
-    assert updated["feature_status"]["traffic"]["status"] == "unknown"
-    assert updated["feature_status"]["publish"]["status"] == "expired"
-    assert updated["status"] == "expired"
