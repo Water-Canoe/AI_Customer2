@@ -570,7 +570,7 @@ def _workbench_page(
     conn: database.sqlite3.Connection, query: str, tab: str,
     keyword: str, status: str, result: str, page: int, page_size: int,
 ) -> tuple[int, list[dict[str, Any]]]:
-    where = "1"
+    order = "datetime(updated_at) DESC, id DESC" if tab in {"competitors", "leads"} else "datetime(updated_at) DESC, datetime(created_at) DESC"
     if any((keyword, status, result)):
         # Python 的 Unicode 小写、JSON 布尔值和错误分类保持与页面原有规则一致。
         fields = ("id", "nickname", "signature", "job_id", "job_status", "job_output_payload")
@@ -587,20 +587,34 @@ def _workbench_page(
             deterministic=True,
         )
         where = f"workbench_matches(json_object({filter_json}))"
-    if where == "1" and tab == "competitors":
+        # 客户证据聚合先完成再筛选，防止 SQLite 把同一次匹配同时下推到 WHERE/HAVING。
+        filter_query = f"{query} LIMIT -1 OFFSET 0" if tab == "leads" else query
+        # 筛选只执行一次；计数左联当前页，保证无结果或超出末页时也返回正确总数。
+        rows = database.rows_to_dicts(conn.execute(
+            f"""
+            WITH matched AS MATERIALIZED (SELECT * FROM ({filter_query}) WHERE {where})
+            SELECT current_page.*, counts._total
+            FROM (SELECT COUNT(*) AS _total FROM matched) counts
+            LEFT JOIN (SELECT * FROM matched ORDER BY {order} LIMIT ? OFFSET ?) current_page ON 1
+            ORDER BY {order}
+            """,
+            (page_size, (page - 1) * page_size),
+        ).fetchall())
+        total = int(rows[0]["_total"])
+        for row in rows:
+            row.pop("_total")
+        return total, [row for row in rows if row["id"] is not None]
+    if tab == "competitors":
         count_query = f"SELECT COUNT(*) FROM user_accounts ua WHERE {_WORKBENCH_COMPETITOR_WHERE}"
-    elif where == "1" and tab == "leads":
+    elif tab == "leads":
         # 未筛选时直接数客户，避免为总数重复聚合全部来源证据。
         count_query = "SELECT COUNT(*) FROM lead_user_accounts WHERE hidden = 0"
-    elif where == "1" and tab in {"failed", "history"}:
+    else:
         statuses = "status = 'failed'" if tab == "failed" else "status IN ('succeeded', 'failed')"
         count_query = f"SELECT COUNT(*) FROM analysis_jobs WHERE {statuses}"
-    else:
-        count_query = f"SELECT COUNT(*) FROM ({query}) WHERE {where}"
     total = int(conn.execute(count_query).fetchone()[0])
-    order = "datetime(updated_at) DESC, id DESC" if tab in {"competitors", "leads"} else "datetime(updated_at) DESC, datetime(created_at) DESC"
     rows = conn.execute(
-        f"SELECT * FROM ({query}) WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?",
+        f"SELECT * FROM ({query}) ORDER BY {order} LIMIT ? OFFSET ?",
         (page_size, (page - 1) * page_size),
     ).fetchall()
     return total, database.rows_to_dicts(rows)

@@ -144,3 +144,34 @@ def test_lead_page_does_not_repeat_analysis_history_lookup_for_each_evidence(wor
         assert item["analysis_status"] == "已分析" and item["result_label"] == "非客户"
         assert item["result_reason"] == "分析19" and item["source_count"] == 25
         assert set(item["comment_samples"].split(",")) == {f"证据{index}" for index in range(25)}
+
+
+@pytest.mark.parametrize("tab", ["competitors", "leads", "history", "failed"])
+def test_filter_matches_each_record_once_including_empty_pages(
+    workbench_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tab: str,
+) -> None:
+    workbench_db.executemany(
+        "INSERT INTO user_accounts(id, platform, platform_user_id, nickname, account_role) "
+        "VALUES(?, 'dy', ?, ?, 'competitor_candidate')",
+        [(index, str(index), f"样本ÄN{index}") for index in range(1, 31)],
+    )
+    workbench_db.execute("INSERT INTO lead_user_accounts(id, account_id) SELECT id, id FROM user_accounts")
+    workbench_db.executemany(
+        "INSERT INTO analysis_jobs(id, target_type, target_id, status, error, output_payload) "
+        "VALUES(?, 'competitor', ?, 'failed', 'network error', ?)",
+        [(f"job-{index}", index, json.dumps({"reason": f"样本ÄN{index}"})) for index in range(1, 31)],
+    )
+    matched_ids: list[object] = []
+    original_matches = ai_service._matches_workbench_item
+
+    def count_matches(item, *args):
+        matched_ids.append(item["id"])
+        return original_matches(item, *args)
+
+    monkeypatch.setattr(ai_service, "_matches_workbench_item", count_matches)
+    # 计数和分页共用一次匹配；无结果、超出末页和 Unicode 搜索都保留正确总数。
+    for keyword, page, total, size in (("än", 1, 30, 10), ("än", 2, 30, 10), ("än", 4, 30, 0), ("不存在", 1, 0, 0)):
+        matched_ids.clear()
+        result = ai_service.ai_workbench(tab, keyword=keyword, page=page)
+        assert result["total"] == total and len(result["items"]) == size
+        assert len(matched_ids) == len(set(matched_ids)) == 30
