@@ -24,6 +24,7 @@ export function usePersistentDraft(options: {
   let baseline = ''
   let timer: ReturnType<typeof setTimeout> | undefined
   let writes: Promise<unknown> = Promise.resolve()
+  let failedRead: { path: string; snapshot: string } | null = null
   const path = () => `/drafts/${options.kind}/${encodeURIComponent(toValue(options.key))}`
   const serialize = () => JSON.stringify(options.getPayload())
 
@@ -34,26 +35,30 @@ export function usePersistentDraft(options: {
     ready = false
     const startingRevision = revision
     const requestPath = path()
+    const snapshot = failedRead?.path === requestPath ? failedRead.snapshot : serialize()
+    const preserveLocal = failedRead?.path === requestPath && serialize() !== snapshot
     status.value = 'loading'
     try {
       await writes.catch(() => undefined)
       const { data } = await api.get<DraftRecord>(requestPath)
       if (requestPath !== path()) return data
       // 读取期间已开始输入时保留本地内容。
-      if (startingRevision === revision && data.exists) {
+      if (!preserveLocal && startingRevision === revision && data.exists) {
         restoring = true
         options.applyPayload(data.payload)
         restoring = false
       }
       ready = true
+      failedRead = null
       baseline = serialize()
       updatedAt.value = data.updated_at
       error.value = ''
       status.value = data.exists ? 'saved' : 'idle'
-      if (startingRevision !== revision) { baseline = ''; scheduleSave() }
+      if (preserveLocal || startingRevision !== revision) { baseline = ''; scheduleSave() }
       return data
     } catch (cause: any) {
       restoring = false
+      failedRead = { path: requestPath, snapshot }
       status.value = 'error'
       error.value = cause?.response?.data?.detail || '草稿读取失败，请重试'
       throw cause
@@ -62,7 +67,7 @@ export function usePersistentDraft(options: {
 
   function save() {
     cancelTimer()
-    if (!ready) return writes
+    if (!ready) return failedRead?.path === path() && serialize() !== failedRead.snapshot ? Promise.reject(new Error(error.value)) : writes
     const body = serialize()
     if (body === baseline) return writes
     const requestPath = path()
@@ -97,12 +102,22 @@ export function usePersistentDraft(options: {
 
   async function clear() {
     cancelTimer()
+    const wasReady = ready
     ready = false
     await writes.catch(() => undefined)
-    await api.delete(path())
+    try {
+      await api.delete(path())
+    } catch (cause: any) {
+      ready = wasReady
+      status.value = 'error'
+      error.value = cause?.response?.data?.detail || '草稿清理失败，请重试'
+      throw cause
+    }
     writes = Promise.resolve()
+    failedRead = null
     baseline = serialize()
     status.value = 'idle'
+    error.value = ''
     updatedAt.value = null
     // 提交后关闭草稿；下次编辑需显式 load，避免清空表单又生成空草稿。
   }
@@ -113,6 +128,7 @@ export function usePersistentDraft(options: {
     scheduleSave()
   }, { flush: 'sync' })
   onBeforeRouteLeave(async () => {
+    if (status.value === 'loading') return false
     try { await save(); return true } catch { return false }
   })
   onBeforeUnmount(() => { cancelTimer(); stop(); void save().catch(() => undefined) })

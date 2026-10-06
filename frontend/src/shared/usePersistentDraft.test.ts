@@ -82,4 +82,25 @@ describe('persistent editing drafts', () => {
     expect(requests.delete).toHaveBeenCalledWith('/drafts/video/work-1')
     wrapper.unmount()
   })
+
+  it('读取期间阻止离页，读取失败后的输入必须恢复保存才能离开', async () => {
+    let fail!: (error: Error) => void
+    requests.get.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+    const { wrapper, form, draft } = editor()
+    const loading = draft.load().catch(() => undefined)
+    await flushPromises()
+    expect(await requests.leave()).toBe(false)
+    form.title = '读取期间开始写的内容'
+    fail(new Error('暂时断线'))
+    await loading
+    expect(await requests.leave()).toBe(false)
+    expect(form.title).toBe('读取期间开始写的内容')
+    requests.get.mockResolvedValue({ data: { exists: true, payload: { title: '服务器旧稿' }, updated_at: 't0' } })
+    requests.put.mockResolvedValue({ data: { updated_at: 't1' } })
+    await draft.load()
+    expect(form.title).toBe('读取期间开始写的内容')
+    expect(await requests.leave()).toBe(true)
+    expect(requests.put).toHaveBeenLastCalledWith('/drafts/video/work-1', { payload: { title: '读取期间开始写的内容' } })
+    wrapper.unmount()
+  })
 })
