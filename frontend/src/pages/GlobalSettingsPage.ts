@@ -113,7 +113,7 @@ export default defineComponent({
       try {
         await api.post(`/accounts/${account.id}/${action}`, null, { params: { login_kind: loginKind } })
         const label = loginKind === 'creator' ? '创作者登录' : '用户登录'
-        ElMessage.success(action === 'login' ? `${label}窗口已加入队列` : `${label}状态检查已加入队列`)
+        ElMessage.success(action === 'login' ? `${label}窗口已加入队列，完成平台提示后请手动关闭窗口` : `${label}状态检查已加入队列`)
         await loadAccounts()
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '账号操作失败')
@@ -171,6 +171,7 @@ export default defineComponent({
           ? [
               h('section', { class: 'pane account-create-pane' }, [
                 sectionTitle({ title: '平台账号', subtitle: '先选择用途，再完成对应登录；工作台会使用指定或默认账号', icon: User, tone: 'teal', aside: h('button', { class: 'primary-action', onClick: () => creating.value = !creating.value }, [h(Plus, { class: 'inline-icon' }), creating.value ? '收起添加' : '添加账号']) }),
+                h('p', { class: 'note' }, '登录后请先处理平台的“保存账号”等提示，再手动关闭登录窗口；关闭后本次登录任务才结束。'),
                 creating.value ? h('div', { class: 'account-create-row' }, [
                   h('select', { value: draft.value.platform, onChange: (event: Event) => draft.value.platform = (event.target as HTMLSelectElement).value }, [
                     h('option', { value: 'dy' }, '抖音'), h('option', { value: 'xhs' }, '小红书'), h('option', { value: 'ks' }, '快手'),

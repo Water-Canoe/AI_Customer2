@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,6 +10,213 @@ import pytest
 from app.publish_engine import service
 from app.publish_engine.browser import launch_publish_context
 from app.publish_engine.uploader.base_video import BaseVideoUploader
+
+
+class _LoginContext:
+    """模拟用户关窗事件，区分关窗前的主动关闭和关窗后的驱动清理。"""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.listeners = []
+        self.page = MagicMock(url="https://example.com/login")
+        self.page.goto = AsyncMock()
+        self.page.is_closed.side_effect = lambda: self.closed
+        self.page.get_by_text.return_value.locator.return_value.first.count = AsyncMock(return_value=0)
+        self.pages = [self.page]
+        self.new_page = AsyncMock(return_value=self.page)
+        self.close = AsyncMock(side_effect=self.manual_close)
+
+    def on(self, event, callback) -> None:
+        assert event == "close"
+        self.listeners.append(callback)
+
+    def manual_close(self) -> None:
+        self.closed = True
+        for callback in self.listeners:
+            callback(self)
+
+
+def _mock_account_login(
+    kind: str,
+    profile: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    context: _LoginContext,
+    checked: asyncio.Event,
+    *,
+    success: bool,
+    already_logged_in: bool = False,
+    cancel_check=None,
+):
+    """保留实际登录服务和会话收尾，仅模拟平台网页的登录检测。"""
+    if kind == "user":
+        from app.services import platform_login
+
+        async def user_logged_in(*_args):
+            checked.set()
+            return success
+
+        monkeypatch.setattr(platform_login, "launch_publish_context", AsyncMock(return_value=context))
+        monkeypatch.setattr(platform_login, "_cookie_map", AsyncMock(return_value={}))
+        monkeypatch.setattr(platform_login, "_open_login_page", AsyncMock())
+        monkeypatch.setattr(platform_login, "_is_logged_in", user_logged_in)
+        return platform_login.login_account("dy", profile, cancel_check=cancel_check, timeout_seconds=1)
+
+    package, qr_function, detector = {
+        "dy": ("douyin_uploader", "_save_douyin_qrcode", "_is_douyin_login_completed"),
+        "ks": ("ks_uploader", "_save_ks_qrcode", "_is_ks_login_page_gone"),
+        "xhs": ("xiaohongshu_uploader", "_save_xhs_qrcode", "_is_xhs_login_completed"),
+    }[kind]
+    module = importlib.import_module(f"app.publish_engine.uploader.{package}.main")
+    monkeypatch.setattr(module, "launch_publish_context", AsyncMock(return_value=context))
+    monkeypatch.setattr(module, "profile_has_state", lambda _: True)
+    monkeypatch.setattr(module, "cookie_auth", AsyncMock(side_effect=AssertionError("打开登录不应仅检查已有登录态")))
+    qr_saved = False
+
+    async def creator_logged_in(*_args):
+        if already_logged_in or qr_saved:
+            checked.set()
+            return success
+        return False
+
+    async def save_qr(*_args, **_kwargs):
+        nonlocal qr_saved
+        assert not already_logged_in, "已登录页面应跳过二维码提取"
+        qr_saved = True
+        return {"image_path": str(profile.parent / "login-qrcode.png")}
+
+    async def goto(url, **_kwargs):
+        context.page.url = module.KUAISHOU_UPLOAD_URL if kind == "ks" and already_logged_in else url
+        if kind == "ks" and already_logged_in:
+            checked.set()
+
+    context.page.goto.side_effect = goto
+    monkeypatch.setattr(module, detector, creator_logged_in)
+    monkeypatch.setattr(module, qr_function, save_qr)
+    if kind == "ks":
+        monkeypatch.setattr(module, "_is_ks_qrcode_expired", AsyncMock(return_value=False))
+    return service.login_account(kind, profile, cancel_check=cancel_check)
+
+
+@pytest.mark.parametrize("kind", ["user", "dy", "ks", "xhs"])
+@pytest.mark.parametrize("already_logged_in", [False, True])
+def test_account_login_keeps_window_until_manual_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, already_logged_in: bool
+) -> None:
+    async def check() -> None:
+        context = _LoginContext()
+        detected = asyncio.Event()
+        task = asyncio.create_task(_mock_account_login(
+            kind, tmp_path / "profile", monkeypatch, context, detected,
+            success=True, already_logged_in=already_logged_in,
+        ))
+        await asyncio.wait_for(detected.wait(), 1)
+        # 已识别登录后任务继续占用会话，等待用户处理保存账号提示。
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(task), 0.02)
+        context.close.assert_not_awaited()
+        context.manual_close()
+        assert (await asyncio.wait_for(task, 1))["success"] is True
+        context.close.assert_awaited_once()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("kind", ["user", "dy", "ks", "xhs"])
+@pytest.mark.parametrize("ending", ["early_close", "cancel_before_login", "cancel_after_login"])
+def test_account_login_early_close_or_cancel_releases_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, ending: str
+) -> None:
+    async def check() -> None:
+        context = _LoginContext()
+        detected = asyncio.Event()
+        cancelled = False
+        task = asyncio.create_task(_mock_account_login(
+            kind, tmp_path / "profile", monkeypatch, context, detected,
+            success=ending == "cancel_after_login", cancel_check=lambda: cancelled,
+        ))
+        await asyncio.wait_for(detected.wait(), 1)
+        await asyncio.sleep(0)
+        if ending == "early_close":
+            context.manual_close()
+            message = "尚未确认登录成功"
+        else:
+            cancelled = True
+            message = "取消"
+        with pytest.raises(RuntimeError, match=message):
+            await asyncio.wait_for(task, 1)
+        context.close.assert_awaited_once()
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("platform", ["dy", "ks", "xhs"])
+def test_creator_login_does_not_treat_closed_page_as_success(platform: str) -> None:
+    from app.publish_engine.uploader.douyin_uploader.main import _is_douyin_login_completed
+    from app.publish_engine.uploader.ks_uploader.main import _is_ks_login_page_gone
+    from app.publish_engine.uploader.xiaohongshu_uploader.main import _is_xhs_login_completed
+
+    page = MagicMock()
+    page.is_closed.return_value = True
+    checker = {"dy": _is_douyin_login_completed, "ks": _is_ks_login_page_gone, "xhs": _is_xhs_login_completed}[platform]
+    assert asyncio.run(checker(page)) is False
+
+
+@pytest.mark.parametrize("kind", ["user", "dy", "ks", "xhs"])
+def test_account_login_immediate_cancel_does_not_leave_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    async def check() -> None:
+        context = _LoginContext()
+        with pytest.raises(RuntimeError, match="取消"):
+            await _mock_account_login(
+                kind, tmp_path / "profile", monkeypatch, context, asyncio.Event(),
+                success=False, cancel_check=lambda: True,
+            )
+        # 创作者在启动登录协程前取消；用户登录已创建上下文，必须清理。
+        assert context.close.await_count == int(kind == "user")
+        context.new_page.assert_not_awaited()
+
+    asyncio.run(check())
+
+
+def test_failed_login_result_closes_context() -> None:
+    from app.publish_engine.browser import run_login_session
+
+    context = _LoginContext()
+    result = {"success": False, "message": "等待用户登录超时"}
+    assert asyncio.run(run_login_session(context, AsyncMock(return_value=result)())) == result
+    context.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("package,setup_name", [
+    ("douyin_uploader", "douyin_setup"),
+    ("ks_uploader", "ks_setup"),
+    ("xiaohongshu_uploader", "xiaohongshu_setup"),
+])
+def test_creator_automatic_check_keeps_existing_valid_profile_behavior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, package: str, setup_name: str
+) -> None:
+    module = importlib.import_module(f"app.publish_engine.uploader.{package}.main")
+    checker = AsyncMock(return_value=True)
+    monkeypatch.setattr(module, "profile_has_state", lambda _: True)
+    monkeypatch.setattr(module, "cookie_auth", checker)
+    monkeypatch.setattr(module, "launch_publish_context", AsyncMock(side_effect=AssertionError("自动校验不应打开交互登录")))
+    result = asyncio.run(getattr(module, setup_name)(str(tmp_path / "profile"), handle=False, return_detail=True))
+    assert result["success"] is True and result["status"] == "cookie_valid"
+    checker.assert_awaited_once()
+
+
+@pytest.mark.parametrize("package,detector", [
+    ("ks_uploader", "_is_ks_login_page_gone"),
+    ("xiaohongshu_uploader", "_is_xhs_login_completed"),
+])
+def test_creator_login_query_error_does_not_mean_success(package: str, detector: str) -> None:
+    module = importlib.import_module(f"app.publish_engine.uploader.{package}.main")
+    page = MagicMock(url="https://example.com/login")
+    page.is_closed.return_value = False
+    page.locator.return_value.first.count = AsyncMock(return_value=1)
+    page.locator.return_value.first.is_visible = AsyncMock(side_effect=RuntimeError("页面已关闭"))
+    assert asyncio.run(getattr(module, detector)(page)) is False
 
 
 def _create_publish_account(platform: str, name: str, *, is_default: bool = False) -> dict[str, object]:

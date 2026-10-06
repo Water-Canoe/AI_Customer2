@@ -5,7 +5,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable
 
-from app.publish_engine.browser import launch_publish_context, profile_has_state
+from app.publish_engine.browser import launch_publish_context, profile_has_state, run_login_session
 
 
 CancelCheck = Callable[[], bool]
@@ -28,7 +28,8 @@ async def login_account(
     timeout_seconds: int = 300,
 ) -> dict[str, Any]:
     context = await launch_publish_context(headless=False, account_file=profile_dir)
-    try:
+
+    async def login() -> dict[str, Any]:
         page = context.pages[0] if context.pages else await context.new_page()
         initial_cookies = await _cookie_map(context)
         await _open_login_page(page, platform, cancel_check)
@@ -38,8 +39,8 @@ async def login_account(
                 return {"success": True, "message": "用户登录成功", "current_url": page.url}
             await asyncio.sleep(1)
         return {"success": False, "message": "等待用户登录超时", "current_url": page.url}
-    finally:
-        await context.close()
+
+    return await run_login_session(context, login(), check_cancel=lambda: _raise_if_cancelled(cancel_check))
 
 
 async def check_account(

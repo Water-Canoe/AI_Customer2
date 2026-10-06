@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import threading
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -93,6 +95,53 @@ def test_running_account_login_cancels_and_releases_browser_queue(tmp_path: Path
 
     assert cancelled["cancel_requested"] is True
     assert finished["status"] == "succeeded"
+
+
+def test_successful_account_login_keeps_browser_queue_until_manual_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepare_queue(tmp_path, monkeypatch)
+    from app.services import account_center, content_publish, job_queue, license_service, platform_login
+
+    detected = threading.Event()
+    session = {}
+    context = MagicMock()
+    context.pages = [MagicMock(url="https://www.douyin.com/")]
+    context.cookies = AsyncMock(return_value=[])
+    context.close = AsyncMock()
+
+    def on_close(_event, callback) -> None:
+        session.update(loop=asyncio.get_running_loop(), callback=callback)
+
+    async def logged_in(*_args) -> bool:
+        detected.set()
+        return True
+
+    context.on.side_effect = on_close
+    monkeypatch.setattr(platform_login, "launch_publish_context", AsyncMock(return_value=context))
+    monkeypatch.setattr(platform_login, "_open_login_page", AsyncMock())
+    monkeypatch.setattr(platform_login, "_is_logged_in", logged_in)
+    monkeypatch.setattr(license_service, "ensure_authorized", lambda: {"authorized": True})
+    monkeypatch.setattr(content_publish, "run_account_check", lambda *_args, **_kwargs: {"valid": True})
+    account = account_center.create_account("dy", "手动关窗账号", "operations", ["message"], [])
+    login_job = job_queue.enqueue_account_job(account["id"], "login", "user")
+    job_queue.start()
+    try:
+        assert detected.wait(1)
+        check_job = job_queue.enqueue_account_job(account["id"], "check", "user")
+        assert job_queue.get_job(login_job["id"])["status"] == "running"
+        assert job_queue.get_job(check_job["id"])["status"] == "queued"
+        assert account_center.get_account(account["id"])["login_status"]["user"]["status"] == "checking"
+        context.close.assert_not_awaited()
+        # 用户关窗事件回到登录任务的事件循环后，才允许后续浏览器任务运行。
+        session["loop"].call_soon_threadsafe(session["callback"], context)
+        wait_for_job(login_job["id"], {"succeeded"})
+        wait_for_job(check_job["id"], {"succeeded"})
+    finally:
+        job_queue.shutdown(1)
+
+    assert account_center.get_account(account["id"])["login_status"]["user"]["status"] == "ready"
+    context.close.assert_awaited_once()
 
 
 def test_queued_runtime_job_marks_workbench_active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

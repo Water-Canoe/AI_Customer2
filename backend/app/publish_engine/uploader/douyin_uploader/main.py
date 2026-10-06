@@ -8,7 +8,7 @@ from pathlib import Path
 
 from playwright.async_api import Page
 
-from app.publish_engine.browser import launch_publish_context, profile_has_state
+from app.publish_engine.browser import launch_publish_context, profile_has_state, run_login_session
 from app.publish_engine.conf import DEBUG_MODE, LOCAL_CHROME_HEADLESS
 from app.publish_engine.uploader.base_video import BaseVideoUploader
 from app.publish_engine.utils.login_qrcode import build_login_qrcode_path
@@ -68,11 +68,11 @@ async def cookie_auth(account_file):
 
 
 async def douyin_setup(account_file, handle=False, return_detail=False, qrcode_callback=None, headless: bool = LOCAL_CHROME_HEADLESS):
-    if not profile_has_state(account_file) or not await cookie_auth(account_file):
+    if handle or not profile_has_state(account_file) or not await cookie_auth(account_file):
         if not handle:
             result = _build_login_result(False, "cookie_invalid", "cookie文件不存在或已失效", account_file)
             return result if return_detail else False
-        douyin_logger.info(_msg("🥹", "cookie 失效了，准备打开浏览器重新登录"))
+        douyin_logger.info(_msg("🧍", "准备打开抖音创作者登录窗口"))
         result = await douyin_cookie_gen(account_file, qrcode_callback=qrcode_callback, headless=headless)
         return result if return_detail else result["success"]
 
@@ -141,6 +141,8 @@ async def _save_douyin_qrcode(page: Page, account_file: str, previous_qrcode_pat
 
 
 async def _is_douyin_login_completed(page: Page) -> bool:
+    if page.is_closed():
+        return False
     # 登录后会跳到 creator-micro 下任意页（home/content 等）；登录页是 creator.douyin.com/ 根路径
     if "creator.douyin.com/creator-micro" not in page.url:
         return False
@@ -204,12 +206,16 @@ async def douyin_cookie_gen(
     headless: bool = LOCAL_CHROME_HEADLESS,
 ):
     context = await launch_publish_context(headless=headless, account_file=account_file)
-    try:
+
+    async def login():
         qrcode_path = None
         result = _build_login_result(False, "failed", "抖音登录失败", account_file)
         try:
             page = await context.new_page()
             await page.goto("https://creator.douyin.com/")
+            if await _is_douyin_login_completed(page):
+                result = _build_login_result(True, "success", "抖音已登录，请处理保存账号提示后手动关闭浏览器", account_file, current_url=page.url)
+                return result
             qrcode_info = await _save_douyin_qrcode(page, account_file, qrcode_callback=qrcode_callback)
             qrcode_path = Path(qrcode_info["image_path"]) if qrcode_info.get("image_path") else None
             douyin_logger.info(_msg("🧍", "请扫码，小人正在耐心等待登录完成"))
@@ -222,8 +228,8 @@ async def douyin_cookie_gen(
                 max_checks=max_checks,
             )
             if result["success"]:
-                await asyncio.sleep(2)
-                # 持久化 Profile 会在当前上下文关闭时保存，不能并发打开同一目录复检。
+                # 持久化 Profile 在用户关窗后保存，不能并发打开同一目录复检。
+                douyin_logger.info(_msg("🧍", "登录成功，请处理平台保存账号提示后手动关闭浏览器"))
         except Exception as exc:
             result = _build_login_result(False, "failed", str(exc), account_file, current_url=page.url if "page" in locals() else "")
         finally:
@@ -231,11 +237,9 @@ async def douyin_cookie_gen(
                 douyin_logger.info(_msg("🧹", f"临时二维码文件已清理: {qrcode_path}"))
             if not result["success"]:
                 douyin_logger.error(_msg("😢", f"登录失败: {result['message']}"))
-            await context.close()
         return result
-    except BaseException:
-        await context.close()
-        raise
+
+    return await run_login_session(context, login(), wait_for_close=not headless)
 
 
 class DouYinBaseUploader(BaseVideoUploader):
