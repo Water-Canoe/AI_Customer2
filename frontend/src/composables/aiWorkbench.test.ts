@@ -31,9 +31,21 @@ describe('useAiWorkbench', () => {
 
     await ai.createJob('lead', 7)
 
-    expect(mocks.post).toHaveBeenCalledWith('/ai/jobs', { target_type: 'lead', target_id: 7, run_now: true })
+    expect(mocks.post).toHaveBeenCalledWith('/ai/jobs', { target_type: 'lead', target_id: 7 })
     expect(ai.workbench.value.items).toEqual([{ id: 'job-1' }])
     expect(mocks.refreshRelated).toHaveBeenCalledOnce()
-    expect(mocks.success).toHaveBeenCalledWith('AI分析完成')
+    expect(mocks.success).toHaveBeenCalledWith('AI分析已加入队列')
+  })
+  it('ignores an old query response after a newer filter has completed', async () => {
+    let first: (value: any) => void = () => undefined
+    mocks.get.mockImplementationOnce(() => new Promise(resolve => first = resolve))
+    mocks.get.mockResolvedValueOnce({ data: { tab: 'leads', items: [{ id: 7 }], total_pages: 1 } })
+    const ai = useAiWorkbench({ refreshRelated: mocks.refreshRelated })
+    const pending = ai.changeQuery({ tab: 'competitors', keyword: '旧条件' })
+    await ai.changeQuery({ tab: 'leads', keyword: '当前条件' })
+    first({ data: { tab: 'competitors', items: [{ id: 1 }], total_pages: 1 } })
+    await pending
+    expect(ai.query.value).toMatchObject({ tab: 'leads', keyword: '当前条件' })
+    expect(ai.workbench.value.items).toEqual([{ id: 7 }])
   })
 })

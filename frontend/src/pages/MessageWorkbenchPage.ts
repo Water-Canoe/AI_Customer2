@@ -1,7 +1,8 @@
 import { computed, defineComponent, h, onMounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElDrawer, ElMessage } from 'element-plus'
+import { useRoute, useRouter } from 'vue-router'
 import { Close, Collection, CopyDocument, Promotion, Search } from '@element-plus/icons-vue'
-import { SplitPane } from '../components/ui/SplitPane'
+import '../styles/operations.css'
 import { platformName } from '../shared/format'
 import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
@@ -25,8 +26,22 @@ export default defineComponent({
     settings: { type: Object, default: () => ({}) },
     loading: { type: Boolean, default: false },
   },
-  emits: ['filter-change', 'select-customer', 'message-customer', 'auto-message-customer', 'start-auto-message-batch', 'cancel-auto-message-batch', 'update-follow-status', 'close-detail'],
+  emits: ['filter-change', 'select-customer', 'message-customer', 'confirm-message-customer', 'auto-message-customer', 'start-auto-message-batch', 'cancel-auto-message-batch', 'update-follow-status', 'close-detail'],
   setup(props, { emit }) {
+    const route = useRoute()
+    const router = useRouter()
+    const detailTab = ref('sources')
+    function handleEvent(name: any, ...args: any[]) {
+      emit(name, ...args)
+      if (name === 'select-customer') void router.replace({ query: { ...route.query, customer: String(args[0]) } })
+      if (name === 'close-detail') { const { customer, ...query } = route.query; void router.replace({ query }) }
+    }
+    watch(() => route.query.customer, value => { if (value && String((props.detail as Dict)?.customer?.lead_id || '') !== String(value)) emit('select-customer', String(value)) }, { immediate: true })
+    watch(() => route.query, value => {
+      if (!['keyword', 'platform', 'status', 'query', 'page', 'page_size'].some(key => key in value)) return
+      const next = { keyword: String(value.keyword || ''), platform: String(value.platform || ''), status: String(value.status || '待私信'), query: String(value.query || ''), page: Number(value.page || 1), page_size: Number(value.page_size || 20) }
+      if (Object.entries(next).some(([key, item]) => String(props.filters[key] ?? '') !== String(item))) emit('filter-change', next)
+    }, { immediate: true })
     const savedBatchConfig = loadAutoBatchConfig()
     const queryDraft = ref(String((props.filters as Dict).query || ''))
     const keywordPages = ref<Record<string, number>>({})
@@ -81,28 +96,33 @@ export default defineComponent({
     })
 
     function changeFilter(next: Dict) {
-      emit('filter-change', { ...(props.filters as Dict), ...next })
+      const values = { ...(props.filters as Dict), ...next }
+      emit('close-detail')
+      emit('filter-change', values)
+      void router.replace({ path: '/message-workbench', query: { keyword: String(values.keyword || ''), platform: String(values.platform || ''), status: String(values.status || '待私信'), query: String(values.query || ''), page: Number(values.page || 1), page_size: Number(values.page_size || 20) } })
     }
 
     function runSearch() {
       changeFilter({ query: queryDraft.value.trim(), page: 1 })
     }
 
-    return () => h(SplitPane, { storageKey: 'message-workbench', side: 'left', defaultSideWidth: 300, minSideWidth: 260, maxSideWidth: 420 }, {
-      side: () => h('aside', { class: 'pane message-keyword-pane' }, [
-        sectionTitle({ title: '关键词队列', subtitle: '按需求产品筛选', icon: Collection, tone: 'amber' }),
-        h('div', { class: 'message-keyword-list' }, [
+    return () => h('div', { class: 'workspace-page operations-page' }, [
+      h('section', { class: 'panel' }, [
+        sectionTitle({ title: '客户跟进', subtitle: (props.filters as Dict).keyword ? `${platformName((props.filters as Dict).platform)} / ${(props.filters as Dict).keyword}` : '全部来源 · 准备话术，实际发送后确认，再推进回复与成交状态。', icon: Collection }),
+        h('div', { class: 'toolbar' }, [
+          h('button', { onClick: () => router.push('/message-batches') }, '触达记录'),
+          h('button', { onClick: () => router.push('/message-settings') }, '话术与发送规则'),
+          h('button', { onClick: () => router.push({ path: '/accounts', query: { feature: 'message', platform: 'dy', return_to: route.fullPath } }) }, '配置私信账号'),
+        ]),
+        h('details', [h('summary', '按平台与来源关键词筛选'), h('div', { class: 'message-keyword-list' }, [
           allKeyword.value ? renderKeywordButton(allKeyword.value, props.filters as Dict, changeFilter) : null,
-          ...keywordGroups.value.map(group => renderKeywordGroup(
-            group,
-            props.filters as Dict,
-            changeFilter,
-            keywordPages.value[group.platform] || 1,
-            (page) => keywordPages.value = { ...keywordPages.value, [group.platform]: page }
-          ))
-        ])
+          ...keywordGroups.value.map(group => renderKeywordGroup(group, props.filters as Dict, changeFilter, keywordPages.value[group.platform] || 1, page => keywordPages.value = { ...keywordPages.value, [group.platform]: page })),
+        ])]),
       ]),
-      default: () => h('section', { class: 'pane message-workbench' }, [
+      h('section', { class: 'panel message-workbench' }, [
+        (props.batches as Dict).active ? h('div', { class: 'toolbar' }, [h('span', { class: 'note' }, '有自动私信批次正在排队或执行'), h('button', { onClick: () => router.push({ path: '/message-batches', query: { batch: String((props.batches as Dict).active.id) } }) }, '查看执行结果')]) : null,
+        h('details', { class: 'operations-advanced' }, [h('summary', '批量自动私信'),
+
         renderAutoBatchControls(props.filters as Dict, props.batches as Dict, batchCount.value, intervalMin.value, intervalMax.value, {
           setCount: (value: number) => batchCount.value = boundedNumber(value, autoBatchDefaults.count, 1, 200),
           setMin: (value: number) => intervalMin.value = boundedNumber(value, autoBatchDefaults.min, 0, 3600),
@@ -118,8 +138,9 @@ export default defineComponent({
             interval_max_seconds: intervalMax.value,
             account_id: accountId.value
           }),
-          cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch)
-        }),
+          cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch),
+          records: () => router.push({ path: '/message-batches', query: (props.batches as Dict).active?.id ? { batch: String((props.batches as Dict).active.id) } : {} })
+        })]),
         h('div', { class: 'message-status-tabs' }, [
           ...statusTabs.map(status => h('button', {
           type: 'button',
@@ -138,21 +159,22 @@ export default defineComponent({
             h('button', { type: 'button', onClick: runSearch }, [h(Search), h('span', '搜索')])
           ])
         ]),
-        renderCustomerTable(rows.value, props.loading, emit, props.settings as Dict, accountId.value),
+        renderCustomerTable(rows.value, props.loading, handleEvent, props.settings as Dict, accountId.value),
         h(ListPagination, {
           page: page.value,
           pageSize: pageSize.value,
           total: total.value,
           onChange: (payload: PageChange) => changeFilter({ page: payload.page, page_size: payload.page_size }),
         }),
-        renderDetailDrawer(props.detail as Dict, emit, {
+        h(ElDrawer, { modelValue: Boolean((props.detail as Dict)?.customer), title: '客户详情', size: '820px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) handleEvent('close-detail') } }, () => renderDetailDrawer(props.detail as Dict, handleEvent, {
+          detailTab: detailTab.value, setDetailTab: (value: string) => detailTab.value = value,
           sourcePage: sourcePage.value,
           eventPage: eventPage.value,
           setSourcePage: (value: number) => { sourcePage.value = value },
           setEventPage: (value: number) => { eventPage.value = value },
-        })
+        }))
       ])
-    })
+    ])
   }
 })
 
@@ -216,7 +238,7 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
     h('div', { class: 'auto-message-batch-title' }, [
       h('div', { class: 'auto-message-batch-heading' }, [
         h('strong', 'AI一键私信'),
-        h('span', keyword ? `${platformName(platform)} / ${keyword}` : '先在左侧选择一个抖音关键词'),
+        h('span', keyword ? `${platformName(platform)} / ${keyword}` : '先选择一个抖音来源关键词'),
       ]),
       h('label', { class: 'auto-message-account' }, [
         h('span', '执行账号'),
@@ -259,6 +281,7 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
         onClick: actions.start
       }, [h(Promotion), h('span', active ? '运行中' : 'AI一键私信')]),
       active ? h('button', { type: 'button', class: 'secondary-action compact-action', onClick: () => actions.cancel(active) }, '取消批次') : null,
+      h('button', { type: 'button', onClick: actions.records }, '查看触达记录'),
       h('p', { class: 'auto-message-platform-note' }, '由于快手网页版、小红书网页版不提供私信入口，因此快手与小红书两个平台私信功能不可用。请以抖音为主。后续平台优化规则，本系统会一并优化添加私信功能。')
     ])
   ])
@@ -338,9 +361,10 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict, accountId: stri
             type: 'button',
             class: 'text-icon-button',
             disabled: !sendScript || !row.profile_url,
-            title: !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : '复制话术、打开主页并标记已私信',
+            title: !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : '复制话术并打开主页，不修改跟进状态',
             onClick: () => emit('message-customer', row)
-          }, [h(CopyDocument), h('span', '私信')])
+          }, [h(CopyDocument), h('span', '准备私信')]),
+          ['待筛选', '未私信'].includes(String(row.follow_status)) ? h('button', { type: 'button', class: 'text-icon-button', onClick: () => emit('confirm-message-customer', row) }, '确认已发送') : null
         ]),
         h('div', { class: 'message-action-row' }, [
           h('select', {
@@ -427,7 +451,8 @@ function renderDetailDrawer(detail: Dict, emit: any, pagination: Dict) {
       h('h4', 'AI分析原因'),
       h('p', customer.reason || '暂无AI分析原因')
     ]),
-    h('div', { class: 'drawer-section' }, [
+    h('div', { class: 'tabs' }, ['sources', 'events'].map(tab => h('button', { class: pagination.detailTab === tab ? 'active' : '', onClick: () => pagination.setDetailTab(tab) }, tab === 'sources' ? `来源证据 (${sources.length})` : `跟进历史 (${events.length})`))),
+    pagination.detailTab === 'sources' ? h('div', { class: 'drawer-section' }, [
       h('h4', '来源证据'),
       ...sourcePagination.items.map((source: Dict) => h('article', { class: 'source-card' }, [
         h('strong', source.keyword || '未标记关键词'),
@@ -443,8 +468,8 @@ function renderDetailDrawer(detail: Dict, emit: any, pagination: Dict) {
         compact: true,
         onChange: (payload: PageChange) => pagination.setSourcePage(payload.page),
       }),
-    ]),
-    h('div', { class: 'drawer-section' }, [
+    ]) : null,
+    pagination.detailTab === 'events' ? h('div', { class: 'drawer-section' }, [
       h('h4', '跟进时间线'),
       events.length
         ? h('ol', { class: 'event-timeline' }, eventPagination.items.map((event: Dict) => h('li', [
@@ -460,7 +485,7 @@ function renderDetailDrawer(detail: Dict, emit: any, pagination: Dict) {
         compact: true,
         onChange: (payload: PageChange) => pagination.setEventPage(payload.page),
       }),
-    ])
+    ]) : null
   ])
 }
 

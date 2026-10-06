@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
+  push: vi.fn(),
 }))
+
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }) }))
 
 vi.mock('../../shared/api', () => ({
   api: { get: mocks.get, post: mocks.post, delete: mocks.remove },
@@ -64,6 +67,35 @@ describe('RuntimeQueuePanel formatters', () => {
 
     expect(mocks.post).toHaveBeenCalledWith('/runtime/jobs/runtime-1/cancel')
     expect(mocks.success).toHaveBeenCalledWith('已请求取消任务')
+    wrapper.unmount()
+  })
+
+  it('定位历史任务，并仅在服务端允许时提供重试', async () => {
+    const job = { id: 'old-job', kind: 'content_publish', status: 'failed', display_name: '发布给品牌号', detail_url: '/content-publish?task=publish-1', retry_allowed: false }
+    mocks.get.mockImplementation(async (url: string) => ({ data: url === '/runtime/jobs/old-job' ? job : { items: [], total: 0, active: {} } }))
+    const wrapper = mount(RuntimeQueuePanel, { props: { initialJobId: 'old-job' } })
+    await flushPromises()
+    expect(mocks.get).toHaveBeenCalledWith('/runtime/jobs/old-job')
+    const focused = wrapper.get('[aria-label="定位的任务"]')
+    expect(focused.text()).toContain('发布给品牌号')
+    expect(focused.text()).not.toContain('重试')
+    await focused.findAll('button').find(button => button.text() === '查看详情')!.trigger('click')
+    expect(mocks.push).toHaveBeenCalledWith('/content-publish?task=publish-1')
+    wrapper.unmount()
+  })
+
+  it('切换筛选后忽略较慢的旧队列响应', async () => {
+    let finish!: (value: any) => void
+    mocks.get.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(RuntimeQueuePanel)
+    await flushPromises()
+    mocks.get.mockResolvedValue({ data: { items: [{ id: 'new', kind: 'ai_job', status: 'failed', display_name: '当前筛选结果' }], total: 1, active: {} } })
+    await wrapper.get('select').setValue('failed')
+    await flushPromises()
+    finish({ data: { items: [{ id: 'old', kind: 'crawl_task', status: 'queued', display_name: '旧筛选结果' }], total: 1, active: {} } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('当前筛选结果')
+    expect(wrapper.text()).not.toContain('旧筛选结果')
     wrapper.unmount()
   })
 })

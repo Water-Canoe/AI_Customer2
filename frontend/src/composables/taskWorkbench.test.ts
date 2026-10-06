@@ -37,11 +37,20 @@ describe('useTaskWorkbench', () => {
     })
     const workbench = useTaskWorkbench({ router: { push: mocks.push }, refreshRelated: mocks.refreshRelated })
 
-    await workbench.createTask({ mode: 'competitor_discovery' })
+    const created = vi.fn()
+    await workbench.createTask({ mode: 'competitor_discovery' }, created)
+    expect(created).toHaveBeenCalledWith(summary)
 
     expect(workbench.tasks.value).toEqual([summary])
     expect(workbench.selected.value).toEqual(detail)
-    expect(mocks.push).toHaveBeenCalledWith('/logs')
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/acquisition', query: { task: 'task-1' } })
     expect(mocks.success).toHaveBeenCalledWith('任务 task-1 已创建')
+  })
+  it('loads the list without fetching an unselected detail', async () => {
+    mocks.get.mockResolvedValue({ data: { items: [{ id: 'task-1' }], total: 1, page: 1, page_size: 10, total_pages: 1 } })
+    const workbench = useTaskWorkbench({ router: { push: mocks.push }, refreshRelated: mocks.refreshRelated })
+    await workbench.loadTasks()
+    expect(mocks.get).toHaveBeenCalledOnce()
+    expect(workbench.selected.value).toBeNull()
   })
 })

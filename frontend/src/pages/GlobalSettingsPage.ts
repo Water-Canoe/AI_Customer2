@@ -1,4 +1,5 @@
-import { defineComponent, h, onMounted, onUnmounted, ref, watch, type PropType } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, ref, watch, type PropType } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DataAnalysis, Key, Plus, Refresh, User } from '@element-plus/icons-vue'
 
@@ -33,15 +34,23 @@ export default defineComponent({
   },
   emits: ['open-license', 'check-update', 'clear-data', 'load-tombstones'],
   setup(props, { emit }) {
+    const route = useRoute()
+    const router = useRouter()
+    const accountMode = computed(() => route.name === 'accounts')
+    const returnTo = computed(() => {
+      const path = String(route.query.return_to || '')
+      return path.startsWith('/') && !path.startsWith('//') ? path : ''
+    })
     const accounts = ref<PlatformAccount[]>([])
-    const draft = ref<Dict>({ platform: 'dy', name: '', role: 'brand' })
+    const draft = ref<Dict>({ platform: String(route.query.platform || 'dy'), name: '', role: route.query.feature === 'acquisition' ? 'operations' : route.query.feature === 'traffic' ? 'traffic' : 'brand' })
+    const creating = ref(false)
     const loading = ref(false)
     const activeSection = ref<'system' | 'accounts' | 'data'>('system')
     const accountPage = ref(1)
     const refresh = createAutoSyncController({
       interval: () => 3000,
       sync: async reason => {
-        if (reason === 'route' || accounts.value.some(account => ['user', 'creator'].some(kind => account.login_status?.[kind]?.status === 'checking'))) {
+        if (accountMode.value && (reason === 'route' || accounts.value.some(account => ['user', 'creator'].some(kind => account.login_status?.[kind]?.status === 'checking')))) {
           await loadAccounts(reason === 'route')
         }
       },
@@ -52,7 +61,14 @@ export default defineComponent({
         const { data } = await api.get<PlatformAccount[]>('/accounts')
         if (accountEditorFocused()) return
         accounts.value = data
+        if (!data.length) creating.value = true
         accountPage.value = Math.min(accountPage.value, Math.max(1, Math.ceil(accounts.value.length / ACCOUNT_PAGE_SIZE)))
+        const selected = data.findIndex(account => account.id === route.query.account)
+        if (selected >= 0) {
+          accountPage.value = Math.floor(selected / ACCOUNT_PAGE_SIZE) + 1
+          await nextTick()
+          document.getElementById(`account-${data[selected].id}`)?.scrollIntoView({ block: 'center' })
+        }
       } catch (error: any) {
         if (showError) ElMessage.error(error?.response?.data?.detail || '账号列表加载失败')
       }
@@ -73,6 +89,7 @@ export default defineComponent({
           default_features: [],
         })
         draft.value.name = ''
+        creating.value = false
         accountPage.value = 1
         ElMessage.success('账号已创建，请完成扫码登录并设置默认用途')
         await loadAccounts()
@@ -143,24 +160,26 @@ export default defineComponent({
     })
     onUnmounted(() => refresh.stop())
     watch(() => props.refreshSeq, () => void refresh.trigger('route'))
+    watch(() => route.name, () => void refresh.trigger('route'))
 
     return () => {
       const paged = paginateAccounts(accounts.value, accountPage.value, ACCOUNT_PAGE_SIZE)
-      const content = activeSection.value === 'system'
+      const section = accountMode.value ? 'accounts' : activeSection.value
+      const content = section === 'system'
         ? [renderSystemSettings()]
-        : activeSection.value === 'accounts'
+        : section === 'accounts'
           ? [
               h('section', { class: 'pane account-create-pane' }, [
-                sectionTitle({ title: '统一账号中心', subtitle: '普通用户站与创作者中心登录态分开保存，各工作台按用途自动选择', icon: User, tone: 'teal', aside: h('button', { class: 'secondary-action', onClick: () => loadAccounts() }, [h(Refresh, { class: 'inline-icon' }), '刷新']) }),
-                h('div', { class: 'account-create-row' }, [
+                sectionTitle({ title: '平台账号', subtitle: '先选择用途，再完成对应登录；工作台会使用指定或默认账号', icon: User, tone: 'teal', aside: h('button', { class: 'primary-action', onClick: () => creating.value = !creating.value }, [h(Plus, { class: 'inline-icon' }), creating.value ? '收起添加' : '添加账号']) }),
+                creating.value ? h('div', { class: 'account-create-row' }, [
                   h('select', { value: draft.value.platform, onChange: (event: Event) => draft.value.platform = (event.target as HTMLSelectElement).value }, [
                     h('option', { value: 'dy' }, '抖音'), h('option', { value: 'xhs' }, '小红书'), h('option', { value: 'ks' }, '快手'),
                   ]),
                   h('select', { value: draft.value.role, onChange: (event: Event) => draft.value.role = (event.target as HTMLSelectElement).value }, Object.keys(ROLE_FEATURES).map(role => h('option', { value: role }, roleLabel(role)))),
                   h('input', { value: draft.value.name, placeholder: '账号名称，例如：品牌主账号', onInput: (event: Event) => draft.value.name = (event.target as HTMLInputElement).value }),
                   h('button', { class: 'primary-action', disabled: loading.value, onClick: createAccount }, [h(Plus, { class: 'inline-icon' }), loading.value ? '创建中...' : '添加账号']),
-                ]),
-                h('p', { class: 'muted-text' }, '品牌账号只允许私信和内容发布；拓客、引流等高风险操作请使用运营号、引流号或测试号。'),
+                ]) : null,
+                creating.value ? h('p', { class: 'muted-text' }, '运营号用于采集与私信，引流号还可执行互动，品牌号用于私信和发布。') : null,
               ]),
               accounts.value.length
                 ? h('div', { class: 'account-center-grid' }, paged.items.map(renderAccount))
@@ -183,11 +202,11 @@ export default defineComponent({
             })]
 
       return h('div', { class: 'account-center-page' }, [
-        h('nav', { class: 'pane global-settings-tabs', 'aria-label': '全局设置分类' }, [
+        accountMode.value && returnTo.value ? h('button', { class: 'secondary-action account-return', onClick: () => router.push(returnTo.value) }, '← 返回刚才的工作') : null,
+        !accountMode.value ? h('nav', { class: 'pane global-settings-tabs', 'aria-label': '系统设置分类' }, [
           settingsTab('system', '系统与授权', Key),
-          settingsTab('accounts', '平台账号', User),
           settingsTab('data', '数据保护', DataAnalysis),
-        ]),
+        ]) : null,
         ...content,
       ])
     }
@@ -225,7 +244,7 @@ export default defineComponent({
 
     function renderAccount(account: PlatformAccount) {
       const allowed = ROLE_FEATURES[String(account.role)] || []
-      return h('article', { class: 'pane account-center-card' }, [
+      return h('article', { id: `account-${account.id}`, class: ['pane', 'account-center-card', { 'is-selected': route.query.account === account.id }] }, [
         h('div', { class: 'account-card-head' }, [
           h('div', [h('strong', `${platformLabel(account.platform)} · ${account.name}`)]),
           h('div', { class: 'account-card-head-actions' }, [

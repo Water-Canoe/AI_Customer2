@@ -14,9 +14,13 @@ type AiWorkbenchOptions = {
 export function useAiWorkbench(options: AiWorkbenchOptions) {
   const workbench = ref<Dict>({})
   const query = ref<Dict>({ tab: 'competitors', keyword: '', status: '', result: '', page: 1, page_size: 10 })
+  let requestSeq = 0
 
   async function load() {
-    const { data } = await api.get('/ai/workbench', { params: query.value })
+    const revision = ++requestSeq
+    const { data } = await api.get('/ai/workbench', { params: { ...query.value } })
+    // 快速切换筛选时，较慢的旧响应不能替换当前列表。
+    if (revision !== requestSeq) return
     workbench.value = data
     if (!data.items?.length && Number(query.value.page || 1) > Number(data.total_pages || 1)) {
       query.value.page = Number(data.total_pages || 1)
@@ -36,8 +40,8 @@ export function useAiWorkbench(options: AiWorkbenchOptions) {
 
   async function createJob(targetType: string, targetId: number) {
     try {
-      await api.post('/ai/jobs', { target_type: targetType, target_id: targetId, run_now: true })
-      ElMessage.success('AI分析完成')
+      await api.post('/ai/jobs', { target_type: targetType, target_id: targetId })
+      ElMessage.success('AI分析已加入队列')
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || 'AI分析失败')
     } finally {
@@ -53,8 +57,8 @@ export function useAiWorkbench(options: AiWorkbenchOptions) {
     }
     try {
       await confirmBulkPreview({ action: 'ai_analyze', target_type: targetType, target_ids: ids }, 'AI批量分析预览')
-      const { data } = await api.post('/ai/jobs/batch', { target_type: targetType, target_ids: ids, run_now: true })
-      ElMessage.success(`已完成 ${data.length} 个AI分析任务`)
+      const { data } = await api.post('/ai/jobs/batch', { target_type: targetType, target_ids: ids })
+      ElMessage.success(`已将 ${data.length} 个AI分析任务加入队列`)
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '批量AI分析失败')
     } finally {
@@ -101,7 +105,7 @@ export function useAiWorkbench(options: AiWorkbenchOptions) {
   async function retryJob(jobId: string) {
     try {
       await api.post(`/ai/jobs/${jobId}/retry`)
-      ElMessage.success('重试完成')
+      ElMessage.success('重试已加入队列')
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '重试失败')
     } finally {

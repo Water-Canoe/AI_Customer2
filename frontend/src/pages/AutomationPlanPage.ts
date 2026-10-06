@@ -8,6 +8,7 @@ import {
   ElCheckboxGroup,
   ElCol,
   ElDialog,
+  ElDrawer,
   ElDivider,
   ElForm,
   ElFormItem,
@@ -28,6 +29,8 @@ import {
 import { ChatDotRound, Clock, Connection, Promotion, Rank } from '@element-plus/icons-vue'
 
 import { api } from '../shared/api'
+import { usePersistentDraft, draftStatusLabel } from '../shared/usePersistentDraft'
+import '../styles/operations.css'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict, PlatformAccount } from '../shared/types'
 import { COMPACT_PAGE_SIZE, DEFAULT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
@@ -110,6 +113,10 @@ export default defineComponent({
     const route = useRoute()
     const router = useRouter()
     const plans = ref<Dict[]>([])
+    const activeSection = ref(route.query.run || route.query.plan ? 'runs' : 'plans')
+    const typeFilter = ref('all')
+    const selectedPlan = ref<Dict | null>(null)
+    const draftKey = ref('new-keyword_lead')
     const runs = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
     const planPage = ref(1)
     const planPageSize = ref(DEFAULT_PAGE_SIZE)
@@ -120,14 +127,29 @@ export default defineComponent({
     const editorOpen = ref(false)
     const runDetailOpen = ref(false)
     const saving = ref(false)
+    const savedPlanId = ref('')
+    const cleanupError = ref('')
     const selectedRun = ref<Dict>({})
     const draggedPlanId = ref('')
     const dragOverPlanId = ref('')
     const reordering = ref(false)
     const draft = reactive<Dict>(emptyDraft())
 
+    const persistent = usePersistentDraft({ kind: 'automation', key: draftKey,
+      getPayload: () => ({ ...draft, return_context: { route: '/automation-plans', query: draft.id ? { edit: String(draft.id) } : { create: '1', type: String(draft.plan_type) }, selection: [] } }),
+      applyPayload: payload => {
+        Object.keys(draft).forEach(key => delete draft[key]); Object.assign(draft, payload); delete draft.return_context
+        // 新建草稿带有对象ID时，之前保存已成功，只需清理草稿。
+        if (draftKey.value.startsWith('new-') && draft.id) {
+          savedPlanId.value = String(draft.id)
+          cleanupError.value = '计划已保存，请清理草稿后再新建。'
+        }
+      },
+    })
+    const filteredPlans = computed(() => typeFilter.value === 'all' ? plans.value : plans.value.filter(plan => plan.plan_type === typeFilter.value))
+    watch(typeFilter, () => planPage.value = 1)
     const editing = computed(() => Boolean(draft.id))
-    const planPagination = computed(() => paginateItems(plans.value, planPage.value, planPageSize.value))
+    const planPagination = computed(() => paginateItems(filteredPlans.value, planPage.value, planPageSize.value))
     const runItemPagination = computed(() => paginateItems<Dict>((selectedRun.value.items || []) as Dict[], runItemPage.value, COMPACT_PAGE_SIZE))
     const planProgress = (run: Dict) => {
       const total = Number(run.total_count || 0)
@@ -140,39 +162,88 @@ export default defineComponent({
       openFromRoute()
     })
     watch(() => props.refreshSeq, loadAll)
-    watch(() => route.query.create, openFromRoute)
+    watch(() => [route.query.create, route.query.edit, route.query.type], openFromRoute)
+    watch(() => route.query.run, async value => {
+      if (value && String(selectedRun.value.id || '') !== String(value)) await showRun({ id: String(value) })
+      if (!value) runDetailOpen.value = false
+    })
 
     async function loadAll() {
       try {
         const [planResponse, runResponse, accountResponse] = await Promise.all([
           api.get('/automation/plans'),
-          api.get('/automation/runs', { params: { page: runs.value.page || 1, page_size: runs.value.page_size || DEFAULT_PAGE_SIZE } }),
+          api.get('/automation/runs', { params: { page: runs.value.page || 1, page_size: runs.value.page_size || DEFAULT_PAGE_SIZE, plan_id: String(route.query.plan || '') } }),
           api.get<PlatformAccount[]>('/accounts'),
         ])
         plans.value = planResponse.data.items || []
         summary.value = planResponse.data.summary || {}
         runs.value = runResponse.data
         accounts.value = accountResponse.data || []
+        if (runDetailOpen.value && selectedRun.value.id) {
+          const { data } = await api.get(`/automation/runs/${selectedRun.value.id}`)
+          selectedRun.value = data
+        }
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '自动化计划加载失败')
       }
     }
 
     function openFromRoute() {
+      if (route.query.run) {
+        activeSection.value = 'runs'
+        if (String(selectedRun.value.id || '') !== String(route.query.run)) void showRun({ id: String(route.query.run) })
+        return
+      }
+      if (route.query.edit) {
+        const plan = plans.value.find(item => String(item.id) === String(route.query.edit))
+        if (plan) void openEditor(String(plan.plan_type), plan)
+        return
+      }
       if (String(route.query.create || '') !== '1') return
       const type = String(route.query.type || '')
-      if (['keyword_lead', 'message', 'traffic'].includes(type)) openEditor(type)
+      if (['keyword_lead', 'message', 'traffic'].includes(type)) void openEditor(type)
       else typePickerOpen.value = true
-      router.replace({ path: '/automation-plans', query: {} })
     }
 
-    function openEditor(type: string, plan?: Dict) {
-      Object.keys(draft).forEach(key => delete draft[key])
-      Object.assign(draft, plan ? JSON.parse(JSON.stringify(plan)) : emptyDraft(type))
-      selectDefaultAccount()
-      typePickerOpen.value = false
-      editorOpen.value = true
+    async function openEditor(type: string, plan?: Dict) {
+      if (saving.value || persistent.status.value === 'loading' || cleanupError.value) return
+      try {
+        if (editorOpen.value) await persistent.flush()
+        Object.keys(draft).forEach(key => delete draft[key])
+        Object.assign(draft, plan ? JSON.parse(JSON.stringify(plan)) : emptyDraft(type))
+        draftKey.value = plan ? String(plan.id) : `new-${type}`
+        savedPlanId.value = ''
+        typePickerOpen.value = false
+        editorOpen.value = true
+        await readDraft()
+        selectDefaultAccount()
+      } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '自动化草稿读取失败') }
     }
+    async function readDraft() {
+      const stored = await persistent.load()
+      // 服务端提交标记优先于恢复期间保留的本地表单。
+      if (draftKey.value.startsWith('new-') && stored?.submitted) {
+        savedPlanId.value = String(stored.payload.id || stored.payload.return_context?.query?.edit || '')
+        draft.id = savedPlanId.value
+        cleanupError.value = '计划已保存，请清理草稿后再新建。'
+      }
+    }
+    async function reloadDraft() {
+      try { await readDraft(); selectDefaultAccount() }
+      catch (error: any) { ElMessage.error(error?.response?.data?.detail || '自动化草稿读取失败') }
+    }
+    async function closeEditor() {
+      if (saving.value || persistent.status.value === 'loading' || cleanupError.value) return
+      try { await persistent.flush(); editorOpen.value = false; await router.replace({ path: '/automation-plans', query: {} }) }
+      catch { ElMessage.error('草稿保存失败，请重试后关闭') }
+    }
+    async function openAccounts() {
+      try {
+        await persistent.flush()
+        await router.push({ path: '/accounts', query: { feature: draft.plan_type === 'keyword_lead' ? 'acquisition' : String(draft.plan_type), platform: String(draft.config?.platform || 'dy'), return_to: draft.id ? `/automation-plans?edit=${draft.id}` : `/automation-plans?create=1&type=${draft.plan_type}` } })
+      } catch { ElMessage.error('草稿保存失败，请重试') }
+    }
+    function showPlan(plan: Dict) { selectedPlan.value = plan }
 
     function setTrafficPlatform(platform: string) {
       draft.config = normalizeTrafficConfig({ ...(draft.config || {}), platform })
@@ -219,6 +290,7 @@ export default defineComponent({
     }
 
     async function savePlan() {
+      if (saving.value || savedPlanId.value || ['loading', 'error'].includes(persistent.status.value)) return
       if (!String(draft.name || '').trim()) {
         ElMessage.warning('请填写计划名称')
         return
@@ -247,18 +319,40 @@ export default defineComponent({
           run_time: draft.run_time,
           config: draft.config,
           enabled: Boolean(draft.enabled),
-          ...(editing.value ? {} : { plan_type: draft.plan_type }),
+          ...(editing.value ? {} : { plan_type: draft.plan_type, draft_key: draftKey.value }),
         }
-        if (editing.value) await api.patch(`/automation/plans/${draft.id}`, payload)
-        else await api.post('/automation/plans', payload)
+        const { data } = editing.value ? await api.patch(`/automation/plans/${draft.id}`, payload) : await api.post('/automation/plans', payload)
         ElMessage.success(editing.value ? '计划已保存' : '计划已创建')
-        editorOpen.value = false
-        await loadAll()
+        savedPlanId.value = String(data.id || draft.id)
+        draft.id = savedPlanId.value
+        await finishSavedPlan()
       } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '计划保存失败')
+        ElMessage.error(error?.response?.data?.detail || (savedPlanId.value ? '计划已保存，列表刷新失败，请刷新查看' : '计划保存失败'))
       } finally {
         saving.value = false
       }
+    }
+    async function finishSavedPlan() {
+      try { await persistent.clear() }
+      catch {
+        cleanupError.value = '计划已保存，草稿清理失败；不会再次创建。'
+        // 清理失败后保存对象ID，避免重开同一新建草稿再次POST。
+        try { await persistent.flush() }
+        catch { cleanupError.value += ' 已保存标识未能写回草稿，请先重试清理。' }
+        ElMessage.warning(cleanupError.value)
+        return
+      }
+      cleanupError.value = ''
+      editorOpen.value = false
+      await router.replace({ path: '/automation-plans', query: {} })
+      await loadAll()
+    }
+    async function retryCleanup() {
+      if (saving.value) return
+      saving.value = true
+      try { await finishSavedPlan() }
+      catch { ElMessage.error('计划已保存，列表刷新失败，请刷新查看') }
+      finally { saving.value = false }
     }
 
     async function togglePlan(plan: Dict, enabled: boolean) {
@@ -294,7 +388,7 @@ export default defineComponent({
     }
 
     function startPlanDrag(plan: Dict, event: DragEvent) {
-      if (reordering.value) return event.preventDefault()
+      if (reordering.value || typeFilter.value !== 'all') return event.preventDefault()
       draggedPlanId.value = String(plan.id)
       if (event.dataTransfer) {
         event.dataTransfer.effectAllowed = 'move'
@@ -316,7 +410,7 @@ export default defineComponent({
     }
 
     function movePlanByKeyboard(plan: Dict, event: KeyboardEvent) {
-      if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
+      if (typeFilter.value !== 'all' || !event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
       const index = plans.value.findIndex(item => String(item.id) === String(plan.id))
       const targetIndex = index + (event.key === 'ArrowUp' ? -1 : 1)
       const target = plans.value[targetIndex]
@@ -350,9 +444,11 @@ export default defineComponent({
     async function showRun(run: Dict) {
       try {
         const { data } = await api.get(`/automation/runs/${run.id}`)
+        if (String(selectedRun.value.id || '') !== String(data.id)) runItemPage.value = 1
         selectedRun.value = data
-        runItemPage.value = 1
+        activeSection.value = 'runs'
         runDetailOpen.value = true
+        await router.replace({ path: '/automation-plans', query: { ...route.query, run: String(data.id) } })
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '运行详情加载失败')
       }
@@ -372,47 +468,16 @@ export default defineComponent({
       return h('div', { class: ['automation-metric', tone] }, [h('span', label), h('strong', String(value ?? '—'))])
     }
 
-    function renderTaskCards() {
-      return h(ElRow, { gutter: 16, class: 'automation-task-cards' }, () => [
-        h(ElCol, { xs: 24, md: 8 }, () => h(ElCard, { shadow: 'hover', class: 'automation-task-card' }, () => [
-          h('div', { class: 'automation-card-icon lead' }, [h(Promotion)]),
-          h('div', { class: 'automation-card-content' }, [
-            h('h3', '关键词自动获客'),
-            h('p', '按优先级选择关键词，依次采竞品、AI筛选、采评论并可选分析和清理无关对象。'),
-            h('div', { class: 'automation-flow' }, '选择关键词 → 采竞品 → AI筛选 → 采评论 → 客户分析'),
-          ]),
-          h(ElButton, { type: 'primary', onClick: () => openEditor('keyword_lead') }, () => '新建获客计划'),
-        ])),
-        h(ElCol, { xs: 24, md: 8 }, () => h(ElCard, { shadow: 'hover', class: 'automation-task-card' }, () => [
-          h('div', { class: 'automation-card-icon message' }, [h(ChatDotRound)]),
-          h('div', { class: 'automation-card-content' }, [
-            h('h3', '自动私信'),
-            h('p', '独立消化新旧积压客户，高意向优先，同意向下等待最久的客户优先。'),
-            h('div', { class: 'automation-flow' }, '筛选积压客户 → 占用额度 → 按间隔逐个私信'),
-          ]),
-          h(ElButton, { type: 'primary', onClick: () => openEditor('message') }, () => '新建私信计划'),
-        ])),
-        h(ElCol, { xs: 24, md: 8 }, () => h(ElCard, { shadow: 'hover', class: 'automation-task-card' }, () => [
-          h('div', { class: 'automation-card-icon traffic' }, [h(Connection)]),
-          h('div', { class: 'automation-card-content' }, [
-            h('h3', '自动引流'),
-            h('p', '定时启动抖音或快手引流批次，与获客、私信计划共用浏览器队列。'),
-            h('div', { class: 'automation-flow' }, '选择来源 → 浏览视频 → 按组合执行互动 → 记录结果'),
-          ]),
-          h(ElButton, { type: 'primary', onClick: () => openEditor('traffic') }, () => '新建引流计划'),
-        ])),
-      ])
-    }
 
     function renderPlans() {
       return h(ElCard, { class: 'automation-section', shadow: 'never' }, () => [
-        h('div', { class: 'automation-section-head' }, [h('div', [h('h2', '计划列表'), h('p', '拖动计划调整顺序；相同时间从上到下逐个执行，前一个结束后再执行下一个。')])]),
+        h('div', { class: 'automation-section-head' }, [h('div', [h('h2', '计划列表'), h('p', typeFilter.value === 'all' ? '全部计划按列表顺序共用浏览器；拖动或 Alt + 方向键调整顺序。' : '当前只显示所选类型；切回全部计划可调整统一执行顺序。')])]),
         h(ElTable, { data: planPagination.value.items, stripe: true, emptyText: '还没有自动化计划' }, () => [
           h(ElTableColumn, { label: '计划', minWidth: 210 }, { default: ({ row, $index }: Dict) => h('div', {
             class: ['automation-plan-drag-cell', { 'is-dragging': draggedPlanId.value === String(row.id), 'is-over': dragOverPlanId.value === String(row.id) }],
-            draggable: !reordering.value,
+            draggable: !reordering.value && typeFilter.value === 'all',
             tabindex: 0,
-            'aria-label': `第${planPagination.value.start + $index + 1}项，${row.name}。拖动排序，或按 Alt 加上下方向键调整`,
+            'aria-label': `统一队列第${plans.value.findIndex(plan => plan.id === row.id) + 1}项，${row.name}。全部计划视图可拖动排序，或按 Alt 加上下方向键调整`,
             title: '按住拖动调整执行顺序',
             onDragstart: (event: DragEvent) => startPlanDrag(row, event),
             onDragover: (event: DragEvent) => overPlan(row, event),
@@ -421,8 +486,8 @@ export default defineComponent({
             onDragend: () => { draggedPlanId.value = ''; dragOverPlanId.value = '' },
             onKeydown: (event: KeyboardEvent) => movePlanByKeyboard(row, event),
           }, [
-            h('span', { class: 'automation-drag-handle', 'aria-hidden': 'true' }, [h(Rank), h('b', String(planPagination.value.start + $index + 1))]),
-            h('div', [h('strong', row.name), h('small', { class: 'table-subtext' }, planTypeLabel(row.plan_type))]),
+            h('span', { class: 'automation-drag-handle', 'aria-hidden': 'true' }, [h(Rank), h('b', String(plans.value.findIndex(plan => plan.id === row.id) + 1))]),
+            h('div', [h('button', { class: 'operations-row-main', onClick: () => showPlan(row) }, row.name), h('small', { class: 'table-subtext' }, planTypeLabel(row.plan_type))]),
           ]) }),
           h(ElTableColumn, { label: '执行时间', minWidth: 190 }, { default: ({ row }: Dict) => h('div', [h('span', `${weekdayText(row.weekdays)} ${row.run_time}`), h('small', { class: 'table-subtext' }, row.next_run_at ? `下次 ${row.next_run_at}` : '已停用')]) }),
           h(ElTableColumn, { label: '范围', minWidth: 190 }, { default: ({ row }: Dict) => h('span', scopeText(row)) }),
@@ -507,9 +572,12 @@ export default defineComponent({
     function renderEditor() {
       return h(ElDialog, {
         modelValue: editorOpen.value, title: `${editing.value ? '编辑' : '新建'}${planTypeLabel(draft.plan_type)}`,
-        width: '720px', destroyOnClose: true, 'onUpdate:modelValue': (value: boolean) => editorOpen.value = value,
+        width: '820px', destroyOnClose: true, closeOnClickModal: false, 'onUpdate:modelValue': (value: boolean) => { if (!value) void closeEditor() },
       }, {
         default: () => h(ElForm, { labelPosition: 'top', class: 'automation-editor' }, () => [
+          h('div', { class: 'toolbar' }, [h('span', { class: 'note' }, draftStatusLabel(persistent.status.value)), h(ElButton, { onClick: () => persistent.save().catch(() => undefined) }, () => '保存草稿'), h(ElButton, { onClick: openAccounts }, () => '配置执行账号')]),
+          persistent.error.value ? h('p', { class: 'operations-error' }, persistent.error.value) : null,
+          cleanupError.value ? h('div', { class: 'toolbar' }, [h('span', { class: 'operations-error' }, cleanupError.value), h(ElButton, { disabled: saving.value, onClick: retryCleanup }, () => '重试清理草稿')]) : persistent.status.value === 'error' ? h(ElButton, { onClick: reloadDraft }, () => '重新读取草稿') : null,
           h(ElFormItem, { label: '计划名称', required: true }, () => h(ElInput, { modelValue: draft.name, maxlength: 80, 'onUpdate:modelValue': (value: string) => draft.name = value })),
           h(ElRow, { gutter: 16 }, () => [
             h(ElCol, { span: 16 }, () => h(ElFormItem, { label: '运行星期', required: true }, () => h(ElCheckboxGroup, { modelValue: draft.weekdays, 'onUpdate:modelValue': (value: Array<string | number>) => draft.weekdays = value.map(Number) }, () => weekdays.map(([value, label]) => h(ElCheckbox, { value }, () => label))))),
@@ -524,7 +592,7 @@ export default defineComponent({
               : '创建引流批次 → 等待共用浏览器 → 浏览视频 → 执行互动 → 记录结果'),
           ...(draft.plan_type === 'keyword_lead' ? renderKeywordFields() : draft.plan_type === 'message' ? renderMessageFields() : renderTrafficFields()),
         ]),
-        footer: () => h('div', [h(ElButton, { onClick: () => editorOpen.value = false }, () => '取消'), h(ElButton, { type: 'primary', loading: saving.value, onClick: savePlan }, () => '保存计划')]),
+        footer: () => h('div', [h(ElButton, { onClick: closeEditor, disabled: saving.value || persistent.status.value === 'loading' || Boolean(cleanupError.value) }, () => '关闭并保留草稿'), h(ElButton, { type: 'primary', loading: saving.value, disabled: Boolean(savedPlanId.value) || ['loading', 'error'].includes(persistent.status.value), onClick: savePlan }, () => '保存计划')]),
       })
     }
 
@@ -628,7 +696,7 @@ export default defineComponent({
       const run = selectedRun.value
       const traffic = trafficRunData(run)
       const trafficRunId = String(run.traffic_run_id || traffic.id || '')
-      return h(ElDialog, { modelValue: runDetailOpen.value, title: `执行详情 · ${run.plan_name || ''}`, width: '820px', 'onUpdate:modelValue': (value: boolean) => runDetailOpen.value = value }, { default: () => [
+      return h(ElDialog, { modelValue: runDetailOpen.value, title: `执行详情 · ${run.plan_name || ''}`, width: '820px', 'onUpdate:modelValue': (value: boolean) => { runDetailOpen.value = value; if (!value) { const { run, ...query } = route.query; void router.replace({ query }) } } }, { default: () => [
         h('div', { class: 'automation-run-summary' }, run.plan_type === 'traffic'
           ? [statusTag(run.status), h('span', `阶段：${stageLabel(run.current_stage)}`), h('span', `浏览 ${traffic.browsed_count || 0}`), h('span', `成功动作 ${traffic.action_success_count || 0}`), h('span', `失败/跳过 ${(traffic.failed_count || 0) + (traffic.skipped_count || 0)}`)]
           : [statusTag(run.status), h('span', `阶段：${stageLabel(run.current_stage)}`), h('span', `成功 ${run.success_count || 0}`), h('span', `失败 ${run.failed_count || 0}`), h('span', `跳过 ${run.skipped_count || 0}`)]),
@@ -650,7 +718,7 @@ export default defineComponent({
           h(ElTableColumn, { prop: 'keyword', label: '关键词', width: 140 }),
           h(ElTableColumn, { label: '状态', width: 100 }, { default: ({ row }: Dict) => statusTag(row.status) }),
           h(ElTableColumn, { label: '阶段', width: 140 }, { default: ({ row }: Dict) => stageLabel(row.current_stage) }),
-          h(ElTableColumn, { label: '关联任务', minWidth: 230 }, { default: ({ row }: Dict) => h('div', { class: 'automation-related-jobs' }, relatedJobIds(row.context).map(id => h(ElTag, { size: 'small' }, () => id))) }),
+          h(ElTableColumn, { label: '关联任务', minWidth: 230 }, { default: ({ row }: Dict) => h('div', { class: 'automation-related-jobs' }, relatedJobs(row.context).map(job => h(ElButton, { text: true, onClick: () => router.push(job.runtime ? { path: '/runtime', query: { job: job.id } } : { path: '/acquisition', query: { task: job.id } }) }, () => job.id))) }),
           h(ElTableColumn, { label: 'AI / 客户', width: 130 }, { default: ({ row }: Dict) => h('span', `AI ${row.ai_results?.filter((item: Dict) => item.status === 'succeeded').length || 0}/${row.ai_results?.length || 0} · 客户 ${row.lead_count || 0}`) }),
           h(ElTableColumn, { prop: 'error', label: '错误原因', minWidth: 180 }),
         ]) : null,
@@ -664,17 +732,24 @@ export default defineComponent({
       ] })
     }
 
-    return () => h('div', { class: 'automation-page' }, [
-      h('section', { class: 'automation-hero' }, [
-        h('div', [h('div', { class: 'automation-eyebrow' }, [h(Clock), h('span', '跨工作台自动化')]), h('h1', '自动化计划'), h('p', '按指定星期和时间运行获客、私信或引流流程；计划按列表顺序共用浏览器队列。软件未运行时错过的计划会直接跳过。')]),
-        h('div', { class: 'automation-metrics' }, [metric('已启用计划', summary.value.enabled || 0, 'green'), metric('下一个计划', summary.value.next_run_at || '暂无', 'blue'), metric('正在运行', summary.value.running || 0, 'blue'), metric('今日失败', summary.value.failed_today || 0, 'red')]),
+    function renderPlanDetail() {
+      const plan = selectedPlan.value
+      return h(ElDrawer, { modelValue: Boolean(plan), title: plan?.name || '计划详情', size: '760px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) selectedPlan.value = null } }, () => plan ? [
+        h('h3', planTypeLabel(plan.plan_type)), h('p', `${weekdayText(plan.weekdays)} ${plan.run_time} · ${plan.enabled ? '已启用' : '已停用'}`),
+        h('p', scopeText(plan)),
+        h('p', { class: 'note' }, '编辑计划影响后续运行；已经创建的运行保留当次参数。引流执行限额与素材读取引流规则。'),
+        h('div', { class: 'toolbar' }, [h(ElButton, { type: 'primary', onClick: () => { selectedPlan.value = null; void openEditor(plan.plan_type, plan) } }, () => '编辑计划'), h(ElButton, { onClick: () => runNow(plan) }, () => '立即加入队列'), h(ElButton, { onClick: async () => { selectedPlan.value = null; activeSection.value = 'runs'; runs.value.page = 1; await router.replace({ query: { plan: String(plan.id) } }); await loadAll() } }, () => '查看执行记录'), h(ElButton, { onClick: () => router.push('/runtime') }, () => '前往任务中心')]),
+        plan.recent_run ? h('div', [h('h4', '最近执行'), statusTag(plan.recent_run.status), h(ElButton, { onClick: () => showRun(plan.recent_run) }, () => '查看详情')]) : null,
+      ] : null)
+    }
+    return () => h('div', { class: 'workspace-page operations-page automation-page' }, [
+      h('section', { class: 'panel' }, [
+        h('div', { class: 'toolbar' }, [h('div', [h('h2', '自动化计划'), h('p', { class: 'note' }, '定时安排获客、私信和引流。软件关闭期间错过的计划不补跑。')]), h(ElButton, { type: 'primary', onClick: () => typePickerOpen.value = true }, () => '新建自动化计划'), h(ElButton, { onClick: () => router.push('/runtime') }, () => '任务中心')]),
+        h('nav', { class: 'tabs toolbar' }, [['plans', '计划'], ['runs', '执行记录']].map(([key, label]) => h('button', { class: activeSection.value === key ? 'active' : '', onClick: async () => { activeSection.value = key; if (key === 'runs' && route.query.plan) { await router.replace({ query: {} }); await loadAll() } } }, label))),
+        activeSection.value === 'plans' ? h('nav', { class: 'tabs toolbar', 'aria-label': '计划类型' }, [['all', '全部'], ...automationPlanTypes].map(([type, label]) => h('button', { class: typeFilter.value === type ? 'active' : '', onClick: () => typeFilter.value = type }, label))) : route.query.plan ? h('p', { class: 'note' }, '当前显示所选计划的执行记录；点击执行记录页签查看全部。') : null,
       ]),
-      renderTaskCards(),
-      renderPlans(),
-      renderRuns(),
-      renderTypePicker(),
-      renderEditor(),
-      renderRunDetail(),
+      activeSection.value === 'plans' ? renderPlans() : renderRuns(),
+      renderTypePicker(), renderEditor(), renderRunDetail(), renderPlanDetail(),
     ])
   },
 })
@@ -751,8 +826,9 @@ function stageLabel(stage: string) {
   return labels[stage] || stage || '—'
 }
 
-function relatedJobIds(context: Dict) {
-  return Object.entries(context || {}).filter(([key, value]) => key.endsWith('_task_id') || key.endsWith('_runtime_job_id') || key.endsWith('_task_ids')).flatMap(([, value]) => Array.isArray(value) ? value : [value]).filter(Boolean).map(String)
+function relatedJobs(context: Dict) {
+  // 采集任务和运行队列包装记录是不同对象，详情入口分别定位。
+  return Object.entries(context || {}).filter(([key]) => key.endsWith('_task_id') || key.endsWith('_runtime_job_id') || key.endsWith('_task_ids')).flatMap(([key, value]) => (Array.isArray(value) ? value : [value]).filter(Boolean).map(id => ({ id: String(id), runtime: key.endsWith('_runtime_job_id') })))
 }
 
 function timeValue(value: string) {

@@ -1,5 +1,5 @@
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Collection,
@@ -16,20 +16,22 @@ import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict, PlatformAccount } from '../shared/types'
 import { createAutoSyncController, shouldReplaceDraft } from '../composables/autoSync'
-import { SplitPane } from '../components/ui/SplitPane'
+import { draftStatusLabel, usePersistentDraft } from '../shared/usePersistentDraft'
+import { useUnsavedSettings } from '../shared/useUnsavedSettings'
+import AssetPicker from '../components/content/AssetPicker'
 import { COMPACT_PAGE_SIZE, DEFAULT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
+import './content.css'
 
 
-const MASKED_SECRET = '********'
-const MATERIAL_PAGE_SIZE = 8
 const ASSET_SEGMENTS = [
   ['all', '全部'],
   ['video', '视频'],
   ['image', '图片'],
   ['background_music', '背景音乐'],
-  ['voice_reference', '克隆音频'],
+  ['voice_reference', '我的音色'],
 ] as const
+const LIBRARY_TABS = ['drafts', 'jobs', 'outputs']
 
 const defaultVideoDraft = () => ({
   video_subject: '',
@@ -145,6 +147,10 @@ const settingGroups: Array<{ title: string, fields: SettingField[] }> = [
   {
     title: '语音与Whisper',
     fields: [
+      { path: 'app.gemini_api_key', label: 'Gemini 文案与配音 API Key', type: 'password' },
+      { path: 'app.gemini_base_url', label: 'Gemini Base URL' },
+      { path: 'app.mimo_api_key', label: 'MiMo 文案与配音 API Key', type: 'password' },
+      { path: 'app.mimo_base_url', label: 'MiMo Base URL' },
       { path: 'azure.speech_key', label: 'Azure Speech Key', type: 'password' },
       { path: 'azure.speech_region', label: 'Azure Speech Region' },
       { path: 'siliconflow.api_key', label: '硅基流动 API Key', type: 'password' },
@@ -185,12 +191,23 @@ export default defineComponent({
     const voiceProfiles = ref<Dict[]>([])
     const jobs = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
     const publishAccounts = ref<PlatformAccount[]>([])
-    const publishTasks = ref<Dict[]>([])
     const selectedJob = ref<Dict | null>(null)
+    const outputs = ref<Dict>({ items: [], total: 0, page: 1, page_size: 12 })
+    const savedDrafts = ref<Dict>({ items: [], total: 0, page: 1, page_size: 20 })
+    const libraryTab = ref(route.query.job ? 'jobs' : LIBRARY_TABS.includes(String(route.query.tab)) ? String(route.query.tab) : 'outputs')
+    const selectedOutputIds = ref<string[]>([])
+    const materialPickerOpen = ref(false)
+    const draftKey = ref(String(route.query.draft_id || crypto.randomUUID()))
+    const restoringDraft = ref(false)
+    const restoreError = ref('')
+    const videoSubmission = ref<Dict | null>(null)
+    let loadedDraftKey = ''
+    let pageActive = true
     const settings = ref<Dict>({})
     const settingsDraft = ref<Dict>({})
     const settingsDirty = ref(false)
     const settingsSaving = ref(false)
+    const clearSecrets = ref<string[]>([])
     const environment = ref<Dict>({})
     const videoDraft = ref<Dict>(defaultVideoDraft())
     const selectedAssetIds = ref<string[]>([])
@@ -198,17 +215,14 @@ export default defineComponent({
     const autoPublish = ref<Dict>({ enabled: false, account_ids: [], output_scope: 'first', publish_strategy: 'immediate', scheduled_at: '' })
     const audioAssetId = ref('')
     const bgmAssetId = ref('')
-    const materialKind = ref('all')
-    const materialPage = ref(1)
     const assetFilter = ref({ search: '' })
     const assetSegment = ref('all')
     const assetPage = ref(1)
     const assetPageSize = ref(DEFAULT_PAGE_SIZE)
     const voicePage = ref(1)
-    const generatedPage = ref(1)
-    const generatedPageSize = ref(DEFAULT_PAGE_SIZE)
     const recordSearch = ref('')
     const voiceProvider = ref('edge')
+    const voiceMode = ref('tts')
     const voices = ref<string[]>([])
     const loading = ref(false)
     const uploading = ref(false)
@@ -228,34 +242,47 @@ export default defineComponent({
     let mediaChunks: Blob[] = []
 
     const materialAssets = computed(() => assets.value.filter(item => ['video', 'image'].includes(String(item.asset_type))))
-    const filteredMaterialAssets = computed(() => filterMaterialAssets(materialAssets.value, materialKind.value))
-    const materialPageCount = computed(() => Math.max(1, Math.ceil(filteredMaterialAssets.value.length / MATERIAL_PAGE_SIZE)))
-    const pagedMaterialAssets = computed(() => paginateMaterialAssets(filteredMaterialAssets.value, materialPage.value, MATERIAL_PAGE_SIZE))
     const audioAssets = computed(() => assets.value.filter(item => String(item.asset_type) === 'audio'))
     const backgroundMusicAssets = computed(() => assets.value.filter(item => assetMatchesSegment(item, 'background_music')))
-    const visibleAssets = computed(() => assets.value.filter(asset => assetMatchesSegment(asset, assetSegment.value)))
+    const visibleAssets = computed(() => assets.value.filter(asset => assetMatchesSegment(asset, assetSegment.value)
+      && String(asset.name || '').toLowerCase().includes(assetFilter.value.search.trim().toLowerCase())))
     const assetPagination = computed(() => paginateItems(visibleAssets.value, assetPage.value, assetPageSize.value))
     const selectedMaterials = computed(() => selectedAssetIds.value
-      .map(id => materialAssets.value.find(item => item.id === id))
-      .filter(Boolean) as Dict[])
+      .map(id => materialAssets.value.find(item => item.id === id) || { id, name: '原素材已删除，请重新选择', deleted: true }) as Dict[])
     const activeJobCount = computed(() => Number(jobs.value.active || 0))
     const voiceRuntime = computed(() => environment.value.voice_models?.voxcpm2 || {})
     const voiceRuntimeJob = computed(() => voiceRuntime.value.install_job || {})
     const voiceRuntimeInstalling = computed(() => ['queued', 'running'].includes(String(voiceRuntimeJob.value.status || '')))
-    const generatedItems = computed<Dict[]>(() => {
-      const query = recordSearch.value.trim().toLowerCase()
-      return (jobs.value.items || []).flatMap((job: Dict) => (job.outputs || []).map((output: Dict) => ({ job, output })))
-        .filter(({ job, output }: Dict) => !query || `${job.subject || ''} ${output.name || ''}`.toLowerCase().includes(query))
+    const persistentDraft = usePersistentDraft({
+      kind: 'video', key: draftKey,
+      getPayload: () => ({ subject: videoDraft.value.video_subject, params: videoDraft.value,
+        asset_ids: selectedAssetIds.value, audio_asset_id: audioAssetId.value, bgm_asset_id: bgmAssetId.value,
+        voice_provider: voiceProvider.value, voice_mode: voiceMode.value, publish_plan: autoPublish.value,
+        ...(videoSubmission.value ? { return_context: videoSubmission.value } : {}) }),
+      applyPayload: payload => {
+        videoDraft.value = { ...defaultVideoDraft(), ...payload.params }
+        selectedAssetIds.value = payload.asset_ids || []
+        audioAssetId.value = payload.audio_asset_id || ''
+        bgmAssetId.value = payload.bgm_asset_id || ''
+        voiceProvider.value = payload.voice_provider || 'edge'
+        voiceMode.value = payload.voice_mode || (payload.audio_asset_id ? 'file' : payload.voice_provider === 'voxcpm2' ? 'clone' : 'tts')
+        autoPublish.value = { enabled: false, account_ids: [], output_scope: 'first', publish_strategy: 'immediate', scheduled_at: '', ...payload.publish_plan }
+        videoSubmission.value = payload.return_context?.query?.job ? payload.return_context : null
+      },
     })
-    const generatedPagination = computed(() => paginateItems(generatedItems.value, generatedPage.value, generatedPageSize.value))
+    useUnsavedSettings(() => view.value === 'content-settings' && settingsDirty.value)
 
     const refresh = createAutoSyncController({
       interval: () => 3000,
       sync: async reason => {
-        if (reason === 'route') return loadPage()
+        if (reason === 'route') {
+          try { await loadPage() }
+          catch (error: any) { ElMessage.error(error?.response?.data?.detail || '内容页面加载失败，请重试') }
+          return
+        }
         const requests: Promise<unknown>[] = []
         if (activeJobCount.value && ['content-create', 'content-records'].includes(view.value)) requests.push(loadJobs(false))
-        if (view.value === 'content-records') requests.push(loadPublishTasks())
+        if (view.value === 'content-records' && libraryTab.value === 'outputs') requests.push(loadOutputs())
         if (view.value === 'content-settings' && voiceRuntimeInstalling.value) requests.push(loadEnvironment())
         // 等所有后台查询结束后再允许下一轮，某个查询失败也不会叠加请求。
         await Promise.allSettled(requests)
@@ -267,30 +294,99 @@ export default defineComponent({
       void refresh.trigger('route')
     })
     onUnmounted(() => {
+      pageActive = false
       refresh.stop()
       window.clearInterval(voiceRecordingTimer)
       if (mediaRecorder?.state === 'recording') mediaRecorder.stop()
       mediaStream?.getTracks().forEach(track => track.stop())
       if (voiceRecordingUrl.value) URL.revokeObjectURL(voiceRecordingUrl.value)
     })
-    watch(view, () => void refresh.trigger('route'))
+    watch(view, (next, previous) => {
+      if (previous === 'content-settings' && next !== 'content-settings') {
+        settingsDraft.value = JSON.parse(JSON.stringify(settings.value))
+        settingsDirty.value = false
+        clearSecrets.value = []
+        settingsMutationSeq += 1
+      }
+    })
+    watch(() => route.fullPath, () => void refresh.trigger('route'))
     watch(() => props.refreshSeq, () => void refresh.trigger('route'))
     watch(assetSegment, () => { assetPage.value = 1; voicePage.value = 1 })
-    watch(recordSearch, () => { generatedPage.value = 1 })
+    onBeforeRouteUpdate(async () => {
+      // 同一页面组件切换路由时不会触发离页钩子，仍须完成读取或保存。
+      if (restoringDraft.value) return false
+      if (view.value === 'content-create' && String(route.query.draft_id || draftKey.value) === draftKey.value) {
+        try { await persistentDraft.flush() } catch { return false }
+      }
+      return true
+    })
 
     async function loadPage() {
-      if (view.value === 'content-create') await Promise.all([loadAssets(), loadVoiceProfiles(), loadJobs(false), loadVoices(), loadPublishAccounts()])
+      if (view.value === 'content-create') {
+        await Promise.all([loadAssets(), loadVoiceProfiles(), loadJobs(false), loadPublishAccounts(), restoreVideoDraft()])
+        if (pageActive && !videoSubmission.value && voiceMode.value !== 'file') await loadVoices()
+      }
       else if (view.value === 'content-assets') await Promise.all([loadAssets(), loadVoiceProfiles(), loadPublishAccounts()])
-      else if (view.value === 'content-records') await Promise.all([loadJobs(true), loadPublishTasks()])
+      else if (view.value === 'content-records') {
+        libraryTab.value = route.query.job ? 'jobs' : LIBRARY_TABS.includes(String(route.query.tab)) ? String(route.query.tab) : 'outputs'
+        if (!route.query.job) selectedJob.value = null
+        await loadLibrary()
+      }
       else await Promise.all([loadSettings(), loadEnvironment()])
     }
 
+    async function restoreVideoDraft() {
+      const requestedKey = String(route.query.draft_id || draftKey.value)
+      if (loadedDraftKey === requestedKey) return
+      if (restoringDraft.value) return
+      const retryDefaults = Boolean(restoreError.value && !persistentDraft.error.value)
+      restoringDraft.value = true
+      restoreError.value = ''
+      const ownsRestore = () => pageActive && view.value === 'content-create' && requestedKey === draftKey.value && String(route.query.draft_id || requestedKey) === requestedKey
+      try {
+        if (loadedDraftKey || retryDefaults) await persistentDraft.flush()
+        if (loadedDraftKey) resetVideoFields()
+        draftKey.value = requestedKey
+        const record = await persistentDraft.load()
+        if (!ownsRestore()) return
+        if (!record.exists) {
+          const { data } = await api.get('/content/settings')
+          if (!ownsRestore()) return
+          if (persistentDraft.status.value === 'idle') videoDraft.value.video_source = data.app?.video_source || 'local'
+        }
+        loadedDraftKey = requestedKey
+        restoringDraft.value = false
+        if (!route.query.draft_id) await router.replace({ path: '/content-create', query: { draft_id: requestedKey } })
+      } catch (error: any) {
+        if (ownsRestore()) restoreError.value = error?.response?.data?.detail || '创作草稿读取失败，请重试'
+        throw error
+      } finally {
+        restoringDraft.value = false
+      }
+    }
+
+    async function loadLibrary() {
+      if (libraryTab.value === 'drafts') return loadSavedDrafts()
+      if (libraryTab.value === 'jobs') {
+        await loadJobs(true)
+        return
+      }
+      return loadOutputs()
+    }
+
+    async function loadSavedDrafts() {
+      const { data } = await api.get('/drafts/video', { params: { page: savedDrafts.value.page, page_size: savedDrafts.value.page_size, search: recordSearch.value } })
+      savedDrafts.value = data
+    }
+
+    async function loadOutputs() {
+      const { data } = await api.get('/content/outputs', { params: { page: outputs.value.page, page_size: outputs.value.page_size, search: recordSearch.value } })
+      outputs.value = data
+    }
+
     async function loadAssets() {
-      const { data } = await api.get('/content/assets', { params: { search: assetFilter.value.search } })
+      const { data } = await api.get('/content/assets')
       assets.value = data
-      selectedAssetIds.value = selectedAssetIds.value.filter(id => data.some((item: Dict) => item.id === id))
-      selectedPublishAssetIds.value = selectedPublishAssetIds.value.filter(id => data.some((item: Dict) => item.id === id))
-      materialPage.value = Math.min(materialPage.value, materialPageCount.value)
     }
 
     async function loadVoiceProfiles() {
@@ -299,24 +395,22 @@ export default defineComponent({
     }
 
     async function loadJobs(selectFirst = false) {
-      const { data } = await api.get('/content/video-jobs', { params: { page: jobs.value.page || 1, page_size: jobs.value.page_size || 20 } })
+      const { data } = await api.get('/content/video-jobs', { params: { page: jobs.value.page || 1, page_size: jobs.value.page_size || 20, search: view.value === 'content-records' ? recordSearch.value : '' } })
       jobs.value = data
       if (selectedJob.value) {
         const found = data.items.find((item: Dict) => item.id === selectedJob.value?.id)
         if (found) selectedJob.value = found
       }
       if (selectFirst && !selectedJob.value && data.items.length) selectedJob.value = data.items[0]
+      if (view.value === 'content-records' && route.query.job) {
+        const detail = await api.get(`/content/video-jobs/${encodeURIComponent(String(route.query.job))}`)
+        selectedJob.value = detail.data
+      }
     }
 
     async function loadPublishAccounts() {
       const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'publish' } })
       publishAccounts.value = data
-      if (!autoPublish.value.account_ids.length) autoPublish.value.account_ids = data.filter(item => item.default_features.includes('publish') && isAccountFeatureReady(item, 'publish')).map(item => item.id)
-    }
-
-    async function loadPublishTasks() {
-      const { data } = await api.get('/content/publish-tasks', { params: { page: 1, page_size: 100 } })
-      publishTasks.value = data.items || []
     }
 
     async function loadSettings() {
@@ -408,6 +502,7 @@ export default defineComponent({
         await ElMessageBox.confirm(message, '删除内容资产', { type: 'warning' })
         for (const profile of linkedProfiles) await api.delete(`/content/voice-profiles/${profile.id}`)
         await api.delete(`/content/assets/${asset.id}`)
+        selectedPublishAssetIds.value = selectedPublishAssetIds.value.filter(id => id !== String(asset.id))
         ElMessage.success('资产已删除')
         await Promise.all([loadAssets(), loadVoiceProfiles()])
       } catch (error: any) {
@@ -600,40 +695,112 @@ export default defineComponent({
     }
 
     async function createVideo() {
+      if (restoringDraft.value || videoSubmission.value) return
       const draft = JSON.parse(JSON.stringify(videoDraft.value))
       if (!String(draft.video_subject || '').trim()) return ElMessage.warning('请填写视频主题')
       if (draft.video_source === 'local' && !selectedAssetIds.value.length) return ElMessage.warning('本地素材模式至少选择一项内容资产')
+      if (voiceMode.value === 'file' && !audioAssetId.value) return ElMessage.warning('请先导入并选择配音文件')
       if (voiceProvider.value === 'voxcpm2' && !audioAssetId.value && !String(draft.voice_name || '').trim()) return ElMessage.warning('请先选择一个克隆音色')
       if (autoPublish.value.enabled && !autoPublish.value.account_ids.length) return ElMessage.warning('自动发布至少选择一个已登录账号')
       draft.video_transition_mode = draft.video_transition_mode || null
       loading.value = true
+      let created = false
       try {
+        await persistentDraft.flush()
         const { data } = await api.post('/content/video-jobs', {
+          draft_key: draftKey.value,
           params: draft,
           asset_ids: selectedAssetIds.value,
           audio_asset_id: audioAssetId.value,
           bgm_asset_id: bgmAssetId.value,
           publish: autoPublish.value,
         })
+        created = true
+        videoSubmission.value = { route: '/content-records', query: { job: data.id }, selection: [] }
         ElMessage.success('视频任务已加入生成队列')
         selectedJob.value = data
-        await loadJobs(false)
+        await finishVideoSubmission()
       } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '视频任务创建失败')
+        ElMessage.error(created ? '视频任务已创建，但草稿清理或页面刷新失败，请勿重复提交' : error?.response?.data?.detail || '视频任务创建失败')
       } finally {
         loading.value = false
       }
     }
 
-    function clearVideoForm() {
+    function resetVideoFields() {
       videoDraft.value = defaultVideoDraft()
       selectedAssetIds.value = []
       audioAssetId.value = ''
       bgmAssetId.value = ''
       autoPublish.value = { enabled: false, account_ids: [], output_scope: 'first', publish_strategy: 'immediate', scheduled_at: '' }
       voiceProvider.value = 'edge'
-      void loadVoices()
-      ElMessage.success('视频创作内容已清空')
+      voiceMode.value = 'tts'
+      videoSubmission.value = null
+    }
+
+    async function finishVideoSubmission() {
+      await persistentDraft.clear()
+      loadedDraftKey = ''
+      draftKey.value = crypto.randomUUID()
+      resetVideoFields()
+      await router.replace({ path: '/content-create', query: { draft_id: draftKey.value } })
+    }
+
+    async function retryVideoCleanup() {
+      loading.value = true
+      try { await finishVideoSubmission() }
+      catch { ElMessage.error('视频任务已创建，草稿仍未清理，可重试清理或查看生成任务') }
+      finally { loading.value = false }
+    }
+
+    async function clearVideoForm() {
+      if (restoringDraft.value) return
+      try {
+        await ElMessageBox.confirm('清空当前草稿的文案、素材和参数？已经生成的成品会继续保留。', '清空草稿', { type: 'warning' })
+        await persistentDraft.clear()
+        loadedDraftKey = ''
+        draftKey.value = crypto.randomUUID()
+        resetVideoFields()
+        await router.replace({ path: '/content-create', query: { draft_id: draftKey.value } })
+      } catch (error: any) {
+        if (!isUserCancel(error)) ElMessage.error(error?.response?.data?.detail || '清空草稿失败')
+      }
+    }
+
+    async function newVideoDraft() {
+      if (restoringDraft.value) return
+      try {
+        await persistentDraft.flush()
+        loadedDraftKey = ''
+        draftKey.value = crypto.randomUUID()
+        resetVideoFields()
+        await router.push({ path: '/content-create', query: { draft_id: draftKey.value } })
+      } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '草稿保存失败') }
+    }
+
+    async function editJobAsDraft(job: Dict) {
+      const key = crypto.randomUUID()
+      const linked = job.assets || []
+      try {
+        await api.put(`/drafts/video/${key}`, { payload: {
+          subject: job.subject, params: job.params,
+          asset_ids: linked.filter((asset: Dict) => asset.role === 'material').map((asset: Dict) => asset.id),
+          audio_asset_id: linked.find((asset: Dict) => asset.role === 'audio')?.id || '',
+          bgm_asset_id: linked.find((asset: Dict) => asset.role === 'bgm')?.id || '',
+          voice_provider: inferVoiceProvider(String(job.params?.voice_name || '')),
+          voice_mode: linked.some((asset: Dict) => asset.role === 'audio') ? 'file' : String(job.params?.voice_name || '').startsWith('voxcpm2:') ? 'clone' : 'tts',
+          publish_plan: { enabled: false, account_ids: [], output_scope: 'first', publish_strategy: 'immediate', scheduled_at: '' },
+        } })
+        await router.push({ path: '/content-create', query: { draft_id: key } })
+      } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '无法建立编辑草稿') }
+    }
+
+    async function removeSavedDraft(key: string) {
+      try {
+        await ElMessageBox.confirm('删除这个未提交的创作草稿？素材原文件和已生成视频不会删除。', '删除草稿', { type: 'warning' })
+        await api.delete(`/drafts/video/${encodeURIComponent(key)}`)
+        await loadSavedDrafts()
+      } catch (error: any) { if (!isUserCancel(error)) ElMessage.error(error?.response?.data?.detail || '删除草稿失败') }
     }
 
     async function cancelJob(id: string) {
@@ -683,40 +850,12 @@ export default defineComponent({
       }
     }
 
-    async function publishJob(id: string) {
-      try {
-        const job = (jobs.value.items || []).find((item: Dict) => String(item.id) === id)
-        const output = job?.outputs?.[0]
-        if (!job || !output) return ElMessage.warning('该任务还没有可发布的视频成品')
-        await api.post('/content/publish-tasks/one-click', { source: { type: 'video_output', video_job_id: job.id, output_name: output.name } })
-        ElMessage.success('发布任务已加入队列')
-        await Promise.all([loadJobs(false), loadPublishTasks()])
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '视频发布失败')
-      }
-    }
-
-    async function uploadOutput(job: Dict, output: Dict) {
-      try {
-        await api.post('/content/publish-tasks/one-click', { source: { type: 'video_output', video_job_id: job.id, output_name: output.name } })
-        ElMessage.success('发布任务已加入队列')
-        await Promise.all([loadJobs(false), loadPublishTasks()])
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '视频上传失败')
-      }
-    }
-
-    function openPublishSettings(job: Dict, output: Dict) {
-      void router.push({ path: '/content-publish', query: { video_job_id: String(job.id), output_name: String(output.name) } })
+    function openPublishSettings(output: Dict) {
+      void router.push({ path: '/content-publish', query: { output_ids: String(output.output_id || output.id) } })
     }
 
     async function publishAsset(asset: Dict) {
-      try {
-        await api.post('/content/publish-tasks/one-click', { source: { type: 'assets', asset_ids: [asset.id] } })
-        ElMessage.success('发布任务已加入队列')
-      } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '一键发布失败')
-      }
+      openAssetPublishSettings([String(asset.id)])
     }
 
     function openAssetPublishSettings(assetIds: string[]) {
@@ -726,8 +865,8 @@ export default defineComponent({
 
     async function updateOutputStatus(job: Dict, output: Dict, uploadStatus: string) {
       try {
-        await api.patch(`/content/video-jobs/${job.id}/output-status`, { output_name: output.name, upload_status: uploadStatus })
-        await loadJobs(false)
+        await api.patch(`/content/outputs/${output.output_id || output.id}/status`, { upload_status: uploadStatus })
+        await loadOutputs()
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '上传状态修改失败')
       }
@@ -737,9 +876,16 @@ export default defineComponent({
       settingsSaving.value = true
       const saveSeq = ++settingsMutationSeq
       try {
-        const values = JSON.parse(JSON.stringify(settingsDraft.value))
-        const { data } = await api.put('/content/settings', { values })
+        // 只提交可编辑配置，公开的连接摘要和凭据状态不回写服务端。
+        const values: Dict = { model_connection_mode: settingsDraft.value.model_connection_mode || 'shared' }
+        settingGroups.flatMap(group => group.fields).forEach(field => {
+          const value = getPath(settingsDraft.value, field.path)
+          if (value !== undefined) setPath(values, field.path, value)
+        })
+        const clearing = [...clearSecrets.value]
+        const { data } = await api.put('/content/settings', { values, ...(clearing.length ? { clear_secrets: clearing } : {}) })
         settings.value = data
+        clearSecrets.value = clearSecrets.value.filter(path => !clearing.includes(path))
         if (saveSeq === settingsMutationSeq) {
           settingsDraft.value = JSON.parse(JSON.stringify(data))
           settingsDirty.value = false
@@ -770,80 +916,69 @@ export default defineComponent({
     }
 
     function renderCreatePage() {
-      return h(SplitPane, { class: 'content-card-split', storageKey: 'content-create', side: 'right', defaultSideWidth: 430, minSideWidth: 360 }, {
-        default: () => h('section', { class: 'pane content-pane content-create-pane' }, [
-          sectionTitle({ title: '视频创作', subtitle: '主题、素材、配音和字幕一次完成', icon: MagicStick, tone: 'purple' }),
-          h('div', { class: 'form-grid content-video-form' }, [
-            formInput('视频主题', videoDraft.value.video_subject, value => videoDraft.value.video_subject = value, 'field-full'),
-            formSelect('素材来源', videoDraft.value.video_source, [['local', '内容资产'], ['pexels', 'Pexels'], ['pixabay', 'Pixabay'], ['coverr', 'Coverr']], value => videoDraft.value.video_source = value),
-            formSelect('画面比例', videoDraft.value.video_aspect, [['9:16', '竖屏 9:16'], ['16:9', '横屏 16:9'], ['1:1', '方形 1:1']], value => videoDraft.value.video_aspect = value),
-            formTextarea('视频文案', videoDraft.value.video_script, value => videoDraft.value.video_script = value, 'field-full'),
-            h('div', { class: 'task-card-actions field-full content-ai-actions' }, [
-              h('button', { class: 'secondary-action', disabled: loading.value, onClick: generateScript }, 'AI生成文案'),
-              h('button', { class: 'secondary-action', disabled: loading.value, onClick: generateTerms }, 'AI生成素材词'),
+      return h('div', { class: 'content-edit-layout' }, [
+        h('section', { class: 'workspace-panel content-editor' }, [
+          h('div', { class: 'workspace-heading' }, [h('div', [h('h2', '创作视频'), h('p', { class: 'workspace-note' }, '先准备内容和素材，再生成成品。草稿会自动保存。')]), h('button', { class: 'secondary-action', disabled: restoringDraft.value || loading.value, onClick: newVideoDraft }, '新建草稿')]),
+          h('section', { class: 'content-editor-section' }, [
+            h('h3', '1. 文案与画面'),
+            formInput('作品主题', videoDraft.value.video_subject, value => videoDraft.value.video_subject = value),
+            formTextarea('视频文案', videoDraft.value.video_script, value => videoDraft.value.video_script = value),
+            h('div', { class: 'workspace-toolbar' }, [h('button', { class: 'secondary-action', disabled: loading.value, onClick: generateScript }, 'AI生成文案'), h('span', { class: 'workspace-note' }, '也可以直接填写；留空时会按主题调用内容 AI。')]),
+            h('div', { class: 'content-editor-grid' }, [
+              formSelect('画面比例', videoDraft.value.video_aspect, [['9:16', '竖屏 9:16'], ['16:9', '横屏 16:9'], ['1:1', '方形 1:1']], value => videoDraft.value.video_aspect = value),
+              formSelect('素材来源', videoDraft.value.video_source, [['local', '我的素材'], ['pexels', 'Pexels'], ['pixabay', 'Pixabay'], ['coverr', 'Coverr']], value => videoDraft.value.video_source = value),
             ]),
-            formTextarea('素材关键词', videoDraft.value.video_terms, value => videoDraft.value.video_terms = value, 'field-full'),
-            videoDraft.value.video_source === 'local' ? renderMaterialSelector() : null,
-            formSelect('音色供应商', voiceProvider.value, [['edge', 'Edge TTS'], ['voxcpm2', '音色克隆'], ['azure-v2', 'Azure Speech'], ['siliconflow', '硅基流动'], ['gemini', 'Gemini TTS'], ['mimo', 'MiMo TTS'], ['elevenlabs', 'ElevenLabs'], ['chatterbox', 'Chatterbox']], value => { voiceProvider.value = value; void loadVoices() }),
-            voices.value.length || voiceProvider.value === 'voxcpm2'
-              ? formSelect('配音音色', videoDraft.value.voice_name, voices.value.length ? voices.value.map(value => [value, voiceOptionLabel(value)]) : [['', '请先在内容资产中创建克隆音色']], value => videoDraft.value.voice_name = value)
-              : formInput('配音音色', videoDraft.value.voice_name, value => videoDraft.value.voice_name = value),
-            formSelect('自定义配音', audioAssetId.value, [['', '使用TTS'], ...audioAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => audioAssetId.value = value),
-            formSelect('背景音乐', bgmAssetId.value, [['', '不使用背景音乐'], ...backgroundMusicAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => bgmAssetId.value = value),
-            renderAutoPublishOptions(),
-            renderAdvancedVideoOptions(),
+            videoDraft.value.video_source === 'local' ? h('div', { class: 'content-material-summary' }, [
+              h('div', { class: 'workspace-toolbar' }, [h('strong', `已选 ${selectedAssetIds.value.length} 项素材`), h('button', { class: 'secondary-action', onClick: () => materialPickerOpen.value = true }, '选择或导入素材')]),
+              selectedMaterials.value.map((asset, index) => h('div', { class: 'content-selected-material', draggable: true, onDragstart: () => draggedAssetId.value = String(asset.id), onDragover: (event: DragEvent) => event.preventDefault(), onDrop: () => reorderMaterial(draggedAssetId.value, String(asset.id)) }, [
+                h('strong', String(index + 1)), asset.thumbnail_url ? h('img', { src: asset.thumbnail_url, alt: '' }) : null,
+                h('span', { title: String(asset.name) }, String(asset.name)),
+                h('button', { class: 'text-icon-button', onClick: () => toggleMaterial(String(asset.id)) }, '移除'),
+              ])),
+              !selectedAssetIds.value.length ? h('p', { class: 'workspace-note' }, '选择视频或图片，按展示顺序拼接；可拖动已选素材调整顺序。') : null,
+            ]) : h('details', { class: 'content-fold', open: true }, [h('summary', '在线素材关键词'), h('div', { class: 'content-fold-body' }, [formTextarea('素材关键词', videoDraft.value.video_terms, value => videoDraft.value.video_terms = value, 'field-full'), h('button', { class: 'secondary-action', disabled: loading.value, onClick: generateTerms }, 'AI生成素材词')])]),
           ]),
-          h('div', { class: 'task-card-actions content-create-actions' }, [
-            h('button', { class: 'secondary-action', disabled: loading.value, onClick: clearVideoForm }, '清空'),
-            h('button', { class: 'primary-action', disabled: loading.value, onClick: createVideo }, loading.value ? '提交中...' : '开始生成视频'),
+          h('section', { class: 'content-editor-section' }, [
+            h('h3', '2. 配音与字幕'),
+            h('div', { class: 'content-editor-grid' }, [
+              formSelect('配音方式', voiceMode.value, [['tts', '标准配音'], ['clone', '我的克隆音色'], ['file', '使用配音文件']], value => {
+                voiceMode.value = value
+                if (value === 'file') audioAssetId.value = ''
+                else { audioAssetId.value = ''; voiceProvider.value = value === 'clone' ? 'voxcpm2' : 'edge'; void loadVoices() }
+              }),
+              voiceMode.value === 'file' ? formSelect('配音文件', audioAssetId.value, [['', '请选择已导入的音频'], ...audioAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => audioAssetId.value = value)
+                : voices.value.length || voiceProvider.value === 'voxcpm2'
+                ? formSelect('配音音色', videoDraft.value.voice_name, voices.value.length ? voices.value.map(value => [value, voiceOptionLabel(value)]) : [['', '请先在素材与音色中创建音色']], value => videoDraft.value.voice_name = value)
+                : formInput('配音音色', videoDraft.value.voice_name, value => videoDraft.value.voice_name = value),
+              formSelect('背景音乐', bgmAssetId.value, [['', '不使用'], ...backgroundMusicAssets.value.map((item): [string, string] => [String(item.id), String(item.name)])], value => bgmAssetId.value = value),
+              formToggle('生成字幕', videoDraft.value.subtitle_enabled, value => videoDraft.value.subtitle_enabled = value),
+            ]),
+            !audioAssets.value.length ? h('p', { class: 'workspace-note' }, '需要已有配音文件时，可在素材与音色页面导入音频。') : null,
+            audioAssetId.value ? h('p', { class: 'workspace-note' }, '配音文件不经过 TTS；需要字幕时，请在内容设置选择 Whisper 识别。') : null,
+            voiceMode.value !== 'file' ? h('details', { class: 'content-fold' }, [h('summary', '配音供应商'), h('div', { class: 'content-fold-body' }, [formSelect('供应商', voiceProvider.value, [['edge', 'Edge TTS'], ['voxcpm2', '音色克隆'], ['azure-v2', 'Azure Speech'], ['siliconflow', '硅基流动'], ['gemini', 'Gemini TTS'], ['mimo', 'MiMo TTS'], ['elevenlabs', 'ElevenLabs'], ['chatterbox', 'Chatterbox']], value => { audioAssetId.value = ''; voiceProvider.value = value; voiceMode.value = value === 'voxcpm2' ? 'clone' : 'tts'; void loadVoices() })])]) : null,
+          ]),
+          renderAdvancedVideoOptions(),
+          renderAutoPublishOptions(),
+          h('div', { class: 'content-submit-bar' }, [
+            h('div', [h('span', { class: ['content-save-state', persistentDraft.error.value || restoreError.value ? 'is-error' : ''] }, videoSubmission.value ? '该草稿已提交，生成任务不会再次创建。' : persistentDraft.error.value || restoreError.value || (restoringDraft.value ? '读取创作配置中…' : draftStatusLabel(persistentDraft.status.value))), !videoSubmission.value && (persistentDraft.error.value || restoreError.value) ? h('button', { class: 'text-icon-button', disabled: restoringDraft.value, onClick: () => (loadedDraftKey ? persistentDraft.flush() : restoreVideoDraft()).catch(() => undefined) }, loadedDraftKey ? '重试保存草稿' : '重试读取草稿') : null]),
+            videoSubmission.value ? h('div', { class: 'workspace-toolbar' }, [h('button', { class: 'secondary-action', onClick: () => router.push({ path: '/content-records', query: videoSubmission.value!.query }) }, '查看已创建生成任务'), h('button', { class: 'primary-action', disabled: loading.value, onClick: retryVideoCleanup }, '重试清理已提交草稿')])
+              : h('div', { class: 'workspace-toolbar' }, [h('button', { class: 'secondary-action', disabled: loading.value || restoringDraft.value, onClick: clearVideoForm }, '清空草稿'), h('button', { class: 'primary-action', disabled: loading.value || restoringDraft.value, onClick: createVideo }, loading.value ? '提交中…' : '生成视频')]),
           ]),
         ]),
-        side: () => h('aside', { class: 'pane side-pane content-create-side' }, [
-          sectionTitle({ title: '生成队列', subtitle: `${activeJobCount.value} 个进行中`, icon: Tickets, tone: 'blue', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新生成队列', 'aria-label': '刷新生成队列', onClick: () => loadJobs(false) }, [h(Refresh)]) }),
-          renderJobList(jobs.value.items || []),
-          renderJobPagination(true),
+        h('aside', { class: 'workspace-panel content-editor-summary' }, [
+          h('h3', '本次创作'),
+          h('dl', [h('dt', '素材'), h('dd', `${selectedAssetIds.value.length} 项`), h('dt', '成品'), h('dd', `${videoDraft.value.video_count} 个`), h('dt', '画面'), h('dd', videoDraft.value.video_aspect), h('dt', '发布'), h('dd', autoPublish.value.enabled ? '生成后自动发布' : '预览后手动发布')]),
+          selectedJob.value ? h('div', [h('strong', selectedJob.value.subject), h('p', { class: 'workspace-note' }, `${statusLabel(selectedJob.value.status)} · ${stageLabel(selectedJob.value.current_stage)} · ${selectedJob.value.progress || 0}%`), selectedJob.value.error ? h('p', { class: 'content-job-error' }, selectedJob.value.error) : null]) : null,
+          h('button', { class: 'secondary-action', onClick: () => router.push('/content-records') }, `查看作品库${activeJobCount.value ? `（${activeJobCount.value} 个生成中）` : ''}`),
         ]),
-      })
-    }
-
-    function renderMaterialSelector() {
-      return h('div', { class: 'form-field field-full' }, [
-        h('span', `本地素材（已选 ${selectedAssetIds.value.length} 项）`),
-        h('div', { class: 'content-material-toolbar' }, [
-          h('div', { class: 'content-material-tabs', role: 'tablist', 'aria-label': '本地素材类型' }, ([['all', '全部'], ['video', '视频'], ['image', '图片']] as Array<[string, string]>).map(([value, label]) => h('button', {
-            role: 'tab',
-            'aria-selected': materialKind.value === value,
-            class: materialKind.value === value ? 'active' : '',
-            onClick: () => { materialKind.value = value; materialPage.value = 1 },
-          }, `${label} ${filterMaterialAssets(materialAssets.value, value).length}`))),
-        ]),
-        materialAssets.value.length
-          ? h('div', { class: 'content-material-picker' }, pagedMaterialAssets.value.map(asset => h('button', {
-              class: ['content-material-option', selectedAssetIds.value.includes(String(asset.id)) ? 'selected' : ''],
-              onClick: () => toggleMaterial(String(asset.id)),
-            }, [renderAssetThumb(asset), h('div', { class: 'content-material-option-copy' }, [h('span', String(asset.name || '未命名')), h('small', asset.asset_type === 'video' ? '视频' : '图片')])])))
-          : emptyState({ title: '还没有视频或图片资产', description: '请先到内容资产页面导入', icon: Collection }),
-        h(ListPagination, {
-          page: materialPage.value,
-          pageSize: MATERIAL_PAGE_SIZE,
-          total: filteredMaterialAssets.value.length,
-          compact: true,
-          onChange: (payload: PageChange) => { materialPage.value = payload.page },
-        }),
-        selectedMaterials.value.length ? h('div', { class: 'content-material-order' }, selectedMaterials.value.map((asset, index) => h('div', {
-          class: 'content-material-order-item',
-          draggable: true,
-          onDragstart: () => draggedAssetId.value = String(asset.id),
-          onDragover: (event: DragEvent) => event.preventDefault(),
-          onDrop: () => { reorderMaterial(draggedAssetId.value, String(asset.id)); draggedAssetId.value = '' },
-        }, [h('strong', String(index + 1)), h('span', String(asset.name || '未命名')), h('small', '拖动排序')]))) : null,
+        materialPickerOpen.value ? h(AssetPicker, { assets: assets.value, selectedIds: selectedAssetIds.value, busy: uploading.value, 'onUpdate:selectedIds': (ids: string[]) => selectedAssetIds.value = ids, onImport: uploadAssets, onClose: () => materialPickerOpen.value = false }) : null,
       ])
     }
 
     function renderAdvancedVideoOptions() {
-      return h('details', { class: 'settings-fold field-full content-advanced-settings' }, [
+      return h('details', { class: 'content-fold' }, [
         h('summary', [h('strong', '高级视频参数'), h('span', '转场、速度、字幕和样式')]),
-        h('div', { class: 'settings-fold-body form-grid content-advanced-grid' }, [
+        h('div', { class: 'content-fold-body' }, [
           formSelect('拼接方式', videoDraft.value.video_concat_mode, [['sequential', '按顺序'], ['random', '随机']], value => videoDraft.value.video_concat_mode = value),
           formSelect('转场效果', videoDraft.value.video_transition_mode, [['', '无'], ['Shuffle', '随机'], ['FadeIn', '淡入'], ['FadeOut', '淡出'], ['SlideIn', '滑入'], ['SlideOut', '滑出']], value => videoDraft.value.video_transition_mode = value),
           formNumber('单段秒数', videoDraft.value.video_clip_duration, value => videoDraft.value.video_clip_duration = value, 1, 30),
@@ -852,6 +987,7 @@ export default defineComponent({
           formNumber('音量', videoDraft.value.voice_volume, value => videoDraft.value.voice_volume = value, 0, 2, 0.1),
           formNumber('背景音乐音量', videoDraft.value.bgm_volume, value => videoDraft.value.bgm_volume = value, 0, 1, 0.05),
           formSelect('字幕位置', videoDraft.value.subtitle_position, [['bottom', '底部'], ['center', '居中'], ['top', '顶部'], ['custom', '自定义']], value => videoDraft.value.subtitle_position = value),
+          videoDraft.value.subtitle_position === 'custom' ? formNumber('字幕垂直位置（%）', videoDraft.value.custom_position, value => videoDraft.value.custom_position = value, 0, 100) : null,
           formInput('字幕字体', videoDraft.value.font_name, value => videoDraft.value.font_name = value),
           formNumber('字幕字号', videoDraft.value.font_size, value => videoDraft.value.font_size = value, 12, 160),
           formInput('字幕颜色', videoDraft.value.text_fore_color, value => videoDraft.value.text_fore_color = value, '', 'color'),
@@ -873,18 +1009,22 @@ export default defineComponent({
       return h('section', { class: 'field-full content-auto-publish' }, [
         h('div', { class: 'content-auto-publish-head' }, [
           h('strong', '生成后自动发布'),
-          formToggle('为本次任务启用', Boolean(autoPublish.value.enabled), value => autoPublish.value.enabled = value),
+          formToggle('为本次任务启用', Boolean(autoPublish.value.enabled), value => {
+            autoPublish.value.enabled = value
+            if (value && !autoPublish.value.account_ids.length) autoPublish.value.account_ids = readyAccounts.filter(account => account.default_features.includes('publish')).map(account => account.id)
+          }),
         ]),
         autoPublish.value.enabled ? h('div', { class: 'content-auto-publish-body' }, [
           readyAccounts.length ? h('div', { class: 'publish-account-options' }, readyAccounts.map(account => h('label', [
             h('input', { type: 'checkbox', checked: autoPublish.value.account_ids.includes(account.id), onChange: (event: Event) => autoPublish.value.account_ids = togglePublishId(autoPublish.value.account_ids, String(account.id), (event.target as HTMLInputElement).checked) }),
             `${publishPlatformLabel(account.platform)} · ${account.name}`,
-          ]))) : h('button', { class: 'secondary-action', onClick: () => router.push('/content-publish') }, '先配置发布账号'),
+          ]))) : h('button', { class: 'secondary-action', onClick: () => router.push({ path: '/accounts', query: { return_to: route.fullPath } }) }, '准备发布账号'),
           formSelect('发布成品', autoPublish.value.output_scope, [['first', '仅首个成品'], ['all', '全部成品']], value => autoPublish.value.output_scope = value),
           formSelect('发布方式', autoPublish.value.publish_strategy, [['immediate', '立即发布'], ['scheduled', '定时发布']], value => autoPublish.value.publish_strategy = value),
           autoPublish.value.publish_strategy === 'scheduled'
-            ? formInput('发布时间', autoPublish.value.scheduled_at, value => autoPublish.value.scheduled_at = value, '', 'datetime-local')
+            ? h('div', [formInput('发布时间', autoPublish.value.scheduled_at, value => autoPublish.value.scheduled_at = value, '', 'datetime-local'), h('p', { class: 'workspace-note' }, '必须晚于当前时间至少 2 小时；执行时过期会失败，不会改为立即发布。')])
             : null,
+          h('p', { class: 'workspace-note' }, `生成成功后将按成品和账号分别建立发布任务；失败后需要先恢复生成，再决定继续发布。`),
         ]) : null,
       ])
     }
@@ -892,7 +1032,7 @@ export default defineComponent({
     function renderAssetsPage() {
       return h('section', { class: 'pane table-workspace content-assets-page' }, [
         h('div', { class: 'table-library-bar' }, [
-          sectionTitle({ title: '内容资产', subtitle: `${assets.value.length} 项客户自有素材`, icon: Collection, tone: 'amber' }),
+          sectionTitle({ title: '素材与我的音色', subtitle: `${assets.value.length} 项托管素材 · 导入一次，多次创作复用`, icon: Collection, tone: 'amber' }),
           h('div', { class: 'table-filters content-asset-filters' }, [
             h('input', { placeholder: '搜索资产名称', value: assetFilter.value.search, onInput: (event: Event) => { assetFilter.value.search = (event.target as HTMLInputElement).value; assetPage.value = 1 } }),
             h('button', { class: 'filter-button', onClick: loadAssets }, '搜索'),
@@ -937,7 +1077,7 @@ export default defineComponent({
           h('small', asset.duration ? `${Number(asset.duration).toFixed(1)}秒` : asset.width ? `${asset.width}×${asset.height}` : '等待使用时校验'),
         ]),
         h('div', { class: 'task-card-actions' }, [
-          asset.asset_type === 'video' ? h('button', { class: 'primary-soft', onClick: () => publishAsset(asset) }, '一键发布') : null,
+          asset.asset_type === 'video' ? h('button', { class: 'primary-soft', onClick: () => publishAsset(asset) }, '准备发布') : null,
           asset.asset_type === 'image' ? h('button', { class: 'primary-soft', onClick: () => openAssetPublishSettings([String(asset.id)]) }, '发布设置') : null,
           asset.asset_type === 'audio' && !voiceProfiles.value.some(profile => profile.reference_asset_id === asset.id)
             ? h('button', { class: 'primary-soft', onClick: () => createVoiceProfile(asset) }, '创建音色')
@@ -1038,65 +1178,67 @@ export default defineComponent({
     }
 
     function renderRecordsPage() {
-      return h(SplitPane, { class: 'content-card-split', storageKey: 'content-records', side: 'right', defaultSideWidth: 480, minSideWidth: 380 }, {
-        default: () => h('section', { class: 'pane content-pane content-record-gallery' }, [
-          sectionTitle({
-            title: '生成内容',
-            subtitle: `${generatedPagination.value.total} 个视频成品`,
-            icon: VideoPlay,
-            tone: 'purple',
-            aside: h('div', { class: 'content-record-toolbar' }, [
-              h('input', { placeholder: '搜索主题或文件名', value: recordSearch.value, onInput: (event: Event) => recordSearch.value = (event.target as HTMLInputElement).value }),
-              h('button', { class: 'primary-action', onClick: () => router.push('/content-create') }, [h(Plus, { class: 'inline-icon' }), '新增视频']),
-            ]),
-          }),
-          generatedItems.value.length
-            ? h('div', { class: 'content-generated-grid' }, generatedPagination.value.items.map(renderGeneratedCard))
-            : emptyState({ title: '暂无生成内容', description: '生成成功的视频会统一展示在这里', icon: VideoPlay }),
-          h(ListPagination, {
-            page: generatedPagination.value.page,
-            pageSize: generatedPagination.value.pageSize,
-            total: generatedPagination.value.total,
-            onChange: (payload: PageChange) => {
-              generatedPage.value = payload.page
-              generatedPageSize.value = payload.page_size
-            },
-          }),
+      const pageData = libraryTab.value === 'drafts' ? savedDrafts.value : libraryTab.value === 'jobs' ? jobs.value : outputs.value
+      return h('section', { class: 'workspace-panel' }, [
+        h('div', { class: 'workspace-heading' }, [h('div', [h('h2', '作品库'), h('p', { class: 'workspace-note' }, '草稿、生成过程与每次成品分别保存，重新生成不会覆盖旧成品。')]), h('button', { class: 'primary-action', onClick: newVideoDraft }, '新建视频')]),
+        h('nav', { class: 'workspace-tabs', 'aria-label': '作品库分类' }, ([['outputs', '成品'], ['drafts', '草稿'], ['jobs', '生成记录']] as Array<[string, string]>).map(([value, label]) => h('button', { class: libraryTab.value === value ? 'is-active' : '', onClick: () => { const query: Dict = { ...route.query, tab: value }; delete query.job; void router.replace({ path: '/content-records', query }) } }, label))),
+        h('div', { class: 'workspace-toolbar', style: { marginBottom: '20px' } }, [
+          h('input', { placeholder: '搜索全部作品主题或文件名', value: recordSearch.value, onInput: (event: Event) => recordSearch.value = (event.target as HTMLInputElement).value, onKeyup: (event: KeyboardEvent) => { if (event.key === 'Enter') searchLibrary() } }),
+          h('button', { class: 'secondary-action', onClick: searchLibrary }, '搜索'),
+          h('button', { class: 'secondary-action', onClick: loadLibrary }, '刷新'),
+          libraryTab.value === 'outputs' && selectedOutputIds.value.length ? h('button', { class: 'primary-action', onClick: () => router.push({ path: '/content-publish', query: { output_ids: selectedOutputIds.value.join(',') } }) }, `发布所选 ${selectedOutputIds.value.length} 个成品`) : null,
         ]),
-        side: () => h('aside', { class: 'pane side-pane content-record-list' }, [
-          sectionTitle({ title: '生成记录', subtitle: `共 ${jobs.value.total || 0} 条`, icon: Tickets, tone: 'blue', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新生成记录', 'aria-label': '刷新生成记录', onClick: () => loadJobs(true) }, [h(Refresh)]) }),
-          renderJobList(jobs.value.items || []),
-          renderJobPagination(),
-        ]),
-      })
+        libraryTab.value === 'jobs' && route.query.job ? renderSelectedJob() : null,
+        libraryTab.value === 'drafts' ? h('div', { class: 'content-work-list' }, savedDrafts.value.items.map((draft: Dict) => h('article', { class: 'content-work-row' }, [
+          h('div', [h('h3', draft.payload?.subject || draft.payload?.params?.video_subject || '未命名草稿'), h('p', { class: 'workspace-note' }, `更新于 ${draft.updated_at || '—'} · ${draft.payload?.asset_ids?.length || 0} 项素材`)]),
+          h('div', { class: 'content-work-actions' }, [draft.payload?.return_context?.query?.job ? h('button', { class: 'primary-soft', onClick: () => router.push({ path: '/content-records', query: draft.payload.return_context.query }) }, '查看已提交生成任务') : h('button', { class: 'primary-soft', onClick: () => router.push({ path: '/content-create', query: { draft_id: draft.key } }) }, '继续编辑'), h('button', { class: 'danger-soft', onClick: () => removeSavedDraft(draft.key) }, '删除草稿')]),
+        ]))) : libraryTab.value === 'jobs' ? renderJobList(jobs.value.items || []) : h('div', { class: 'content-output-grid' }, (outputs.value.items || []).map((output: Dict) => renderGeneratedCard({ output, job: { id: output.video_job_id, subject: output.subject, attempt: output.attempt, finished_at: output.created_at } }))),
+        !pageData.items?.length ? emptyState({ title: libraryTab.value === 'drafts' ? '暂无创作草稿' : libraryTab.value === 'jobs' ? '暂无生成记录' : '暂无视频成品', description: recordSearch.value ? '没有符合条件的记录，请调整搜索。' : '从新建视频开始准备内容。', icon: VideoPlay }) : null,
+        h(ListPagination, { page: pageData.page || 1, pageSize: pageData.page_size || 20, total: pageData.total || 0, onChange: (value: PageChange) => { pageData.page = value.page; pageData.page_size = value.page_size; void loadLibrary() } }),
+        libraryTab.value === 'jobs' && !route.query.job ? renderSelectedJob() : null,
+      ])
+    }
+
+    function renderSelectedJob() {
+      return selectedJob.value ? h('section', { class: 'content-job-detail' }, [
+          h('div', { class: 'workspace-heading' }, [h('div', [h('h3', selectedJob.value.subject), h('p', { class: 'workspace-note' }, `第 ${selectedJob.value.attempt || 0} 次执行 · ${statusLabel(selectedJob.value.status)} · ${stageLabel(selectedJob.value.current_stage)}`)]), h('button', { class: 'secondary-action', onClick: () => editJobAsDraft(selectedJob.value!) }, '修改后重新生成')]),
+          selectedJob.value.error ? h('p', { class: 'content-job-error' }, selectedJob.value.error) : null,
+          h('div', { class: 'content-output-grid' }, (selectedJob.value.outputs || []).map((output: Dict) => renderGeneratedCard({ job: selectedJob.value, output }))),
+        ]) : null
+    }
+
+    function searchLibrary() {
+      outputs.value.page = 1; savedDrafts.value.page = 1; jobs.value.page = 1
+      selectedJob.value = null
+      void loadLibrary()
     }
 
     function renderGeneratedCard(item: Dict) {
       const job = item.job as Dict
       const output = item.output as Dict
-      const outputTasks = publishTasks.value.filter(task => task.video_job_id === job.id && task.output_name === output.name)
-      return h('article', { class: 'content-generated-card' }, [
+      const outputTasks = output.publish_tasks || []
+      const outputId = String(output.output_id || output.id)
+      return h('article', { class: 'content-output-card' }, [
         h('video', { src: output.url, controls: true, preload: 'metadata' }),
-        h('div', { class: 'content-generated-info' }, [
-          h('strong', { title: job.subject }, String(job.subject || '未命名视频')),
-          h('span', `${output.name || '生成视频'} · 第${job.attempt || 1}次生成`),
-          h('time', `生成于 ${job.finished_at || job.created_at || '-'}`),
-          outputTasks.length ? h('div', { class: 'content-publish-badges' }, outputTasks.map(task => h('span', { class: `status-pill status-${task.status}` }, `${publishPlatformLabel(task.platform)} ${publishTaskStatusLabel(task.status)}`))) : h('small', '尚未发布'),
+        h('div', { class: 'content-output-copy' }, [
+          h('strong', { title: output.subject }, String(output.subject || '未命名视频')),
+          h('span', `${output.name || '生成视频'} · 第${output.attempt || 1}次生成`),
+          h('time', `生成于 ${output.created_at || '-'}`),
+          h('label', { class: 'content-output-select' }, [h('input', { type: 'checkbox', checked: selectedOutputIds.value.includes(outputId), onChange: (event: Event) => selectedOutputIds.value = togglePublishId(selectedOutputIds.value, outputId, (event.target as HTMLInputElement).checked) }), '选择发布']),
+          outputTasks.length ? h('div', { class: 'content-publish-badges' }, outputTasks.map((task: Dict) => h('span', { class: `status-pill status-${task.status}` }, `${publishPlatformLabel(task.platform)} ${publishTaskStatusLabel(task.status)}`))) : h('small', '尚未发布'),
         ]),
-        h('div', { class: 'content-generated-publish' }, [
+        h('div', { class: 'content-output-copy' }, [
           h('label', [h('span', '人工标记'), h('select', {
             value: output.upload_status || 'not_uploaded',
             onChange: (event: Event) => updateOutputStatus(job, output, (event.target as HTMLSelectElement).value),
           }, [h('option', { value: 'not_uploaded' }, '未上传'), h('option', { value: 'uploaded' }, '已上传')])]),
           h('div', { class: 'content-publish-split' }, [
-            h('button', { class: 'primary-soft', onClick: () => uploadOutput(job, output) }, '一键发布'),
-            h('button', { class: 'text-icon-button', onClick: () => openPublishSettings(job, output) }, '发布设置'),
+            h('button', { class: 'primary-soft', onClick: () => openPublishSettings(output) }, '准备发布'),
           ]),
         ]),
-        h('div', { class: 'content-generated-actions' }, [
+        h('div', { class: 'content-output-copy workspace-toolbar' }, [
           h('a', { class: 'text-icon-button', href: output.url, download: output.name }, '下载'),
-          h('button', { class: 'text-icon-button', onClick: () => renameJob(job) }, '重命名'),
-          h('button', { class: 'text-icon-button danger', onClick: () => archiveJob(String(job.id)) }, '删除'),
+          h('button', { class: 'text-icon-button', onClick: () => router.push({ path: '/content-records', query: { job: job.id } }) }, '查看生成记录'),
         ]),
       ])
     }
@@ -1125,59 +1267,76 @@ export default defineComponent({
 
     function renderJobActions(job: Dict) {
       return h('div', { class: 'content-job-card-actions' }, [
-        h('button', { class: 'text-icon-button', onClick: () => renameJob(job) }, '编辑'),
+        h('button', { class: 'text-icon-button', onClick: () => editJobAsDraft(job) }, '修改后生成'),
+        h('button', { class: 'text-icon-button', onClick: () => renameJob(job) }, '重命名'),
         ['queued', 'running'].includes(String(job.status)) ? h('button', { class: 'danger-soft', onClick: () => cancelJob(String(job.id)) }, '取消') : null,
-        ['failed', 'cancelled', 'interrupted'].includes(String(job.status)) ? h('button', { class: 'primary-soft', onClick: () => retryJob(String(job.id)) }, '重试') : null,
-        job.status === 'succeeded' ? h('button', { class: 'primary-soft', onClick: () => publishJob(String(job.id)) }, '发布') : null,
-        !['queued', 'running'].includes(String(job.status)) ? h('button', { class: 'text-icon-button danger', onClick: () => archiveJob(String(job.id)) }, '删除') : null,
+        ['failed', 'cancelled', 'interrupted'].includes(String(job.status)) ? h('button', { class: 'primary-soft', onClick: () => retryJob(String(job.id)) }, '重试原配置') : null,
+        job.outputs?.length ? h('button', { class: 'primary-soft', onClick: () => router.push({ path: '/content-records', query: { job: job.id } }) }, '选择成品发布') : null,
+        !['queued', 'running'].includes(String(job.status)) ? h('button', { class: 'text-icon-button danger', onClick: () => archiveJob(String(job.id)) }, '归档记录') : null,
       ])
     }
 
-    function renderJobPagination(compact = false) {
-      return h(ListPagination, {
-        page: Number(jobs.value.page || 1),
-        pageSize: Number(jobs.value.page_size || DEFAULT_PAGE_SIZE),
-        total: Number(jobs.value.total || 0),
-        compact,
-        onChange: (payload: PageChange) => {
-          jobs.value.page = payload.page
-          jobs.value.page_size = payload.page_size
-          generatedPage.value = 1
-          void loadJobs(true)
-        },
-      })
-    }
-
     function renderSettingsPage() {
-      return h(SplitPane, { class: 'content-card-split', storageKey: 'content-settings', side: 'right', defaultSideWidth: 340, minSideWidth: 300 }, {
-        default: () => h('section', { class: 'pane content-pane content-settings-pane' }, [
-          sectionTitle({ title: '内容设置', subtitle: settingsDirty.value ? '有未保存修改，自动刷新不会覆盖当前草稿' : '视频AI与拓客AI完全独立', icon: Setting, tone: settingsDirty.value ? 'amber' : 'teal', aside: h('button', { class: 'primary-action', disabled: settingsSaving.value, onClick: saveSettings }, settingsSaving.value ? '保存中...' : '保存设置') }),
-          ...settingGroups.map(group => h('details', { class: 'settings-fold', open: group.title === '素材与基础处理' }, [
-            h('summary', [h('strong', group.title), h('span', `${group.fields.length} 项配置`)]),
-            h('div', { class: 'settings-fold-body form-grid content-settings-grid' }, group.fields.map(renderSettingField)),
-          ])),
+      return h('div', { class: 'content-settings-layout' }, [
+        h('section', { class: 'workspace-panel content-settings-pane' }, [
+          sectionTitle({ title: '内容设置', subtitle: settingsDirty.value ? '有未保存修改，自动刷新不会覆盖当前草稿' : '模型连接、素材、配音与运行环境', icon: Setting, tone: settingsDirty.value ? 'amber' : 'teal', aside: h('button', { class: 'primary-action', disabled: settingsSaving.value, onClick: saveSettings }, settingsSaving.value ? '保存中...' : '保存设置') }),
+          h('section', { class: 'content-model-connection' }, [
+            h('h3', '内容模型连接'),
+            formSelect('模型连接方式', settingsDraft.value.model_connection_mode || 'shared', [['shared', '复用全局模型连接'], ['custom', '为内容单独配置']], value => updateSetting('model_connection_mode', value)),
+            settingsDraft.value.model_connection_mode !== 'custom' ? h('div', [
+              h('p', { class: 'workspace-note' }, '文案和发布文案使用全局模型连接，无需重复填写密钥。素材来源与配音供应商仍各自配置。'),
+              settings.value.model_connection?.mode === 'shared' ? h('p', { class: 'workspace-note' }, `${settings.value.model_connection.model || '模型未配置'} · ${settings.value.model_connection.base_url || '服务地址未配置'} · ${settings.value.model_connection.api_key_configured ? '密钥已配置' : '密钥未配置'}`) : null,
+              h('button', { class: 'secondary-action', onClick: () => router.push('/settings') }, '管理全局模型连接'),
+            ]) : h('p', { class: 'workspace-note' }, '此处只配置所选文案供应商。Gemini、MiMo 的密钥和连接与配音共用，位于语音配置。'),
+          ]),
+          ...settingGroups.filter(group => group.title !== 'AI供应商' || settingsDraft.value.model_connection_mode === 'custom').map(group => {
+            const provider = String(settingsDraft.value.app?.llm_provider || 'openai')
+            const fields = group.title === 'AI供应商' ? group.fields.filter(field => field.path === 'app.llm_provider' || field.path.startsWith('app.' + provider + '_') && !['app.gemini_api_key', 'app.mimo_api_key', 'app.mimo_base_url'].includes(field.path)) : group.fields
+            return h('details', { class: 'settings-fold', open: group.title === '素材与基础处理' || group.title === 'AI供应商' }, [
+            h('summary', [h('strong', group.title), h('span', `${fields.length} 项配置`)]),
+            h('div', { class: 'settings-fold-body form-grid content-settings-grid' }, fields.map(renderSettingField)),
+          ]) }),
         ]),
-        side: () => h('aside', { class: 'pane side-pane content-env-pane' }, [
+        h('aside', { class: 'workspace-panel content-env-pane' }, [
           sectionTitle({ title: '内容环境', subtitle: environment.value.ok ? '可以生成视频' : '存在缺失项', icon: Setting, tone: environment.value.ok ? 'green' : 'amber', aside: h('button', { type: 'button', class: 'icon-refresh', title: '刷新内容环境', 'aria-label': '刷新内容环境', onClick: loadEnvironment }, [h(Refresh)]) }),
           renderEnvironment(),
         ]),
-      })
+      ])
     }
 
     function renderSettingField(field: SettingField) {
       const value = getPath(settingsDraft.value, field.path)
       if (field.type === 'boolean') return formSelect(field.label, String(Boolean(value)), [['true', '开启'], ['false', '关闭']], selected => updateSetting(field.path, selected === 'true'))
       if (field.options) return formSelect(field.label, String(value ?? ''), field.options, selected => updateSetting(field.path, selected))
+      if (field.type === 'password' || field.path.endsWith('_api_keys')) {
+        const configured = Boolean(getPath(settingsDraft.value, field.path + '_configured'))
+        const clearing = clearSecrets.value.includes(field.path)
+        return h('div', { class: 'content-secret-setting' }, [
+          field.type === 'list' ? formTextarea(field.label, Array.isArray(value) ? value.join('\n') : '', selected => updateSetting(field.path, selected.split(/[\n,]+/).map(item => item.trim()).filter(Boolean)))
+            : formInput(field.label, String(value || ''), selected => updateSetting(field.path, selected), '', 'password'),
+          h('small', { class: 'workspace-note' }, clearing ? '保存设置时清除已存凭据' : configured ? '已配置；留空保留，填写新值替换。' : '尚未配置'),
+          configured && !clearing ? h('button', { class: 'text-icon-button danger', onClick: () => clearSavedSecret(field) }, '清除已保存密钥') : null,
+        ])
+      }
       if (field.type === 'list') return formTextarea(field.label, Array.isArray(value) ? value.join('\n') : String(value || ''), selected => updateSetting(field.path, selected.split(/[\n,]+/).map(item => item.trim()).filter(Boolean)))
       if (field.type === 'textarea') return formTextarea(field.label, String(value || ''), selected => updateSetting(field.path, selected), 'field-full')
       if (field.type === 'number') return formNumber(field.label, Number(value || 0), selected => updateSetting(field.path, selected))
-      return formInput(field.label, String(value ?? ''), selected => updateSetting(field.path, selected), '', field.type === 'password' ? 'password' : 'text')
+      return formInput(field.label, String(value ?? ''), selected => updateSetting(field.path, selected))
     }
 
     function updateSetting(path: string, value: unknown) {
       setPath(settingsDraft.value, path, value)
+      if (Array.isArray(value) ? value.length : value) clearSecrets.value = clearSecrets.value.filter(item => item !== path)
       settingsDirty.value = true
       settingsMutationSeq += 1
+    }
+
+    async function clearSavedSecret(field: SettingField) {
+      try {
+        await ElMessageBox.confirm(`保存设置时清除“${field.label}”？使用此凭据的功能将需要重新配置。`, '清除内容凭据', { type: 'warning' })
+        updateSetting(field.path, field.type === 'list' ? [] : '')
+        clearSecrets.value = [...new Set([...clearSecrets.value, field.path])]
+      } catch (error: any) { if (!isUserCancel(error)) ElMessage.error('无法清除内容凭据') }
     }
 
     function renderEnvironment() {
@@ -1232,10 +1391,7 @@ export default defineComponent({
     }
 
     return () => {
-      if (view.value === 'content-create') return renderCreatePage()
-      if (view.value === 'content-assets') return renderAssetsPage()
-      if (view.value === 'content-records') return renderRecordsPage()
-      return renderSettingsPage()
+      return h('div', { class: 'workspace-page content-product' }, [view.value === 'content-create' ? renderCreatePage() : view.value === 'content-assets' ? renderAssetsPage() : view.value === 'content-records' ? renderRecordsPage() : renderSettingsPage()])
     }
   },
 })
@@ -1361,6 +1517,12 @@ function togglePublishId(values: string[], id: string, checked: boolean) {
 
 function voiceLabel(value: string) {
   return value.replace('-Female', ' 女声').replace('-Male', ' 男声').replace('Neural', '')
+}
+
+function inferVoiceProvider(value: string) {
+  const prefix = value.split(':')[0]
+  if (['voxcpm2', 'siliconflow', 'gemini', 'mimo', 'elevenlabs', 'chatterbox'].includes(prefix)) return prefix
+  return value.replace(/-(Female|Male)$/, '').endsWith('-V2') ? 'azure-v2' : 'edge'
 }
 
 function formatBytes(value: unknown) {

@@ -23,11 +23,12 @@ describe('工作台路由', () => {
 
   it('统一运行队列作为独立全局页面', () => {
     const runtimeRoute = routes.find(route => route.name === 'runtime-center')
-    const logsRoute = routes.find(route => route.name === 'logs')
+    const acquisitionRoute = routes.find(route => route.name === 'acquisition')
 
     expect(runtimeRoute?.path).toBe('/runtime')
-    expect(runtimeRoute?.meta?.title).toBe('运行中心')
-    expect(logsRoute?.meta?.title).toBe('采集记录')
+    expect(runtimeRoute?.meta?.title).toBe('任务中心')
+    expect(acquisitionRoute?.path).toBe('/acquisition')
+    expect(routes.some(route => ['/tasks', '/logs'].includes(route.path))).toBe(false)
   })
 
   it('私信工作台拆分客户跟进、批次记录和设置页', () => {
@@ -37,7 +38,7 @@ describe('工作台路由', () => {
 
     expect(workbenchRoute?.meta?.title).toBe('客户跟进')
     expect(batchesRoute?.path).toBe('/message-batches')
-    expect(batchesRoute?.meta?.title).toBe('批次记录')
+    expect(batchesRoute?.meta?.title).toBe('触达记录')
     expect(settingsRoute?.path).toBe('/message-settings')
     expect(settingsRoute?.meta?.title).toBe('私信设置')
   })
@@ -50,11 +51,13 @@ describe('工作台路由', () => {
     expect(batchStatusLabel('quota_reached')).toBe('额度已用完')
   })
 
-  it('全局设置统一承载更新、授权和账号入口', () => {
+  it('账号中心独立可达，系统设置保留授权与数据保护', () => {
     const globalSettingsRoute = routes.find(route => route.name === 'global-settings')
 
     expect(globalSettingsRoute?.path).toBe('/global-settings')
-    expect(routes.some(route => route.name === 'accounts')).toBe(false)
+    expect(routes.find(route => route.name === 'accounts')?.path).toBe('/accounts')
+    expect(routes.find(route => route.name === 'workspace')?.path).toBe('/workspace')
+    expect(routes.find(route => route.path === '/')?.redirect).toBe('/workspace')
   })
 
   it('三类自动化计划拖动后按目标位置重排', () => {
@@ -105,7 +108,7 @@ describe('工作台路由', () => {
     const sharedContentLoader = contentRoutes.find(route => route.name === 'content-create')?.component
     expect(contentRoutes.filter(route => route.name !== 'content-publish').every(route => route.component === sharedContentLoader)).toBe(true)
     expect(contentRoutes.find(route => route.name === 'content-publish')?.component).not.toBe(sharedContentLoader)
-    expect(contentRoutes.map(route => route.meta?.title)).toEqual(['视频创作', '内容资产', '生成记录', '发布中心', '内容设置'])
+    expect(contentRoutes.map(route => route.meta?.title)).toEqual(['视频创作', '素材与音色', '作品库', '发布中心', '内容默认设置'])
   })
 
   it('背景音乐列表不会混入克隆参考音频', () => {

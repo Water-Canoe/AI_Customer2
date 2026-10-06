@@ -44,7 +44,7 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
       await loadTasks()
       return
     }
-    if (!selected.value && data.items.length) selected.value = await fetchTask(data.items[0].id)
+    // 列表不会自动打开首条详情；只有用户选择或创建成功才加载详情。
   }
 
   async function loadDiagnostics(id?: string) {
@@ -95,23 +95,26 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
     }
   }
 
-  async function createTask(payload: Dict) {
+  async function createTask(payload: Dict, onCreated?: (task: TaskRecord) => Promise<void> | void, onSettled?: () => void) {
+    let created = false
     try {
       const { data } = await api.post<TaskRecord>('/tasks', payload)
+      created = true
       ElMessage.success(`任务 ${data.id} 已创建`)
+      await onCreated?.(data)
       await loadTasks()
       selected.value = await fetchTask(data.id)
       await loadDiagnostics(data.id)
-      await options.router.push('/logs')
+      await options.router.push({ path: '/acquisition', query: { task: data.id } })
     } catch (error: any) {
-      ElMessage.error(error?.response?.data?.detail || '任务创建失败')
-    }
+      ElMessage.error(created ? '任务已创建，结果刷新失败，请刷新查看' : error?.response?.data?.detail || '任务创建失败')
+    } finally { onSettled?.() }
   }
 
   async function openLogs(id: string) {
     selected.value = await fetchTask(id)
     await loadDiagnostics(id)
-    await options.router.push('/logs')
+    await options.router.push({ path: '/acquisition', query: { task: id } })
   }
 
   async function selectTask(id: string) {
@@ -135,7 +138,7 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
 
   function retryTask(task: TaskRecord) {
     retryDraft.value = { ...task, retry_token: Date.now() }
-    void options.router.push('/tasks')
+    void options.router.push({ path: '/acquisition', query: { create: '1' } })
     ElMessage.success('已带入失败任务参数，请确认后重新启动')
   }
 

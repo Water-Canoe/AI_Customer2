@@ -1,8 +1,10 @@
 ﻿import { defineComponent, h, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElDrawer } from 'element-plus'
 import { Document, Tickets, Warning } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
-import { platformName } from '../shared/format'
-import { SplitPane } from '../components/ui/SplitPane'
+import { platformName, taskModeName } from '../shared/format'
+import '../styles/operations.css'
 import { ListPagination, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 
@@ -27,110 +29,57 @@ export default defineComponent({
 
     watch(() => props.query, value => taskSearch.value = value)
 
-    return () => h(SplitPane, { storageKey: 'logs', side: 'right', defaultSideWidth: 390 }, {
-      default: () => [
-      h('section', { class: 'pane primary-pane log-pane' }, [
-        sectionTitle({
-          title: props.selectedTask ? `${props.selectedTask.id} · ${props.selectedTask.name}` : '任务详情',
-          subtitle: props.selectedTask?.status || '请选择任务',
-          icon: props.selectedTask?.status === 'failed' ? Warning : Document,
-          tone: props.selectedTask?.status === 'failed' ? 'red' : 'blue'
-        }),
-        props.selectedTask ? renderTaskOutcome(props.selectedTask as Dict) : emptyState({
-          title: '请选择一个任务',
-          description: '从右侧任务列表选择任务后，这里会显示产出、失败诊断和防重复记录。',
-          icon: Tickets,
-          tone: 'gray'
-        }),
-        props.selectedTask ? renderDiagnostics(props.diagnostics as Dict) : null,
-        props.selectedTask ? renderDedupSummary(props.dedupSummary as Dict) : null
-        // 原始采集运行日志暂时隐藏，保留任务产出和诊断信息。
-      ])
-      ],
-      side: () => [
-      h('aside', { class: 'pane side-pane' }, [
-        sectionTitle({ title: '任务列表', subtitle: '归档前先看结果', icon: Tickets, tone: 'blue' }),
-        h('div', { class: 'task-list-tools' }, [
-          h('input', {
-            value: taskSearch.value,
-            placeholder: '搜索任务ID或任务名',
-            onInput: (event: Event) => {
-              taskSearch.value = (event.target as HTMLInputElement).value
-            },
-            onKeydown: (event: KeyboardEvent) => { if (event.key === 'Enter') applyTaskSearch() }
-          }),
-          h('button', { class: 'filter-button', onClick: applyTaskSearch }, '搜索'),
-          h('small', `共 ${props.total} 个任务`)
+    const route = useRoute()
+    const router = useRouter()
+    const detailOpen = ref(Boolean(route.query.task))
+    function openTask(id: string) {
+      detailOpen.value = true
+      emit('select-task', id)
+      void router.replace({ path: '/acquisition', query: { ...route.query, task: id } })
+    }
+    watch(() => route.query.task, id => {
+      detailOpen.value = Boolean(id)
+      if (id && String(props.selectedTask?.id || '') !== String(id)) emit('select-task', String(id))
+    }, { immediate: true })
+    function closeTask() {
+      detailOpen.value = false
+      const { task, ...query } = route.query
+      void router.replace({ path: '/acquisition', query })
+    }
+    return () => h('section', { class: 'panel acquisition-task-list' }, [
+      sectionTitle({ title: '采集任务', subtitle: '查看产出后继续筛选与跟进', icon: Tickets, tone: 'blue' }),
+      h('div', { class: 'toolbar task-list-tools' }, [
+        h('input', { value: taskSearch.value, placeholder: '搜索任务ID或任务名', onInput: (event: Event) => taskSearch.value = (event.target as HTMLInputElement).value, onKeydown: (event: KeyboardEvent) => { if (event.key === 'Enter') applyTaskSearch() } }),
+        h('button', { onClick: applyTaskSearch }, '搜索'), h('span', `共 ${props.total} 个任务`),
+      ]),
+      h('div', { class: 'operations-list' }, (props.tasks as Dict[]).length ? (props.tasks as Dict[]).map(task => h('article', { class: 'operations-list-row' }, [
+        h('button', { class: 'operations-row-main', onClick: () => openTask(String(task.id)) }, [
+          h('strong', task.name || task.id), h('span', `${platformName(task.platform)} · ${taskModeName(task.mode)} · ${task.keywords || task.creator_id || task.specified_id || ''}`),
+          h('small', taskOutcomeSummary(task)),
         ]),
-        h('div', { class: 'task-list' }, (props.tasks as Dict[]).length ? (props.tasks as Dict[]).map(task => h('article', {
-          class: ['task-row', { selected: props.selectedTask?.id === task.id }],
-          role: 'button',
-          tabindex: 0,
-          onClick: () => emit('select-task', task.id),
-          onKeydown: (event: KeyboardEvent) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              emit('select-task', task.id)
-            }
-          }
-        }, [
-          h('div', { class: 'task-row-head' }, [
-            h('div', { class: 'task-title' }, [
-              h('span', { class: 'task-id-label' }, `任务ID ${task.id}`),
-              h('strong', task.name || '-')
-            ]),
-            h('em', { class: `status ${task.status}` }, task.status)
-          ]),
-          h('div', { class: 'task-params' }, taskParameterItems(task).map(item => h('span', { title: item.value }, [
-            h('small', item.label),
-            h('b', item.value)
-          ]))),
-          h('span', { class: 'task-row-outcome' }, taskOutcomeSummary(task)),
-          h('div', { class: 'task-card-actions' }, [
-            task.status === 'running' ? h('button', {
-              class: 'warning-soft',
-              onClick: (event: MouseEvent) => {
-                event.stopPropagation()
-                emit('cancel-task', task.id)
-              }
-            }, '取消') : null,
-            task.status === 'failed' ? h('button', {
-              class: 'primary-soft',
-              onClick: (event: MouseEvent) => {
-                event.stopPropagation()
-                emit('retry-task', task)
-              }
-            }, '重试') : null,
-            !['failed', 'running'].includes(task.status) ? h('button', {
-              onClick: (event: MouseEvent) => {
-                event.stopPropagation()
-                emit('archive-task', task.id)
-              }
-            }, '归档') : null,
-            h('button', {
-              class: 'danger',
-              onClick: (event: MouseEvent) => {
-                event.stopPropagation()
-                emit('delete-task', task.id)
-              }
-            }, '删除')
-          ])
-        ])) : [emptyState({
-          title: '没有匹配任务',
-          description: '尝试清空搜索词，或回到任务页创建新的采集任务。',
-          icon: Tickets,
-          tone: 'gray'
-        })]),
-        h(ListPagination, {
-          page: props.page,
-          pageSize: props.pageSize,
-          total: props.total,
-          compact: true,
-          onChange: (payload: PageChange) => emit('change-task-page', payload),
-        }),
-      ])
-      ]
-    })
+        h('span', { class: `status ${task.status}` }, taskStatusLabel(task.status)),
+        h('div', { class: 'toolbar' }, [
+          h('button', { onClick: () => openTask(String(task.id)) }, '查看结果'),
+          ['queued', 'running', 'pending'].includes(task.status) ? h('button', { onClick: () => emit('cancel-task', task.id) }, '取消') : null,
+          ['failed', 'cancelled', 'interrupted'].includes(task.status) ? h('button', { onClick: () => emit('retry-task', task) }, '修改参数重试') : null,
+          !['queued', 'running', 'pending', 'failed'].includes(task.status) ? h('button', { onClick: () => emit('archive-task', task.id) }, '归档') : null,
+          h('button', { class: 'danger', onClick: () => emit('delete-task', task.id) }, '删除'),
+        ]),
+      ])) : [emptyState({ title: '暂无匹配任务', description: '新建采集任务，或清空搜索条件。', icon: Tickets })]),
+      h(ListPagination, { page: props.page, pageSize: props.pageSize, total: props.total, onChange: (payload: PageChange) => emit('change-task-page', payload) }),
+      h(ElDrawer, { modelValue: detailOpen.value, title: props.selectedTask?.name || '任务详情', size: '840px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) closeTask() } }, () => props.selectedTask ? [
+        h('p', { class: 'note' }, `${props.selectedTask.id} · ${taskStatusLabel(props.selectedTask.status)}`),
+        renderTaskOutcome(props.selectedTask as Dict),
+        h('div', { class: 'toolbar operations-next-actions' }, [
+          Number(props.selectedTask.outcome?.counts?.competitor_candidates || 0) ? h('button', { class: 'primary-action', onClick: () => router.push({ path: '/ai', query: { tab: 'competitors', keyword: String(props.selectedTask?.keywords || '') } }) }, '筛选竞品账号') : null,
+          Number(props.selectedTask.outcome?.counts?.leads || 0) ? h('button', { class: 'primary-action', onClick: () => router.push({ path: '/ai', query: { tab: 'leads', keyword: String(props.selectedTask?.keywords || '') } }) }, '分析客户意向') : null,
+          Number(props.selectedTask.outcome?.counts?.target_customers || 0) ? h('button', { onClick: () => router.push('/message-workbench') }, '跟进目标客户') : null,
+          h('button', { onClick: () => router.push('/overview') }, '查看来源证据'),
+        ]),
+        props.selectedTask.status === 'failed' ? renderDiagnostics(props.diagnostics as Dict) : h('details', [h('summary', '运行诊断'), renderDiagnostics(props.diagnostics as Dict)]),
+        h('details', [h('summary', '防重复与删除记录'), renderDedupSummary(props.dedupSummary as Dict)]),
+      ] : h('p', '正在加载任务详情…')),
+    ])
   }
 })
 
@@ -219,17 +168,6 @@ function taskOutcomeSummary(task: Dict) {
   return `已入库：内容 ${counts.contents || 0} / 评论 ${counts.comments || 0} / 候选竞品 ${counts.competitor_candidates || 0} / 线索 ${counts.leads || 0}`
 }
 
-function taskParameterItems(task: Dict) {
-  const items = [
-    { label: '平台', value: platformName(String(task.platform || '-')) }
-  ]
-  if (task.keywords) items.push({ label: '关键词', value: String(task.keywords) })
-  if (task.creator_id) items.push({ label: '主页/ID', value: String(task.creator_id) })
-  if (task.specified_id) items.push({ label: '内容ID/链接', value: String(task.specified_id) })
-  if (!task.keywords && !task.creator_id && !task.specified_id) items.push({ label: '采集对象', value: task.mode || '-' })
-  return items
-}
-
 function outcomeHealthLabel(health: string) {
   return ({
     actionable: '可处理',
@@ -242,4 +180,8 @@ function outcomeHealthLabel(health: string) {
 
 function entityTypeLabel(type: string) {
   return ({ author_account: '账号', content: '内容', comment: '评论' } as Record<string, string>)[type] || type || '-'
+}
+
+function taskStatusLabel(status: string) {
+  return ({ pending: '待执行', queued: '排队中', running: '采集中', succeeded: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断', archived: '已归档' } as Record<string, string>)[status] || status
 }

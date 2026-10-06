@@ -7,26 +7,38 @@ const AutomationPlanPage = () => import('./pages/AutomationPlanPage')
 const ContentWorkbenchPage = () => import('./pages/ContentWorkbenchPage')
 const PublishCenterPage = () => import('./pages/PublishCenterPage')
 const RuntimeCenterPage = () => import('./pages/RuntimeCenterPage')
-const LogsPage = () => import('./pages/LogsPage')
+const AcquisitionWorkbenchPage = () => import('./pages/AcquisitionWorkbenchPage')
+const WorkspacePage = () => import('./pages/WorkspacePage')
 const MessageWorkbenchPage = () => import('./pages/MessageWorkbenchPage')
 const MessageBatchPage = () => import('./pages/MessageBatchPage')
 const MessageSettingsPage = () => import('./pages/MessageSettingsPage')
 const OverviewPage = () => import('./pages/OverviewPage')
 const SettingsPage = () => import('./pages/SettingsPage')
 const TablesPage = () => import('./pages/TablesPage')
-const TaskPage = () => import('./pages/TaskPage')
 const TrafficWorkbenchPage = () => import('./pages/TrafficWorkbenchPage')
 
 export const routes = [
   {
     path: '/',
-    redirect: '/tasks',
+    redirect: '/workspace',
   },
   {
-    path: '/tasks',
-    name: 'tasks',
-    component: TaskPage,
-    meta: { title: '任务管理', subtitle: '选择拓客模式，生成采集任务，并自动导入项目库。', hint: '选择模式后直接开始采集' },
+    path: '/workspace',
+    name: 'workspace',
+    component: WorkspacePage,
+    meta: { title: '工作台', subtitle: '继续手头的工作，处理需要关注的任务。', module: '日常工作' },
+  },
+  {
+    path: '/acquisition',
+    name: 'acquisition',
+    component: AcquisitionWorkbenchPage,
+    meta: { title: '采集与结果', subtitle: '从来源到线索，查看每次采集的进度与产出。', module: '获客' },
+  },
+  {
+    path: '/accounts',
+    name: 'accounts',
+    component: GlobalSettingsPage,
+    meta: { title: '账号中心', subtitle: '管理执行账号、用途及平台登录状态。', module: '配置' },
   },
   {
     path: '/automation-plans',
@@ -38,25 +50,25 @@ export const routes = [
     path: '/runtime',
     name: 'runtime-center',
     component: RuntimeCenterPage,
-    meta: { title: '运行中心', subtitle: '统一监控拓客、私信、引流、内容、AI和视频任务。', hint: '全局任务在这里排队和执行' },
+    meta: { title: '任务中心', subtitle: '查看执行阶段、处理异常并回到对应业务。', module: '执行' },
   },
   {
     path: '/global-settings',
     name: 'global-settings',
     component: GlobalSettingsPage,
-    meta: { title: '全局设置', subtitle: '统一管理软件更新、产品授权、平台账号和数据保护。', hint: '系统级配置集中在这里' },
+    meta: { title: '系统设置', subtitle: '软件授权、环境与数据保护。', module: '配置' },
   },
   {
     path: '/overview',
     name: 'overview',
     component: OverviewPage,
-    meta: { title: '总览树', subtitle: '按平台、关键词、账号、内容和客户查看证据链。', hint: '从业务关系理解数据' },
+    meta: { title: '来源证据', subtitle: '追溯客户、评论、内容和采集来源。', module: '获客' },
   },
   {
     path: '/ai',
     name: 'ai',
     component: AiPage,
-    meta: { title: 'AI分析', subtitle: '集中处理竞品筛选、目标客户筛选、失败重试和私信话术。', hint: '把线索变成可跟进客户' },
+    meta: { title: 'AI筛选', subtitle: '判断竞品账号与客户意向，保留每次分析依据。', module: '获客' },
   },
   {
     path: '/message-workbench',
@@ -68,19 +80,13 @@ export const routes = [
     path: '/message-batches',
     name: 'message-batches',
     component: MessageBatchPage,
-    meta: { title: '批次记录', subtitle: '查看自动私信批次及每位客户的执行结果。', hint: '失败项可从历史批次中重试' },
+    meta: { title: '触达记录', subtitle: '查看批次与每位客户的实际执行结果。', module: '客户' },
   },
   {
     path: '/message-settings',
     name: 'message-settings',
     component: MessageSettingsPage,
     meta: { title: '私信设置', subtitle: '统一管理话术来源、人工确认、未回复提醒和发送频率额度。', hint: '所有私信入口共用同一套规则' },
-  },
-  {
-    path: '/logs',
-    name: 'logs',
-    component: LogsPage,
-    meta: { title: '采集记录', subtitle: '查看拓客采集产出、失败诊断、防重复记录和历史任务。', hint: '先确认采集结果再继续处理' },
   },
   {
     path: '/tables',
@@ -98,7 +104,7 @@ export const routes = [
     path: '/traffic-plans',
     name: 'traffic-plans',
     component: TrafficWorkbenchPage,
-    meta: { title: '计划工作台', subtitle: '创建抖音引流计划，选择来源和动作组合。', hint: '先配置计划再启动批次' },
+    meta: { title: '引流运营', subtitle: '维护计划，查看执行和互动结果。', module: '引流' },
   },
   {
     path: '/traffic-monitor',
@@ -128,13 +134,13 @@ export const routes = [
     path: '/content-assets',
     name: 'content-assets',
     component: ContentWorkbenchPage,
-    meta: { title: '内容资产', subtitle: '统一管理客户自己的视频、图片和音频素材。', hint: '导入一次即可在多个视频中复用' },
+    meta: { title: '素材与音色', subtitle: '管理可复用的视频、图片、音频及我的音色。', module: '内容' },
   },
   {
     path: '/content-records',
     name: 'content-records',
     component: ContentWorkbenchPage,
-    meta: { title: '生成记录', subtitle: '查看视频生成进度、结果、重试和发布状态。', hint: '生成和发布分别记录结果' },
+    meta: { title: '作品库', subtitle: '继续草稿，查看生成历史并选择具体成品。', module: '内容' },
   },
   {
     path: '/content-publish',
@@ -146,7 +152,7 @@ export const routes = [
     path: '/content-settings',
     name: 'content-settings',
     component: ContentWorkbenchPage,
-    meta: { title: '内容设置', subtitle: '独立配置视频AI、语音、素材源、Whisper和自动发布。', hint: '不会读取拓客AI设置' },
+    meta: { title: '内容默认设置', subtitle: '配置文案、配音、视频默认参数和生成环境。', module: '内容' },
   },
 ]
 

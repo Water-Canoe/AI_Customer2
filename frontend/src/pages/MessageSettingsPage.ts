@@ -1,11 +1,13 @@
-import { defineComponent, h, onMounted, reactive, ref, watch, type PropType } from 'vue'
+import { defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch, type PropType } from 'vue'
 import { ChatDotRound, Check, Refresh, Timer } from '@element-plus/icons-vue'
 import { ElAlert, ElMessage } from 'element-plus'
 
 import { sectionTitle } from '../components/ui/Workbench'
 import { shouldReplaceDraft } from '../composables/autoSync'
+import { useUnsavedSettings } from '../shared/useUnsavedSettings'
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
+import '../styles/operations.css'
 
 
 const MESSAGE_SETTING_KEYS = [
@@ -32,6 +34,8 @@ export default defineComponent({
     const settingsDirty = ref(false)
     const limitSaving = ref(false)
     const limitsDirty = ref(false)
+    useUnsavedSettings(() => settingsDirty.value || limitsDirty.value)
+    onBeforeUnmount(() => emit('settings-dirty-change', false))
     let limitMutationSeq = 0
 
     function syncSettings() {
@@ -96,8 +100,8 @@ export default defineComponent({
     watch(() => props.refreshSeq, () => loadLimits(false))
     onMounted(() => loadLimits())
 
-    return () => h('div', { class: 'message-settings-page' }, [
-      h('section', { class: 'pane message-settings-pane' }, [
+    return () => h('div', { class: 'workspace-page operations-page message-settings-page' }, [
+      h('section', { class: 'panel message-settings-pane' }, [
         sectionTitle({
           title: '私信与跟进设置',
           subtitle: settingsDirty.value ? '有未保存修改，自动同步不会覆盖草稿' : '单客户、批量和定时私信共用这些规则',
@@ -144,7 +148,7 @@ export default defineComponent({
           h('button', { class: 'primary-action', onClick: saveSettings }, [h(Check, { class: 'inline-icon' }), '保存私信设置']),
         ]),
       ]),
-      h('section', { class: 'pane message-limit-pane' }, [
+      h('section', { class: 'panel message-limit-pane' }, [
         sectionTitle({
           title: '私信频率额度',
           subtitle: limitsDirty.value ? '有未保存修改，自动刷新不会覆盖当前草稿' : '单客户、批量和定时私信统一占用，失败或结果不明确也会计数',

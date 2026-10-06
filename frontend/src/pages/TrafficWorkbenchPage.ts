@@ -1,6 +1,8 @@
 import { computed, defineComponent, h, nextTick, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { useRoute, useRouter } from 'vue-router'
+import { ElDialog, ElDrawer, ElMessage, ElMessageBox } from 'element-plus'
+import { usePersistentDraft, draftStatusLabel } from '../shared/usePersistentDraft'
+import { useUnsavedSettings } from '../shared/useUnsavedSettings'
 import {
   DataLine,
   Delete,
@@ -18,7 +20,7 @@ import { api } from '../shared/api'
 import { isAccountFeatureReady } from '../shared/accounts'
 import type { Dict, PlatformAccount } from '../shared/types'
 import { shouldReplaceDraft } from '../composables/autoSync'
-import { SplitPane } from '../components/ui/SplitPane'
+import '../styles/operations.css'
 import { COMPACT_PAGE_SIZE, ListPagination, paginateItems, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, metricTile, sectionTitle } from '../components/ui/Workbench'
 
@@ -53,6 +55,14 @@ export default defineComponent({
   },
   setup(props) {
     const route = useRoute()
+    const router = useRouter()
+    const editorOpen = ref(false)
+    const runDetailOpen = ref(Boolean(route.query.run))
+    const editingId = ref('')
+    const savedPlanId = ref('')
+    const cleanupError = ref('')
+    let startAfterSave = false
+    const draftKey = ref('new')
     const plans = ref<Dict[]>([])
     const runs = ref<Dict[]>([])
     const selectedRun = ref<Dict | null>(null)
@@ -64,6 +74,18 @@ export default defineComponent({
     const sourceVideoPage = ref(1)
     const sourceKeywordPage = ref(1)
     const planDraft = ref<Dict>(defaultPlan())
+    const persistent = usePersistentDraft({ kind: 'traffic', key: draftKey,
+      getPayload: () => ({ ...planDraft.value, return_context: { route: '/traffic-plans', query: { create: '1', ...(editingId.value ? { edit: editingId.value } : {}) }, selection: [] } }),
+      applyPayload: payload => {
+        planDraft.value = Object.fromEntries(Object.keys(defaultPlan()).map(key => [key, payload[key] ?? (defaultPlan() as Dict)[key]]))
+        // 新建草稿记录已保存对象，清理失败后重新打开也不会重复创建。
+        if (draftKey.value === 'new' && payload.return_context?.query?.edit) {
+          editingId.value = String(payload.return_context.query.edit)
+          savedPlanId.value = editingId.value
+          cleanupError.value = '计划已保存，请清理草稿后再新建。'
+        }
+      },
+    })
     const settingsDraft = ref<Dict>({})
     const textDraft = ref<Dict[]>([])
     const imageDraft = ref<Dict[]>([])
@@ -88,11 +110,13 @@ export default defineComponent({
     const trafficLogAutoFollow = ref(true)
     const LOG_BOTTOM_THRESHOLD = 28
     let settingsMutationSeq = 0
+    let settingsRouteRevision = 0
 
     const view = computed(() => String(route.name || 'traffic-plans'))
+    useUnsavedSettings(() => view.value === 'traffic-settings' && (settingsDirty.value || imageUploading.value))
     // 归档数据默认隐藏，只有用户切换到“已归档”时才展示。
     const visiblePlans = computed(() => plans.value.filter(plan => planArchiveFilter.value === 'archived' ? plan.archived : !plan.archived))
-    const visibleRuns = computed(() => runs.value.filter(run => runArchiveFilter.value === 'archived' ? run.archived : !run.archived))
+    const visibleRuns = computed(() => runs.value.filter(run => (runArchiveFilter.value === 'archived' ? run.archived : !run.archived) && (!route.query.plan || String(run.plan_id) === String(route.query.plan))))
     const pagedPlans = computed(() => pageSlice(visiblePlans.value, planPage.value))
     const pagedRuns = computed(() => pageSlice(visibleRuns.value, runPage.value))
     const filteredSourceVideos = computed(() => {
@@ -110,9 +134,20 @@ export default defineComponent({
       account.platform === planDraft.value.platform && isAccountFeatureReady(account, 'traffic')
     ))
 
-    onMounted(loadPage)
-    watch(view, () => loadPage())
-    watch(() => route.query.run, () => { if (view.value === 'traffic-monitor') loadRuns() })
+    onMounted(async () => { await loadPage(); await openFromRoute() })
+    watch(view, (current, previous) => {
+      // 路由真正离开设置后才丢弃输入，取消导航时保留原草稿。
+      if (previous === 'traffic-settings' && current !== previous) {
+        settingsRouteRevision += 1
+        settingsMutationSeq += 1
+        settingsDirty.value = false
+        applySettings(settings.value)
+      }
+      void loadPage()
+    })
+    watch(() => route.query.run, () => { runDetailOpen.value = Boolean(route.query.run); if (view.value === 'traffic-monitor') void loadRuns() })
+    watch(() => [route.query.create, route.query.edit, route.query.copy], () => { void openFromRoute() })
+    watch(() => route.query.plan, () => { if (view.value === 'traffic-monitor') void loadRuns() })
     watch(() => props.refreshSeq, () => loadPage())
     watch(
       () => ({
@@ -146,18 +181,17 @@ export default defineComponent({
     }
 
     async function loadRuns() {
-      const { data } = await api.get('/traffic/runs', { params: { include_archived: runArchiveFilter.value === 'archived' } })
+      const { data } = await api.get('/traffic/runs', { params: { include_archived: runArchiveFilter.value === 'archived', plan_id: String(route.query.plan || '') } })
       runs.value = data
       const requestedRunId = String(route.query.run || '')
       const requestedIndex = visibleRuns.value.findIndex(run => String(run.id) === requestedRunId)
-      if (requestedIndex >= 0) {
-        runPage.value = Math.floor(requestedIndex / SIDE_PAGE_SIZE) + 1
+      if (requestedRunId) {
+        if (requestedIndex >= 0) runPage.value = Math.floor(requestedIndex / SIDE_PAGE_SIZE) + 1
         await selectRun(requestedRunId)
         return
       }
       if (selectedRun.value && !visibleRuns.value.some(run => run.id === selectedRun.value?.id)) selectedRun.value = null
-      const firstVisible = visibleRuns.value[0]
-      const selectedId = selectedRun.value?.id || firstVisible?.id
+      const selectedId = selectedRun.value?.id
       if (selectedId) await selectRun(selectedId)
     }
 
@@ -181,6 +215,9 @@ export default defineComponent({
       const requestSeq = settingsMutationSeq
       const { data } = await api.get('/traffic/settings')
       if (!shouldReplaceDraft(settingsDirty.value, settingsSaving.value || imageUploading.value, requestSeq, settingsMutationSeq)) return
+      applySettings(data)
+    }
+    function applySettings(data: Dict) {
       settings.value = data
       uploadedImages.value = []
       settingsDraft.value = { ...(data.values || {}) }
@@ -248,28 +285,105 @@ export default defineComponent({
       sourceKeywordPage.value = 1
     }
 
+    async function openEditor(plan?: Dict, copy = false) {
+      if (loading.value || persistent.status.value === 'loading' || cleanupError.value) return
+      try {
+        if (editorOpen.value) await persistent.flush()
+        editingId.value = plan && !copy ? String(plan.id) : ''
+        draftKey.value = editingId.value || 'new'
+        planDraft.value = plan ? Object.fromEntries(Object.keys(defaultPlan()).map(key => [key, plan[key] ?? (defaultPlan() as Dict)[key]])) : defaultPlan()
+        savedPlanId.value = ''
+        startAfterSave = false
+        editorOpen.value = true
+        await readDraft()
+        // 复制是用户明确选择的参数，优先于未提交的新建草稿。
+        if (plan && copy && !savedPlanId.value) planDraft.value = { ...Object.fromEntries(Object.keys(defaultPlan()).map(key => [key, plan[key] ?? (defaultPlan() as Dict)[key]])), name: `${plan.name || '引流计划'} 副本` }
+        selectDefaultAccount()
+      } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '计划草稿读取失败') }
+    }
+    async function readDraft() {
+      const stored = await persistent.load()
+      // 服务端提交标记不能因读取期间的本地编辑而被忽略。
+      if (draftKey.value === 'new' && stored?.submitted) {
+        editingId.value = String(stored.payload.return_context?.query?.edit || '')
+        savedPlanId.value = editingId.value
+        cleanupError.value = '计划已保存，请清理草稿后再新建。'
+      }
+    }
+    async function reloadDraft() {
+      try { await readDraft(); selectDefaultAccount() }
+      catch (error: any) { ElMessage.error(error?.response?.data?.detail || '计划草稿读取失败') }
+    }
+    async function openFromRoute() {
+      if (view.value !== 'traffic-plans') return
+      const id = String(route.query.edit || route.query.copy || '')
+      if (id) {
+        const plan = plans.value.find(item => String(item.id) === id)
+        if (plan) await openEditor(plan, Boolean(route.query.copy))
+      } else if (String(route.query.create || '') === '1') await openEditor()
+    }
+    async function closeEditor() {
+      if (loading.value || persistent.status.value === 'loading' || cleanupError.value) return
+      try { await persistent.flush(); editorOpen.value = false; await router.replace({ path: '/traffic-plans', query: {} }) }
+      catch { ElMessage.error('草稿保存失败，请重试保存后再关闭') }
+    }
+    async function openAccounts() {
+      try {
+        await persistent.flush()
+        await router.push({ path: '/accounts', query: { feature: 'traffic', platform: String(planDraft.value.platform), return_to: editingId.value ? `/traffic-plans?edit=${editingId.value}` : '/traffic-plans?create=1' } })
+      } catch { ElMessage.error('草稿保存失败，请重试') }
+    }
     async function createPlan(startNow = false) {
+      if (loading.value || savedPlanId.value || ['loading', 'error'].includes(persistent.status.value)) return
       loading.value = true
       try {
-        const { data } = await api.post('/traffic/plans', planDraft.value)
-        ElMessage.success('引流计划已创建')
-        planDraft.value = defaultPlan()
-        selectDefaultAccount()
-        await loadPlans()
-        if (startNow) await startRun(data.id)
+        const { data } = editingId.value
+          ? await api.patch(`/traffic/plans/${editingId.value}`, planDraft.value)
+          : await api.post('/traffic/plans', { ...planDraft.value, draft_key: draftKey.value })
+        ElMessage.success(editingId.value ? '引流计划已保存' : '引流计划已创建')
+        savedPlanId.value = String(data.id || editingId.value)
+        editingId.value = savedPlanId.value
+        startAfterSave = startNow
+        await finishSavedPlan()
       } catch (error: any) {
-        ElMessage.error(error?.response?.data?.detail || '计划创建失败')
-      } finally {
-        loading.value = false
+        ElMessage.error(error?.response?.data?.detail || (savedPlanId.value ? '计划已保存，列表刷新失败，请刷新查看' : '计划保存失败'))
+      } finally { loading.value = false }
+    }
+    async function finishSavedPlan() {
+      try { await persistent.clear() }
+      catch {
+        cleanupError.value = `计划已保存，草稿清理失败；不会再次创建。${startAfterSave ? '本次尚未启动。' : ''}`
+        // 保存已创建对象的标识，刷新页面后仍可识别这份待清理草稿。
+        try { await persistent.flush() }
+        catch { cleanupError.value += ' 已保存标识未能写回草稿，请先重试清理。' }
+        ElMessage.warning(cleanupError.value)
+        return
       }
+      cleanupError.value = ''
+      editorOpen.value = false
+      await router.replace({ path: '/traffic-plans', query: {} })
+      await loadPlans()
+      if (startAfterSave) { startAfterSave = false; await startRun(savedPlanId.value) }
+    }
+    async function retryCleanup() {
+      if (loading.value) return
+      loading.value = true
+      try { await finishSavedPlan() }
+      catch { ElMessage.error('计划已保存，列表刷新失败，请刷新查看') }
+      finally { loading.value = false }
+    }
+    function openRun(id: string) {
+      runDetailOpen.value = true
+      void selectRun(id)
+      void router.replace({ path: '/traffic-monitor', query: { ...route.query, run: id } })
     }
 
     async function startRun(planId: string) {
       try {
         const { data } = await api.post(`/traffic/plans/${planId}/runs`)
-        ElMessage.success('引流批次已启动')
+        ElMessage.success('引流批次已加入队列')
         selectedRun.value = data
-        await loadRuns()
+        await router.push({ path: '/traffic-monitor', query: { run: String(data.id) } })
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '批次启动失败')
       }
@@ -372,6 +486,7 @@ export default defineComponent({
       const input = event.target as HTMLInputElement
       const files = Array.from(input.files || [])
       if (!files.length) return
+      const routeRevision = settingsRouteRevision
       imageUploading.value = true
       try {
         for (const file of files) {
@@ -383,6 +498,7 @@ export default defineComponent({
             params: { filename: file.name },
             headers: { 'Content-Type': 'application/octet-stream' },
           })
+          if (routeRevision !== settingsRouteRevision) return
           appendImagePath(data)
           uploadedImages.value = [data, ...uploadedImages.value.filter(item => item.path !== data.path)]
         }
@@ -425,16 +541,24 @@ export default defineComponent({
     }
 
     function renderPlanPage() {
-      return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-plans', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
-        default: () => h('section', { class: 'pane content-pane traffic-split-main' }, [
-          sectionTitle({ title: '创建引流计划', subtitle: '不选动作时就是纯自动刷视频', icon: Promotion, tone: 'teal' }),
+      return h('section', { class: 'panel' }, [
+        sectionTitle({ title: '引流计划', subtitle: '配置来源与动作，启动后到执行记录查看结果', icon: Promotion }),
+        h('div', { class: 'toolbar' }, [
+          renderArchiveTabs(planArchiveFilter.value, async value => { planArchiveFilter.value = value; planPage.value = 1; await loadPlans() }),
+          h('button', { class: 'primary-action', disabled: loading.value || Boolean(cleanupError.value), onClick: () => openEditor() }, '新建引流计划'),
+        ]),
+        renderPlanTable(),
+        h(ElDialog, { modelValue: editorOpen.value, title: editingId.value ? '编辑引流计划' : '新建引流计划', width: '900px', closeOnClickModal: false, 'onUpdate:modelValue': (value: boolean) => { if (!value) void closeEditor() } }, () => [
+          h('div', { class: 'toolbar' }, [h('span', { class: 'note' }, draftStatusLabel(persistent.status.value)), h('button', { onClick: () => persistent.save().catch(() => undefined) }, '保存草稿'), h('button', { onClick: openAccounts }, '配置执行账号')]),
+          persistent.error.value ? h('p', { class: 'operations-error' }, persistent.error.value) : null,
+          cleanupError.value ? h('div', { class: 'toolbar' }, [h('span', { class: 'operations-error' }, cleanupError.value), h('button', { disabled: loading.value, onClick: retryCleanup }, '重试清理草稿')]) : persistent.status.value === 'error' ? h('button', { onClick: reloadDraft }, '重新读取草稿') : null,
           renderPlatformTabs(),
           h('div', { class: 'form-grid traffic-plan-form' }, [
             labelInput('计划名称', planDraft.value.name, value => planDraft.value.name = value, 'field-wide', `留空自动生成：${sourceLabel(planDraft.value.source_mode)}-计划ID`),
             labelSelect('执行账号', planDraft.value.account_id, availableAccounts.value.map(account => [account.id, account.name]), value => planDraft.value.account_id = value),
             labelSelect('来源模式', planDraft.value.source_mode, sourceOptions, setSourceMode),
             labelInput('每轮视频上限', String(planDraft.value.round_video_limit || 5), value => planDraft.value.round_video_limit = value.trim() || 5, '', '', 'number'),
-            planDraft.value.source_mode === 'competitor_videos'
+            planDraft.value.source_mode === 'random_feed' ? null : planDraft.value.source_mode === 'competitor_videos'
               ? labelTextarea(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide', '可从下方多选，也可每行填写一个视频链接或ID')
               : labelInput(sourceValueLabel(), planDraft.value.source_value, value => planDraft.value.source_value = value, 'field-wide'),
             h('label', { class: 'form-field field-full' }, [
@@ -455,29 +579,23 @@ export default defineComponent({
           ]),
           renderSourceShortcuts(),
           h('div', { class: 'task-card-actions traffic-form-actions' }, [
-            h('button', { class: 'primary-soft', disabled: loading.value || !planDraft.value.account_id, onClick: () => createPlan(false) }, '保存计划'),
-            h('button', { class: 'primary-action', disabled: loading.value || !planDraft.value.account_id, onClick: () => createPlan(true) }, '保存并启动'),
+            h('button', { class: 'primary-soft', disabled: loading.value || Boolean(savedPlanId.value) || ['loading', 'error'].includes(persistent.status.value) || !planDraft.value.account_id, onClick: () => createPlan(false) }, '保存计划'),
+            h('button', { class: 'primary-action', disabled: loading.value || Boolean(savedPlanId.value) || ['loading', 'error'].includes(persistent.status.value) || !planDraft.value.account_id, onClick: () => createPlan(true) }, '保存并启动'),
           ]),
+
         ]),
-        side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
-          sectionTitle({ title: '计划列表', subtitle: `${visiblePlans.value.length} 个计划`, icon: Tickets, tone: 'blue' }),
-          renderArchiveTabs(planArchiveFilter.value, async value => { planArchiveFilter.value = value; planPage.value = 1; await loadPlans() }),
-          renderPlanTable(),
-        ]),
-      })
+      ])
     }
 
     function renderMonitorPage() {
       const run = selectedRun.value
-      return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-monitor', side: 'right', defaultSideWidth: 620, minSideWidth: 420 }, {
-        default: () => h('section', { class: 'pane content-pane traffic-split-main traffic-monitor-pane' }, [
-          sectionTitle({
-            title: '执行详情',
-            subtitle: run?.plan_name || '选择右侧批次',
-            icon: Monitor,
-            tone: 'blue',
-            aside: run ? renderRunMetrics(run) : null,
-          }),
+      return h('section', { class: 'panel' }, [
+        sectionTitle({ title: '计划执行记录', subtitle: route.query.plan ? '当前计划的批次记录' : '查看排队、运行和历史批次', icon: Monitor }),
+        h('div', { class: 'toolbar' }, [renderArchiveTabs(runArchiveFilter.value, async value => { runArchiveFilter.value = value; runPage.value = 1; await loadRuns() }), h('button', { onClick: loadRuns }, '刷新'), route.query.plan ? h('button', { onClick: () => router.replace('/traffic-monitor') }, '查看全部计划') : null]),
+        renderRunTable(),
+        h(ElDrawer, { modelValue: runDetailOpen.value, title: run?.plan_name || '执行详情', size: '920px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) { runDetailOpen.value = false; const { run, ...query } = route.query; void router.replace({ query }) } } }, () => [
+          run ? h('p', { class: 'note' }, `${statusText(run.status)} · 批次 ${run.id}`) : null,
+          run ? renderRunMetrics(run) : null,
           run ? [
             run.stop_reason ? h('div', { class: 'bulk-preview-warning' }, [
               h('li', run.stop_reason),
@@ -493,17 +611,10 @@ export default defineComponent({
               compact: true,
               onChange: (payload: PageChange) => { detailRecordPage.value = payload.page },
             }),
-          ] : emptyState({ title: '请选择批次', description: '右侧选择一个批次查看日志', icon: Monitor }),
+          ] : emptyState({ title: '请选择批次', description: '选择一个批次查看日志', icon: Monitor }),
+
         ]),
-        side: () => h('aside', { class: 'pane side-pane traffic-split-side' }, [
-          sectionTitle({ title: '批次列表', subtitle: '运行状态与历史', icon: Tickets, tone: 'blue' }),
-          h('div', { class: 'traffic-list-toolbar' }, [
-            renderArchiveTabs(runArchiveFilter.value, async value => { runArchiveFilter.value = value; runPage.value = 1; await loadRuns() }),
-            h('button', { class: 'secondary-action', onClick: loadRuns }, [h(Refresh, { class: 'inline-icon' }), '刷新']),
-          ]),
-          renderRunTable(),
-        ]),
-      })
+      ])
     }
 
     function renderRecordsPage() {
@@ -562,8 +673,7 @@ export default defineComponent({
     }
 
     function renderSettingsPage() {
-      return h(SplitPane, { class: 'traffic-card-split', storageKey: 'traffic-settings', side: 'right', defaultSideWidth: 320, minSideWidth: 280, maxSideWidth: 420 }, {
-        default: () => h('section', { class: 'pane content-pane traffic-settings-pane traffic-split-main' }, [
+      return h('section', { class: 'panel' }, [
           sectionTitle({ title: '引流设置', subtitle: settingsDirty.value ? '有未保存修改，自动刷新不会覆盖当前草稿' : '文案、图片和执行限额统一在这里维护', icon: Setting, tone: settingsDirty.value ? 'amber' : 'teal' }),
           h('div', { class: 'task-card-actions traffic-settings-actions' }, [
             h('button', { class: 'primary-action', disabled: settingsSaving.value, onClick: saveSettings }, settingsSaving.value ? '保存中...' : '保存设置'),
@@ -582,13 +692,10 @@ export default defineComponent({
             renderTextManager(),
             renderImageManager(),
           ]),
-        ]),
-        side: () => h('aside', { class: 'pane side-pane traffic-settings-side traffic-split-side' }, [
-          renderTrafficEnvironment(),
-          sectionTitle({ title: '危险操作', subtitle: '不可恢复', icon: Delete, tone: 'red', compact: true }),
-          h('button', { class: 'text-icon-button danger', onClick: clearRecords }, [h(Delete, { class: 'inline-icon' }), '清除引流记录']),
-        ]),
-      })
+
+        h('details', [h('summary', '运行环境'), renderTrafficEnvironment()]),
+        h('details', [h('summary', '数据清理'), h('p', { class: 'note' }, '清理历史记录前请确认保留的数据。'), h('button', { class: 'danger', onClick: clearRecords }, '清除引流记录')]),
+      ])
     }
 
     function renderPlatformTabs() {
@@ -686,24 +793,23 @@ export default defineComponent({
       return h('div', { class: 'traffic-side-table-block' }, [
         h('div', { class: 'table-scroll traffic-side-scroll' }, [
           h('table', { class: 'data-table resizable-table traffic-side-table' }, [
-            h('thead', [h('tr', ['计划名称', '平台', '来源模式', '每轮上限', '来源内容', '动作组合', '状态', '创建时间', '操作'].map(text => h('th', text)))]),
+            h('thead', [h('tr', ['计划与来源', '每轮上限', '动作组合', '状态', '操作'].map(text => h('th', text)))]),
             h('tbody', pagedPlans.value.length ? pagedPlans.value.map(plan => h('tr', [
-              h('td', [h('strong', { class: 'table-primary-text', title: plan.name }, plan.name || '-')]),
-              h('td', platformLabel(plan.platform)),
-              h('td', sourceLabel(plan.source_mode)),
+              h('td', [h('strong', { class: 'table-primary-text', title: plan.name }, plan.name || '-'), h('small', { class: 'traffic-subtext' }, `${platformLabel(plan.platform)} · ${sourceLabel(plan.source_mode)}`), h('small', { class: 'traffic-subtext', title: plan.source_value }, plan.source_value || '随机推荐流'), h('small', { class: 'traffic-subtext' }, plan.created_at || '')]),
               h('td', String(plan.round_video_limit || 5)),
-              h('td', tableText(plan.source_value || '随机推荐流')),
               h('td', tableText(plan.action_label || planActionLabel(plan))),
               h('td', h('span', { class: ['status', plan.archived ? 'cancelled' : 'pending'] }, plan.archived ? '已归档' : '可启动')),
-              h('td', tableText(plan.created_at || '-')),
               h('td', { class: 'traffic-row-actions' }, plan.archived ? [
                 h('button', { class: 'text-icon-button', onClick: () => restorePlan(plan.id) }, '恢复'),
                 h('button', { class: 'text-icon-button danger', onClick: () => deletePlan(plan.id) }, '删除'),
               ] : [
                 h('button', { class: 'text-icon-button reserved', onClick: () => startRun(plan.id) }, '启动'),
+                h('button', { class: 'text-icon-button', onClick: () => openEditor(plan) }, '编辑'),
+                h('button', { class: 'text-icon-button', onClick: () => openEditor(plan, true) }, '复制'),
+                h('button', { class: 'text-icon-button', onClick: () => router.push({ path: '/traffic-monitor', query: { plan: String(plan.id) } }) }, '执行记录'),
                 h('button', { class: 'text-icon-button', onClick: () => archivePlan(plan.id) }, '归档'),
               ]),
-            ])) : [emptyTableRow(9, planArchiveFilter.value === 'archived' ? '暂无已归档计划' : '暂无计划，先在左侧创建')]),
+            ])) : [emptyTableRow(5, planArchiveFilter.value === 'archived' ? '暂无已归档计划' : '暂无计划，请新建引流计划')]),
           ]),
         ]),
         renderSidePagination(visiblePlans.value.length, planPage, '计划'),
@@ -714,14 +820,11 @@ export default defineComponent({
       return h('div', { class: 'traffic-side-table-block' }, [
         h('div', { class: 'table-scroll traffic-side-scroll' }, [
           h('table', { class: 'data-table resizable-table traffic-side-table' }, [
-            h('thead', [h('tr', ['批次', '计划', '状态', '浏览', '成功', '跳过/失败', '停机原因', '开始时间', '操作'].map(text => h('th', text)))]),
-            h('tbody', pagedRuns.value.length ? pagedRuns.value.map(run => h('tr', { class: selectedRun.value?.id === run.id ? 'selected-table-row' : '', onClick: () => selectRun(run.id) }, [
-              h('td', [h('strong', { class: 'table-primary-text', title: run.id }, shortId(run.id))]),
-              h('td', tableText(run.plan_name || '-')),
+            h('thead', [h('tr', ['批次与计划', '状态', '进度', '停机原因', '开始时间', '操作'].map(text => h('th', text)))]),
+            h('tbody', pagedRuns.value.length ? pagedRuns.value.map(run => h('tr', { class: selectedRun.value?.id === run.id ? 'selected-table-row' : '', onClick: () => openRun(run.id) }, [
+              h('td', [h('strong', { class: 'table-primary-text', title: run.id }, shortId(run.id)), h('small', { class: 'traffic-subtext' }, run.plan_name || '-')]),
               h('td', h('span', { class: ['status', statusClass(run.status)] }, statusText(run.status))),
-              h('td', String(run.browsed_count || 0)),
-              h('td', String(run.action_success_count || 0)),
-              h('td', `${run.skipped_count || 0}/${run.failed_count || 0}`),
+              h('td', [h('span', `浏览 ${run.browsed_count || 0} · 成功 ${run.action_success_count || 0}`), h('small', { class: 'traffic-subtext' }, `跳过 ${run.skipped_count || 0} · 失败 ${run.failed_count || 0}`)]),
               h('td', tableText(run.stop_reason || '-')),
               h('td', tableText(run.started_at || run.created_at || '-')),
               h('td', { class: 'traffic-row-actions' }, run.archived ? [
@@ -731,7 +834,7 @@ export default defineComponent({
                 isActiveStatus(run.status) ? h('button', { class: 'text-icon-button', onClick: stopClick(() => stopRun(run.id)) }, '停止') : h('button', { class: 'text-icon-button reserved', onClick: stopClick(() => startRun(run.plan_id)) }, '重试'),
                 !isActiveStatus(run.status) ? h('button', { class: 'text-icon-button', onClick: stopClick(() => archiveRun(run.id)) }, '归档') : null,
               ]),
-            ])) : [emptyTableRow(9, runArchiveFilter.value === 'archived' ? '暂无已归档批次' : '暂无批次，启动计划后会出现')]),
+            ])) : [emptyTableRow(6, runArchiveFilter.value === 'archived' ? '暂无已归档批次' : '暂无批次，启动计划后会出现')]),
           ]),
         ]),
         renderSidePagination(visibleRuns.value.length, runPage, '批次'),
@@ -1180,12 +1283,9 @@ export default defineComponent({
       return error === 'cancel' || error === 'close'
     }
 
-    return () => {
-      // 路由只切换当前工作区视图，页面仍复用同一套工作台组件。
-      if (view.value === 'traffic-plans') return renderPlanPage()
-      if (view.value === 'traffic-monitor') return renderMonitorPage()
-      if (view.value === 'traffic-records') return renderRecordsPage()
-      return renderSettingsPage()
-    }
+    return () => h('div', { class: 'workspace-page operations-page' }, [
+      h('nav', { class: 'tabs toolbar', 'aria-label': '引流工作区' }, [['traffic-plans', '计划'], ['traffic-monitor', '执行记录'], ['traffic-records', '操作记录'], ['traffic-settings', '引流规则']].map(([name, label]) => h('button', { class: view.value === name ? 'active' : '', onClick: () => router.push({ name }) }, label))),
+      view.value === 'traffic-plans' ? renderPlanPage() : view.value === 'traffic-monitor' ? renderMonitorPage() : view.value === 'traffic-records' ? renderRecordsPage() : renderSettingsPage(),
+    ])
   },
 })

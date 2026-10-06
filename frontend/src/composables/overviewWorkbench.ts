@@ -54,7 +54,7 @@ export function useOverviewWorkbench(options: OverviewWorkbenchOptions) {
     }
     try {
       await api.post(`/overview/customers/${leadId}/intent-analysis`)
-      ElMessage.success('客户意向分析完成')
+      ElMessage.success('客户意向分析已加入队列')
       await refresh(options.refreshAi, options.refreshTable)
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '客户意向分析失败')
@@ -70,11 +70,14 @@ export function useOverviewWorkbench(options: OverviewWorkbenchOptions) {
     const currentStatus = String(node.metrics?.follow_status)
     if (currentStatus === status) return
     try {
+      if (status === '已私信' && ['待筛选', '未私信'].includes(currentStatus)) {
+        await ElMessageBox.confirm('请确认你已在平台实际发送私信。确认后才记录发送次数。', '确认已发送', { type: 'warning', confirmButtonText: '已实际发送' })
+      }
       if (['已成交', '未成交'].includes(currentStatus)) {
         await ElMessageBox.confirm(`当前客户已经是“${currentStatus}”，确认改为“${status}”？`, '修改跟进状态', { type: 'warning' })
       }
       const note = `人工修改跟进状态：${currentStatus} -> ${status}`
-      await api.patch(`/overview/customers/${leadId}/follow-status`, { follow_status: status, note })
+      await api.patch(`/overview/customers/${leadId}/follow-status`, { follow_status: status, note, ...(status === '已私信' && ['待筛选', '未私信'].includes(currentStatus) ? { record_message_attempt: true } : {}) })
       ElMessage.success(`跟进状态已更新为“${status}”`)
       await refresh(options.refreshTable, options.refreshAi)
     } catch (error: any) {
@@ -108,19 +111,8 @@ export function useOverviewWorkbench(options: OverviewWorkbenchOptions) {
       homepage.opener = null
       await navigator.clipboard.writeText(scriptSelection.text)
 
-      // AI 筛选与人工跟进分开，已进入后续阶段的客户不回退。
-      const currentStatus = String(node.metrics?.follow_status)
-      if (['待筛选', '未私信'].includes(currentStatus)) {
-        await api.patch(`/overview/customers/${leadId}/follow-status`, {
-          follow_status: '已私信',
-          note: `点击私信按钮：复制${scriptSelection.label}并打开客户主页`,
-          record_message_attempt: true,
-        })
-        ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开，跟进状态已更新为“已私信”`)
-      } else {
-        ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
-      }
-      await refresh(options.refreshTable, options.refreshAi)
+      // 复制和打开主页只是准备，不消耗发送额度，也不修改跟进状态。
+      ElMessage.success(`${scriptSelection.label}已复制，客户主页已打开；发送后请确认已发送`)
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '私信操作失败')
     }

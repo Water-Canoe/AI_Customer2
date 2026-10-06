@@ -1,124 +1,38 @@
 <template>
   <el-container class="shell">
-    <el-aside class="sidebar" width="236px">
-      <div class="brand">
-        <img class="brand-mark" src="/ai-customer-icon.png" alt="" aria-hidden="true" />
-        <div>
-          <strong>AI获客系统</strong>
-          <span>拓客 · 引流 · 内容 · 跟进</span>
-        </div>
-      </div>
-      <el-menu ref="sidebarMenu" :default-active="activeView" :default-openeds="[]" :unique-opened="true" class="nav" @select="goToView">
+    <el-aside class="sidebar" width="224px">
+      <div class="brand"><img class="brand-mark" src="/ai-customer-icon.png" alt="" /><div><strong>AI 获客</strong><span>本地运营工作台</span></div></div>
+      <el-menu ref="sidebarMenu" :default-active="activeMenuItem" :default-openeds="[]" :unique-opened="true" class="nav" @select="goToView">
+        <el-menu-item index="workspace"><el-icon><House /></el-icon><span>工作台</span></el-menu-item>
+        <el-sub-menu index="lead-workbench"><template #title><el-icon><Operation /></el-icon><span>获客</span></template>
+          <el-menu-item index="acquisition">采集与结果</el-menu-item><el-menu-item index="ai">AI 筛选</el-menu-item>
+        </el-sub-menu>
+        <el-sub-menu index="message-center"><template #title><el-icon><Message /></el-icon><span>客户</span></template>
+          <el-menu-item index="message-workbench">客户跟进</el-menu-item><el-menu-item index="message-batches">触达记录</el-menu-item>
+        </el-sub-menu>
+        <el-menu-item index="traffic-plans"><el-icon><Promotion /></el-icon><span>引流运营</span></el-menu-item>
+        <el-sub-menu index="content-workbench"><template #title><el-icon><VideoPlay /></el-icon><span>内容</span></template>
+          <el-menu-item index="content-create">视频创作</el-menu-item><el-menu-item index="content-assets">素材与音色</el-menu-item>
+          <el-menu-item index="content-records">作品库</el-menu-item><el-menu-item index="content-publish">发布中心</el-menu-item>
+        </el-sub-menu>
         <el-menu-item index="automation-plans"><el-icon><Clock /></el-icon><span>自动化计划</span></el-menu-item>
-        <el-menu-item index="runtime-center"><el-icon><Monitor /></el-icon><span>运行中心</span></el-menu-item>
-        <el-sub-menu index="lead-workbench">
-          <template #title><el-icon><Operation /></el-icon><span>拓客工作台</span></template>
-          <el-menu-item index="tasks"><el-icon><Operation /></el-icon><span>任务管理</span></el-menu-item>
-          <el-menu-item index="logs"><el-icon><Tickets /></el-icon><span>采集记录</span></el-menu-item>
-          <el-menu-item index="overview"><el-icon><Share /></el-icon><span>总览树</span></el-menu-item>
-          <el-menu-item index="ai"><el-icon><MagicStick /></el-icon><span>AI分析</span></el-menu-item>
-          <el-menu-item index="tables"><el-icon><Grid /></el-icon><span>数据表</span></el-menu-item>
-          <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>拓客设置</span></el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu index="message-center">
-          <template #title><el-icon><Message /></el-icon><span>私信工作台</span></template>
-          <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>客户跟进</span></el-menu-item>
-          <el-menu-item index="message-batches"><el-icon><Tickets /></el-icon><span>批次记录</span></el-menu-item>
-          <el-menu-item index="message-settings"><el-icon><Setting /></el-icon><span>私信设置</span></el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu index="traffic-workbench">
-          <template #title><el-icon><Promotion /></el-icon><span>引流工作台</span></template>
-          <el-menu-item index="traffic-plans"><el-icon><Promotion /></el-icon><span>计划工作台</span></el-menu-item>
-          <el-menu-item index="traffic-monitor"><el-icon><Tickets /></el-icon><span>执行监控</span></el-menu-item>
-          <el-menu-item index="traffic-records"><el-icon><Grid /></el-icon><span>操作记录</span></el-menu-item>
-          <el-menu-item index="traffic-settings"><el-icon><Setting /></el-icon><span>引流设置</span></el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu index="content-workbench">
-          <template #title><el-icon><VideoPlay /></el-icon><span>内容工作台</span></template>
-          <el-menu-item index="content-create"><el-icon><MagicStick /></el-icon><span>视频创作</span></el-menu-item>
-          <el-menu-item index="content-assets"><el-icon><Collection /></el-icon><span>内容资产</span></el-menu-item>
-          <el-menu-item index="content-records"><el-icon><Tickets /></el-icon><span>生成记录</span></el-menu-item>
-          <el-menu-item index="content-publish"><el-icon><Promotion /></el-icon><span>发布中心</span></el-menu-item>
-          <el-menu-item index="content-settings"><el-icon><Setting /></el-icon><span>内容设置</span></el-menu-item>
-        </el-sub-menu>
+        <el-menu-item index="runtime-center"><el-icon><Monitor /></el-icon><span>任务中心</span></el-menu-item>
       </el-menu>
       <div class="sidebar-footer">
-        <button
-          type="button"
-          class="sidebar-license"
-          :class="[licenseStatusClass, { 'is-active': isGlobalSettingsView }]"
-          title="管理更新、授权设备和平台账号"
-          aria-label="打开全局设置"
-          @click="goToView('global-settings')"
-        >
-          <el-icon><Setting /></el-icon>
-          <span class="sidebar-license-copy">
-            <strong>全局设置</strong>
-            <small>{{ licenseStatusLabel }}</small>
-          </span>
-          <i class="sidebar-license-dot" aria-hidden="true"></i>
-        </button>
-        <button
-          type="button"
-          class="sidebar-license"
-          title="安全停止任务队列和本地服务，并关闭当前页面"
-          aria-label="安全退出应用"
-          :disabled="exitRequested"
-          @click="exitApplication"
-        >
-          <el-icon><SwitchButton /></el-icon>
-          <span class="sidebar-license-copy">
-            <strong>安全退出</strong>
-            <small>{{ exitRequested ? '正在安全退出' : '关闭页面与本地服务' }}</small>
-          </span>
-        </button>
-        <small v-if="appVersion" class="sidebar-version">版本 v{{ appVersion }}</small>
+        <button class="sidebar-license" :class="{ 'is-active': activeView === 'accounts' }" @click="goToView('accounts')"><el-icon><User /></el-icon><span>账号中心</span></button>
+        <button class="sidebar-license" :class="{ 'is-active': isGlobalSettingsView }" @click="goToView('global-settings')"><el-icon><Setting /></el-icon><span>系统设置</span><small>{{ licenseStatusLabel }}</small></button>
+        <button class="sidebar-license" :disabled="exitRequested" @click="exitApplication"><el-icon><SwitchButton /></el-icon><span>{{ exitRequested ? '正在退出' : '安全退出' }}</span></button>
+        <small v-if="appVersion" class="sidebar-version">v{{ appVersion }}</small>
       </div>
     </el-aside>
-
-    <el-container>
+    <el-container class="workspace-shell-body">
       <el-header class="topbar">
-        <div class="topbar-heading">
-          <span class="topbar-kicker">{{ topbarKicker }}</span>
-          <h1>{{ viewTitle }}</h1>
-          <p>{{ viewSubtitle }}</p>
-        </div>
-        <div v-if="dashboardInsights.length" class="topbar-insights" aria-label="当前工作台指标">
-          <div
-            v-for="item in dashboardInsights"
-            :key="item.label"
-            class="topbar-insight"
-            :class="`tone-${item.tone}`"
-          >
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
-          </div>
-        </div>
-        <div class="topbar-actions">
-          <span class="topbar-env-tag" :class="topbarEnvClass">{{ topbarEnvLabel }}</span>
-          <el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button>
-          <el-button v-if="!isGlobalSettingsView && !isRuntimeView && !isMessageView" type="primary" :icon="Plus" @click="createFromTopbar">{{ topbarPrimaryAction }}</el-button>
-        </div>
+        <div class="topbar-heading"><span class="topbar-kicker">{{ topbarKicker }}</span><h1>{{ viewTitle }}</h1><p>{{ viewSubtitle }}</p></div>
+        <div class="topbar-actions"><button v-if="showEnvironmentStatus" class="topbar-env-tag" :class="topbarEnvClass" @click="goToView(isContentView ? 'content-settings' : isTrafficView ? 'traffic-settings' : 'settings')">{{ topbarEnvLabel }}</button><el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button></div>
       </el-header>
-
-      <el-main class="main" :class="`view-${activeView}`">
-        <RouterView v-slot="{ Component }">
-          <component :is="Component" v-bind="routeProps" v-on="routeListeners" />
-        </RouterView>
-      </el-main>
+      <el-main class="main" :class="`view-${activeView}`"><RouterView v-slot="{ Component }"><component :is="Component" v-bind="routeProps" v-on="routeListeners" /></RouterView></el-main>
     </el-container>
-    <LicenseDialog
-      :open="licenseDialogOpen"
-      :loading="licenseLoading"
-      :checking="licenseChecking"
-      :info="licenseInfo"
-      :code="licenseCodeDraft"
-      @update:code="updateLicenseCodeDraft"
-      @close="closeLicenseDialog"
-      @save="saveLicenseCode"
-      @check="checkLicense"
-      @copy-device="copyDeviceCode"
-    />
+    <LicenseDialog :open="licenseDialogOpen" :loading="licenseLoading" :checking="licenseChecking" :info="licenseInfo" :code="licenseCodeDraft" @update:code="updateLicenseCodeDraft" @close="closeLicenseDialog" @save="saveLicenseCode" @check="checkLicense" @copy-device="copyDeviceCode" />
   </el-container>
 </template>
 
@@ -126,20 +40,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import {
-  Collection,
   Clock,
-  Grid,
-  MagicStick,
+  House,
+  User,
   Message,
   Monitor,
   Operation,
-  Plus,
   Promotion,
   Refresh,
   Setting,
-  Share,
   SwitchButton,
-  Tickets,
   VideoPlay,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -178,6 +88,7 @@ const automationRefreshSeq = ref(0)
 const runtimeRefreshSeq = ref(0)
 const messageSettingsRefreshSeq = ref(0)
 const globalSettingsRefreshSeq = ref(0)
+const workspaceRefreshSeq = ref(0)
 const contentEnv = ref<Dict>({})
 const contentRefreshSeq = ref(0)
 const workbenchStatus = ref<Dict>({ metrics: {}, active: false })
@@ -218,6 +129,7 @@ const {
 
 const {
   workbench: aiWorkbench,
+  query: aiQuery,
   load: loadAiJobs,
   changeQuery: changeAiQuery,
   createJob: createAiJob,
@@ -294,6 +206,7 @@ const {
   closeDetail: closeMessageWorkbenchDetail,
   updateFollowStatus: updateMessageWorkbenchFollowStatus,
   messageCustomer: messageWorkbenchCustomer,
+  confirmMessageCustomer: confirmMessageWorkbenchCustomer,
   autoMessageCustomer: autoMessageWorkbenchCustomer,
   startBatch: startMessageAutoBatch,
   cancelBatch: cancelMessageAutoBatch,
@@ -304,39 +217,34 @@ const {
   refreshRelated: () => Promise.allSettled([loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)]),
 })
 
-const activeView = computed(() => String(route.name || 'tasks'))
+const activeView = computed(() => String(route.name || 'workspace'))
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
 const isRuntimeView = computed(() => activeView.value === 'runtime-center')
 const isMessageView = computed(() => activeView.value.startsWith('message-'))
 const isGlobalSettingsView = computed(() => activeView.value === 'global-settings')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
+const activeMenuItem = computed(() => isTrafficView.value ? 'traffic-plans' : ({
+  settings: 'acquisition', overview: 'acquisition', tables: 'acquisition',
+  'message-settings': 'message-workbench', 'content-settings': 'content-create',
+} as Record<string, string>)[activeView.value] || activeView.value)
 const activeMenuGroup = computed(() => {
   if (isMessageView.value) return 'message-center'
-  if (isTrafficView.value) return 'traffic-workbench'
   if (isContentView.value) return 'content-workbench'
-  if (['tasks', 'logs', 'overview', 'ai', 'tables', 'settings'].includes(activeView.value)) return 'lead-workbench'
+  if (['acquisition', 'overview', 'ai', 'tables', 'settings'].includes(activeView.value)) return 'lead-workbench'
   return ''
 })
-const topbarKicker = computed(() => isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isMessageView.value ? '私信工作台' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))))
-const viewTitle = computed(() => String(route.meta.title || '任务管理'))
+const topbarKicker = computed(() => activeView.value === 'workspace' ? '日常工作' : activeView.value === 'accounts' ? '配置' : isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isMessageView.value ? '私信工作台' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))))
+const viewTitle = computed(() => String(route.meta.title || '工作台'))
 const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
-const topbarEnvOk = computed(() => isAutomationView.value || isRuntimeView.value || isMessageView.value || isGlobalSettingsView.value || (isContentView.value ? Boolean(contentEnv.value?.ok) : (isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)))
-const topbarEnvClass = computed(() => isAutomationView.value || isRuntimeView.value || isMessageView.value || isGlobalSettingsView.value ? 'is-neutral' : (topbarEnvOk.value ? 'is-ok' : 'is-warn'))
+const showEnvironmentStatus = computed(() => ['acquisition', 'settings', 'content-create', 'content-settings', 'traffic-plans', 'traffic-settings'].includes(activeView.value))
+const topbarEnvOk = computed(() => isContentView.value ? Boolean(contentEnv.value?.ok) : isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)
+const topbarEnvClass = computed(() => topbarEnvOk.value ? 'is-ok' : 'is-warn')
 const topbarEnvLabel = computed(() => {
-  if (isGlobalSettingsView.value) return licenseStatusLabel.value
-  if (isRuntimeView.value) return '五类资源统一调度'
-  if (isAutomationView.value) return '共用浏览器队列'
-  if (isMessageView.value) return '私信账号独立登录态'
   if (isContentView.value) return topbarEnvOk.value ? '视频环境正常' : '需要检查视频环境'
   if (isTrafficView.value) return topbarEnvOk.value ? '引流环境正常' : '需要检查引流环境'
   return topbarEnvOk.value ? '环境就绪' : '需要检查环境'
-})
-const topbarPrimaryAction = computed(() => {
-  if (isContentView.value) return '创作视频'
-  if (isTrafficView.value || activeView.value === 'automation-plans') return '新建计划'
-  return '新建任务'
 })
 const hasActiveAsyncWork = computed(() => {
   return Boolean(workbenchStatus.value?.active)
@@ -345,65 +253,13 @@ const autoSync = createAutoSyncController({
   sync: syncCurrentView,
   interval: () => hasActiveAsyncWork.value ? 3000 : 12000,
 })
-const dashboardInsights = computed(() => {
-  const metrics = workbenchStatus.value?.metrics || {}
-  if (isGlobalSettingsView.value) return []
-  if (isMessageView.value) {
-    return [
-      { label: '待私信', value: compactCount(metrics.pending_customers), tone: 'amber' },
-      { label: '待回复', value: compactCount(metrics.waiting_reply), tone: 'blue' },
-      { label: '运行批次', value: compactCount(metrics.active_batches), tone: 'green' },
-      { label: '失败批次', value: compactCount(metrics.failed_batches), tone: 'red' },
-    ]
-  }
-  if (isRuntimeView.value) {
-    return [
-      { label: '排队中', value: compactCount(metrics.queued), tone: 'amber' },
-      { label: '执行中', value: compactCount(metrics.running), tone: 'blue' },
-      { label: '失败', value: compactCount(metrics.failed), tone: 'red' },
-      { label: '被中断', value: compactCount(metrics.interrupted), tone: 'red' },
-    ]
-  }
-  if (isAutomationView.value) {
-    return [
-      { label: '启用计划', value: compactCount(metrics.enabled_plans), tone: 'green' },
-      { label: '运行中', value: compactCount(metrics.active_runs), tone: 'blue' },
-      { label: '失败', value: compactCount(metrics.failed_runs), tone: 'red' },
-    ]
-  }
-  if (isContentView.value) {
-    return [
-      { label: '内容资产', value: compactCount(metrics.assets), tone: 'green' },
-      { label: '生成中', value: compactCount(metrics.active_jobs), tone: 'blue' },
-      { label: '已完成', value: compactCount(metrics.succeeded_jobs), tone: 'green' },
-      { label: '失败', value: compactCount(metrics.failed_jobs), tone: 'red' },
-    ]
-  }
-  if (isTrafficView.value) {
-    return [
-      { label: '运行批次', value: compactCount(metrics.active_runs), tone: 'blue' },
-      { label: '成功动作', value: compactCount(metrics.successful_actions), tone: 'green' },
-      { label: '失败/跳过', value: compactCount(metrics.failed_actions), tone: 'red' },
-    ]
-  }
-  return [
-    { label: '运行任务', value: compactCount(metrics.active_tasks), tone: 'blue' },
-    { label: 'AI待处理', value: compactCount(metrics.ai_pending), tone: 'amber' },
-    { label: '目标客户', value: compactCount(metrics.target_customers), tone: 'green' },
-    { label: '失败待查', value: compactCount(Number(metrics.failed_tasks || 0) + Number(metrics.ai_failed || 0)), tone: 'red' },
-  ]
-})
 const licenseStatusLabel = computed(() => {
   if (licenseInfo.value.authorized) return '已授权'
   return licenseInfo.value.status === 'failed' ? '未授权' : '待授权'
 })
-const licenseStatusClass = computed(() => {
-  if (licenseInfo.value.authorized) return 'is-authorized'
-  return licenseInfo.value.status === 'failed' ? 'is-denied' : 'is-pending'
-})
 
 const routeProps = computed(() => {
-  if (activeView.value === 'tasks') {
+  if (activeView.value === 'acquisition') {
     return {
       tasks: tasks.value,
       page: taskPage.value,
@@ -411,10 +267,14 @@ const routeProps = computed(() => {
       total: taskTotal.value,
       settings: settings.value,
       retryDraft: retryDraft.value || undefined,
+      selectedTask: selectedTask.value || undefined,
+      diagnostics: taskDiagnostics.value,
+      dedupSummary: taskDedupSummary.value,
+      query: taskQuery.value,
     }
   }
   if (activeView.value === 'overview') return { tree: overviewTree.value }
-  if (activeView.value === 'ai') return { workbench: aiWorkbench.value }
+  if (activeView.value === 'ai') return { workbench: aiWorkbench.value, query: aiQuery.value }
   if (activeView.value === 'message-workbench') {
     return {
       keywords: messageKeywords.value,
@@ -434,18 +294,6 @@ const routeProps = computed(() => {
       refreshSeq: messageSettingsRefreshSeq.value,
     }
   }
-  if (activeView.value === 'logs') {
-    return {
-      tasks: tasks.value,
-      selectedTask: selectedTask.value || undefined,
-      diagnostics: taskDiagnostics.value,
-      dedupSummary: taskDedupSummary.value,
-      page: taskPage.value,
-      pageSize: taskPageSize.value,
-      total: taskTotal.value,
-      query: taskQuery.value,
-    }
-  }
   if (activeView.value === 'tables') {
     return {
       library: activeLibrary.value,
@@ -460,7 +308,7 @@ const routeProps = computed(() => {
   }
   if (activeView.value.startsWith('traffic-')) return { refreshSeq: trafficRefreshSeq.value }
   if (activeView.value === 'automation-plans') return { refreshSeq: automationRefreshSeq.value }
-  if (activeView.value === 'global-settings') {
+  if (['global-settings', 'accounts'].includes(activeView.value)) {
     return {
       refreshSeq: globalSettingsRefreshSeq.value,
       licenseInfo: licenseInfo.value,
@@ -472,6 +320,7 @@ const routeProps = computed(() => {
       tombstoneFilters: tombstoneFilters.value,
     }
   }
+  if (activeView.value === 'workspace') return { refreshSeq: workspaceRefreshSeq.value }
   if (activeView.value === 'runtime-center') return { refreshSeq: runtimeRefreshSeq.value }
   if (activeView.value.startsWith('content-')) return { refreshSeq: contentRefreshSeq.value }
   if (activeView.value === 'settings') {
@@ -481,24 +330,23 @@ const routeProps = computed(() => {
       env: env.value,
     }
   }
-  return {
-    settings: settings.value,
-    settingsSaveRevision: settingsSaveRevision.value,
-    env: env.value,
-    tombstoneSummary: tombstoneSummary.value,
-    tombstones: tombstones.value,
-    tombstoneFilters: tombstoneFilters.value,
-  }
+  return {}
 })
 
 const routeListeners = computed(() => {
   // 只把当前页面声明的事件传下去，避免 fragment 页面收到无关监听器 warning。
-  if (activeView.value === 'tasks') {
+  if (activeView.value === 'acquisition') {
     return {
       'create-task': createTask,
       'open-logs': openTaskLogs,
       'consume-retry-draft': consumeRetryDraft,
       'change-task-page': changeTaskPage,
+      'select-task': selectTask,
+      'retry-task': retryTask,
+      'cancel-task': cancelTask,
+      'archive-task': archiveTask,
+      'delete-task': deleteTask,
+      'change-task-query': changeTaskQuery,
     }
   }
   if (activeView.value === 'overview') {
@@ -534,6 +382,7 @@ const routeListeners = computed(() => {
       'filter-change': changeMessageWorkbenchFilter,
       'select-customer': selectMessageWorkbenchCustomer,
       'message-customer': messageWorkbenchCustomer,
+      'confirm-message-customer': confirmMessageWorkbenchCustomer,
       'auto-message-customer': autoMessageWorkbenchCustomer,
       'start-auto-message-batch': startMessageAutoBatch,
       'cancel-auto-message-batch': cancelMessageAutoBatch,
@@ -557,17 +406,6 @@ const routeListeners = computed(() => {
       'settings-dirty-change': updateSettingsDraftDirty,
     }
   }
-  if (activeView.value === 'logs') {
-    return {
-      'select-task': selectTask,
-      'retry-task': retryTask,
-      'cancel-task': cancelTask,
-      'archive-task': archiveTask,
-      'delete-task': deleteTask,
-      'change-task-page': changeTaskPage,
-      'change-task-query': changeTaskQuery,
-    }
-  }
   if (activeView.value === 'tables') {
     return {
       'change-library': changeLibrary,
@@ -580,7 +418,7 @@ const routeListeners = computed(() => {
       'find-customers': findCustomers,
     }
   }
-  if (activeView.value === 'global-settings') {
+  if (['global-settings', 'accounts'].includes(activeView.value)) {
     return {
       'open-license': openLicenseDialog,
       'check-update': checkForUpdates,
@@ -595,15 +433,7 @@ const routeListeners = computed(() => {
       'check-env': checkEnv,
     }
   }
-  if (activeView.value.startsWith('traffic-')) return {}
-  if (activeView.value.startsWith('content-')) return {}
-  return {
-    save: saveSettings,
-    'settings-dirty-change': updateSettingsDraftDirty,
-    'check-env': checkEnv,
-    'load-tombstones': loadTombstones,
-    'clear-data': clearAllData,
-  }
+  return {}
 })
 
 function goToView(view: string) {
@@ -755,17 +585,9 @@ async function copyDeviceCode() {
 }
 
 async function loadWorkbenchStatus() {
-  const scope = isRuntimeView.value ? 'runtime' : (isAutomationView.value ? 'automation' : (isMessageView.value ? 'message' : (isContentView.value ? 'content' : (isTrafficView.value ? 'traffic' : 'lead'))))
-  const { data } = await api.get('/workbench/status', { params: { scope } })
+  // 应用壳只需要全局活跃状态；业务摘要由对应页面读取。
+  const { data } = await api.get('/workbench/status', { params: { scope: 'runtime' } })
   workbenchStatus.value = data
-}
-
-function createFromTopbar() {
-  if (activeView.value === 'automation-plans') {
-    router.push({ path: '/automation-plans', query: { create: '1' } })
-    return
-  }
-  router.push(isContentView.value ? '/content-create' : (isTrafficView.value ? '/traffic-plans' : '/tasks'))
 }
 
 async function loadContentShell() {
@@ -804,23 +626,13 @@ async function loadTrafficShell() {
   trafficEnv.value = data
 }
 
-function compactCount(value: unknown) {
-  const count = Number(value || 0)
-  if (!Number.isFinite(count)) return '0'
-  if (count >= 10000) return `${Math.round(count / 1000) / 10}万`
-  if (count >= 1000) return `${Math.round(count / 100) / 10}k`
-  return String(count)
-}
-
 function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
   const loaders: Array<() => Promise<unknown>> = []
-  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isRuntimeView.value && !isMessageView.value && !isGlobalSettingsView.value && includeStatic) loaders.push(checkEnv)
+  if (!isTrafficView.value && !isContentView.value && !isAutomationView.value && !isRuntimeView.value && !isMessageView.value && !isGlobalSettingsView.value && !['workspace', 'accounts'].includes(activeView.value) && includeStatic) loaders.push(checkEnv)
 
-  if (activeView.value === 'tasks') {
-    loaders.push(loadTasks)
-    if (includeStatic) loaders.push(loadSettings)
-  } else if (activeView.value === 'logs') {
+  if (activeView.value === 'acquisition') {
     loaders.push(async () => { await loadTasks(); await refreshSelectedTask() })
+    if (includeStatic) loaders.push(loadSettings)
   } else if (activeView.value === 'overview') {
     loaders.push(loadOverview)
   } else if (activeView.value === 'ai') {
@@ -847,6 +659,10 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
     if (includeStatic || refreshChild) loaders.push(async () => { automationRefreshSeq.value += 1 })
   } else if (isRuntimeView.value) {
     if (includeStatic || refreshChild) loaders.push(async () => { runtimeRefreshSeq.value += 1 })
+  } else if (activeView.value === 'workspace') {
+    if (includeStatic || refreshChild) loaders.push(async () => { workspaceRefreshSeq.value += 1 })
+  } else if (activeView.value === 'accounts') {
+    if (includeStatic || refreshChild) loaders.push(async () => { globalSettingsRefreshSeq.value += 1 })
   } else if (isGlobalSettingsView.value) {
     loaders.push(() => loadLicense(true))
     loaders.push(loadTombstoneSummary, () => loadTombstones())
@@ -865,11 +681,11 @@ async function syncCurrentView(reason: AutoSyncReason) {
   await Promise.allSettled(loaders.map(loader => loader()))
 }
 
-async function saveSettings(values: Dict) {
+async function saveSettings(values: Dict, clearSecrets: string[] = []) {
   settingsSaving.value = true
   const saveSeq = ++settingsMutationSeq
   try {
-    const { data } = await api.put('/settings', { values })
+    const { data } = await api.put('/settings', { values, ...(clearSecrets.length ? { clear_secrets: clearSecrets } : {}) })
     settings.value = data
     if (saveSeq === settingsMutationSeq) {
       settingsDraftDirty.value = false
@@ -923,7 +739,7 @@ watch(activeView, () => {
 
 watch(activeMenuGroup, async group => {
   await nextTick()
-  for (const item of ['lead-workbench', 'message-center', 'traffic-workbench', 'content-workbench']) {
+  for (const item of ['lead-workbench', 'message-center', 'content-workbench']) {
     if (item !== group) sidebarMenu.value?.close?.(item)
   }
   if (group) sidebarMenu.value?.open?.(group)

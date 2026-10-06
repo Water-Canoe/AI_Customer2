@@ -89,6 +89,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
   }
 
   async function updateFollowStatus(row: Dict, status: string) {
+    if (status === '已私信' && ['待筛选', '未私信'].includes(String(row.follow_status))) return confirmMessageCustomer(row)
     const leadId = row.lead_id || row.id
     if (!leadId) return ElMessage.error('当前客户缺少线索ID，无法修改状态')
     try {
@@ -116,21 +117,27 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
       homepage.opener = null
       await navigator.clipboard.writeText(script.text)
 
-      // 跟进流程使用独立状态，筛选结果不参与私信状态流转。
-      const currentStatus = String(row.follow_status)
-      if (['待筛选', '未私信'].includes(currentStatus)) {
-        await api.patch(`/overview/customers/${leadId}/follow-status`, {
-          follow_status: '已私信',
-          note: `私信工作台：复制${script.label}并打开客户主页`,
-          record_message_attempt: true,
-        })
-        ElMessage.success(`${script.label}已复制，客户主页已打开，跟进状态已更新为“已私信”`)
-      } else {
-        ElMessage.success(`${script.label}已复制，客户主页已打开；当前状态“${currentStatus}”未回退`)
-      }
-      await refreshAllMessageData()
+      // 准备话术不代表发送成功，确认发送后才记账并推进跟进状态。
+      ElMessage.success(`${script.label}已复制，客户主页已打开；发送后请点击“确认已发送”`)
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '私信操作失败')
+    }
+  }
+
+  async function confirmMessageCustomer(row: Dict) {
+    const leadId = row.lead_id || row.id
+    if (!leadId) return ElMessage.error('当前客户缺少线索ID，无法确认发送')
+    try {
+      await ElMessageBox.confirm('请确认你已在平台实际发送私信。确认后会记录发送次数，并将客户标记为已私信。', '确认已发送', { type: 'warning', confirmButtonText: '已实际发送' })
+      await api.patch(`/overview/customers/${leadId}/follow-status`, {
+        follow_status: '已私信', record_message_attempt: true,
+        note: '人工确认已发送私信',
+      })
+      ElMessage.success('已记录实际发送，跟进状态已更新')
+      await refreshAllMessageData()
+    } catch (error: any) {
+      if (error === 'cancel' || error === 'close') return
+      ElMessage.error(error?.response?.data?.detail || '确认发送失败')
     }
   }
 
@@ -159,7 +166,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     if (String(payload.platform || '') !== 'dy') return ElMessage.info('AI一键私信已跳过快手/小红书平台，请选择抖音关键词')
     try {
       const { data } = await api.post('/message-workbench/auto-message-batches', payload)
-      ElMessage.success(`自动私信批次 ${data.id} 已启动`)
+      ElMessage.success(`自动私信批次 ${data.id} 已加入队列`)
       await loadBatches(String(data.id || ''), { page: 1, item_page: 1 })
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '启动自动私信批次失败')
@@ -220,6 +227,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     closeDetail,
     updateFollowStatus,
     messageCustomer,
+    confirmMessageCustomer,
     autoMessageCustomer,
     startBatch,
     cancelBatch,

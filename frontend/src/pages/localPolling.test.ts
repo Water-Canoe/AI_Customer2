@@ -8,12 +8,17 @@ import PublishCenterPage from './PublishCenterPage'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  put: vi.fn(),
+  delete: vi.fn(),
+  push: vi.fn(),
   route: { name: '', fullPath: '', query: {} },
 }))
-vi.mock('../shared/api', () => ({ api: { get: mocks.get } }))
+vi.mock('../shared/api', () => ({ api: { get: mocks.get, put: mocks.put, delete: mocks.delete } }))
 vi.mock('vue-router', () => ({
   useRoute: () => mocks.route,
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ push: mocks.push, replace: vi.fn() }),
+  onBeforeRouteLeave: vi.fn(),
+  onBeforeRouteUpdate: vi.fn(),
 }))
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn() },
@@ -22,9 +27,9 @@ vi.mock('element-plus', () => ({
 }))
 
 const pages = [
-  { label: '内容记录', component: ContentWorkbenchPage, view: 'content-records', pollUrl: '/content/publish-tasks' },
+  { label: '内容作品库', component: ContentWorkbenchPage, view: 'content-records', pollUrl: '/content/outputs' },
   { label: '发布中心', component: PublishCenterPage, view: 'content-publish', pollUrl: '/accounts' },
-  { label: '全局设置', component: GlobalSettingsPage, view: 'global-settings', pollUrl: '/accounts' },
+  { label: '账号中心', component: GlobalSettingsPage, view: 'accounts', pollUrl: '/accounts' },
 ]
 
 // 仅提供活动任务与正在检查的账号；测试不会调用登录、发布等业务动作。
@@ -43,6 +48,8 @@ describe('局部后台轮询', () => {
     Object.defineProperty(document, 'hidden', { configurable: true, value: false })
     mocks.route.query = {}
     mocks.get.mockImplementation(async (url: string) => response(url))
+    mocks.put.mockResolvedValue({ data: { exists: true, updated_at: null } })
+    mocks.delete.mockResolvedValue({ data: {} })
   })
   afterEach(() => {
     wrapper?.unmount()
@@ -88,7 +95,7 @@ describe('局部后台轮询', () => {
 
   it.each(pages)('$label 首次慢请求期间不叠加轮询，卸载后不会遗留定时器', async ({ component, view, pollUrl }) => {
     mocks.route.name = view
-    if (view === 'content-publish') mocks.route.query = { video_job_id: 'video' }
+    if (view === 'content-publish') mocks.route.query = { output_ids: 'output' }
     let finish!: (value: ReturnType<typeof response>) => void
     mocks.get.mockImplementation((url: string) => url === pollUrl
       ? new Promise(resolve => { finish = resolve })
@@ -109,11 +116,11 @@ describe('局部后台轮询', () => {
 
   it('defers a hidden publish composer until accounts load and preserves its edited draft', async () => {
     mocks.route.name = 'content-publish'
-    mocks.route.query = { video_job_id: 'video' }
+    mocks.route.query = { output_ids: 'output' }
     Object.defineProperty(document, 'hidden', { configurable: true, value: true })
     mocks.get.mockImplementation(async (url: string) => {
       if (url === '/accounts') return { data: [{ id: 'account', name: '发布账号', enabled: true, features: ['publish'], default_features: ['publish'], feature_status: { publish: { status: 'ready' } } }] }
-      if (url === '/content/video-jobs/video') return { data: { subject: '原始标题', script: '正文' } }
+      if (url === '/content/outputs/output') return { data: { id: 'output', subject: '原始标题', script: '正文' } }
       return response(url)
     })
     wrapper = mount(PublishCenterPage)
@@ -124,11 +131,33 @@ describe('局部后台轮询', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     await flushPromises()
     expect((wrapper.get('.publish-account-options input').element as HTMLInputElement).checked).toBe(true)
-    const title = wrapper.get('.publish-composer > label > input')
+    const title = wrapper.get('.publish-composer .publish-field input')
     await title.setValue('人工编辑标题')
     await wrapper.setProps({ refreshSeq: 1 })
     await flushPromises()
     expect((title.element as HTMLInputElement).value).toBe('人工编辑标题')
-    expect(mocks.get.mock.calls.filter(([url]) => url === '/content/video-jobs/video')).toHaveLength(1)
+    expect(mocks.get.mock.calls.filter(([url]) => url === '/content/outputs/output')).toHaveLength(1)
+  })
+
+  it('账号中心直接展示账号，并保留返回工作中的查询参数', async () => {
+    mocks.route.name = 'accounts'
+    mocks.route.query = { feature: 'acquisition', return_to: '/acquisition?create=1' }
+    wrapper = mount(GlobalSettingsPage)
+    await flushPromises()
+    expect(wrapper.find('.global-settings-tabs').exists()).toBe(false)
+    expect(wrapper.find('.account-create-pane').exists()).toBe(true)
+    await wrapper.get('.account-return').trigger('click')
+    expect(mocks.push).toHaveBeenCalledWith('/acquisition?create=1')
+  })
+
+  it('系统设置不读取平台账号，也不提供外部返回地址', async () => {
+    mocks.route.name = 'global-settings'
+    mocks.route.query = { return_to: '//external.example' }
+    wrapper = mount(GlobalSettingsPage)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(mocks.get).not.toHaveBeenCalled()
+    expect(wrapper.find('.account-return').exists()).toBe(false)
+    expect(wrapper.get('.global-settings-tabs').text()).not.toContain('平台账号')
   })
 })

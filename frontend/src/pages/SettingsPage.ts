@@ -1,10 +1,11 @@
-import { defineComponent, h, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
+import { defineComponent, h, onBeforeUnmount, reactive, ref, watch, type Component, type VNodeChild } from 'vue'
 import { Check, DataAnalysis, Monitor, Refresh, Setting, Tools, User } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
 import { SplitPane } from '../components/ui/SplitPane'
 import { TagInput, splitTagText } from '../components/ui/TagInput'
 import { platformName } from '../shared/format'
 import { pageAction, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
+import { useUnsavedSettings } from '../shared/useUnsavedSettings'
 
 const icpFields = [
   { key: 'product', label: '产品/服务', placeholder: '例如：AI客服、获客工具' },
@@ -84,12 +85,16 @@ export default defineComponent({
     const local = reactive<Dict>({})
     const settingsDirty = ref(false)
     const syncingFromProps = ref(false)
+    const clearAiKey = ref(false)
+    useUnsavedSettings(() => settingsDirty.value || clearAiKey.value)
+    onBeforeUnmount(() => emit('settings-dirty-change', false))
 
     function sync() {
       if (settingsDirty.value) return
       syncingFromProps.value = true
       Object.keys(local).forEach(key => delete local[key])
       Object.assign(local, JSON.parse(JSON.stringify(props.settings || {})))
+      clearAiKey.value = false
       local.icp_profile = normalizeIcpProfile(local.icp_profile)
       local.own_accounts = normalizeOwnAccounts(local.own_accounts)
       emit('settings-dirty-change', false)
@@ -101,7 +106,10 @@ export default defineComponent({
       emit('settings-dirty-change', true)
     }
     function submitSettings(payload: Dict) {
-      emit('save', payload)
+      // 公开配置只返回是否已设置；空输入保留密钥，清除需明确选择。
+      delete payload.ai_api_key_configured
+      if (!payload.ai_api_key) delete payload.ai_api_key
+      emit('save', payload, clearAiKey.value ? ['ai_api_key'] : [])
     }
     function submitSettingsAfterDraft(payloadFactory: () => Dict) {
       const active = document.activeElement as HTMLElement | null
@@ -143,7 +151,11 @@ export default defineComponent({
           }, [
             h('div', { class: 'form-grid' }, [
               inputField(local, 'ai_base_url', 'AI服务地址', 'text', '', markSettingsDirty),
-              inputField(local, 'ai_api_key', 'API Key', 'password', local.ai_api_key_configured ? '已配置，留空表示不修改' : '请输入 API Key', markSettingsDirty),
+              h('div', [
+                inputField(local, 'ai_api_key', 'API Key', 'password', local.ai_api_key_configured ? '已配置，留空表示不修改' : '请输入 API Key', () => { if (local.ai_api_key) clearAiKey.value = false; markSettingsDirty() }),
+                h('small', { class: 'note' }, clearAiKey.value ? '保存设置后清除已存密钥' : local.ai_api_key_configured ? '密钥已配置；输入新密钥才会替换' : '尚未配置密钥'),
+                local.ai_api_key_configured ? h('button', { type: 'button', onClick: () => { clearAiKey.value = !clearAiKey.value; local.ai_api_key = ''; markSettingsDirty() } }, clearAiKey.value ? '取消清除密钥' : '清除已保存密钥') : null,
+              ]),
               inputField(local, 'ai_model', '模型名', 'text', '', markSettingsDirty),
               inputField(local, 'default_content_count', '默认内容数', 'number', '', markSettingsDirty),
               inputField(local, 'default_comment_count', '默认评论数', 'number', '', markSettingsDirty),

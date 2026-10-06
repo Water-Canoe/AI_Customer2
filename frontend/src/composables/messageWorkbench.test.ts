@@ -3,11 +3,11 @@ import { ref } from 'vue'
 
 import { selectDmScript, useMessageWorkbench } from './messageWorkbench'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), writeText: vi.fn() }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), writeText: vi.fn(), confirm: vi.fn() }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get, patch: mocks.patch } }))
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
-  ElMessageBox: { confirm: vi.fn() },
+  ElMessageBox: { confirm: mocks.confirm },
 }))
 
 
@@ -31,6 +31,7 @@ describe('useMessageWorkbench follow status', () => {
     mocks.get.mockResolvedValue({ data: [] })
     mocks.patch.mockResolvedValue({ data: {} })
     mocks.writeText.mockResolvedValue(undefined)
+    mocks.confirm.mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText: mocks.writeText } })
     vi.spyOn(window, 'open').mockReturnValue({ opener: window } as Window)
   })
@@ -45,13 +46,28 @@ describe('useMessageWorkbench follow status', () => {
 
     expect(mocks.writeText).toHaveBeenCalledWith('当前话术')
     expect(window.open).toHaveBeenCalledWith('https://example.com/customer', '_blank')
-    // 当前未发送状态才流转，回复和软删除状态不被私信动作回退。
-    if (['待筛选', '未私信'].includes(followStatus)) {
-      expect(mocks.patch).toHaveBeenCalledWith('/overview/customers/7/follow-status', expect.objectContaining({
-        follow_status: '已私信', record_message_attempt: true,
-      }))
-    } else {
-      expect(mocks.patch).not.toHaveBeenCalled()
-    }
+    // 准备动作不代表平台实际发送，所有跟进状态保持不变。
+    expect(mocks.patch).not.toHaveBeenCalled()
+  })
+  it('records actual sending only after the user confirms', async () => {
+    const workbench = useMessageWorkbench({ settings: ref({}), refreshRelated: vi.fn() })
+    await workbench.confirmMessageCustomer({ lead_id: 7, follow_status: '未私信' })
+    expect(mocks.confirm).toHaveBeenCalledOnce()
+    expect(mocks.patch).toHaveBeenCalledWith('/overview/customers/7/follow-status', {
+      follow_status: '已私信', record_message_attempt: true, note: '人工确认已发送私信',
+    })
+  })
+  it('does not record sending when confirmation is cancelled, including the status dropdown', async () => {
+    mocks.confirm.mockRejectedValue('cancel')
+    const workbench = useMessageWorkbench({ settings: ref({}), refreshRelated: vi.fn() })
+    await workbench.updateFollowStatus({ lead_id: 7, follow_status: '未私信' }, '已私信')
+    expect(mocks.patch).not.toHaveBeenCalled()
+  })
+  it('selects the requested customer detail by its persistent lead identity', async () => {
+    mocks.get.mockResolvedValue({ data: { customer: { lead_id: 7 }, sources: [], events: [] } })
+    const workbench = useMessageWorkbench({ settings: ref({}), refreshRelated: vi.fn() })
+    await workbench.selectCustomer('7')
+    expect(mocks.get).toHaveBeenCalledWith('/message-workbench/customers/7')
+    expect(workbench.detail.value.customer.lead_id).toBe(7)
   })
 })

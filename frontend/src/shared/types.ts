@@ -85,6 +85,9 @@ export interface RuntimeJob {
   id: string
   kind: string
   entity_id: string
+  display_name?: string
+  retry_allowed?: boolean
+  detail_url?: string
   resource: string
   payload: Dict
   status: RuntimeJobStatus

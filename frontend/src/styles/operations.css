@@ -1,0 +1,36 @@
+/* 各业务页面共享列表到详情的节奏；内容由应用主区域统一纵向滚动。 */
+.operations-page { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.operations-page .panel { background: var(--app-surface, #fff); border: 1px solid var(--app-border, #e5eaf1); border-radius: var(--app-radius, 14px); padding: 24px; }
+.operations-page .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.operations-page .note { color: var(--app-muted, #667085); }
+.operations-list { display: flex; flex-direction: column; gap: 0; }
+.operations-list-row { display: flex; align-items: center; gap: 20px; padding: 20px 0; border-bottom: 1px solid var(--app-border, #e5eaf1); }
+.operations-row-main { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 7px; text-align: left; background: transparent; border: 0; }
+.operations-row-main strong { font-size: 15px; color: var(--app-text, #1d2939); }
+.operations-row-main span, .operations-row-main small { color: var(--app-muted, #667085); white-space: normal; overflow-wrap: anywhere; }
+.operations-summary, .operations-advanced, .operations-page details { padding: 14px 0; }
+.operations-page summary, .operations-create-form summary { cursor: pointer; color: var(--app-muted, #667085); font-weight: 600; }
+.operations-page .ai-row-list, .operations-page .task-list, .operations-page .message-table-wrap, .operations-page .traffic-side-scroll { max-height: none; overflow-y: visible; }
+.operations-page .ai-workbench, .operations-page .traffic-records-workspace { height: auto; overflow: visible; }
+.operations-create-form { display: flex; flex-direction: column; gap: 18px; }
+.operations-create-form .mode-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.operations-create-form .mode-option { min-height: 130px; }
+.operations-error { color: #b42318; }
+.operations-detail .pane { height: auto; min-width: 0; padding: 0; border: 0; box-shadow: none; overflow: visible; }
+.operations-detail .message-detail-drawer { position: static; width: auto; inset: auto; height: auto; box-shadow: none; border: 0; padding: 0; overflow: visible; }
+.operations-next-actions { margin: 20px 0; }
+.operations-page .message-platform-keywords { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.operations-page .message-keyword-list { max-height: none; overflow: visible; }
+.operations-page .message-workbench { height: auto; overflow: visible; }
+.operations-page .message-table .message-clamp { -webkit-line-clamp: 2; }
+.operations-page .message-table th, .operations-page .message-table td { padding: 16px 12px; }
+.operations-page .traffic-side-table { width: 100%; min-width: 900px; }
+.operations-page .traffic-side-scroll { height: auto; }
+.operations-page .traffic-log-list { max-height: 380px; }
+.operations-page .automation-section { margin: 0; }
+.operations-page .automation-hero { background: var(--app-surface, #fff); color: var(--app-text, #1d2939); border: 1px solid var(--app-border, #e5eaf1); }
+.operations-page .automation-hero p { color: var(--app-muted, #667085); }
+.operations-page.overview-pane { height: auto; overflow: visible; padding: 24px; }
+.operations-page.message-settings-page { display: flex; flex-direction: column; }
+.operations-page .message-batch-history-card { padding: 20px; margin: 0; border-radius: 0; border-width: 0 0 1px; }
+.operations-secondary-tabs { display: flex; gap: 8px; margin-left: auto; font-size: 13px; }

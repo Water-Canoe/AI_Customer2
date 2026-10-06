@@ -1,7 +1,9 @@
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElDrawer } from 'element-plus'
 import { Tickets, User } from '@element-plus/icons-vue'
 
-import { SplitPane } from '../components/ui/SplitPane'
+import '../styles/operations.css'
 import { emptyState, sectionTitle } from '../components/ui/Workbench'
 import { platformName } from '../shared/format'
 import type { Dict } from '../shared/types'
@@ -14,51 +16,35 @@ export default defineComponent({
   },
   emits: ['select-auto-message-batch', 'cancel-auto-message-batch', 'retry-auto-message-batch', 'delete-auto-message-batch', 'change-auto-message-batch-page', 'change-auto-message-item-page'],
   setup(props, { emit }) {
+    const route = useRoute()
+    const router = useRouter()
+    const detailOpen = ref(Boolean(route.query.batch))
+    watch(() => route.query.batch, value => {
+      detailOpen.value = Boolean(value)
+      if (value && String(props.batches.selected_batch_id || '') !== String(value)) emit('select-auto-message-batch', { id: String(value) })
+    }, { immediate: true })
+    function select(batch: Dict) {
+      emit('select-auto-message-batch', batch)
+      detailOpen.value = true
+      void router.replace({ path: '/message-batches', query: { batch: String(batch.id) } })
+    }
     return () => {
       const data = props.batches as Dict
       const batchList = Array.isArray(data.batches) ? data.batches as Dict[] : []
       const selected = resolveSelectedMessageBatch(data)
       const items = Array.isArray(data.items) ? data.items as Dict[] : []
 
-      return h(SplitPane, { storageKey: 'message-batches', side: 'right', defaultSideWidth: 390 }, {
-        default: () => h('section', { class: 'pane primary-pane message-batch-detail-pane' }, [
-          selected
-            ? renderBatchDetail(selected, items, data, {
-              cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch),
-              retry: (batch: Dict) => emit('retry-auto-message-batch', batch),
-              remove: (batch: Dict) => emit('delete-auto-message-batch', batch),
-              changeItemPage: (payload: PageChange) => emit('change-auto-message-item-page', payload),
-            })
-            : emptyState({
-              title: '暂无自动私信批次',
-              description: '在“客户跟进”选择抖音关键词并启动 AI 一键私信后，执行记录会显示在这里。',
-              icon: Tickets,
-              tone: 'gray',
-            }),
+      return h('div', { class: 'workspace-page operations-page' }, [
+        h('section', { class: 'panel' }, [
+          sectionTitle({ title: '触达记录', subtitle: `共 ${Number(data.total || 0)} 个自动私信批次`, icon: Tickets, tone: 'purple' }),
+          h('div', { class: 'toolbar' }, [h('button', { onClick: () => router.push('/message-workbench') }, '返回客户跟进')]),
+          batchList.length ? h('div', { class: 'operations-list' }, batchList.map(batch => renderBatchHistoryCard(batch, String(selected?.id || '') === String(batch.id || ''), () => select(batch)))) : emptyState({ title: '还没有触达记录', description: '启动自动私信后，在这里查看每位客户的执行结果。', icon: Tickets }),
+          h(ListPagination, { page: Number(data.page || 1), pageSize: Number(data.page_size || 10), total: Number(data.total || 0), onChange: (payload: PageChange) => emit('change-auto-message-batch-page', payload) }),
         ]),
-        side: () => h('aside', { class: 'pane side-pane message-batch-history-pane' }, [
-          sectionTitle({ title: '批次列表', subtitle: `共 ${Number(data.total || 0)} 个批次`, icon: Tickets, tone: 'purple' }),
-          batchList.length
-            ? h('div', { class: 'message-batch-history-list' }, batchList.map(batch => renderBatchHistoryCard(
-              batch,
-              String(selected?.id || '') === String(batch.id || ''),
-              () => emit('select-auto-message-batch', batch),
-            )))
-            : emptyState({
-              title: '还没有批次记录',
-              description: '批次启动后会按时间倒序显示。',
-              icon: Tickets,
-              tone: 'gray',
-            }),
-          h(ListPagination, {
-            page: Number(data.page || 1),
-            pageSize: Number(data.page_size || 10),
-            total: Number(data.total || 0),
-            compact: true,
-            onChange: (payload: PageChange) => emit('change-auto-message-batch-page', payload),
-          }),
-        ]),
-      })
+        h(ElDrawer, { modelValue: detailOpen.value, title: '批次执行明细', size: '840px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) { detailOpen.value = false; void router.replace('/message-batches') } } }, () => selected ? renderBatchDetail(selected, items, data, {
+          cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch), retry: (batch: Dict) => emit('retry-auto-message-batch', batch), remove: (batch: Dict) => emit('delete-auto-message-batch', batch), changeItemPage: (payload: PageChange) => emit('change-auto-message-item-page', payload),
+        }) : h('p', '正在加载批次详情…')),
+      ])
     }
   },
 })
@@ -106,7 +92,7 @@ function renderBatchHistoryCard(batch: Dict, selected: boolean, select: () => vo
 
 
 function renderBatchDetail(batch: Dict, items: Dict[], pagination: Dict, actions: Dict) {
-  const active = ['pending', 'running'].includes(String(batch.status || ''))
+  const active = ['pending', 'queued', 'running'].includes(String(batch.status || ''))
   const retryable = !active && Number(batch.failed_count || 0) + Number(batch.skipped_count || 0) > 0
   return [
     sectionTitle({
@@ -189,6 +175,8 @@ function renderBatchStatus(status: unknown) {
 export function batchStatusLabel(status: string) {
   return ({
     pending: '排队中',
+    queued: '排队中',
+    interrupted: '已中断',
     running: '执行中',
     succeeded: '成功',
     failed: '失败',

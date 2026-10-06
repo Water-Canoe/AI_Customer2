@@ -1,4 +1,5 @@
 ﻿import { defineComponent, h, reactive } from 'vue'
+import '../styles/operations.css'
 import { Compass, Connection } from '@element-plus/icons-vue'
 import { watch } from 'vue'
 import { ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage } from 'element-plus'
@@ -104,8 +105,8 @@ export default defineComponent({
       deleteKeywordNonCompetitors: (node: Dict) => emit('delete-keyword-noncompetitors', node),
       findCustomers: (node: Dict) => emit('find-customers', node)
     }
-    return () => h('section', { class: 'pane overview-pane' }, [
-      sectionTitle({ title: '关系总览', subtitle: '平台 / 关键词 / 账号层级表', icon: Compass, tone: 'blue' }),
+    return () => h('section', { class: 'workspace-page operations-page panel overview-pane' }, [
+      sectionTitle({ title: '来源与证据', subtitle: '逐层查看平台、关键词、账号、内容和客户的来源关系', icon: Compass, tone: 'blue' }),
       (props.tree as Dict[]).length
         ? h('div', { class: 'overview-table' }, (props.tree as Dict[]).flatMap(node => renderOverviewRow(node, 0, isExpanded, toggle, childState, setPage, handlers)))
         : emptyState({
@@ -346,12 +347,13 @@ function renderOverviewCustomerRow(node: Dict, level: number, handlers: Overview
       h('button', {
         class: 'overview-action reserved',
         disabled: screeningStage !== '客户',
-        title: screeningStage === '客户' ? '复制AI话术、打开主页并标记已私信' : '只有客户状态才能私信',
+        title: screeningStage === '客户' ? '复制话术并打开主页，不修改跟进状态' : '只有客户状态才能准备私信',
         onClick: (event: MouseEvent) => {
           event.stopPropagation()
           if (screeningStage === '客户') handlers.messageCustomer(node)
         }
-      }, '私信'),
+      }, '准备私信'),
+      ['待筛选', '未私信'].includes(String(metrics.follow_status)) ? h('button', { class: 'overview-action', onClick: (event: MouseEvent) => { event.stopPropagation(); handlers.updateCustomerFollowStatus(node, '已私信') } }, '确认已发送') : null,
       h('button', {
         class: 'overview-action danger',
         onClick: (event: MouseEvent) => {

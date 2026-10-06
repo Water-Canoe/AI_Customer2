@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   refreshTable: vi.fn(),
   openTaskLogs: vi.fn(),
   writeText: vi.fn(),
+  confirm: vi.fn(),
 }))
 
 vi.mock('../shared/api', () => ({
@@ -24,7 +25,7 @@ vi.mock('../shared/api', () => ({
 vi.mock('../shared/bulkPreview', () => ({ confirmBulkPreview: vi.fn() }))
 vi.mock('element-plus', () => ({
   ElMessage: { success: mocks.success, error: mocks.error, info: vi.fn(), warning: vi.fn() },
-  ElMessageBox: { confirm: vi.fn() },
+  ElMessageBox: { confirm: mocks.confirm },
 }))
 
 
@@ -68,13 +69,7 @@ describe('useOverviewWorkbench', () => {
     } })
 
     expect(mocks.writeText).toHaveBeenCalledWith('当前话术')
-    if (['待筛选', '未私信'].includes(followStatus)) {
-      expect(mocks.patch).toHaveBeenCalledWith('/overview/customers/7/follow-status', expect.objectContaining({
-        follow_status: '已私信', record_message_attempt: true,
-      }))
-    } else {
-      expect(mocks.patch).not.toHaveBeenCalled()
-    }
+    expect(mocks.patch).not.toHaveBeenCalled()
   })
 
   it('restores a soft-removed customer and skips an unchanged follow status', async () => {
@@ -91,5 +86,14 @@ describe('useOverviewWorkbench', () => {
     expect(mocks.patch).toHaveBeenCalledWith('/overview/customers/7/follow-status', {
       follow_status: '未私信', note: '人工修改跟进状态：已移出 -> 未私信',
     })
+  })
+  it('asks for actual sending before advancing an unmessaged customer', async () => {
+    mocks.confirm.mockResolvedValue(undefined)
+    mocks.get.mockResolvedValue({ data: [] })
+    mocks.patch.mockResolvedValue({ data: {} })
+    const overview = useOverviewWorkbench({ settings: ref({}), refreshTasks: mocks.refreshTasks, refreshAi: mocks.refreshAi, refreshTable: mocks.refreshTable, openTaskLogs: mocks.openTaskLogs })
+    await overview.updateCustomerFollowStatus({ metrics: { id: 7, follow_status: '未私信' } }, '已私信')
+    expect(mocks.confirm).toHaveBeenCalledOnce()
+    expect(mocks.patch).toHaveBeenCalledWith('/overview/customers/7/follow-status', expect.objectContaining({ record_message_attempt: true }))
   })
 })

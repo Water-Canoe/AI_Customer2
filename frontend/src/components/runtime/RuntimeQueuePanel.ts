@@ -1,4 +1,5 @@
-import { defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
+import { defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { Clock, Delete, Refresh, RefreshRight, VideoPause } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -10,27 +11,39 @@ import { sectionTitle } from '../ui/Workbench'
 
 export const RuntimeQueuePanel = defineComponent({
   name: 'RuntimeQueuePanel',
-  props: { refreshSeq: { type: Number, default: 0 } },
+  props: { refreshSeq: { type: Number, default: 0 }, initialStatus: { type: String, default: '' }, initialJobId: { type: String, default: '' } },
   setup(props) {
+    const router = useRouter()
     const queue = ref<RuntimeJobPage>({ items: [], total: 0, page: 1, page_size: 20, active: {} })
-    const filters = reactive({ status: '', kind: '', page: 1, page_size: 20 })
+    const filters = reactive({ status: props.initialStatus, kind: '', page: 1, page_size: 20 })
     const loading = ref(false)
+    const loadError = ref('')
     const operating = ref('')
+    const focusedJob = ref<RuntimeJob | null>(null)
+    let requestSeq = 0
 
     async function load(silent = false) {
+      const revision = ++requestSeq
       if (!silent) loading.value = true
       try {
-        const { data } = await api.get<RuntimeJobPage>('/runtime/jobs', { params: { ...filters } })
+        const [{ data }, focused] = await Promise.all([
+          api.get<RuntimeJobPage>('/runtime/jobs', { params: { ...filters } }),
+          props.initialJobId ? api.get<RuntimeJob>(`/runtime/jobs/${encodeURIComponent(props.initialJobId)}`) : Promise.resolve(null),
+        ])
+        // 快速切换筛选或详情时，旧响应不能覆盖当前选择。
+        if (revision !== requestSeq) return
         queue.value = data
+        focusedJob.value = focused?.data || null
+        loadError.value = ''
         const totalPages = Math.max(1, Math.ceil(Number(data.total || 0) / filters.page_size))
         if (!(data.items || []).length && filters.page > totalPages) {
           filters.page = totalPages
           await load(silent)
         }
       } catch (error: any) {
-        if (!silent) ElMessage.error(error?.response?.data?.detail || '运行队列加载失败')
+        if (revision === requestSeq) loadError.value = error?.response?.data?.detail || '任务读取失败，保留上次记录，请重新读取。'
       } finally {
-        if (!silent) loading.value = false
+        if (revision === requestSeq) loading.value = false
       }
     }
 
@@ -85,7 +98,10 @@ export const RuntimeQueuePanel = defineComponent({
     }
 
     onMounted(() => void load())
+    onBeforeUnmount(() => { requestSeq += 1 })
     watch(() => props.refreshSeq, () => void load(true))
+    watch(() => props.initialStatus, value => { filters.status = value; applyFilters() })
+    watch(() => props.initialJobId, () => { focusedJob.value = null; void load() })
 
     return () => {
       const items = queue.value.items || []
@@ -93,7 +109,7 @@ export const RuntimeQueuePanel = defineComponent({
       const activeCount = Object.values(active).reduce((sum: number, value) => sum + Number(value || 0), 0)
       return h('section', { class: 'runtime-queue-panel' }, [
         h('div', { class: 'runtime-queue-heading' }, [
-          sectionTitle({ title: '统一运行队列', subtitle: `${activeCount} 个执行中 · 共 ${queue.value.total || 0} 条`, icon: Clock, tone: activeCount ? 'green' : 'blue', compact: true }),
+          sectionTitle({ title: '任务执行', subtitle: `${activeCount} 个执行中 · 共 ${queue.value.total || 0} 条记录`, icon: Clock, tone: activeCount ? 'green' : 'blue', compact: true }),
           h('button', { class: 'text-icon-button', disabled: loading.value, onClick: () => load() }, [h(Refresh, { class: 'inline-icon' }), loading.value ? '刷新中' : '刷新'])
         ]),
         h('div', { class: 'runtime-resource-grid' }, RUNTIME_RESOURCES.map(resource => h('div', { class: 'runtime-resource-card' }, [
@@ -101,6 +117,11 @@ export const RuntimeQueuePanel = defineComponent({
           h('strong', String(active[resource] || 0)),
           h('small', '执行中'),
         ]))),
+        loadError.value ? h('div', { class: 'workspace-alert', role: 'alert' }, [loadError.value, h('button', { onClick: () => load() }, '重新读取')]) : null,
+        focusedJob.value ? h('section', { class: 'runtime-focused-job', 'aria-label': '定位的任务' }, [
+          h('div', { class: 'workspace-heading' }, [h('strong', '正在查看这次执行'), h('button', { class: 'text-icon-button', onClick: () => router.push('/runtime') }, '返回全部任务')]),
+          renderJob(focusedJob.value, operating.value, cancel, retry, remove, value => router.push(String(value.detail_url))),
+        ]) : null,
         h('div', { class: 'runtime-queue-filters' }, [
           h('select', { value: filters.status, onChange: (event: Event) => { filters.status = (event.target as HTMLSelectElement).value; applyFilters() } }, [
             h('option', { value: '' }, '全部状态'),
@@ -112,7 +133,7 @@ export const RuntimeQueuePanel = defineComponent({
           ]),
         ]),
         items.length
-          ? h('div', { class: 'runtime-job-list' }, items.map(job => renderJob(job, operating.value, cancel, retry, remove)))
+          ? h('div', { class: 'runtime-job-list' }, items.map(job => renderJob(job, operating.value, cancel, retry, remove, value => router.push(String(value.detail_url)))))
           : h('div', { class: 'diagnostic-empty' }, loading.value ? '正在读取队列...' : '当前没有匹配的运行记录'),
         h(ListPagination, {
           page: filters.page,
@@ -144,7 +165,8 @@ function renderJob(
   operating: string,
   cancel: (job: RuntimeJob) => void,
   retry: (job: RuntimeJob) => void,
-  remove: (job: RuntimeJob) => void
+  remove: (job: RuntimeJob) => void,
+  openDetails: (job: RuntimeJob) => void
 ) {
   const status = String(job.status || '')
   const busy = operating === String(job.id || '')
@@ -152,15 +174,16 @@ function renderJob(
   return h('article', { class: ['runtime-job-row', `runtime-${status}`] }, [
     h('div', { class: 'runtime-job-main' }, [
       h('div', [
-        h('strong', runtimeKindLabel(String(job.kind || ''))),
-        h('span', String(job.entity_id || '').slice(0, 24) || '无业务标识')
+        h('strong', job.display_name || runtimeKindLabel(String(job.kind || ''))),
+        h('span', runtimeKindLabel(job.kind))
       ]),
       h('em', { class: `status ${status}` }, runtimeStatusLabel(status))
     ]),
     h('small', runtimeJobSummary(job)),
     h('div', { class: 'runtime-job-actions' }, [
+      job.detail_url ? h('button', { onClick: () => openDetails(job) }, '查看详情') : null,
       active ? h('button', { disabled: busy, onClick: () => cancel(job) }, [h(VideoPause, { class: 'inline-icon' }), '取消']) : null,
-      ['failed', 'interrupted', 'cancelled'].includes(status) ? h('button', { disabled: busy, onClick: () => retry(job) }, [h(RefreshRight, { class: 'inline-icon' }), '重试']) : null,
+      job.retry_allowed ? h('button', { disabled: busy, onClick: () => retry(job) }, [h(RefreshRight, { class: 'inline-icon' }), '重试']) : null,
       !active ? h('button', { disabled: busy, onClick: () => remove(job) }, [h(Delete, { class: 'inline-icon' }), '删除']) : null
     ])
   ])

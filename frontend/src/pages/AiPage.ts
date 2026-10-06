@@ -1,20 +1,31 @@
 import { computed, defineComponent, h, reactive, ref, watch } from 'vue'
 import type { Component } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElDrawer } from 'element-plus'
 import { CircleCheck, CopyDocument, DataAnalysis, Delete, Finished, MagicStick, Refresh, Search, TrendCharts, User, View, Warning } from '@element-plus/icons-vue'
 import type { Dict } from '../shared/types'
+import { api } from '../shared/api'
 import { platformName } from '../shared/format'
-import { SplitPane } from '../components/ui/SplitPane'
+import '../styles/operations.css'
 import { ListPagination, type PageChange } from '../components/ui/ListPagination'
 import { emptyState, metricTile, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 export default defineComponent({
   props: {
-    workbench: { type: Object, default: () => ({}) }
+    workbench: { type: Object, default: () => ({}) },
+    query: { type: Object, default: () => ({ tab: 'competitors', keyword: '', status: '', result: '', page: 1, page_size: 10 }) }
   },
   emits: ['create-job', 'create-batch-jobs', 'delete-non-competitors', 'delete-non-customers', 'retry-job', 'retry-jobs', 'query-change'],
   setup(props, { emit }) {
+    const route = useRoute()
+    const router = useRouter()
     const activeTab = ref<'competitors' | 'leads' | 'failed' | 'history'>('competitors')
     const selected = ref<Dict | null>(null)
+    const selectedJobId = ref('')
+    const jobError = ref('')
+    let detailSeq = 0
+    let jobRequestId = ''
+    let jobRequest: Promise<void> | undefined
     const filters = reactive({
       keyword: '',
       status: '',
@@ -26,28 +37,78 @@ export default defineComponent({
     const summary = computed(() => props.workbench?.summary || {})
     const rows = computed<Dict[]>(() => props.workbench?.items || [])
     const total = computed(() => Number(props.workbench?.total || 0))
-
-    watch(() => props.workbench?.tab, tab => {
-      if (['competitors', 'leads', 'failed', 'history'].includes(String(tab || ''))) {
-        activeTab.value = tab as typeof activeTab.value
-      }
+    watch(rows, items => {
+      if (selected.value && !selectedJobId.value) selected.value = items.find(row => selectedKey(row) === selectedKey(selected.value)) || null
+    })
+    watch(() => route.query.job, (value, previous) => {
+      selectedJobId.value = String(value || '')
+      jobError.value = ''
+      if (value) { selected.value = null; void loadJob(selectedJobId.value) }
+      else { detailSeq += 1; jobRequestId = ''; jobRequest = undefined; if (previous) selected.value = null }
     }, { immediate: true })
-    watch(() => props.workbench?.page, page => filters.page = Number(page || 1))
-    watch(() => props.workbench?.page_size, pageSize => filters.pageSize = Number(pageSize || 10))
+    watch(() => props.workbench, () => { if (selectedJobId.value) void loadJob(selectedJobId.value) })
+
+    async function loadJob(id: string) {
+      if (jobRequestId === id && jobRequest) return jobRequest
+      const revision = ++detailSeq
+      jobRequestId = id
+      const request = (async () => {
+        try {
+          const { data } = await api.get(`/ai/jobs/${encodeURIComponent(id)}`)
+          // 任务中心直达详情独立于当前列表页，较慢旧请求不替换新选择。
+          if (revision === detailSeq && selectedJobId.value === id) { selected.value = data; jobError.value = '' }
+        } catch (error: any) {
+          if (revision === detailSeq) jobError.value = error?.response?.data?.detail || '分析任务详情读取失败，请重试'
+        } finally {
+          if (revision === detailSeq) { jobRequestId = ''; jobRequest = undefined }
+        }
+      })()
+      jobRequest = request
+      return request
+    }
+    function selectRow(row: Dict) {
+      detailSeq += 1
+      jobRequestId = ''; jobRequest = undefined
+      selectedJobId.value = ''
+      jobError.value = ''
+      selected.value = row
+      if (route.query.job) { const { job, ...query } = route.query; void router.replace({ path: '/ai', query }) }
+    }
+    function closeDetail() {
+      detailSeq += 1
+      jobRequestId = ''; jobRequest = undefined
+      selectedJobId.value = ''
+      selected.value = null
+      jobError.value = ''
+      if (route.query.job) { const { job, ...query } = route.query; void router.replace({ path: '/ai', query }) }
+    }
+
+    // 请求与工具栏共享父级查询；返回页面时不再显示空筛选配旧结果。
+    watch(() => props.query, value => {
+      activeTab.value = value.tab as typeof activeTab.value
+      Object.assign(filters, { keyword: value.keyword || '', status: value.status || '', result: value.result || '', page: Number(value.page || 1), pageSize: Number(value.page_size || 10) })
+    }, { immediate: true, deep: true })
+    watch(() => route.query, value => {
+      if (!value.tab) return
+      const next = { tab: String(value.tab), keyword: String(value.keyword || ''), status: String(value.status || ''), result: String(value.result || ''), page: Number(value.page || 1), page_size: Number(value.page_size || 10) }
+      if (!['competitors', 'leads', 'failed', 'history'].includes(next.tab)) return
+      if (Object.entries(next).some(([key, item]) => String(props.query[key] ?? '') !== String(item))) emit('query-change', next)
+    }, { immediate: true })
 
     function requestRows(page = filters.page, pageSize = filters.pageSize) {
-      emit('query-change', {
+      const next = {
         tab: activeTab.value,
         keyword: filters.keyword,
         status: filters.status,
         result: filters.result,
         page,
         page_size: pageSize,
-      })
+      }
+      emit('query-change', next)
+      void router.replace({ path: '/ai', query: next })
     }
     function selectTab(tab: 'competitors' | 'leads' | 'failed' | 'history') {
       activeTab.value = tab
-      filters.keyword = ''
       filters.status = ''
       filters.result = ''
       filters.page = 1
@@ -100,19 +161,29 @@ export default defineComponent({
       if (script) navigator.clipboard?.writeText(script)
     }
 
-    return () => h(SplitPane, { storageKey: 'ai-workbench', side: 'right', defaultSideWidth: 360 }, {
-      default: () => h('section', { class: 'pane ai-workbench' }, [
+    return () => h('div', { class: 'workspace-page operations-page' }, [
+      h('section', { class: 'panel ai-workbench' }, [
+        sectionTitle({ title: 'AI筛选', subtitle: '先筛竞品账号，再判断客户意向；分析任务在后台队列中执行。', icon: MagicStick }),
+        h('div', { class: 'toolbar' }, [
+          h('button', { onClick: () => router.push('/settings') }, '筛选规则与AI配置'),
+          h('button', { onClick: () => router.push({ path: '/message-workbench', query: { query: filters.keyword, status: '待私信' } }) }, '前往客户跟进'),
+          h('button', { onClick: () => router.push('/acquisition') }, '返回采集结果'),
+        ]),
+        h('details', { class: 'operations-summary' }, [h('summary', '处理概况'),
         renderSummary(summary.value),
+        ]),
         renderTabs(activeTab.value, selectTab),
         renderToolbar(activeTab.value, filters, applyFilters, runBatch, retryBatch, deleteNonCompetitors, deleteNonCustomers),
         renderRows({
           tab: activeTab.value,
           rows: rows.value,
           selected: selected.value,
-          onSelect: row => selected.value = row,
+          onSelect: selectRow,
           onRun: runSingle,
           onRetry: retryOne,
-          onCopy: copyScript
+          onCopy: copyScript,
+          onFollow: row => router.push({ path: '/message-workbench', query: { customer: String(row.target_id || row.id), status: '全部' } }),
+          onAcquire: row => router.push({ path: '/acquisition', query: { create: '1', platform: String(row.platform || 'dy'), creator: String(row.profile_url || row.sec_uid || row.platform_user_id || '') } }),
         }),
         renderPagination(
           filters,
@@ -121,8 +192,11 @@ export default defineComponent({
           pageSize => { filters.page = 1; filters.pageSize = pageSize; selected.value = null; requestRows(1, pageSize) },
         )
       ]),
-      side: () => renderDetailPane(selected.value, activeTab.value)
-    })
+      h(ElDrawer, { modelValue: Boolean(selected.value || selectedJobId.value), title: '分析详情', size: '760px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) closeDetail() } }, () => [
+        jobError.value ? h('div', { class: 'toolbar' }, [h('p', { class: 'operations-error' }, jobError.value), h('button', { onClick: () => loadJob(selectedJobId.value) }, '重新读取详情')]) : null,
+        selectedJobId.value && !selected.value && !jobError.value ? h('p', { class: 'note' }, '正在读取分析任务…') : renderDetailPane(selected.value, selectedJobId.value ? (selected.value?.status === 'failed' ? 'failed' : 'history') : activeTab.value),
+      ]),
+    ])
   }
 })
 
@@ -145,11 +219,11 @@ function renderTabs(active: string, setActive: (tab: 'competitors' | 'leads' | '
     ['failed', '失败与重试'],
     ['history', '分析历史']
   ]
-  return h('div', { class: 'ai-tabs' }, tabs.map(([key, label]) => h('button', {
-    class: active === key ? 'active' : '',
-    type: 'button',
-    onClick: () => setActive(key)
-  }, label)))
+  const button = ([key, label]: typeof tabs[number]) => h('button', { class: active === key ? 'active' : '', type: 'button', onClick: () => setActive(key) }, label)
+  return h('nav', { class: 'ai-tabs tabs' }, [
+    ...tabs.slice(0, 2).map(button),
+    h('div', { class: 'operations-secondary-tabs' }, tabs.slice(2).map(button)),
+  ])
 }
 
 function renderToolbar(
@@ -217,6 +291,8 @@ function renderRows(args: {
   onRun: (row: Dict) => void
   onRetry: (row: Dict) => void
   onCopy: (row: Dict) => void
+  onFollow: (row: Dict) => void
+  onAcquire: (row: Dict) => void
 }) {
   if (!args.rows.length) return emptyState({
     title: '当前筛选下没有数据',
@@ -256,7 +332,8 @@ function renderCompetitorRow(row: Dict, active: boolean, args: Dict) {
     h('div', { class: 'ai-object-actions' }, [
       h('button', { type: 'button', class: 'overview-action', disabled: ['排队分析', '正在分析'].includes(row.analysis_status), onClick: stop(() => args.onRun(row)) }, '分析'),
       row.job_status === 'failed' ? h('button', { type: 'button', class: 'overview-action', onClick: stop(() => args.onRetry(row)) }, '重试') : null,
-      h('button', { type: 'button', class: 'icon-button', title: '查看详情', 'aria-label': '查看详情', onClick: stop(() => args.onSelect(row)) }, [h(View)])
+      h('button', { type: 'button', class: 'icon-button', title: '查看详情', 'aria-label': '查看详情', onClick: stop(() => args.onSelect(row)) }, [h(View)]),
+      row.result_label === '竞品' && (row.profile_url || row.sec_uid || row.platform_user_id) ? h('button', { type: 'button', class: 'overview-action', onClick: stop(() => args.onAcquire(row)) }, '采集评论') : null
     ])
   ])
 }
@@ -288,7 +365,8 @@ function renderLeadRow(row: Dict, active: boolean, args: Dict) {
     h('div', { class: 'ai-object-actions' }, [
       h('button', { type: 'button', class: 'overview-action', disabled: ['排队分析', '正在分析'].includes(row.analysis_status), onClick: stop(() => args.onRun(row)) }, '意向分析'),
       row.result_script || row.script ? h('button', { type: 'button', class: 'icon-button', title: '复制话术', 'aria-label': '复制话术', onClick: stop(() => args.onCopy(row)) }, [h(CopyDocument)]) : null,
-      row.job_status === 'failed' ? h('button', { type: 'button', class: 'overview-action', onClick: stop(() => args.onRetry(row)) }, '重试') : null
+      row.job_status === 'failed' ? h('button', { type: 'button', class: 'overview-action', onClick: stop(() => args.onRetry(row)) }, '重试') : null,
+      row.result_label === '目标客户' ? h('button', { type: 'button', class: 'overview-action', onClick: stop(() => args.onFollow(row)) }, '跟进') : null
     ])
   ])
 }
@@ -367,11 +445,12 @@ function renderDetailPane(row: Dict | null, tab: string) {
     ]),
     renderDetailBlock('AI结果', [
       ['结论', row.result_label || row.output_summary || '-'],
-      ['原因', row.result_reason || row.reason || row.error || ''],
-      ['话术', row.result_script || row.script || ''],
+      ['原因', row.result_reason || row.reason || row.output_payload?.reason || row.error || ''],
+      ['话术', row.result_script || row.script || row.output_payload?.script || ''],
       ['任务', row.job_id || row.id || '-'],
       ['更新时间', row.job_updated_at || row.updated_at || '-']
-    ])
+    ]),
+    row.input_payload ? h('details', { class: 'operations-advanced' }, [h('summary', '本次分析的原始证据'), h('pre', JSON.stringify(row.input_payload, null, 2))]) : null,
   ])
 }
 
