@@ -4,9 +4,7 @@
       <div class="brand"><img class="brand-mark" src="/ai-customer-icon.png" alt="" /><div><strong>AI 获客</strong><span>本地运营工作台</span></div></div>
       <el-menu ref="sidebarMenu" :default-active="activeMenuItem" :default-openeds="[]" :unique-opened="true" class="nav" @select="goToView">
         <el-menu-item index="workspace"><el-icon><House /></el-icon><span>工作台</span></el-menu-item>
-        <el-sub-menu index="lead-workbench"><template #title><el-icon><Operation /></el-icon><span>获客</span></template>
-          <el-menu-item index="acquisition">采集与结果</el-menu-item><el-menu-item index="ai">AI 筛选</el-menu-item>
-        </el-sub-menu>
+        <el-menu-item index="acquisition"><el-icon><Operation /></el-icon><span>获客工作台</span></el-menu-item>
         <el-sub-menu index="message-center"><template #title><el-icon><Message /></el-icon><span>客户</span></template>
           <el-menu-item index="message-workbench">客户跟进</el-menu-item><el-menu-item index="message-batches">触达记录</el-menu-item>
         </el-sub-menu>
@@ -30,7 +28,17 @@
         <div class="topbar-heading"><span class="topbar-kicker">{{ topbarKicker }}</span><h1>{{ viewTitle }}</h1><p>{{ viewSubtitle }}</p></div>
         <div class="topbar-actions"><button v-if="showEnvironmentStatus" class="topbar-env-tag" :class="topbarEnvClass" @click="goToView(isContentView ? 'content-settings' : isTrafficView ? 'traffic-settings' : 'settings')">{{ topbarEnvLabel }}</button><el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button></div>
       </el-header>
-      <el-main class="main" :class="`view-${activeView}`"><RouterView v-slot="{ Component }"><component :is="Component" v-bind="routeProps" v-on="routeListeners" /></RouterView></el-main>
+      <el-main class="main" :class="`view-${activeView}`">
+        <div :class="{ 'workspace-page': isAcquisitionView }">
+          <nav v-if="isAcquisitionView" class="workspace-tabs" aria-label="获客工作区">
+            <button v-for="[name, label] in acquisitionTabs" :key="name" type="button" :class="{ 'is-active': activeView === name }" :aria-current="activeView === name ? 'page' : undefined" @click="goToView(name)">{{ label }}</button>
+          </nav>
+          <RouterView v-slot="{ Component }">
+            <!-- 仅保留 AI 详情和来源树；创建表单、规则页仍正常卸载并执行离页保护。 -->
+            <KeepAlive :include="['AiPage', 'OverviewPage']" :max="2"><component :is="Component" v-bind="routeProps" v-on="routeListeners" /></KeepAlive>
+          </RouterView>
+        </div>
+      </el-main>
     </el-container>
     <LicenseDialog :open="licenseDialogOpen" :loading="licenseLoading" :checking="licenseChecking" :info="licenseInfo" :code="licenseCodeDraft" @update:code="updateLicenseCodeDraft" @close="closeLicenseDialog" @save="saveLicenseCode" @check="checkLicense" @copy-device="copyDeviceCode" />
   </el-container>
@@ -218,25 +226,25 @@ const {
 })
 
 const activeView = computed(() => String(route.name || 'workspace'))
+const acquisitionTabs = [['acquisition', '采集与结果'], ['ai', 'AI筛选'], ['overview', '来源与证据'], ['settings', '采集与筛选规则']]
+const isAcquisitionView = computed(() => acquisitionTabs.some(([name]) => name === activeView.value) || activeView.value === 'tables')
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
 const isRuntimeView = computed(() => activeView.value === 'runtime-center')
 const isMessageView = computed(() => activeView.value.startsWith('message-'))
 const isGlobalSettingsView = computed(() => activeView.value === 'global-settings')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
-const activeMenuItem = computed(() => isTrafficView.value ? 'traffic-plans' : ({
-  settings: 'acquisition', overview: 'acquisition', tables: 'acquisition',
+const activeMenuItem = computed(() => isAcquisitionView.value ? 'acquisition' : isTrafficView.value ? 'traffic-plans' : ({
   'message-settings': 'message-workbench', 'content-settings': 'content-create',
 } as Record<string, string>)[activeView.value] || activeView.value)
 const activeMenuGroup = computed(() => {
   if (isMessageView.value) return 'message-center'
   if (isContentView.value) return 'content-workbench'
-  if (['acquisition', 'overview', 'ai', 'tables', 'settings'].includes(activeView.value)) return 'lead-workbench'
   return ''
 })
 const topbarKicker = computed(() => activeView.value === 'workspace' ? '日常工作' : activeView.value === 'accounts' ? '配置' : isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isMessageView.value ? '私信工作台' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))))
-const viewTitle = computed(() => String(route.meta.title || '工作台'))
-const viewSubtitle = computed(() => String(route.meta.subtitle || ''))
+const viewTitle = computed(() => isAcquisitionView.value ? '获客工作台' : String(route.meta.title || '工作台'))
+const viewSubtitle = computed(() => isAcquisitionView.value ? '从采集、筛选到来源证据，在同一工作区推进获客。' : String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
 const showEnvironmentStatus = computed(() => ['acquisition', 'settings', 'content-create', 'content-settings', 'traffic-plans', 'traffic-settings'].includes(activeView.value))
 const topbarEnvOk = computed(() => isContentView.value ? Boolean(contentEnv.value?.ok) : isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)
@@ -437,7 +445,7 @@ const routeListeners = computed(() => {
   return {}
 })
 
-// 侧栏重进入列表时恢复查询；单次任务、编辑对象等深链接不作为列表筛选保存。
+// 获客页签保留完整工作位置；其它模块的侧栏仍只恢复列表筛选。
 const listQueryFields: Record<string, string[]> = {
   'traffic-plans': ['archive', 'page'],
   'traffic-monitor': ['archive', 'page'],
@@ -445,13 +453,24 @@ const listQueryFields: Record<string, string[]> = {
   'automation-plans': ['section', 'plan_type', 'plan_page', 'plan_page_size', 'run_page', 'run_page_size'],
   'runtime-center': ['status', 'kind', 'page', 'page_size'],
 }
-const rememberedListQueries: Record<string, Dict> = {}
-watch(() => [route.name, route.query] as const, ([name, query]) => {
-  const fields = listQueryFields[String(name)]
-  if (fields?.some(field => field in query)) rememberedListQueries[String(name)] = Object.fromEntries(fields.filter(field => field in query).map(field => [field, query[field]]))
+const rememberedViewQueries: Record<string, Dict> = {}
+watch(() => [route.name, route.query] as const, ([name, query], previous) => {
+  const view = String(name)
+  const fields = listQueryFields[view]
+  if (acquisitionTabs.some(([tab]) => tab === view) || view === 'tables') rememberedViewQueries[view] = { ...query }
+  else if (fields?.some(field => field in query)) rememberedViewQueries[view] = Object.fromEntries(fields.filter(field => field in query).map(field => [field, query[field]]))
+  if (view !== 'acquisition') return
+  // 地址里的采集筛选同时支持刷新、后退和页签返回；同路由变化只重读列表。
+  const page = Math.max(1, Number(query.page || 1))
+  const pageSize = Math.max(1, Number(query.page_size || 10))
+  const search = String(query.query || '')
+  const changed = taskPage.value !== page || taskPageSize.value !== pageSize || taskQuery.value !== search
+  taskPage.value = page; taskPageSize.value = pageSize; taskQuery.value = search
+  if (!query.task) selectedTask.value = null
+  if (changed && previous?.[0] === name) void loadTasks()
 }, { immediate: true })
 function goToView(view: string) {
-  router.push({ name: view, query: rememberedListQueries[view] || {} })
+  router.push({ name: view, query: rememberedViewQueries[view] || {} })
 }
 
 async function refreshAll(notifyFailure = false) {
@@ -753,7 +772,7 @@ watch(activeView, () => {
 
 watch(activeMenuGroup, async group => {
   await nextTick()
-  for (const item of ['lead-workbench', 'message-center', 'content-workbench']) {
+  for (const item of ['message-center', 'content-workbench']) {
     if (item !== group) sidebarMenu.value?.close?.(item)
   }
   if (group) sidebarMenu.value?.open?.(group)

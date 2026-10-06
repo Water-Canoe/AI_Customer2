@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AiPage from './AiPage'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), replace: vi.fn(), push: vi.fn(), route: { query: {} as Record<string, string> } }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), replace: vi.fn(), push: vi.fn(), route: { name: 'ai', query: {} as Record<string, string> } }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get } }))
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => mocks }))
 vi.mock('element-plus', async () => {

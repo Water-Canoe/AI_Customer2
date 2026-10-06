@@ -11,6 +11,7 @@ import { ListPagination, type PageChange } from '../components/ui/ListPagination
 import { emptyState, metricTile, sectionTitle, type WorkbenchTone } from '../components/ui/Workbench'
 
 export default defineComponent({
+  name: 'AiPage',
   props: {
     workbench: { type: Object, default: () => ({}) },
     query: { type: Object, default: () => ({ tab: 'competitors', keyword: '', status: '', result: '', page: 1, page_size: 10 }) }
@@ -40,13 +41,16 @@ export default defineComponent({
     watch(rows, items => {
       if (selected.value && !selectedJobId.value) selected.value = items.find(row => selectedKey(row) === selectedKey(selected.value)) || null
     })
-    watch(() => route.query.job, (value, previous) => {
+    watch(() => [route.name, route.query.job] as const, ([name, value]) => {
+      // 缓存期间不响应其它页面的参数，回到本页才更新当前详情。
+      if (name !== 'ai' || String(value || '') === selectedJobId.value) return
+      const previous = selectedJobId.value
       selectedJobId.value = String(value || '')
       jobError.value = ''
       if (value) { selected.value = null; void loadJob(selectedJobId.value) }
       else { detailSeq += 1; jobRequestId = ''; jobRequest = undefined; if (previous) selected.value = null }
     }, { immediate: true })
-    watch(() => props.workbench, () => { if (selectedJobId.value) void loadJob(selectedJobId.value) })
+    watch(() => props.workbench, () => { if (route.name === 'ai' && selectedJobId.value) void loadJob(selectedJobId.value) })
 
     async function loadJob(id: string) {
       if (jobRequestId === id && jobRequest) return jobRequest
@@ -88,8 +92,8 @@ export default defineComponent({
       activeTab.value = value.tab as typeof activeTab.value
       Object.assign(filters, { keyword: value.keyword || '', status: value.status || '', result: value.result || '', page: Number(value.page || 1), pageSize: Number(value.page_size || 10) })
     }, { immediate: true, deep: true })
-    watch(() => route.query, value => {
-      if (!value.tab) return
+    watch(() => [route.name, route.query] as const, ([name, value]) => {
+      if (name !== 'ai' || !value.tab) return
       const next = { tab: String(value.tab), keyword: String(value.keyword || ''), status: String(value.status || ''), result: String(value.result || ''), page: Number(value.page || 1), page_size: Number(value.page_size || 10) }
       if (!['competitors', 'leads', 'failed', 'history'].includes(next.tab)) return
       if (Object.entries(next).some(([key, item]) => String(props.query[key] ?? '') !== String(item))) emit('query-change', next)
@@ -165,9 +169,7 @@ export default defineComponent({
       h('section', { class: 'panel ai-workbench' }, [
         sectionTitle({ title: 'AI筛选', subtitle: '先筛竞品账号，再判断客户意向；分析任务在后台队列中执行。', icon: MagicStick }),
         h('div', { class: 'toolbar' }, [
-          h('button', { onClick: () => router.push('/settings') }, '筛选规则与AI配置'),
           h('button', { onClick: () => router.push({ path: '/message-workbench', query: { query: filters.keyword, status: '待私信' } }) }, '前往客户跟进'),
-          h('button', { onClick: () => router.push('/acquisition') }, '返回采集结果'),
         ]),
         h('details', { class: 'operations-summary' }, [h('summary', '处理概况'),
         renderSummary(summary.value),
@@ -192,7 +194,7 @@ export default defineComponent({
           pageSize => { filters.page = 1; filters.pageSize = pageSize; selected.value = null; requestRows(1, pageSize) },
         )
       ]),
-      h(ElDrawer, { modelValue: Boolean(selected.value || selectedJobId.value), title: '分析详情', size: '760px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) closeDetail() } }, () => [
+      h(ElDrawer, { modelValue: route.name === 'ai' && Boolean(selected.value || selectedJobId.value), title: '分析详情', size: '760px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value && route.name === 'ai') closeDetail() } }, () => [
         jobError.value ? h('div', { class: 'toolbar' }, [h('p', { class: 'operations-error' }, jobError.value), h('button', { onClick: () => loadJob(selectedJobId.value) }, '重新读取详情')]) : null,
         selectedJobId.value && !selected.value && !jobError.value ? h('p', { class: 'note' }, '正在读取分析任务…') : renderDetailPane(selected.value, selectedJobId.value ? (selected.value?.status === 'failed' ? 'failed' : 'history') : activeTab.value),
       ]),

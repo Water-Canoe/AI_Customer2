@@ -62,11 +62,8 @@ export default defineComponent({
     }
     return () => h('div', { class: 'workspace-page operations-page acquisition-workspace' }, [
       h('div', { class: 'toolbar acquisition-heading' }, [
-        h('div', [h('h2', '采集与结果'), h('p', { class: 'note' }, '新建采集 → 确认产出 → AI筛选 → 客户跟进')]),
-        h('button', { class: 'primary-action', disabled: submitting.value || Boolean(cleanupError.value), onClick: () => router.replace({ path: '/acquisition', query: { create: '1' } }) }, '新建采集'),
-        h('button', { onClick: () => router.push('/ai') }, 'AI筛选'),
-        h('button', { onClick: () => router.push('/overview') }, '来源与证据'),
-        h('button', { onClick: () => router.push('/settings') }, '采集与筛选规则'),
+        h('button', { class: 'primary-action', disabled: submitting.value || Boolean(cleanupError.value), onClick: () => router.replace({ path: '/acquisition', query: { ...route.query, create: '1' } }) }, '新建采集'),
+        h('p', { class: 'note' }, '新建采集 → 确认产出 → AI筛选 → 客户跟进'),
       ]),
       cleanupError.value ? h('div', { class: 'panel toolbar' }, [h('span', { class: 'operations-error' }, `${cleanupError.value} 任务 ${createdTaskId.value}`), h('button', { disabled: submitting.value, onClick: retryCleanup }, '重试清理草稿'), h('button', { onClick: () => emit('open-logs', createdTaskId.value) }, '查看已创建任务')]) : null,
       h('details', { class: 'acquisition-data-tools' }, [h('summary', '数据维护'), h('div', { class: 'toolbar' }, [h('span', { class: 'note' }, '按对象维护内容、评论、竞品、线索与客户资料。'), h('button', { onClick: () => router.push('/tables') }, '打开数据表')])]),

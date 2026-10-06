@@ -27,6 +27,7 @@ type OverviewHandlers = {
 }
 
 export default defineComponent({
+  name: 'OverviewPage',
   props: { tree: { type: Array, required: true } },
   emits: ['account-analyze', 'keyword-analyze', 'customer-intent-analyze', 'account-customers-analyze', 'customer-message', 'customer-follow-update', 'delete-account', 'delete-customer', 'delete-account-noncustomers', 'delete-platform', 'delete-keyword', 'delete-keyword-noncompetitors', 'find-customers'],
   setup(props, { emit }) {

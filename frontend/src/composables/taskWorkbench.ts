@@ -8,7 +8,7 @@ import type { Dict, TaskPage, TaskRecord } from '../shared/types'
 
 
 type TaskWorkbenchOptions = {
-  router: Pick<Router, 'push'>
+  router: Pick<Router, 'push' | 'replace'>
   refreshRelated: () => Promise<unknown>
 }
 
@@ -24,6 +24,10 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
   const diagnostics = ref<Dict>({})
   const dedupSummary = ref<Dict>({})
   const retryDraft = ref<(TaskRecord & { retry_token?: number }) | null>(null)
+  let listRequestSeq = 0
+
+  // 采集列表上下文随操作写入地址，详情和新建入口沿用相同筛选。
+  const listQuery = () => ({ query: query.value, page: String(page.value), page_size: String(pageSize.value) })
 
   async function fetchTask(id: string) {
     const { data } = await api.get<TaskRecord>(`/tasks/${id}`)
@@ -31,9 +35,11 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
   }
 
   async function loadTasks() {
+    const requestSeq = ++listRequestSeq
     const { data } = await api.get<TaskPage>('/tasks', {
       params: { page: page.value, page_size: pageSize.value, query: query.value },
     })
+    if (requestSeq !== listRequestSeq) return
     tasks.value = data.items
     total.value = Number(data.total || 0)
     page.value = Number(data.page || 1)
@@ -64,9 +70,11 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
 
   async function changePage(payload: PageChange) {
     page.value = Number(payload.page || 1)
+    pageSize.value = Number(payload.page_size || pageSize.value)
     selected.value = null
     diagnostics.value = {}
     dedupSummary.value = {}
+    await options.router.replace({ path: '/acquisition', query: listQuery() })
     await loadTasks()
     await loadDiagnostics()
   }
@@ -77,6 +85,7 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
     selected.value = null
     diagnostics.value = {}
     dedupSummary.value = {}
+    await options.router.replace({ path: '/acquisition', query: listQuery() })
     await loadTasks()
     await loadDiagnostics()
   }
@@ -105,7 +114,7 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
       await loadTasks()
       selected.value = await fetchTask(data.id)
       await loadDiagnostics(data.id)
-      await options.router.push({ path: '/acquisition', query: { task: data.id } })
+      await options.router.push({ path: '/acquisition', query: { ...listQuery(), task: data.id } })
     } catch (error: any) {
       ElMessage.error(created ? '任务已创建，结果刷新失败，请刷新查看' : error?.response?.data?.detail || '任务创建失败')
     } finally { onSettled?.() }
@@ -114,7 +123,7 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
   async function openLogs(id: string) {
     selected.value = await fetchTask(id)
     await loadDiagnostics(id)
-    await options.router.push({ path: '/acquisition', query: { task: id } })
+    await options.router.push({ path: '/acquisition', query: { ...listQuery(), task: id } })
   }
 
   async function selectTask(id: string) {
@@ -138,7 +147,7 @@ export function useTaskWorkbench(options: TaskWorkbenchOptions) {
 
   function retryTask(task: TaskRecord) {
     retryDraft.value = { ...task, retry_token: Date.now() }
-    void options.router.push({ path: '/acquisition', query: { create: '1' } })
+    void options.router.push({ path: '/acquisition', query: { ...listQuery(), create: '1' } })
     ElMessage.success('已带入失败任务参数，请确认后重新启动')
   }
 
