@@ -364,6 +364,8 @@ def tts(
     voice_rate: float,
     voice_file: str,
     voice_volume: float = 1.0,
+    *,
+    voice_profile_snapshot: dict[str, str] | None = None,
 ) -> Union[SubMaker, None]:
     if is_no_voice(voice_name):
         duration_seconds = estimate_no_voice_duration(text)
@@ -392,6 +394,7 @@ def tts(
             voice_file,
             voice_rate=voice_rate,
             voice_volume=voice_volume,
+            snapshot=voice_profile_snapshot,
         )
         duration_seconds = get_audio_duration(voice_file)
         return populate_legacy_submaker_with_full_text(

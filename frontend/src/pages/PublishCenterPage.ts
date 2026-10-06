@@ -1,5 +1,5 @@
 import { computed, defineComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Promotion } from '@element-plus/icons-vue'
 import { api } from '../shared/api'
@@ -23,7 +23,8 @@ export default defineComponent({
     const accounts = ref<PlatformAccount[]>([])
     const tasks = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
     const focusedTask = ref<Dict | null>(null)
-    const savedDrafts = ref<Dict[]>([])
+    const savedDrafts = ref<Dict>({ items: [], total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE })
+    const draftSearch = ref('')
     const taskStatus = ref('')
     const composer = ref<Dict>(emptyComposer())
     const composerOpen = ref(false)
@@ -31,6 +32,7 @@ export default defineComponent({
     const sourceItems = ref<Dict[]>([])
     const draftKey = ref(String(route.query.draft_id || crypto.randomUUID()))
     const loading = ref(false)
+    const restoringComposer = ref(false)
     let loadedComposerKey = ''
     let pageActive = true
     const persistentDraft = usePersistentDraft({ kind: 'publish', key: draftKey,
@@ -51,6 +53,13 @@ export default defineComponent({
     onUnmounted(() => { pageActive = false; refresh.stop() })
     watch(() => props.refreshSeq, () => void refresh.trigger('route'))
     watch(() => route.fullPath, () => void refresh.trigger('route'))
+    onBeforeRouteLeave(() => !restoringComposer.value)
+    onBeforeRouteUpdate(async to => {
+      // 同组件切换也须完成素材读取；写入失败时保留当前编辑器。
+      if (restoringComposer.value) return false
+      if (to?.query.draft_id === draftKey.value) return true
+      try { await persistentDraft.flush(); return true } catch { return false }
+    })
 
     function accountUrl() { return { path: '/accounts', query: { return_to: route.fullPath } } }
     async function loadAll(showError = true) {
@@ -66,28 +75,44 @@ export default defineComponent({
           focusedTask.value = data
         } else focusedTask.value = null
         if (showError && pageActive) {
-          const { data } = await api.get('/drafts/publish', { params: { page: 1, page_size: 5 } })
-          savedDrafts.value = data.items || []
+          await loadSavedDrafts()
         }
       } catch (error: any) { if (showError) ElMessage.error(error?.response?.data?.detail || '发布中心加载失败') }
     }
+
+    async function loadSavedDrafts() {
+      const params = { page: savedDrafts.value.page, page_size: savedDrafts.value.page_size, search: draftSearch.value }
+      try {
+        const { data } = await api.get('/drafts/publish', { params })
+        if (pageActive && params.page === savedDrafts.value.page && params.page_size === savedDrafts.value.page_size && params.search === draftSearch.value) savedDrafts.value = data
+      } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '发布草稿查询失败') }
+    }
+
+    function searchSavedDrafts() { savedDrafts.value.page = 1; void loadSavedDrafts() }
 
     async function openComposerFromRoute() {
       const outputIds = String(route.query.output_ids || '').split(',').filter(Boolean)
       const assetIds = String(route.query.asset_ids || '').split(',').filter(Boolean)
       const requestedKey = String(route.query.draft_id || '')
-      if (!outputIds.length && !assetIds.length && !requestedKey) return
-      if (requestedKey && requestedKey === loadedComposerKey) return
+      if (!outputIds.length && !assetIds.length && !requestedKey) { composerOpen.value = false; return }
+      if (requestedKey && requestedKey === loadedComposerKey) { composerOpen.value = true; return }
+      if (restoringComposer.value) return
       const requestedSource = outputIds.length ? { type: 'video_output', output_ids: outputIds } : { type: 'assets', asset_ids: assetIds }
       if (!requestedKey && composerOpen.value && composer.value.source && publishSourceKey(requestedSource) === publishSourceKey(composer.value.source)) return
+      const requestedPath = route.fullPath
+      const nextKey = requestedKey || (loadedComposerKey ? crypto.randomUUID() : draftKey.value)
+      const retryingCurrent = Boolean(composerError.value && nextKey === draftKey.value)
+      const ownsRestore = () => pageActive && route.name === 'content-publish' && route.fullPath === requestedPath && draftKey.value === nextKey
+      restoringComposer.value = true
       composerError.value = ''
       try {
         if (loadedComposerKey) await persistentDraft.flush()
-        draftKey.value = requestedKey || crypto.randomUUID()
-        composer.value = emptyComposer()
+        if (!pageActive || route.fullPath !== requestedPath) return
+        draftKey.value = nextKey
+        if (!retryingCurrent) composer.value = emptyComposer()
         composerOpen.value = false
         const record = await persistentDraft.load()
-        if (!pageActive) return
+        if (!ownsRestore()) return
         if (!record.exists) {
           composer.value.source = outputIds.length ? { type: 'video_output', output_ids: outputIds } : { type: 'assets', asset_ids: assetIds }
           composer.value.account_ids = accounts.value.filter(account => account.default_features.includes('publish') && isAccountFeatureReady(account, 'publish')).map(account => account.id)
@@ -97,23 +122,28 @@ export default defineComponent({
           // 已提交草稿只用于定位结果与清理，不依赖仍然存在的原始素材。
           sourceItems.value = []
           composerOpen.value = true
-          loadedComposerKey = draftKey.value
+          loadedComposerKey = nextKey
           return
         }
         const source = composer.value.source
-        sourceItems.value = await Promise.all((source.type === 'video_output' ? source.output_ids : source.asset_ids).map(async (id: string) => {
+        const items = await Promise.all((source.type === 'video_output' ? source.output_ids : source.asset_ids).map(async (id: string) => {
           const { data } = await api.get(source.type === 'video_output' ? '/content/outputs/' + id : '/content/assets/' + id)
           return data
         }))
+        if (!ownsRestore()) return
+        sourceItems.value = items
         if (!record.exists) {
           const first = sourceItems.value[0]
           composer.value.title = first?.subject || String(first?.name || '').replace(/\.[^.]+$/, '')
           composer.value.description = first?.script || ''
         }
         composerOpen.value = true
-        loadedComposerKey = draftKey.value
-        if (!requestedKey) await router.replace({ path: '/content-publish', query: { ...route.query, draft_id: draftKey.value } })
-      } catch (error: any) { composerError.value = error?.response?.data?.detail || error?.message || '发布草稿读取失败'; ElMessage.error(composerError.value) }
+        loadedComposerKey = nextKey
+        restoringComposer.value = false
+        if (!requestedKey) await router.replace({ path: '/content-publish', query: { ...route.query, draft_id: nextKey } })
+      } catch (error: any) {
+        if (ownsRestore()) { composerError.value = error?.response?.data?.detail || error?.message || '发布草稿读取失败'; ElMessage.error(composerError.value) }
+      } finally { restoringComposer.value = false }
     }
 
     function accountCopy(id: string): Dict { return composer.value.account_overrides[id] || composer.value }
@@ -228,7 +258,7 @@ export default defineComponent({
     function renderComposer() {
       if (!composerOpen.value) return null
       return h('section', { class: 'workspace-panel publish-composer' }, [
-        h('div', { class: 'workspace-heading' }, [h('div', [h('h2', '准备发布'), h('p', { class: 'workspace-note' }, '选择账号并确认文案，提交后每个账号独立记录结果。')]), h('button', { class: 'secondary-action', onClick: () => router.push('/content-records') }, '返回作品库')]),
+        h('div', { class: 'workspace-heading' }, [h('div', [h('h2', '准备发布'), h('p', { class: 'workspace-note' }, '选择账号并确认文案，提交后每个账号独立记录结果。')]), h('div', { class: 'workspace-toolbar' }, [h('button', { class: 'secondary-action', onClick: () => router.push('/content-publish') }, '返回发布草稿'), h('button', { class: 'secondary-action', onClick: () => router.push('/content-records') }, '返回作品库')])]),
         h('div', { class: 'publish-source-strip' }, sourceItems.value.map(item => h('span', String(item.subject || item.name) + (item.attempt ? ' · 第 ' + item.attempt + ' 次成品' : '')))),
         h('div', { class: 'workspace-heading' }, [h('h3', '1. 发布账号'), h('button', { class: 'secondary-action', onClick: () => router.push(accountUrl()) }, '准备账号')]),
         h('div', { class: 'publish-account-options' }, accounts.value.map(account => h('label', [h('input', { type: 'checkbox', disabled: !isAccountFeatureReady(account, 'publish'), checked: composer.value.account_ids.includes(account.id), onChange: (event: Event) => { composer.value.account_ids = (event.target as HTMLInputElement).checked ? [...new Set([...composer.value.account_ids, account.id])] : composer.value.account_ids.filter((id: string) => id !== account.id) } }), platformLabel(account.platform) + ' · ' + account.name + (isAccountFeatureReady(account, 'publish') ? '' : '（需登录）')]))),
@@ -284,8 +314,17 @@ export default defineComponent({
         h('p', { class: 'workspace-note' }, focusedTask.value.output_name ? '使用成品：' + focusedTask.value.output_name : (focusedTask.value.assets || []).map((asset: Dict) => asset.name).join('、') || '等待视频生成'),
         focusedTask.value.video_job_id ? h('button', { class: 'secondary-action', onClick: () => router.push({ path: '/content-records', query: { job: focusedTask.value!.video_job_id } }) }, '查看对应生成记录') : null,
       ]) : null,
-      composerError.value && !composerOpen.value ? h('section', { class: 'workspace-panel' }, [h('p', { class: 'publish-validation' }, composerError.value), h('button', { class: 'secondary-action', onClick: openComposerFromRoute }, '重试读取发布草稿')]) : null,
-      !composerOpen.value && savedDrafts.value.length ? h('section', { class: 'workspace-panel' }, [h('h3', '发布草稿与提交结果'), h('div', { class: 'workspace-toolbar' }, savedDrafts.value.map(draft => h('button', { class: 'secondary-action', onClick: () => router.push({ path: '/content-publish', query: draft.payload?.return_context?.selection?.length ? draft.payload.return_context.query : { draft_id: draft.key } }) }, (draft.payload?.return_context?.selection?.length ? '已提交 · ' : '') + (draft.payload?.title || '继续发布草稿'))))]) : null,
+      composerError.value && !composerOpen.value ? h('section', { class: 'workspace-panel' }, [h('p', { class: 'publish-validation' }, composerError.value), h('button', { class: 'secondary-action', disabled: restoringComposer.value, onClick: openComposerFromRoute }, '重试读取发布草稿')]) : null,
+      !composerOpen.value ? h('section', { class: 'workspace-panel publish-draft-library' }, [
+        h('h3', '发布草稿与提交结果'),
+        h('div', { class: 'workspace-toolbar' }, [h('input', { placeholder: '搜索全部发布草稿', value: draftSearch.value, onInput: (event: Event) => draftSearch.value = (event.target as HTMLInputElement).value, onKeyup: (event: KeyboardEvent) => { if (event.key === 'Enter') searchSavedDrafts() } }), h('button', { class: 'secondary-action', onClick: searchSavedDrafts }, '搜索草稿')]),
+        h('div', { class: 'content-work-list' }, savedDrafts.value.items.map((draft: Dict) => h('article', { class: 'content-work-row' }, [
+          h('div', [h('h3', draft.payload?.title || '未命名发布草稿'), h('p', { class: 'workspace-note' }, `更新于 ${draft.updated_at || '—'} · ${draft.payload?.account_ids?.length || 0} 个账号`)]),
+          h('button', { class: 'secondary-action', disabled: restoringComposer.value, onClick: () => router.push({ path: '/content-publish', query: draft.payload?.return_context?.selection?.length ? draft.payload.return_context.query : { draft_id: draft.key } }) }, (draft.payload?.return_context?.selection?.length ? '查看已提交任务 · ' : '继续编辑 · ') + (draft.payload?.title || '未命名发布草稿')),
+        ]))),
+        !savedDrafts.value.items.length ? h('p', { class: 'workspace-note' }, draftSearch.value ? '没有匹配的发布草稿，请调整搜索。' : '暂无发布草稿，从作品库选择成品即可开始。') : null,
+        h(ListPagination, { page: savedDrafts.value.page, pageSize: savedDrafts.value.page_size, total: savedDrafts.value.total, onChange: (value: PageChange) => { savedDrafts.value.page = value.page; savedDrafts.value.page_size = value.page_size; void loadSavedDrafts() } }),
+      ]) : null,
       renderTasks(),
     ])
   },

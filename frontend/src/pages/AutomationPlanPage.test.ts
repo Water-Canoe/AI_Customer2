@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AutomationPlanPage from './AutomationPlanPage'
+import { ListPagination } from '../components/ui/ListPagination'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), push: vi.fn(), replace: vi.fn(), route: { query: {} as Record<string, string> } }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post, put: mocks.put, delete: mocks.remove } }))
@@ -76,6 +77,28 @@ describe('自动化详情与草稿', () => {
     await flushPromises()
     expect(mocks.remove).toHaveBeenCalledTimes(2)
     expect(mocks.post).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+  it('restores plan type and separate plan and run pages without interpreting the type as a creation link', async () => {
+    mocks.route.query = { section: 'plans', plan_type: 'message', plan_page: '2', plan_page_size: '10', run_page: '3', run_page_size: '5' }
+    const plans = Array.from({ length: 22 }, (_, index) => ({ id: `plan-${index}`, name: `私信计划${index}`, plan_type: 'message', weekdays: [1], run_time: '10:00', config: {} }))
+    mocks.get.mockImplementation(async (url: string) => ({ data: url === '/automation/plans' ? { items: [...plans, { id: 'traffic-plan', plan_type: 'traffic' }], summary: {} } : url === '/automation/runs' ? { items: [], page: 3, page_size: 5, total: 17 } : [] }))
+    let wrapper = mount(AutomationPlanPage)
+    await flushPromises()
+    expect(mocks.get).toHaveBeenCalledWith('/automation/runs', { params: { page: 3, page_size: 5, plan_id: '' } })
+    expect(wrapper.get('[aria-label="计划类型"] .active').text()).toBe('自动私信')
+    expect(wrapper.getComponent(ListPagination).props()).toMatchObject({ page: 2, pageSize: 10, total: 22 })
+    expect(mocks.get.mock.calls.some(([url]) => String(url).startsWith('/drafts/'))).toBe(false)
+    wrapper.getComponent(ListPagination).vm.$emit('change', { page: 3, page_size: 10 })
+    await flushPromises()
+    const query = mocks.replace.mock.calls[mocks.replace.mock.calls.length - 1][0].query
+    expect(query).toMatchObject({ section: 'plans', plan_type: 'message', plan_page: 3, run_page: 3, run_page_size: 5 })
+    wrapper.unmount()
+    mocks.route.query = query
+    wrapper = mount(AutomationPlanPage)
+    await flushPromises()
+    expect(wrapper.getComponent(ListPagination).props()).toMatchObject({ page: 3, pageSize: 10 })
+    expect(mocks.get).toHaveBeenCalledWith('/automation/runs', { params: { page: 3, page_size: 5, plan_id: '' } })
     wrapper.unmount()
   })
 })

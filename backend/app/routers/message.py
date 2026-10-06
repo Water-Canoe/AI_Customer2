@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from app import database
@@ -22,8 +23,8 @@ def update_message_limits(payload: MessageLimitsUpdate) -> dict[str, object]:
 
 
 @router.get("/keywords")
-def message_workbench_keywords() -> list[dict[str, object]]:
-    return message_workbench.list_keywords()
+def message_workbench_keywords(intention: Literal["", "高", "中", "低"] = "") -> list[dict[str, object]]:
+    return message_workbench.list_keywords(intention)
 
 
 @router.get("/customers")
@@ -34,8 +35,9 @@ def message_workbench_customers(
     query: str = Query(default=""),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    intention: Literal["", "高", "中", "低"] = "",
 ) -> dict[str, object]:
-    return message_workbench.list_customers(keyword=keyword, platform=platform, status=status, query=query, page=page, page_size=page_size)
+    return message_workbench.list_customers(keyword=keyword, platform=platform, status=status, query=query, page=page, page_size=page_size, intention=intention)
 
 
 @router.get("/customers/{lead_id}")

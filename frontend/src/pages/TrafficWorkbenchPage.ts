@@ -53,7 +53,8 @@ export default defineComponent({
   props: {
     refreshSeq: { type: Number, default: 0 },
   },
-  setup(props) {
+  emits: ['navigate-view'],
+  setup(props, { emit }) {
     const route = useRoute()
     const router = useRouter()
     const editorOpen = ref(false)
@@ -134,8 +135,38 @@ export default defineComponent({
       account.platform === planDraft.value.platform && isAccountFeatureReady(account, 'traffic')
     ))
 
-    onMounted(async () => { await loadPage(); await openFromRoute() })
+    // 四个子视图分别保存列表条件，不携带其他页的运行或编辑对象。
+    function listQuery(name = view.value): Dict {
+      if (name === 'traffic-plans') return { archive: planArchiveFilter.value, page: planPage.value }
+      if (name === 'traffic-monitor') return { archive: runArchiveFilter.value, page: runPage.value }
+      if (name === 'traffic-records') return { ...recordFilters.value }
+      return {}
+    }
+    function persistListQuery(name = view.value) {
+      if (name !== view.value) return
+      const query = listQuery(name)
+      if (Object.entries(query).some(([key, value]) => String(route.query[key] ?? '') !== String(value))) void router.replace({ query: { ...route.query, ...query } })
+    }
+    function restoreListQuery() {
+      const before = JSON.stringify(listQuery())
+      const query = route.query
+      const page = Math.max(1, Number(query.page || 1))
+      if (view.value === 'traffic-plans') {
+        if (query.archive) planArchiveFilter.value = String(query.archive)
+        if (query.page) planPage.value = page
+      } else if (view.value === 'traffic-monitor') {
+        if (query.archive) runArchiveFilter.value = String(query.archive)
+        if (query.page) runPage.value = page
+      } else if (view.value === 'traffic-records') {
+        for (const key of ['query', 'platform', 'status', 'action'] as const) if (key in query) recordFilters.value[key] = String(query[key] || '')
+        if (query.page) recordFilters.value.page = page
+        if (query.page_size) recordFilters.value.page_size = Number(query.page_size)
+      }
+      return before !== JSON.stringify(listQuery())
+    }
+    onMounted(async () => { restoreListQuery(); await loadPage(); await openFromRoute() })
     watch(view, (current, previous) => {
+      restoreListQuery()
       // 路由真正离开设置后才丢弃输入，取消导航时保留原草稿。
       if (previous === 'traffic-settings' && current !== previous) {
         settingsRouteRevision += 1
@@ -148,6 +179,7 @@ export default defineComponent({
     watch(() => route.query.run, () => { runDetailOpen.value = Boolean(route.query.run); if (view.value === 'traffic-monitor') void loadRuns() })
     watch(() => [route.query.create, route.query.edit, route.query.copy], () => { void openFromRoute() })
     watch(() => route.query.plan, () => { if (view.value === 'traffic-monitor') void loadRuns() })
+    watch(() => route.query, () => { if (restoreListQuery()) void loadPage() })
     watch(() => props.refreshSeq, () => loadPage())
     watch(
       () => ({
@@ -176,6 +208,7 @@ export default defineComponent({
     }
 
     async function loadPlans() {
+      persistListQuery('traffic-plans')
       const { data } = await api.get('/traffic/plans', { params: { include_archived: planArchiveFilter.value === 'archived' } })
       plans.value = data
     }
@@ -188,11 +221,13 @@ export default defineComponent({
       if (requestedRunId) {
         if (requestedIndex >= 0) runPage.value = Math.floor(requestedIndex / SIDE_PAGE_SIZE) + 1
         await selectRun(requestedRunId)
+        persistListQuery('traffic-monitor')
         return
       }
       if (selectedRun.value && !visibleRuns.value.some(run => run.id === selectedRun.value?.id)) selectedRun.value = null
       const selectedId = selectedRun.value?.id
       if (selectedId) await selectRun(selectedId)
+      persistListQuery('traffic-monitor')
     }
 
     async function selectRun(id: string) {
@@ -207,6 +242,7 @@ export default defineComponent({
     }
 
     async function loadRecords() {
+      persistListQuery('traffic-records')
       const { data } = await api.get('/traffic/records', { params: recordFilters.value })
       records.value = data
     }
@@ -324,13 +360,14 @@ export default defineComponent({
     }
     async function closeEditor() {
       if (loading.value || persistent.status.value === 'loading' || cleanupError.value) return
-      try { await persistent.flush(); editorOpen.value = false; await router.replace({ path: '/traffic-plans', query: {} }) }
+      try { await persistent.flush(); editorOpen.value = false; await router.replace({ path: '/traffic-plans', query: listQuery('traffic-plans') }) }
       catch { ElMessage.error('草稿保存失败，请重试保存后再关闭') }
     }
     async function openAccounts() {
       try {
         await persistent.flush()
-        await router.push({ path: '/accounts', query: { feature: 'traffic', platform: String(planDraft.value.platform), return_to: editingId.value ? `/traffic-plans?edit=${editingId.value}` : '/traffic-plans?create=1' } })
+        const returnQuery = new URLSearchParams({ ...listQuery('traffic-plans'), ...(editingId.value ? { edit: editingId.value } : { create: '1' }) })
+        await router.push({ path: '/accounts', query: { feature: 'traffic', platform: String(planDraft.value.platform), return_to: `/traffic-plans?${returnQuery}` } })
       } catch { ElMessage.error('草稿保存失败，请重试') }
     }
     async function createPlan(startNow = false) {
@@ -361,7 +398,7 @@ export default defineComponent({
       }
       cleanupError.value = ''
       editorOpen.value = false
-      await router.replace({ path: '/traffic-plans', query: {} })
+      await router.replace({ path: '/traffic-plans', query: listQuery('traffic-plans') })
       await loadPlans()
       if (startAfterSave) { startAfterSave = false; await startRun(savedPlanId.value) }
     }
@@ -848,7 +885,7 @@ export default defineComponent({
         pageSize: SIDE_PAGE_SIZE,
         total,
         compact: true,
-        onChange: (payload: PageChange) => { pageRef.value = payload.page },
+        onChange: (payload: PageChange) => { pageRef.value = payload.page; if (pageRef === planPage || pageRef === runPage) persistListQuery() },
       })
     }
 
@@ -1284,7 +1321,7 @@ export default defineComponent({
     }
 
     return () => h('div', { class: 'workspace-page operations-page' }, [
-      h('nav', { class: 'tabs toolbar', 'aria-label': '引流工作区' }, [['traffic-plans', '计划'], ['traffic-monitor', '执行记录'], ['traffic-records', '操作记录'], ['traffic-settings', '引流规则']].map(([name, label]) => h('button', { class: view.value === name ? 'active' : '', onClick: () => router.push({ name }) }, label))),
+      h('nav', { class: 'tabs toolbar', 'aria-label': '引流工作区' }, [['traffic-plans', '计划'], ['traffic-monitor', '执行记录'], ['traffic-records', '操作记录'], ['traffic-settings', '引流规则']].map(([name, label]) => h('button', { class: view.value === name ? 'active' : '', onClick: () => emit('navigate-view', name) }, label))),
       view.value === 'traffic-plans' ? renderPlanPage() : view.value === 'traffic-monitor' ? renderMonitorPage() : view.value === 'traffic-records' ? renderRecordsPage() : renderSettingsPage(),
     ])
   },

@@ -25,11 +25,25 @@ def synthesize_profile(
     *,
     voice_rate: float = 1.0,
     voice_volume: float = 1.0,
+    snapshot: dict[str, str] | None = None,
 ) -> None:
     profile = voice_profiles.get_profile(profile_id)
     if profile["provider"] != "voxcpm2":
         raise ValueError("该克隆音色引擎尚未接入语音合成")
-    reference = content_assets.resolve_asset_path(str(profile["reference_asset"]["relative_path"]))
+    if not profile["consent_confirmed"]:
+        raise ValueError("克隆音色尚未确认参考声音的使用授权")
+    current_asset = content_assets.get_asset(str(profile["reference_asset_id"]))
+    if current_asset["asset_type"] != "audio":
+        raise ValueError("克隆音色只能使用音频资产")
+    if not content_assets.resolve_asset_path(current_asset["relative_path"]).is_file():
+        raise ValueError("克隆音色参考文件不存在")
+    # 视频使用提交时参数；独立配音没有快照，明确采用当前档案。
+    if snapshot is not None:
+        profile = {**profile, **{key: snapshot[key] for key in ("reference_asset_id", "prompt_text", "style_prompt")}}
+    reference_asset = content_assets.get_asset(str(profile["reference_asset_id"]))
+    reference = content_assets.resolve_asset_path(str(reference_asset["relative_path"]))
+    if reference_asset["asset_type"] != "audio" or not reference.is_file():
+        raise ValueError("克隆音色参考音频资产不可用")
     _synthesize_voxcpm2(profile, str(text or "").strip(), reference, Path(output_file), voice_rate, voice_volume)
 
 

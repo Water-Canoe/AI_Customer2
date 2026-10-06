@@ -163,6 +163,7 @@ def generate_audio(task_id, params, video_script, *, defer_volume: bool = False)
             voice_file=audio_file,
             # 成片合成会统一调整音量；独立配音继续沿用用户设置。
             voice_volume=1.0 if defer_volume else params.voice_volume,
+            voice_profile_snapshot=getattr(params, "voice_profile_snapshot", None),
         )
         if sub_maker is None:
             sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)

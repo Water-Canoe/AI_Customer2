@@ -17,7 +17,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
   const customers = ref<Dict>({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 })
   const detail = ref<Dict>({})
   const loading = ref(false)
-  const filters = ref<Dict>({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 })
+  const filters = ref<Dict>({ keyword: '', status: '待私信', intention: '', query: '', page: 1, page_size: 20 })
   const batches = ref<Dict>({ batches: [], active: null, items: [], page: 1, page_size: 10, total: 0, item_page: 1, item_page_size: 20, item_total: 0 })
 
   async function loadBatches(batchId?: string, pagination: Dict = {}) {
@@ -49,7 +49,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     if (!silent) loading.value = true
     try {
       const [keywordResponse, customerResponse] = await Promise.all([
-        api.get('/message-workbench/keywords'),
+        api.get('/message-workbench/keywords', { params: { intention: filters.value.intention } }),
         api.get('/message-workbench/customers', { params: filters.value }),
         loadBatches(),
       ])

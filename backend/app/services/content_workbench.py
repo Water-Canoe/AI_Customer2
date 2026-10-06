@@ -122,7 +122,9 @@ def create_video_job(
 
     job_id = uuid.uuid4().hex
     serialized = validated.model_dump(mode="json", warnings=False)
-    _validate_voice_reference(serialized)
+    # 后台捕获音色参数，客户端不能伪造快照或授权状态。
+    profile = _clone_voice_profile(serialized)
+    serialized['voice_profile_snapshot'] = ({key: str(profile[key]) for key in ('reference_asset_id', 'prompt_text', 'style_prompt')} if profile else None)
     with database.connect() as conn:
         conn.execute(
             """
@@ -575,15 +577,26 @@ def _validate_video_inputs(job: dict[str, Any]) -> None:
 
 
 def _validate_voice_reference(params: dict[str, Any]) -> None:
+    profile = _clone_voice_profile(params)
+    if profile is None:
+        return
+    snapshot = params.get('voice_profile_snapshot')
+    if not isinstance(snapshot, dict) or not all(key in snapshot for key in ('reference_asset_id', 'prompt_text', 'style_prompt')):
+        raise ValueError('视频任务缺少提交时的克隆音色参数')
+    _require_asset(str(snapshot['reference_asset_id']), {'audio'})
+
+
+def _clone_voice_profile(params: dict[str, Any]) -> dict[str, Any] | None:
     voice_name = str(params.get('voice_name') or '')
     if params.get('custom_audio_file') or not voice_name.startswith('voxcpm2:'):
-        return
+        return None
     from app.services import voice_profiles
 
     profile = voice_profiles.get_profile(voice_name.split(':', 1)[1])
     if not profile['consent_confirmed']:
         raise ValueError('克隆音色尚未确认参考声音的使用授权')
     _require_asset(str(profile['reference_asset_id']), {'audio'})
+    return profile
 
 
 def _finish_video_job(video_job_id: str, status: str, error: str) -> None:

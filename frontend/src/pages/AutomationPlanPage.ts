@@ -113,7 +113,7 @@ export default defineComponent({
     const route = useRoute()
     const router = useRouter()
     const plans = ref<Dict[]>([])
-    const activeSection = ref(route.query.run || route.query.plan ? 'runs' : 'plans')
+    const activeSection = ref(route.query.run || route.query.plan ? 'runs' : String(route.query.section || 'plans'))
     const typeFilter = ref('all')
     const selectedPlan = ref<Dict | null>(null)
     const draftKey = ref('new-keyword_lead')
@@ -147,7 +147,7 @@ export default defineComponent({
       },
     })
     const filteredPlans = computed(() => typeFilter.value === 'all' ? plans.value : plans.value.filter(plan => plan.plan_type === typeFilter.value))
-    watch(typeFilter, () => planPage.value = 1)
+    watch(typeFilter, () => planPage.value = 1, { flush: 'sync' })
     const editing = computed(() => Boolean(draft.id))
     const planPagination = computed(() => paginateItems(filteredPlans.value, planPage.value, planPageSize.value))
     const runItemPagination = computed(() => paginateItems<Dict>((selectedRun.value.items || []) as Dict[], runItemPage.value, COMPACT_PAGE_SIZE))
@@ -157,18 +157,42 @@ export default defineComponent({
       return Math.min(100, Math.round((Number(run.success_count || 0) + Number(run.failed_count || 0) + Number(run.skipped_count || 0)) * 100 / total))
     }
 
+    // 计划与执行记录使用独立页码；type 是创建参数，plan_type 才是列表筛选。
+    function listQuery(): Dict {
+      return { section: activeSection.value, plan_type: typeFilter.value, plan_page: planPage.value, plan_page_size: planPageSize.value, run_page: Number(runs.value.page || 1), run_page_size: Number(runs.value.page_size || DEFAULT_PAGE_SIZE) }
+    }
+    function persistListQuery() {
+      const query = listQuery()
+      if (Object.entries(query).some(([key, value]) => String(route.query[key] ?? '') !== String(value))) void router.replace({ query: { ...route.query, ...query } })
+    }
+    function restoreListQuery() {
+      const before = JSON.stringify(listQuery())
+      const query = route.query
+      if (query.run || query.plan) activeSection.value = 'runs'
+      else if (query.section) activeSection.value = String(query.section)
+      if (query.plan_type) typeFilter.value = String(query.plan_type)
+      if (query.plan_page) planPage.value = Math.max(1, Number(query.plan_page))
+      if (query.plan_page_size) planPageSize.value = Number(query.plan_page_size)
+      if (query.run_page) runs.value.page = Math.max(1, Number(query.run_page))
+      if (query.run_page_size) runs.value.page_size = Number(query.run_page_size)
+      return before !== JSON.stringify(listQuery())
+    }
     onMounted(async () => {
+      restoreListQuery()
       await loadAll()
       openFromRoute()
     })
     watch(() => props.refreshSeq, loadAll)
     watch(() => [route.query.create, route.query.edit, route.query.type], openFromRoute)
+    watch(() => [route.query.section, route.query.plan_type, route.query.plan_page, route.query.plan_page_size, route.query.run_page, route.query.run_page_size], () => { if (restoreListQuery()) void loadAll() })
+    watch(() => route.query.plan, loadAll)
     watch(() => route.query.run, async value => {
       if (value && String(selectedRun.value.id || '') !== String(value)) await showRun({ id: String(value) })
       if (!value) runDetailOpen.value = false
     })
 
     async function loadAll() {
+      persistListQuery()
       try {
         const [planResponse, runResponse, accountResponse] = await Promise.all([
           api.get('/automation/plans'),
@@ -234,13 +258,14 @@ export default defineComponent({
     }
     async function closeEditor() {
       if (saving.value || persistent.status.value === 'loading' || cleanupError.value) return
-      try { await persistent.flush(); editorOpen.value = false; await router.replace({ path: '/automation-plans', query: {} }) }
+      try { await persistent.flush(); editorOpen.value = false; await router.replace({ path: '/automation-plans', query: listQuery() }) }
       catch { ElMessage.error('草稿保存失败，请重试后关闭') }
     }
     async function openAccounts() {
       try {
         await persistent.flush()
-        await router.push({ path: '/accounts', query: { feature: draft.plan_type === 'keyword_lead' ? 'acquisition' : String(draft.plan_type), platform: String(draft.config?.platform || 'dy'), return_to: draft.id ? `/automation-plans?edit=${draft.id}` : `/automation-plans?create=1&type=${draft.plan_type}` } })
+        const returnQuery = new URLSearchParams({ ...listQuery(), ...(draft.id ? { edit: String(draft.id) } : { create: '1', type: String(draft.plan_type) }) })
+        await router.push({ path: '/accounts', query: { feature: draft.plan_type === 'keyword_lead' ? 'acquisition' : String(draft.plan_type), platform: String(draft.config?.platform || 'dy'), return_to: `/automation-plans?${returnQuery}` } })
       } catch { ElMessage.error('草稿保存失败，请重试') }
     }
     function showPlan(plan: Dict) { selectedPlan.value = plan }
@@ -344,7 +369,7 @@ export default defineComponent({
       }
       cleanupError.value = ''
       editorOpen.value = false
-      await router.replace({ path: '/automation-plans', query: {} })
+      await router.replace({ path: '/automation-plans', query: listQuery() })
       await loadAll()
     }
     async function retryCleanup() {
@@ -448,7 +473,7 @@ export default defineComponent({
         selectedRun.value = data
         activeSection.value = 'runs'
         runDetailOpen.value = true
-        await router.replace({ path: '/automation-plans', query: { ...route.query, run: String(data.id) } })
+        await router.replace({ path: '/automation-plans', query: { ...route.query, ...listQuery(), run: String(data.id) } })
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '运行详情加载失败')
       }
@@ -506,6 +531,7 @@ export default defineComponent({
           onChange: (payload: PageChange) => {
             planPage.value = payload.page
             planPageSize.value = payload.page_size
+            persistListQuery()
           },
         }),
       ])
@@ -738,15 +764,15 @@ export default defineComponent({
         h('h3', planTypeLabel(plan.plan_type)), h('p', `${weekdayText(plan.weekdays)} ${plan.run_time} · ${plan.enabled ? '已启用' : '已停用'}`),
         h('p', scopeText(plan)),
         h('p', { class: 'note' }, '编辑计划影响后续运行；已经创建的运行保留当次参数。引流执行限额与素材读取引流规则。'),
-        h('div', { class: 'toolbar' }, [h(ElButton, { type: 'primary', onClick: () => { selectedPlan.value = null; void openEditor(plan.plan_type, plan) } }, () => '编辑计划'), h(ElButton, { onClick: () => runNow(plan) }, () => '立即加入队列'), h(ElButton, { onClick: async () => { selectedPlan.value = null; activeSection.value = 'runs'; runs.value.page = 1; await router.replace({ query: { plan: String(plan.id) } }); await loadAll() } }, () => '查看执行记录'), h(ElButton, { onClick: () => router.push('/runtime') }, () => '前往任务中心')]),
+        h('div', { class: 'toolbar' }, [h(ElButton, { type: 'primary', onClick: () => { selectedPlan.value = null; void openEditor(plan.plan_type, plan) } }, () => '编辑计划'), h(ElButton, { onClick: () => runNow(plan) }, () => '立即加入队列'), h(ElButton, { onClick: async () => { selectedPlan.value = null; activeSection.value = 'runs'; runs.value.page = 1; await router.replace({ query: { ...listQuery(), plan: String(plan.id) } }) } }, () => '查看执行记录'), h(ElButton, { onClick: () => router.push('/runtime') }, () => '前往任务中心')]),
         plan.recent_run ? h('div', [h('h4', '最近执行'), statusTag(plan.recent_run.status), h(ElButton, { onClick: () => showRun(plan.recent_run) }, () => '查看详情')]) : null,
       ] : null)
     }
     return () => h('div', { class: 'workspace-page operations-page automation-page' }, [
       h('section', { class: 'panel' }, [
         h('div', { class: 'toolbar' }, [h('div', [h('h2', '自动化计划'), h('p', { class: 'note' }, '定时安排获客、私信和引流。软件关闭期间错过的计划不补跑。')]), h(ElButton, { type: 'primary', onClick: () => typePickerOpen.value = true }, () => '新建自动化计划'), h(ElButton, { onClick: () => router.push('/runtime') }, () => '任务中心')]),
-        h('nav', { class: 'tabs toolbar' }, [['plans', '计划'], ['runs', '执行记录']].map(([key, label]) => h('button', { class: activeSection.value === key ? 'active' : '', onClick: async () => { activeSection.value = key; if (key === 'runs' && route.query.plan) { await router.replace({ query: {} }); await loadAll() } } }, label))),
-        activeSection.value === 'plans' ? h('nav', { class: 'tabs toolbar', 'aria-label': '计划类型' }, [['all', '全部'], ...automationPlanTypes].map(([type, label]) => h('button', { class: typeFilter.value === type ? 'active' : '', onClick: () => typeFilter.value = type }, label))) : route.query.plan ? h('p', { class: 'note' }, '当前显示所选计划的执行记录；点击执行记录页签查看全部。') : null,
+        h('nav', { class: 'tabs toolbar' }, [['plans', '计划'], ['runs', '执行记录']].map(([key, label]) => h('button', { class: activeSection.value === key ? 'active' : '', onClick: async () => { activeSection.value = key; runDetailOpen.value = false; const { run, plan, ...query } = route.query; await router.replace({ query: { ...query, ...listQuery() } }); if (!plan) await loadAll() } }, label))),
+        activeSection.value === 'plans' ? h('nav', { class: 'tabs toolbar', 'aria-label': '计划类型' }, [['all', '全部'], ...automationPlanTypes].map(([type, label]) => h('button', { class: typeFilter.value === type ? 'active' : '', onClick: () => { typeFilter.value = type; persistListQuery() } }, label))) : route.query.plan ? h('p', { class: 'note' }, '当前显示所选计划的执行记录；点击执行记录页签查看全部。') : null,
       ]),
       activeSection.value === 'plans' ? renderPlans() : renderRuns(),
       renderTypePicker(), renderEditor(), renderRunDetail(), renderPlanDetail(),

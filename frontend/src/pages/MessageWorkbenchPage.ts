@@ -21,7 +21,7 @@ export default defineComponent({
     keywords: { type: Array, default: () => [] },
     customers: { type: Object, default: () => ({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 }) },
     detail: { type: Object, default: () => ({}) },
-    filters: { type: Object, default: () => ({ keyword: '', status: '待私信', query: '', page: 1, page_size: 20 }) },
+    filters: { type: Object, default: () => ({ keyword: '', status: '待私信', intention: '', query: '', page: 1, page_size: 20 }) },
     batches: { type: Object, default: () => ({ batches: [], active: null, items: [] }) },
     settings: { type: Object, default: () => ({}) },
     loading: { type: Boolean, default: false },
@@ -38,8 +38,8 @@ export default defineComponent({
     }
     watch(() => route.query.customer, value => { if (value && String((props.detail as Dict)?.customer?.lead_id || '') !== String(value)) emit('select-customer', String(value)) }, { immediate: true })
     watch(() => route.query, value => {
-      if (!['keyword', 'platform', 'status', 'query', 'page', 'page_size'].some(key => key in value)) return
-      const next = { keyword: String(value.keyword || ''), platform: String(value.platform || ''), status: String(value.status || '待私信'), query: String(value.query || ''), page: Number(value.page || 1), page_size: Number(value.page_size || 20) }
+      if (!['keyword', 'platform', 'status', 'intention', 'query', 'page', 'page_size'].some(key => key in value)) return
+      const next = { keyword: String(value.keyword || ''), platform: String(value.platform || ''), status: String(value.status || '待私信'), intention: String(value.intention || ''), query: String(value.query || ''), page: Number(value.page || 1), page_size: Number(value.page_size || 20) }
       if (Object.entries(next).some(([key, item]) => String(props.filters[key] ?? '') !== String(item))) emit('filter-change', next)
     }, { immediate: true })
     const savedBatchConfig = loadAutoBatchConfig()
@@ -99,7 +99,7 @@ export default defineComponent({
       const values = { ...(props.filters as Dict), ...next }
       emit('close-detail')
       emit('filter-change', values)
-      void router.replace({ path: '/message-workbench', query: { keyword: String(values.keyword || ''), platform: String(values.platform || ''), status: String(values.status || '待私信'), query: String(values.query || ''), page: Number(values.page || 1), page_size: Number(values.page_size || 20) } })
+      void router.replace({ path: '/message-workbench', query: { ...(route.query.return_to ? { return_to: route.query.return_to } : {}), keyword: String(values.keyword || ''), platform: String(values.platform || ''), status: String(values.status || '待私信'), intention: String(values.intention || ''), query: String(values.query || ''), page: Number(values.page || 1), page_size: Number(values.page_size || 20) } })
     }
 
     function runSearch() {
@@ -110,6 +110,7 @@ export default defineComponent({
       h('section', { class: 'panel' }, [
         sectionTitle({ title: '客户跟进', subtitle: (props.filters as Dict).keyword ? `${platformName((props.filters as Dict).platform)} / ${(props.filters as Dict).keyword}` : '全部来源 · 准备话术，实际发送后确认，再推进回复与成交状态。', icon: Collection }),
         h('div', { class: 'toolbar' }, [
+          String(route.query.return_to || '').startsWith('/message-batches?') ? h('button', { onClick: () => router.push(String(route.query.return_to)) }, '返回触达记录') : null,
           h('button', { onClick: () => router.push('/message-batches') }, '触达记录'),
           h('button', { onClick: () => router.push('/message-settings') }, '话术与发送规则'),
           h('button', { onClick: () => router.push({ path: '/accounts', query: { feature: 'message', platform: 'dy', return_to: route.fullPath } }) }, '配置私信账号'),
@@ -142,6 +143,7 @@ export default defineComponent({
           records: () => router.push({ path: '/message-batches', query: (props.batches as Dict).active?.id ? { batch: String((props.batches as Dict).active.id) } : {} })
         })]),
         h('div', { class: 'message-status-tabs' }, [
+          h('select', { value: String(props.filters.intention || ''), 'aria-label': '客户意向', onChange: (event: Event) => changeFilter({ intention: (event.target as HTMLSelectElement).value, page: 1 }) }, [h('option', { value: '' }, '全部意向'), ...['高', '中', '低'].map(value => h('option', { value }, `${value}意向`))]),
           ...statusTabs.map(status => h('button', {
           type: 'button',
           class: String((props.filters as Dict).status || '待私信') === status ? 'active' : '',

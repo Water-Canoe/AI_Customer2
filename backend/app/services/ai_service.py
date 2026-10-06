@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 from app import database
 from app.services import deletion
+from app.services.importer import LEAD_SOURCE_KEYWORD_SQL
 
 
 PROMPT_VERSIONS = {
@@ -239,15 +240,16 @@ def _matches_workbench_item(item: dict[str, Any], tab: str, keyword: str, status
         return False
     if result and result_value != result:
         return False
-    keyword = str(keyword or "").strip().lower()
-    if not keyword:
+    # 采集表单支持多个关键词，跳转后按任一关键词匹配，忽略空项。
+    keywords = [part.strip().lower() for part in str(keyword or "").replace("，", ",").split(",") if part.strip()]
+    if not keywords:
         return True
     fields = (
         "id", "job_id", "nickname", "target_name", "signature", "comment_samples",
         "content_samples", "source_keywords", "source_account_names", "result_reason",
         "reason", "error", "output_summary",
     )
-    return any(keyword in str(item.get(field) or "").lower() for field in fields)
+    return any(term in str(item.get(field) or "").lower() for field in fields for term in keywords)
 
 
 def _ai_workbench_summary() -> dict[str, int]:
@@ -463,7 +465,7 @@ def _workbench_competitors_query() -> str:
 
 
 def _workbench_leads_query() -> str:
-    return """
+    return f"""
         SELECT lua.id,
                lua.account_id,
                lua.screening_status,
@@ -486,6 +488,7 @@ def _workbench_leads_query() -> str:
                GROUP_CONCAT(DISTINCT c.body) AS comment_samples,
                GROUP_CONCAT(DISTINCT COALESCE(NULLIF(ct.title, ''), NULLIF(ct.description, ''))) AS content_samples,
                GROUP_CONCAT(DISTINCT source_ua.nickname) AS source_account_names,
+               GROUP_CONCAT(DISTINCT {LEAD_SOURCE_KEYWORD_SQL}) AS source_keywords,
                MAX(COALESCE(c.updated_at, ct.updated_at, ls.created_at, lua.updated_at)) AS latest_evidence_at
         FROM lead_user_accounts lua
         JOIN user_accounts ua ON ua.id = lua.account_id
@@ -500,6 +503,7 @@ def _workbench_leads_query() -> str:
         LEFT JOIN comments c ON c.id = ls.comment_id
         LEFT JOIN contents ct ON ct.id = ls.content_id
         LEFT JOIN user_accounts source_ua ON source_ua.id = COALESCE(ls.source_account_id, ct.author_account_id)
+        LEFT JOIN crawl_jobs j ON j.id = ls.task_id
         WHERE lua.hidden = 0
         GROUP BY lua.id
         """
@@ -555,9 +559,8 @@ def _workbench_item(row: dict[str, Any], tab: str) -> dict[str, Any]:
         })
         for key in ("job_id", "job_status", "job_error", "job_updated_at"):
             item[key] = item.get(key) or ""
-        if tab == "competitors":
-            item["source_keywords"] = item.get("source_keywords") or ""
-        else:
+        item["source_keywords"] = item.get("source_keywords") or ""
+        if tab == "leads":
             item["result_script"] = str(output.get("script") or item.get("script") or "")
     else:
         item["error_category"] = _classify_ai_error(str(item.get("error") or ""))
@@ -582,7 +585,7 @@ def _workbench_page(
         if tab == "competitors":
             fields += ("competitor_status", "competitor_reason", "source_keywords")
         elif tab == "leads":
-            fields += ("screening_status", "reason", "script", "comment_samples", "content_samples", "source_account_names")
+            fields += ("screening_status", "reason", "script", "comment_samples", "content_samples", "source_account_names", "source_keywords")
         else:
             fields = ("id", "target_name", "error", "status", "output_payload")
         filter_json = ", ".join(f"'{field}', {field}" for field in fields)

@@ -32,6 +32,13 @@ export default defineComponent({
     const route = useRoute()
     const router = useRouter()
     const detailOpen = ref(Boolean(route.query.task))
+    const logDetailsOpen = ref(false)
+    const logPage = ref(1)
+    const logPageSize = ref(50)
+    watch(() => props.selectedTask?.id, () => {
+      logDetailsOpen.value = false
+      logPage.value = 1
+    })
     function openTask(id: string) {
       detailOpen.value = true
       emit('select-task', id)
@@ -78,10 +85,23 @@ export default defineComponent({
         ]),
         props.selectedTask.status === 'failed' ? renderDiagnostics(props.diagnostics as Dict) : h('details', [h('summary', '运行诊断'), renderDiagnostics(props.diagnostics as Dict)]),
         h('details', [h('summary', '防重复与删除记录'), renderDedupSummary(props.dedupSummary as Dict)]),
+        h('details', { key: props.selectedTask.id, class: 'task-raw-logs', open: logDetailsOpen.value, onToggle: (event: Event) => logDetailsOpen.value = (event.target as HTMLDetailsElement).open }, [
+          h('summary', `原始日志（${props.selectedTask.logs?.length || 0} 条）`),
+          logDetailsOpen.value ? renderTaskLogs((props.selectedTask.logs || []).slice((logPage.value - 1) * logPageSize.value, logPage.value * logPageSize.value)) : null,
+          logDetailsOpen.value ? h(ListPagination, { page: logPage.value, pageSize: logPageSize.value, total: props.selectedTask.logs?.length || 0, onChange: (payload: PageChange) => { logPage.value = payload.page; logPageSize.value = payload.page_size } }) : null,
+        ]),
       ] : h('p', '正在加载任务详情…')),
     ])
   }
 })
+
+function renderTaskLogs(logs: Dict[]) {
+  // 原始日志按需展开，复用可滚动日志区域，不挤占任务主列表。
+  return logs.length ? h('div', { class: 'traffic-log-list' }, logs.map(log => h('div', { key: log.id, class: ['traffic-log-item', `log-${log.level}`] }, [
+    h('time', log.created_at || ''),
+    h('div', { class: 'traffic-log-body' }, [h('small', log.level || 'info'), h('pre', String(log.message || ''))]),
+  ]))) : h('p', { class: 'muted-text' }, '暂无运行日志')
+}
 
 function renderTaskOutcome(task: Dict) {
   const outcome = task.outcome || {}

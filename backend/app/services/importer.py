@@ -10,6 +10,22 @@ from app import database
 from app.services import tombstones
 
 
+# 客户来源与 AI 筛选共用继承规则；查询使用 ls、ct、j 三个来源别名。
+LEAD_SOURCE_KEYWORD_SQL = """
+    COALESCE(
+        NULLIF(ls.keyword, ''),
+        NULLIF(ct.source_keyword, ''),
+        (
+            SELECT NULLIF(acs.keyword, '') FROM account_sources acs
+            WHERE acs.account_id = COALESCE(ls.source_account_id, ct.author_account_id)
+              AND acs.active = 1 AND NULLIF(acs.keyword, '') IS NOT NULL
+            ORDER BY acs.created_at DESC, acs.id DESC LIMIT 1
+        ),
+        NULLIF(j.keywords, '')
+    )
+"""
+
+
 CONTENT_TABLES = {
     "dy": {
         "table": "douyin_aweme",

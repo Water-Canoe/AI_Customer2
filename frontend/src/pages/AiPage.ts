@@ -250,7 +250,7 @@ function renderToolbar(
       h(Search),
       h('input', {
         value: filters.keyword,
-        placeholder: tab === 'failed' ? '搜索任务、对象、错误原因' : '搜索名称、简介、评论、来源、原因',
+        placeholder: tab === 'failed' ? '搜索任务、对象、错误；逗号分隔任一匹配' : '搜索名称、评论、来源；逗号分隔任一匹配',
         onInput: (event: Event) => filters.keyword = (event.target as HTMLInputElement).value,
         onKeydown: (event: KeyboardEvent) => { if (event.key === 'Enter') applyFilters() }
       })

@@ -390,6 +390,72 @@ describe('内容创作到发布', () => {
     expect(mocks.get.mock.calls.filter(([url]) => url === '/drafts/publish/publish-1')).toHaveLength(1)
   })
 
+  it.each(['draft', 'source'])('发布恢复完整结束前阻止切换，旧 A 的 %s 读取晚到不能覆盖草稿 B 的地址与文案', async stage => {
+    mocks.route.name = 'content-publish'; mocks.route.query = { output_ids: 'old-output' }; mocks.route.fullPath = '/content-publish?output_ids=old-output'
+    drafts['/drafts/publish/publish-B'] = { ...publishPayload(), source: { type: 'video_output', output_ids: ['new-output'] }, title: '草稿B标题' }
+    const originalGet = mocks.get.getMockImplementation()!
+    let finishOld!: (value: any) => void
+    mocks.get.mockImplementation((url: string, options?: any) => {
+      if (stage === 'draft' && url.startsWith('/drafts/publish/') && !url.endsWith('publish-B')) return new Promise(resolve => { finishOld = resolve })
+      if (stage === 'source' && url === '/content/outputs/old-output') return new Promise(resolve => { finishOld = resolve })
+      return originalGet(url, options)
+    })
+    wrapper = mount(PublishCenterPage)
+    await flushPromises()
+    expect(await mocks.updateGuard!()).toBe(false)
+    // 即使外部路由状态发生变化，晚到的旧请求也必须丧失页面归属。
+    mocks.route.query = { draft_id: 'publish-B' }; mocks.route.fullPath = '/content-publish?draft_id=publish-B'
+    await flushPromises()
+    finishOld({ data: stage === 'draft' ? { exists: false, payload: {}, updated_at: null } : outputs[0] })
+    await flushPromises()
+    expect(mocks.route.query).toEqual({ draft_id: 'publish-B' })
+    expect(wrapper.get('.publish-composer .publish-field input').element).toHaveProperty('value', '草稿B标题')
+    expect(wrapper.get('.publish-source-strip').text()).toContain('第 2 次成品')
+    expect(mocks.replace).not.toHaveBeenCalled()
+  })
+
+  it('发布草稿查询覆盖第六份及更旧记录，服务端分页搜索后能恢复指定草稿', async () => {
+    mocks.route.name = 'content-publish'; mocks.route.query = {}; mocks.route.fullPath = '/content-publish'
+    const records = Array.from({ length: 24 }, (_, index) => ({ key: 'publish-' + (index + 1), payload: { ...publishPayload(), title: '发布草稿' + (index + 1) }, updated_at: '2026-10-06' }))
+    records.forEach(record => drafts['/drafts/publish/' + record.key] = record.payload)
+    const originalGet = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options?: any) => {
+      if (url !== '/drafts/publish') return originalGet(url, options)
+      const params = options?.params || {}
+      const found = records.filter(record => record.payload.title.includes(params.search || ''))
+      return Promise.resolve({ data: { ...page([], params), total: found.length, items: found.slice((params.page - 1) * params.page_size, params.page * params.page_size) } })
+    })
+    wrapper = mount(PublishCenterPage)
+    await flushPromises()
+    expect(button('继续编辑 · 发布草稿6')).toBeDefined()
+    wrapper.get('.publish-draft-library').getComponent(ListPagination).vm.$emit('change', { page: 2, page_size: 20 })
+    await flushPromises()
+    expect(mocks.get).toHaveBeenLastCalledWith('/drafts/publish', { params: { page: 2, page_size: 20, search: '' } })
+    expect(button('继续编辑 · 发布草稿21')).toBeDefined()
+    await wrapper.get('input[placeholder="搜索全部发布草稿"]').setValue('发布草稿6')
+    await button('搜索草稿').trigger('click')
+    await flushPromises()
+    expect(mocks.get).toHaveBeenLastCalledWith('/drafts/publish', { params: { page: 1, page_size: 20, search: '发布草稿6' } })
+    await button('继续编辑 · 发布草稿6').trigger('click')
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/content-publish', query: { draft_id: 'publish-6' } })
+    mocks.route.query = { draft_id: 'publish-6' }; mocks.route.fullPath = '/content-publish?draft_id=publish-6'
+    await flushPromises()
+    expect(wrapper.get('.publish-composer .publish-field input').element).toHaveProperty('value', '发布草稿6')
+  })
+
+  it('发布草稿保存失败时阻止同组件切换并保留人工输入，恢复后先保存再允许切换', async () => {
+    mocks.route.name = 'content-publish'; mocks.route.query = { draft_id: 'publish-1' }; mocks.route.fullPath = '/content-publish?draft_id=publish-1'
+    wrapper = mount(PublishCenterPage)
+    await flushPromises()
+    const title = wrapper.get('.publish-composer .publish-field input')
+    await title.setValue('切换前的人工输入')
+    mocks.put.mockRejectedValueOnce(new Error('网络中断'))
+    expect(await mocks.updateGuard!()).toBe(false)
+    expect(title.element).toHaveProperty('value', '切换前的人工输入')
+    expect(await mocks.updateGuard!()).toBe(true)
+    expect(drafts['/drafts/publish/publish-1'].title).toBe('切换前的人工输入')
+  })
+
   it('内容模型默认复用全局，单独配置只展示所选供应商；空密钥保留、显式清除单独提交', async () => {
     mocks.route.name = 'content-settings'; mocks.route.query = {}; mocks.route.fullPath = '/content-settings'
     wrapper = mount(ContentWorkbenchPage)

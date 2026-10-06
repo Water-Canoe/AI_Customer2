@@ -140,4 +140,26 @@ describe('引流监控刷新', () => {
     expect(wrapper.findAll('img').some(image => image.attributes('src') === '/image.png')).toBe(false)
     wrapper.unmount()
   })
+  it('restores record filters and pages on reentry while keeping the other traffic views independent', async () => {
+    mocks.route.name = 'traffic-records'
+    mocks.route.query = { query: '评论证据', status: 'failed', platform: 'dy', action: 'like', page: '2', page_size: '10' }
+    mocks.get.mockImplementation(async (url: string) => ({ data: url === '/traffic/records' ? { rows: [], total: 35, page: 2, page_size: 10 } : [] }))
+    let wrapper = mount(TrafficWorkbenchPage)
+    await flushPromises()
+    expect(mocks.get).toHaveBeenCalledWith('/traffic/records', { params: { query: '评论证据', status: 'failed', platform: 'dy', action: 'like', page: 2, page_size: 10 } })
+    wrapper.getComponent(ListPagination).vm.$emit('change', { page: 3, page_size: 10 })
+    await flushPromises()
+    const query = mocks.replace.mock.calls[mocks.replace.mock.calls.length - 1][0].query
+    expect(query).toMatchObject({ status: 'failed', query: '评论证据', page: 3 })
+    wrapper.unmount()
+    mocks.route.query = query
+    wrapper = mount(TrafficWorkbenchPage)
+    await flushPromises()
+    expect((wrapper.get('input[placeholder="搜索视频/作者/评论"]').element as HTMLInputElement).value).toBe('评论证据')
+    expect(mocks.get).toHaveBeenLastCalledWith('/traffic/records', { params: expect.objectContaining({ status: 'failed', page: 3 }) })
+    await wrapper.findAll('nav[aria-label="引流工作区"] button').find(button => button.text() === '计划')!.trigger('click')
+    expect(wrapper.emitted('navigate-view')).toEqual([['traffic-plans']])
+    expect(mocks.push).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 })

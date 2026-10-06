@@ -335,6 +335,7 @@ const routeProps = computed(() => {
 
 const routeListeners = computed(() => {
   // 只把当前页面声明的事件传下去，避免 fragment 页面收到无关监听器 warning。
+  if (activeView.value.startsWith('traffic-')) return { 'navigate-view': goToView }
   if (activeView.value === 'acquisition') {
     return {
       'create-task': createTask,
@@ -392,7 +393,7 @@ const routeListeners = computed(() => {
   }
   if (activeView.value === 'message-batches') {
     return {
-      'select-auto-message-batch': (batch: Dict) => loadMessageBatches(String(batch.id || ''), { item_page: 1 }),
+      'select-auto-message-batch': (batch: Dict) => loadMessageBatches(String(batch.id || ''), { page: batch.page || messageBatches.value.page, page_size: batch.page_size || messageBatches.value.page_size, item_page: batch.item_page || 1, item_page_size: batch.item_page_size || messageBatches.value.item_page_size }),
       'change-auto-message-batch-page': changeMessageBatchPage,
       'change-auto-message-item-page': changeMessageBatchItemPage,
       'cancel-auto-message-batch': cancelMessageAutoBatch,
@@ -436,8 +437,21 @@ const routeListeners = computed(() => {
   return {}
 })
 
+// 侧栏重进入列表时恢复查询；单次任务、编辑对象等深链接不作为列表筛选保存。
+const listQueryFields: Record<string, string[]> = {
+  'traffic-plans': ['archive', 'page'],
+  'traffic-monitor': ['archive', 'page'],
+  'traffic-records': ['query', 'platform', 'status', 'action', 'page', 'page_size'],
+  'automation-plans': ['section', 'plan_type', 'plan_page', 'plan_page_size', 'run_page', 'run_page_size'],
+  'runtime-center': ['status', 'kind', 'page', 'page_size'],
+}
+const rememberedListQueries: Record<string, Dict> = {}
+watch(() => [route.name, route.query] as const, ([name, query]) => {
+  const fields = listQueryFields[String(name)]
+  if (fields?.some(field => field in query)) rememberedListQueries[String(name)] = Object.fromEntries(fields.filter(field => field in query).map(field => [field, query[field]]))
+}, { immediate: true })
 function goToView(view: string) {
-  router.push({ name: view })
+  router.push({ name: view, query: rememberedListQueries[view] || {} })
 }
 
 async function refreshAll(notifyFailure = false) {

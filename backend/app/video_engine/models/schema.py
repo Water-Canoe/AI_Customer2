@@ -88,6 +88,8 @@ class VideoParams(BaseModel):
     video_language: Optional[str] = ""  # auto detect
 
     voice_name: Optional[str] = ""
+    # 视频后台捕获的非敏感音色参数；创建任务时覆盖客户端输入。
+    voice_profile_snapshot: Optional[dict[str, str]] = None
     voice_volume: Optional[float] = 1.0
     voice_rate: Optional[float] = 1.0
     bgm_type: Optional[str] = "random"

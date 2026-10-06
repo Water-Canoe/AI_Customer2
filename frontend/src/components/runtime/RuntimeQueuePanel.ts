@@ -1,5 +1,5 @@
 import { defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Clock, Delete, Refresh, RefreshRight, VideoPause } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -11,16 +11,22 @@ import { sectionTitle } from '../ui/Workbench'
 
 export const RuntimeQueuePanel = defineComponent({
   name: 'RuntimeQueuePanel',
-  props: { refreshSeq: { type: Number, default: 0 }, initialStatus: { type: String, default: '' }, initialJobId: { type: String, default: '' } },
+  props: { refreshSeq: { type: Number, default: 0 }, initialStatus: { type: String, default: '' }, initialKind: { type: String, default: '' }, initialPage: { type: Number, default: 1 }, initialPageSize: { type: Number, default: 20 }, initialJobId: { type: String, default: '' } },
   setup(props) {
     const router = useRouter()
+    const route = useRoute()
     const queue = ref<RuntimeJobPage>({ items: [], total: 0, page: 1, page_size: 20, active: {} })
-    const filters = reactive({ status: props.initialStatus, kind: '', page: 1, page_size: 20 })
+    const filters = reactive({ status: props.initialStatus, kind: props.initialKind, page: props.initialPage, page_size: props.initialPageSize })
     const loading = ref(false)
     const loadError = ref('')
     const operating = ref('')
     const focusedJob = ref<RuntimeJob | null>(null)
     let requestSeq = 0
+
+    function persistFilters() {
+      // 定位任务 ID 继续保留在当前路由，侧栏只记住列表条件。
+      if (Object.entries(filters).some(([key, value]) => String(route.query[key] ?? '') !== String(value))) void router.replace({ query: { ...route.query, ...filters } })
+    }
 
     async function load(silent = false) {
       const revision = ++requestSeq
@@ -38,6 +44,7 @@ export const RuntimeQueuePanel = defineComponent({
         const totalPages = Math.max(1, Math.ceil(Number(data.total || 0) / filters.page_size))
         if (!(data.items || []).length && filters.page > totalPages) {
           filters.page = totalPages
+          persistFilters()
           await load(silent)
         }
       } catch (error: any) {
@@ -49,6 +56,7 @@ export const RuntimeQueuePanel = defineComponent({
 
     function applyFilters() {
       filters.page = 1
+      persistFilters()
       void load()
     }
 
@@ -100,7 +108,11 @@ export const RuntimeQueuePanel = defineComponent({
     onMounted(() => void load())
     onBeforeUnmount(() => { requestSeq += 1 })
     watch(() => props.refreshSeq, () => void load(true))
-    watch(() => props.initialStatus, value => { filters.status = value; applyFilters() })
+    watch(() => [props.initialStatus, props.initialKind, props.initialPage, props.initialPageSize] as const, ([status, kind, page, page_size]) => {
+      if (JSON.stringify(filters) === JSON.stringify({ status, kind, page, page_size })) return
+      Object.assign(filters, { status, kind, page, page_size })
+      void load()
+    })
     watch(() => props.initialJobId, () => { focusedJob.value = null; void load() })
 
     return () => {
@@ -119,7 +131,7 @@ export const RuntimeQueuePanel = defineComponent({
         ]))),
         loadError.value ? h('div', { class: 'workspace-alert', role: 'alert' }, [loadError.value, h('button', { onClick: () => load() }, '重新读取')]) : null,
         focusedJob.value ? h('section', { class: 'runtime-focused-job', 'aria-label': '定位的任务' }, [
-          h('div', { class: 'workspace-heading' }, [h('strong', '正在查看这次执行'), h('button', { class: 'text-icon-button', onClick: () => router.push('/runtime') }, '返回全部任务')]),
+          h('div', { class: 'workspace-heading' }, [h('strong', '正在查看这次执行'), h('button', { class: 'text-icon-button', onClick: () => router.push({ path: '/runtime', query: { ...filters } }) }, '返回任务列表')]),
           renderJob(focusedJob.value, operating.value, cancel, retry, remove, value => router.push(String(value.detail_url))),
         ]) : null,
         h('div', { class: 'runtime-queue-filters' }, [
@@ -142,6 +154,7 @@ export const RuntimeQueuePanel = defineComponent({
           onChange: (payload: PageChange) => {
             filters.page = payload.page
             filters.page_size = payload.page_size
+            persistFilters()
             void load()
           },
         }),

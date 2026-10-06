@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { runtimeJobSummary, runtimeKindLabel, runtimeResourceLabel, runtimeStatusLabel } from './RuntimeQueuePanel'
 import { RuntimeQueuePanel } from './RuntimeQueuePanel'
+import { ListPagination } from '../ui/ListPagination'
 
 
 const mocks = vi.hoisted(() => ({
@@ -12,9 +13,11 @@ const mocks = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
   push: vi.fn(),
+  replace: vi.fn(),
+  query: {} as Record<string, string>,
 }))
 
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }) }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push, replace: mocks.replace }), useRoute: () => ({ query: mocks.query }) }))
 
 vi.mock('../../shared/api', () => ({
   api: { get: mocks.get, post: mocks.post, delete: mocks.remove },
@@ -97,5 +100,25 @@ describe('RuntimeQueuePanel formatters', () => {
     expect(wrapper.text()).toContain('当前筛选结果')
     expect(wrapper.text()).not.toContain('旧筛选结果')
     wrapper.unmount()
+  })
+  it('restores list conditions on reentry and keeps a focused job independent from the saved filters', async () => {
+    mocks.query = { job: 'selected-job', status: 'failed', kind: 'ai_job', page: '2', page_size: '10' }
+    mocks.get.mockImplementation(async (url: string) => ({ data: url === '/runtime/jobs/selected-job' ? { id: 'selected-job', kind: 'ai_job', status: 'running' } : { items: [{ id: 'failure', kind: 'ai_job', status: 'failed' }], total: 40, active: {} } }))
+    let wrapper = mount(RuntimeQueuePanel, { props: { initialStatus: 'failed', initialKind: 'ai_job', initialPage: 2, initialPageSize: 10, initialJobId: 'selected-job' } })
+    await flushPromises()
+    expect(mocks.get).toHaveBeenCalledWith('/runtime/jobs', { params: { status: 'failed', kind: 'ai_job', page: 2, page_size: 10 } })
+    expect(wrapper.get('[aria-label="定位的任务"]').text()).toContain('执行中')
+    wrapper.getComponent(ListPagination).vm.$emit('change', { page: 3, page_size: 10 })
+    await flushPromises()
+    expect(mocks.replace).toHaveBeenCalledWith({ query: { job: 'selected-job', status: 'failed', kind: 'ai_job', page: 3, page_size: 10 } })
+    await wrapper.findAll('button').find(button => button.text() === '返回任务列表')!.trigger('click')
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/runtime', query: { status: 'failed', kind: 'ai_job', page: 3, page_size: 10 } })
+    wrapper.unmount()
+    wrapper = mount(RuntimeQueuePanel, { props: { initialStatus: 'failed', initialKind: 'ai_job', initialPage: 3, initialPageSize: 10 } })
+    await flushPromises()
+    expect(mocks.get).toHaveBeenLastCalledWith('/runtime/jobs', { params: { status: 'failed', kind: 'ai_job', page: 3, page_size: 10 } })
+    expect(wrapper.find('[aria-label="定位的任务"]').exists()).toBe(false)
+    wrapper.unmount()
+    mocks.query = {}
   })
 })

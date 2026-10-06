@@ -1,17 +1,19 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MessageWorkbenchPage from './MessageWorkbenchPage'
+import { ref } from 'vue'
+import { useMessageWorkbench } from '../composables/messageWorkbench'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), push: vi.fn(), replace: vi.fn() }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), push: vi.fn(), replace: vi.fn(), route: { query: { customer: '7', status: '全部' } as Record<string, string>, fullPath: '/message-workbench?customer=7&status=全部' } }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get } }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: { customer: '7', status: '全部' }, fullPath: '/message-workbench?customer=7&status=全部' }), useRouter: () => mocks }))
+vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => mocks }))
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   return { ElPagination: { render: () => null }, ElMessage: { error: vi.fn() }, ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('div', slots.default?.()) : null }) }
 })
 
 describe('客户跟进交互', () => {
-  beforeEach(() => { vi.clearAllMocks(); mocks.get.mockResolvedValue({ data: [] }) })
+  beforeEach(() => { vi.clearAllMocks(); mocks.route.query = { customer: '7', status: '全部' }; mocks.get.mockResolvedValue({ data: [] }) })
   it('locates the customer, separates preparation from confirmation and keeps source and history views', async () => {
     const customer = { lead_id: 7, nickname: '客户A', platform: 'dy', follow_status: '未私信', script: '问候语', profile_url: 'https://example.com/customer' }
     const wrapper = mount(MessageWorkbenchPage, { props: { customers: { rows: [customer], page: 1, total: 1 } } })
@@ -27,6 +29,25 @@ describe('客户跟进交互', () => {
     expect(wrapper.text()).toContain('需要客服')
     await wrapper.findAll('button').find(button => button.text().startsWith('跟进历史'))!.trigger('click')
     expect(wrapper.text()).toContain('已判定为目标客户')
+    wrapper.unmount()
+  })
+  it('restores an exact intention filter and sends the same conditions with pagination', async () => {
+    mocks.route.query = { intention: '高', status: '待私信', keyword: '来源A', page: '2', page_size: '10' }
+    mocks.get.mockImplementation(async (url: string) => ({ data: url === '/message-workbench/customers' ? { rows: [], total: 2, page: 2 } : [] }))
+    const workbench = useMessageWorkbench({ settings: ref({}), refreshRelated: async () => undefined })
+    const wrapper = mount(MessageWorkbenchPage)
+    const restored = wrapper.emitted('filter-change')![0][0] as Record<string, unknown>
+    await workbench.changeFilter(restored)
+    expect(mocks.get).toHaveBeenCalledWith('/message-workbench/customers', { params: expect.objectContaining({ intention: '高', keyword: '来源A', page: 2, page_size: 10 }) })
+    expect(mocks.get).toHaveBeenCalledWith('/message-workbench/keywords', { params: { intention: '高' } })
+    await wrapper.setProps({ filters: workbench.filters.value })
+    expect((wrapper.get('[aria-label="客户意向"]').element as HTMLSelectElement).value).toBe('高')
+    await wrapper.get('[aria-label="客户意向"]').setValue('低')
+    const changes = wrapper.emitted('filter-change')!
+    const changed = changes[changes.length - 1][0] as Record<string, unknown>
+    await workbench.changeFilter(changed)
+    expect(mocks.get).toHaveBeenCalledWith('/message-workbench/customers', { params: expect.objectContaining({ intention: '低', page: 1 }) })
+    expect(mocks.replace).toHaveBeenCalledWith({ path: '/message-workbench', query: expect.objectContaining({ intention: '低', keyword: '来源A', page: 1 }) })
     wrapper.unmount()
   })
 })

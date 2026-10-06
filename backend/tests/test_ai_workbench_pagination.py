@@ -27,6 +27,38 @@ def workbench_db(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.parametrize("tab", ["competitors", "leads"])
+def test_multiple_collection_keywords_include_inherited_sources_and_keep_page_totals(workbench_db: sqlite3.Connection, tab: str) -> None:
+    # 用户资料与评论不含搜索词；必须从实际来源关系找回采集范围。
+    keywords = ["工业机器人", "机器视觉", "智能制造", "自动焊接", "无关业务"]
+    workbench_db.executemany(
+        "INSERT INTO user_accounts(id, platform, platform_user_id, nickname, account_role) VALUES(?, 'dy', ?, ?, 'competitor_candidate')",
+        [(index, f"user-{index}", f"用户{index}") for index in range(1, 6)],
+    )
+    workbench_db.executemany("INSERT INTO account_sources(account_id, keyword) VALUES(?, ?)", enumerate(keywords, start=1))
+    workbench_db.execute("INSERT INTO account_sources(account_id, keyword, active) VALUES(5, '工业机器人', 0)")
+    workbench_db.execute("INSERT INTO crawl_jobs(id, name, platform, mode, login_type, crawler_type, keywords) VALUES('source-task', '来源任务', 'dy', 'keyword', 'qrcode', 'search', '自动焊接')")
+    workbench_db.execute("INSERT INTO lead_user_accounts(id, account_id) SELECT id, id FROM user_accounts")
+    workbench_db.executemany(
+        "INSERT INTO contents(id, platform, content_id, title, author_account_id, source_keyword) VALUES(?, 'dy', ?, '来源视频', ?, ?)",
+        [(index, f"content-{index}", None if index == 4 else index, "机器视觉" if index == 2 else "") for index in range(1, 6)],
+    )
+    workbench_db.executemany(
+        "INSERT INTO lead_sources(lead_account_id, content_id, keyword, source_type, task_id) VALUES(?, ?, ?, 'comment', ?)",
+        [(index, index, "工业机器人" if index == 1 else "", "source-task" if index == 4 else None) for index in range(1, 6)],
+    )
+    keyword_filter = ", 工业机器人，机器视觉,智能制造, 自动焊接,, "
+    first = ai_service.ai_workbench(tab, keyword=keyword_filter, page_size=2)
+    second = ai_service.ai_workbench(tab, keyword=keyword_filter, page=2, page_size=2)
+    beyond = ai_service.ai_workbench(tab, keyword=keyword_filter, page=3, page_size=2)
+    assert first["total"] == second["total"] == beyond["total"] == 4
+    assert [item["id"] for item in first["items"] + second["items"]] == [4, 3, 2, 1]
+    assert beyond["items"] == []
+    assert ai_service.ai_workbench(tab, keyword="机器视觉")["items"][0]["id"] == 2
+    if tab == "leads":
+        assert {item["source_keywords"] for item in first["items"] + second["items"]} == set(keywords[:4])
+
+
+@pytest.mark.parametrize("tab", ["competitors", "leads"])
 def test_filtered_targets_include_records_beyond_old_limit(workbench_db: sqlite3.Connection, tab: str) -> None:
     workbench_db.executemany(
         """

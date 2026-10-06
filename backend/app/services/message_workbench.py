@@ -14,6 +14,7 @@ from uuid import uuid4
 from app import database
 from app.schemas import MessagePlanConfig
 from app.services import account_center, browser_queue
+from app.services.importer import LEAD_SOURCE_KEYWORD_SQL
 from app.services.message_attempts import (
     MessageQuotaReached,
     finish_message_attempt,
@@ -31,7 +32,7 @@ _AUTO_DM_LOCKS: dict[int, asyncio.Lock] = {}
 ACTIVE_BATCH_STATUSES = {"pending", "running"}
 
 
-def list_keywords() -> list[dict[str, Any]]:
+def list_keywords(intention: str = "") -> list[dict[str, Any]]:
     with database.connect() as conn:
         reminder_days = _reminder_days(conn)
         customers = _aggregate_customers(_target_source_rows(conn), reminder_days)
@@ -40,6 +41,8 @@ def list_keywords() -> list[dict[str, Any]]:
         "": _empty_keyword_stat("", "全部"),
     }
     for customer in customers:
+        if intention and customer["intention"] != intention:
+            continue
         _apply_customer_to_stat(stats[""], customer)
         for keyword in customer["keywords"]:
             key = f"{customer['platform']}::{keyword}"
@@ -61,6 +64,7 @@ def list_customers(
     query: str = "",
     page: int = 1,
     page_size: int = 20,
+    intention: str = "",
 ) -> dict[str, Any]:
     page = max(1, int(page or 1))
     page_size = max(1, min(100, int(page_size or 20)))
@@ -75,7 +79,7 @@ def list_customers(
 
     filtered = [
         customer for customer in customers
-        if _matches_customer(customer, normalized_keyword, normalized_platform, normalized_status, normalized_query)
+        if _matches_customer(customer, normalized_keyword, normalized_platform, normalized_status, normalized_query, intention)
     ]
     filtered.sort(key=lambda item: (not item["overdue"], item["latest_at"] or "", item["updated_at"] or ""), reverse=True)
 
@@ -218,9 +222,9 @@ def list_auto_message_batches(
         batches = database.rows_to_dicts(
             conn.execute(
                 """
-                SELECT *
-                FROM message_batches
-                ORDER BY created_at DESC
+                SELECT mb.*, pa.name AS account_name
+                FROM message_batches mb LEFT JOIN publish_accounts pa ON pa.id = mb.account_id
+                ORDER BY mb.created_at DESC
                 LIMIT ? OFFSET ?
                 """,
                 (page_size, (page - 1) * page_size),
@@ -228,12 +232,12 @@ def list_auto_message_batches(
         )
         active = database.row_to_dict(
             conn.execute(
-                "SELECT * FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
+                "SELECT mb.*, pa.name AS account_name FROM message_batches mb LEFT JOIN publish_accounts pa ON pa.id = mb.account_id WHERE mb.status IN ('pending', 'running') ORDER BY mb.created_at DESC LIMIT 1"
             ).fetchone()
         )
         selected_id = str(batch_id or ((active or {}) if page == 1 else {}).get("id") or (batches[0] if batches else {}).get("id") or "")
         selected_batch = database.row_to_dict(
-            conn.execute("SELECT * FROM message_batches WHERE id = ?", (selected_id,)).fetchone()
+            conn.execute("SELECT mb.*, pa.name AS account_name FROM message_batches mb LEFT JOIN publish_accounts pa ON pa.id = mb.account_id WHERE mb.id = ?", (selected_id,)).fetchone()
         ) if selected_id else None
         if not selected_batch and batches:
             selected_batch = batches[0]
@@ -269,7 +273,8 @@ def list_auto_message_batches(
 
 def get_auto_message_batch(batch_id: str, *, conn: Any | None = None) -> dict[str, Any]:
     with database.connect() if conn is None else nullcontext(conn) as conn:
-        batch = database.row_to_dict(conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone())
+        # 执行账号来自该批次保存的 ID，不能使用当前默认账号代替历史。
+        batch = database.row_to_dict(conn.execute("SELECT mb.*, pa.name AS account_name FROM message_batches mb LEFT JOIN publish_accounts pa ON pa.id = mb.account_id WHERE mb.id = ?", (batch_id,)).fetchone())
         if not batch:
             raise ValueError("自动私信批次不存在")
         batch["items"] = _batch_items(conn, batch_id)
@@ -857,21 +862,7 @@ def _target_source_rows(conn, lead_id: int | None = None) -> list[Any]:
             ua.profile_url,
             ua.signature,
             ls.id AS source_id,
-            COALESCE(
-                NULLIF(ls.keyword, ''),
-                NULLIF(ct.source_keyword, ''),
-                (
-                    SELECT NULLIF(acs.keyword, '')
-                    FROM account_sources acs
-                    WHERE acs.account_id = COALESCE(ls.source_account_id, ct.author_account_id)
-                      AND acs.active = 1
-                      AND NULLIF(acs.keyword, '') IS NOT NULL
-                    ORDER BY acs.created_at DESC, acs.id DESC
-                    LIMIT 1
-                ),
-                NULLIF(j.keywords, ''),
-                ?
-            ) AS keyword,
+            COALESCE({LEAD_SOURCE_KEYWORD_SQL}, ?) AS keyword,
             ls.source_type,
             ls.created_at AS source_created_at,
             cm.id AS comment_row_id,
@@ -1043,7 +1034,9 @@ def _apply_customer_to_stat(stat: dict[str, Any], customer: dict[str, Any]) -> N
         stat["overdue_count"] += 1
 
 
-def _matches_customer(customer: dict[str, Any], keyword: str, platform: str, status: str, query: str) -> bool:
+def _matches_customer(customer: dict[str, Any], keyword: str, platform: str, status: str, query: str, intention: str = "") -> bool:
+    if intention and customer["intention"] != intention:
+        return False
     if platform and customer["platform"] != platform:
         return False
     if keyword and keyword not in customer["keywords"]:

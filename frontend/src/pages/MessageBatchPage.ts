@@ -21,12 +21,15 @@ export default defineComponent({
     const detailOpen = ref(Boolean(route.query.batch))
     watch(() => route.query.batch, value => {
       detailOpen.value = Boolean(value)
-      if (value && String(props.batches.selected_batch_id || '') !== String(value)) emit('select-auto-message-batch', { id: String(value) })
+      if (value && (String(props.batches.selected_batch_id || '') !== String(value) || Number(route.query.item_page || 1) !== Number(props.batches.item_page || 1) || Number(route.query.page || 1) !== Number(props.batches.page || 1))) emit('select-auto-message-batch', { id: String(value), page: Number(route.query.page || props.batches.page || 1), page_size: Number(route.query.page_size || props.batches.page_size || 10), item_page: Number(route.query.item_page || 1), item_page_size: Number(route.query.item_page_size || props.batches.item_page_size || 20) })
     }, { immediate: true })
+    function batchQuery(id: string, itemPage = Number(props.batches.item_page || 1)) {
+      return { batch: id, page: Number(props.batches.page || 1), page_size: Number(props.batches.page_size || 10), item_page: itemPage, item_page_size: Number(props.batches.item_page_size || 20) }
+    }
     function select(batch: Dict) {
-      emit('select-auto-message-batch', batch)
+      emit('select-auto-message-batch', { ...batch, item_page: 1 })
       detailOpen.value = true
-      void router.replace({ path: '/message-batches', query: { batch: String(batch.id) } })
+      void router.replace({ path: '/message-batches', query: batchQuery(String(batch.id), 1) })
     }
     return () => {
       const data = props.batches as Dict
@@ -39,10 +42,14 @@ export default defineComponent({
           sectionTitle({ title: '触达记录', subtitle: `共 ${Number(data.total || 0)} 个自动私信批次`, icon: Tickets, tone: 'purple' }),
           h('div', { class: 'toolbar' }, [h('button', { onClick: () => router.push('/message-workbench') }, '返回客户跟进')]),
           batchList.length ? h('div', { class: 'operations-list' }, batchList.map(batch => renderBatchHistoryCard(batch, String(selected?.id || '') === String(batch.id || ''), () => select(batch)))) : emptyState({ title: '还没有触达记录', description: '启动自动私信后，在这里查看每位客户的执行结果。', icon: Tickets }),
-          h(ListPagination, { page: Number(data.page || 1), pageSize: Number(data.page_size || 10), total: Number(data.total || 0), onChange: (payload: PageChange) => emit('change-auto-message-batch-page', payload) }),
+          h(ListPagination, { page: Number(data.page || 1), pageSize: Number(data.page_size || 10), total: Number(data.total || 0), onChange: (payload: PageChange) => { emit('change-auto-message-batch-page', payload); void router.replace({ query: { page: payload.page, page_size: payload.page_size } }) } }),
         ]),
-        h(ElDrawer, { modelValue: detailOpen.value, title: '批次执行明细', size: '840px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) { detailOpen.value = false; void router.replace('/message-batches') } } }, () => selected ? renderBatchDetail(selected, items, data, {
-          cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch), retry: (batch: Dict) => emit('retry-auto-message-batch', batch), remove: (batch: Dict) => emit('delete-auto-message-batch', batch), changeItemPage: (payload: PageChange) => emit('change-auto-message-item-page', payload),
+        h(ElDrawer, { modelValue: detailOpen.value, title: '批次执行明细', size: '840px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) { detailOpen.value = false; void router.replace({ path: '/message-batches', query: { page: Number(data.page || 1), page_size: Number(data.page_size || 10) } }) } } }, () => selected ? renderBatchDetail(selected, items, data, {
+          cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch), retry: (batch: Dict) => emit('retry-auto-message-batch', batch), remove: (batch: Dict) => emit('delete-auto-message-batch', batch), changeItemPage: (payload: PageChange) => { emit('change-auto-message-item-page', payload); void router.replace({ query: { ...batchQuery(String(selected.id), payload.page), item_page_size: payload.page_size } }) },
+          openCustomer: (item: Dict) => {
+            const returnQuery = new URLSearchParams(Object.fromEntries(Object.entries(batchQuery(String(selected.id))).map(([key, value]) => [key, String(value)])))
+            void router.push({ path: '/message-workbench', query: { customer: String(item.lead_account_id), status: '全部', return_to: `/message-batches?${returnQuery}` } })
+          },
         }) : h('p', '正在加载批次详情…')),
       ])
     }
@@ -114,6 +121,7 @@ function renderBatchDetail(batch: Dict, items: Dict[], pagination: Dict, actions
       renderBatchMetric('已跳过', batch.skipped_count || 0),
     ]),
     h('section', { class: 'message-batch-meta-panel' }, [
+      renderBatchMeta('执行账号', batch.account_name ? `${batch.account_name} (${batch.account_id})` : batch.account_id || '未记录执行账号'),
       renderBatchMeta('创建时间', batch.created_at || '-'),
       renderBatchMeta('开始时间', batch.started_at || '-'),
       renderBatchMeta('结束时间', batch.finished_at || '-'),
@@ -123,7 +131,7 @@ function renderBatchDetail(batch: Dict, items: Dict[], pagination: Dict, actions
     h('section', { class: 'message-batch-items-panel' }, [
       sectionTitle({ title: '客户执行明细', subtitle: `共 ${Number(pagination.item_total || 0)} 条`, icon: User, tone: 'blue' }),
       items.length
-        ? h('div', { class: 'message-batch-item-detail-list' }, items.map(renderBatchItem))
+        ? h('div', { class: 'message-batch-item-detail-list' }, items.map(item => renderBatchItem(item, actions.openCustomer)))
         : emptyState({
           title: '当前批次没有执行明细',
           description: '批次刚创建时请稍候刷新；历史批次没有客户时不会产生明细。',
@@ -151,13 +159,14 @@ function renderBatchMeta(label: string, value: unknown) {
 }
 
 
-function renderBatchItem(item: Dict) {
+function renderBatchItem(item: Dict, openCustomer: (item: Dict) => void) {
   return h('article', { class: 'message-batch-item-detail' }, [
     h('div', { class: 'message-batch-item-head' }, [
       item.profile_url
         ? h('a', { href: item.profile_url, target: '_blank', rel: 'noreferrer' }, item.nickname || `客户 ${item.lead_account_id}`)
         : h('strong', item.nickname || `客户 ${item.lead_account_id}`),
       renderBatchStatus(item.status),
+      item.lead_account_id ? h('button', { class: 'text-icon-button', onClick: () => openCustomer(item) }, '查看客户跟进') : null,
     ]),
     item.script ? h('p', { class: 'message-batch-item-script' }, item.script) : null,
     item.error ? h('p', { class: 'message-batch-item-error' }, item.error) : null,
