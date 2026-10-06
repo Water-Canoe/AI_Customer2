@@ -50,4 +50,26 @@ describe('客户跟进交互', () => {
     expect(mocks.replace).toHaveBeenCalledWith({ path: '/message-workbench', query: expect.objectContaining({ intention: '低', keyword: '来源A', page: 1 }) })
     wrapper.unmount()
   })
+  it('explains the full source batch scope independently of the filtered customer list', async () => {
+    mocks.route.query = {}
+    localStorage.removeItem('message-workbench-auto-batch-config')
+    mocks.get.mockResolvedValue({ data: [{ id: 'account-1', name: '私信账号', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } }] })
+    const wrapper = mount(MessageWorkbenchPage, { props: {
+      filters: { platform: 'dy', keyword: '来源A', intention: '高', query: '文字搜索', status: '已回复', page: 3, page_size: 10 },
+      customers: { rows: [], total: 0, page: 3, page_size: 10 }
+    } })
+    await flushPromises()
+    const batchPanel = wrapper.get('.auto-message-batch-panel')
+    expect(batchPanel.text()).toContain('抖音 / 来源A')
+    expect(batchPanel.text()).toContain('全部未私信、话术可用的目标客户')
+    expect(batchPanel.text()).toContain('按评论/来源时间倒序选取最多 10 人')
+    expect(batchPanel.text()).toContain('当前列表的意向、文字搜索、状态和分页不参与批次筛选')
+    await batchPanel.findAll('input[type="number"]')[0].setValue(7)
+    expect(batchPanel.text()).toContain('选取最多 7 人')
+    await batchPanel.findAll('button').find(button => button.text() === 'AI一键私信')!.trigger('click')
+    expect(wrapper.emitted('start-auto-message-batch')?.[0][0]).toEqual({ platform: 'dy', keyword: '来源A', count: 7, interval_min_seconds: 5, interval_max_seconds: 20, account_id: 'account-1' })
+    expect(mocks.get).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+    localStorage.removeItem('message-workbench-auto-batch-config')
+  })
 })

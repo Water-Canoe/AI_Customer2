@@ -48,6 +48,65 @@ def test_intention_is_exact_and_counts_match_filtered_pagination(workspace, inte
     assert workspace.get('/api/message-workbench/customers', params={'intention': '高意向'}).status_code == 422
 
 
+def test_query_matches_any_comma_separated_term_and_keeps_other_filters(workspace):
+    # 不同来源词分别命中；其余客户验证查询与平台、状态、意向仍取交集。
+    lead_ids = []
+    with database.connect() as conn:
+        for index, (platform, status, intention, keyword, nickname) in enumerate([
+            ('dy', '未私信', '高', '电动车', 'ALPHA采购客户'),
+            ('dy', '未私信', '高', '巡游花车', 'BETA采购客户'),
+            ('dy', '未私信', '高', '智能音箱', '无关客户'),
+            ('ks', '未私信', '高', '电动车', '其他平台客户'),
+            ('dy', '已私信', '高', '电动车', '已私信客户'),
+            ('dy', '未私信', '中', '巡游花车', '中意向客户'),
+        ]):
+            account_id = conn.execute(
+                'INSERT INTO user_accounts(platform,platform_user_id,nickname) VALUES(?,?,?)',
+                (platform, f'query-customer-{index}', nickname),
+            ).lastrowid
+            lead_id = conn.execute(
+                "INSERT INTO lead_user_accounts(account_id,follow_status,screening_status,intention) VALUES(?,?,'目标客户',?)",
+                (account_id, status, intention),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO lead_sources(lead_account_id,source_type,keyword) VALUES(?,'comment',?)",
+                (lead_id, keyword),
+            )
+            lead_ids.append(lead_id)
+
+    params = {'platform': 'dy', 'status': '待私信', 'intention': '高', 'query': '电动车,巡游花车', 'page_size': 1}
+    first = workspace.get('/api/message-workbench/customers', params=params).json()
+    second = workspace.get('/api/message-workbench/customers', params={**params, 'page': 2}).json()
+    assert first['total'] == second['total'] == first['total_pages'] == second['total_pages'] == 2
+    assert {row['lead_id'] for row in first['rows'] + second['rows']} == set(lead_ids[:2])
+    beyond = workspace.get('/api/message-workbench/customers', params={**params, 'page': 3}).json()
+    assert beyond['total'] == 2 and beyond['total_pages'] == 2 and beyond['rows'] == []
+
+    # 混用两种逗号、首尾空格及空项，不扩大查询范围；单词仍按子串且忽略大小写。
+    for query, expected_ids in [
+        (' ， 电动车 , , 巡游花车， ', lead_ids[:2]),
+        ('动车', lead_ids[:1]),
+        (' alpha ', lead_ids[:1]),
+        ('， , ，', lead_ids[:3]),
+    ]:
+        result = workspace.get('/api/message-workbench/customers', params={**params, 'query': query, 'page_size': 20}).json()
+        assert result['total'] == len(expected_ids)
+        assert {row['lead_id'] for row in result['rows']} == set(expected_ids)
+
+    # 精确来源筛选不拆词、不改为子串；逐个放开其它约束只增加对应客户。
+    for overrides, expected_ids in [
+        ({'keyword': '电动车'}, lead_ids[:1]),
+        ({'keyword': '电动'}, []),
+        ({'keyword': '电动车,巡游花车'}, []),
+        ({'platform': ''}, [*lead_ids[:2], lead_ids[3]]),
+        ({'status': ''}, [*lead_ids[:2], lead_ids[4]]),
+        ({'intention': ''}, [*lead_ids[:2], lead_ids[5]]),
+    ]:
+        result = workspace.get('/api/message-workbench/customers', params={**params, **overrides, 'page_size': 20}).json()
+        assert result['total'] == len(expected_ids)
+        assert {row['lead_id'] for row in result['rows']} == set(expected_ids)
+
+
 def test_batch_history_uses_saved_execution_account_instead_of_new_default(workspace):
     old = account_center.create_account('dy', '当时执行账号', 'service', ['message'], ['message'])
     account_center.create_account('dy', '现在默认账号', 'service', ['message'], ['message'])

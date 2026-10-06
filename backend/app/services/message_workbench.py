@@ -1047,6 +1047,8 @@ def _matches_customer(customer: dict[str, Any], keyword: str, platform: str, sta
     if status and status != "已超时" and customer["follow_status"] != status:
         return False
     if query:
+        # 多个查询词按中英文逗号分隔，忽略空项，任一词匹配即可。
+        terms = [term.strip() for term in query.replace("，", ",").split(",") if term.strip()]
         haystack = "\n".join(
             str(customer.get(key, ""))
             for key in (
@@ -1060,7 +1062,7 @@ def _matches_customer(customer: dict[str, Any], keyword: str, platform: str, sta
                 "script",
             )
         ).lower()
-        if query not in haystack:
+        if terms and not any(term in haystack for term in terms):
             return False
     return True
 

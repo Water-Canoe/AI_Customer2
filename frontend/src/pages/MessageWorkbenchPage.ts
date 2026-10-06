@@ -152,7 +152,7 @@ export default defineComponent({
           h('div', { class: 'message-search' }, [
             h('input', {
               value: queryDraft.value,
-              placeholder: '搜索客户/评论',
+              placeholder: '搜索客户/评论/来源；逗号分隔任一匹配',
               onInput: (event: Event) => queryDraft.value = (event.target as HTMLInputElement).value,
               onKeydown: (event: KeyboardEvent) => {
                 if (event.key === 'Enter') runSearch()
@@ -284,8 +284,10 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
       }, [h(Promotion), h('span', active ? '运行中' : 'AI一键私信')]),
       active ? h('button', { type: 'button', class: 'secondary-action compact-action', onClick: () => actions.cancel(active) }, '取消批次') : null,
       h('button', { type: 'button', onClick: actions.records }, '查看触达记录'),
-      h('p', { class: 'auto-message-platform-note' }, '由于快手网页版、小红书网页版不提供私信入口，因此快手与小红书两个平台私信功能不可用。请以抖音为主。后续平台优化规则，本系统会一并优化添加私信功能。')
-    ])
+      h('p', { class: 'auto-message-platform-note' }, '当前批量自动私信仅支持抖音。')
+    ]),
+    // 批次按来源选人，列表筛选和分页不会缩小自动发送范围。
+    h('p', { class: 'note' }, `批量范围：所选抖音来源关键词下全部未私信、话术可用的目标客户，按评论/来源时间倒序选取最多 ${count} 人；当前列表的意向、文字搜索、状态和分页不参与批次筛选。`)
   ])
 }
 

@@ -33,6 +33,14 @@ describe('AI筛选查询上下文', () => {
     expect(wrapper.emitted('create-job')).toBeUndefined()
     wrapper.unmount()
   })
+  it.each(['关键词A,关键词B', '关键词A，关键词B'])('keeps every search term when continuing to follow-up: %s', async keyword => {
+    const wrapper = mount(AiPage, { props: { workbench: { items: [], total: 0 }, query: { tab: 'leads', keyword: '', status: '已分析', result: '目标客户', page: 2, page_size: 10 } } })
+    await wrapper.get('.ai-search input').setValue(keyword)
+    await wrapper.findAll('button').find(button => button.text() === '前往客户跟进')!.trigger('click')
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-workbench', query: { query: keyword, status: '待私信' } })
+    expect(wrapper.emitted('query-change')).toBeUndefined()
+    wrapper.unmount()
+  })
   it('loads the exact job outside the current list and refreshes that detail without clearing it', async () => {
     mocks.route.query = { job: 'historical-job' }
     let status = 'pending'
