@@ -1,4 +1,4 @@
-import { defineComponent, h, reactive } from 'vue'
+import { defineComponent, h, reactive, ref, type Ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { usePersistentDraft } from './usePersistentDraft'
@@ -7,12 +7,12 @@ const requests = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), delete: vi.fn()
 vi.mock('./api', () => ({ api: requests }))
 vi.mock('vue-router', () => ({ onBeforeRouteLeave: (callback: any) => { requests.leave = callback } }))
 
-function editor() {
+function editor(key: string | Ref<string> = 'work-1') {
   let draft: ReturnType<typeof usePersistentDraft>
   const form = reactive({ title: '' })
   const wrapper = mount(defineComponent({
     setup() {
-      draft = usePersistentDraft({ kind: 'video', key: 'work-1', getPayload: () => ({ title: form.title }), applyPayload: value => { form.title = value.title }, delay: 500 })
+      draft = usePersistentDraft({ kind: 'video', key, getPayload: () => ({ title: form.title }), applyPayload: value => { form.title = value.title }, delay: 500 })
       return () => h('span', form.title)
     },
   }))
@@ -101,6 +101,24 @@ describe('persistent editing drafts', () => {
     expect(form.title).toBe('读取期间开始写的内容')
     expect(await requests.leave()).toBe(true)
     expect(requests.put).toHaveBeenLastCalledWith('/drafts/video/work-1', { payload: { title: '读取期间开始写的内容' } })
+    wrapper.unmount()
+  })
+
+  it('切换草稿后，旧读取失败不会污染当前草稿', async () => {
+    let fail!: (error: Error) => void
+    requests.get.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+    const key = ref('work-1')
+    const { wrapper, form, draft } = editor(key)
+    const oldLoad = draft.load().catch(() => undefined)
+    await flushPromises()
+    key.value = 'work-2'
+    requests.get.mockResolvedValue({ data: { exists: true, payload: { title: '当前草稿' }, updated_at: 't2' } })
+    await draft.load()
+    fail(new Error('旧草稿失败'))
+    await oldLoad
+    expect(form.title).toBe('当前草稿')
+    expect(draft.status.value).toBe('saved')
+    expect(draft.error.value).toBe('')
     wrapper.unmount()
   })
 })

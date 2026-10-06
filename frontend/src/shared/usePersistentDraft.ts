@@ -5,7 +5,7 @@ import type { Dict } from './types'
 
 export type DraftKind = 'crawl' | 'video' | 'publish' | 'traffic' | 'automation'
 export type DraftStatus = 'idle' | 'loading' | 'dirty' | 'saving' | 'saved' | 'error'
-export interface DraftRecord { kind: DraftKind; key: string; payload: Dict; updated_at: string | null; exists: boolean }
+export interface DraftRecord { kind: DraftKind; key: string; payload: Dict; updated_at: string | null; exists: boolean; submitted: boolean }
 
 // 草稿写入串行化，避免较慢的旧请求覆盖新输入；凭据不得进入 getPayload。
 export function usePersistentDraft(options: {
@@ -21,6 +21,7 @@ export function usePersistentDraft(options: {
   let ready = false
   let restoring = false
   let revision = 0
+  let loadSeq = 0
   let baseline = ''
   let timer: ReturnType<typeof setTimeout> | undefined
   let writes: Promise<unknown> = Promise.resolve()
@@ -34,6 +35,7 @@ export function usePersistentDraft(options: {
     cancelTimer()
     ready = false
     const startingRevision = revision
+    const readRevision = ++loadSeq
     const requestPath = path()
     const snapshot = failedRead?.path === requestPath ? failedRead.snapshot : serialize()
     const preserveLocal = failedRead?.path === requestPath && serialize() !== snapshot
@@ -41,7 +43,7 @@ export function usePersistentDraft(options: {
     try {
       await writes.catch(() => undefined)
       const { data } = await api.get<DraftRecord>(requestPath)
-      if (requestPath !== path()) return data
+      if (requestPath !== path() || readRevision !== loadSeq) return data
       // 读取期间已开始输入时保留本地内容。
       if (!preserveLocal && startingRevision === revision && data.exists) {
         restoring = true
@@ -57,10 +59,12 @@ export function usePersistentDraft(options: {
       if (preserveLocal || startingRevision !== revision) { baseline = ''; scheduleSave() }
       return data
     } catch (cause: any) {
-      restoring = false
-      failedRead = { path: requestPath, snapshot }
-      status.value = 'error'
-      error.value = cause?.response?.data?.detail || '草稿读取失败，请重试'
+      if (requestPath === path() && readRevision === loadSeq) {
+        restoring = false
+        failedRead = { path: requestPath, snapshot }
+        status.value = 'error'
+        error.value = cause?.response?.data?.detail || '草稿读取失败，请重试'
+      }
       throw cause
     }
   }
@@ -84,8 +88,10 @@ export function usePersistentDraft(options: {
         }
         return data
       } catch (cause: any) {
-        status.value = 'error'
-        error.value = cause?.response?.data?.detail || '草稿保存失败，请重试'
+        if (requestPath === path()) {
+          status.value = 'error'
+          error.value = cause?.response?.data?.detail || '草稿保存失败，请重试'
+        }
         throw cause
       }
     })
@@ -102,6 +108,7 @@ export function usePersistentDraft(options: {
 
   async function clear() {
     cancelTimer()
+    loadSeq += 1
     const wasReady = ready
     ready = false
     await writes.catch(() => undefined)
@@ -131,7 +138,7 @@ export function usePersistentDraft(options: {
     if (status.value === 'loading') return false
     try { await save(); return true } catch { return false }
   })
-  onBeforeUnmount(() => { cancelTimer(); stop(); void save().catch(() => undefined) })
+  onBeforeUnmount(() => { loadSeq += 1; cancelTimer(); stop(); void save().catch(() => undefined) })
   return { status, error, updatedAt, load, save, flush: save, clear, scheduleSave }
 }
 
