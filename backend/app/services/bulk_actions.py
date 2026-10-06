@@ -16,7 +16,7 @@ def preview_bulk_action(payload: Any) -> dict[str, Any]:
     if action == "delete_non_customers":
         return _preview_delete_non_customers(target_ids, filters)
     if action == "ai_analyze":
-        return _preview_ai_analyze(target_type, target_ids)
+        return _preview_ai_analyze(target_type, target_ids, unanalysed_only=bool(filters.get("unanalysed_only")))
     if action == "retry_failed_ai":
         return _preview_retry_failed_ai(target_ids)
     if action == "keyword_analyze":
@@ -61,7 +61,18 @@ def _preview_delete_non_customers(target_ids: list[Any], filters: dict[str, Any]
     }
 
 
-def _preview_ai_analyze(target_type: str, target_ids: list[Any]) -> dict[str, Any]:
+def _preview_ai_analyze(target_type: str, target_ids: list[Any], *, unanalysed_only: bool = False) -> dict[str, Any]:
+    if unanalysed_only:
+        from app.services import ai_service
+
+        with database.connect() as conn:
+            eligible = ai_service.unanalysed_targets(conn, target_type)
+        return {
+            "action": "ai_analyze", "eligible_count": len(eligible), "skipped_count": 0,
+            "affected_counts": {"analysis_jobs": len(eligible)}, "tombstone_counts": {}, "warnings": [],
+            "sample_rows": _sample_rows(eligible, "nickname", "job_status"),
+            "confirm_text": f"将分析当前类型的全部 {len(eligible)} 个未分析对象，不受列表筛选和分页限制。已分析、排队、运行和失败对象不重复分析。",
+        }
     ids = _int_ids(target_ids)
     if target_type not in ("competitor", "lead", "content"):
         return _empty_preview("AI分析对象类型不支持", ["仅支持 competitor、lead、content。"])

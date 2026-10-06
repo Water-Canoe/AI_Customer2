@@ -335,7 +335,8 @@ class AiJobCreate(BaseModel):
 
 class AiBatchCreate(BaseModel):
     target_type: Literal["competitor", "lead", "content"]
-    target_ids: list[int]
+    # 未传 ID 表示当前类型的全量未分析对象；显式空数组仍不执行任何任务。
+    target_ids: list[int] | None = None
     run_now: bool = True
 
 

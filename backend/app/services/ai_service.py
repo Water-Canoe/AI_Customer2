@@ -464,6 +464,38 @@ def _workbench_competitors_query() -> str:
         """
 
 
+def unanalysed_targets(conn: database.sqlite3.Connection, target_type: str) -> list[dict[str, Any]]:
+    """用现有状态规则选择全量未分析对象，供预览和事务内入队共用。"""
+    if target_type == "competitor":
+        query = f"SELECT ua.id, ua.nickname, ua.competitor_status FROM user_accounts ua WHERE {_WORKBENCH_COMPETITOR_WHERE}"
+        analysis_status = _competitor_analysis_status
+    elif target_type == "lead":
+        query = """
+            SELECT lua.id, ua.nickname, lua.screening_status, lua.reason, lua.script
+            FROM lead_user_accounts lua JOIN user_accounts ua ON ua.id = lua.account_id
+            WHERE lua.hidden = 0
+        """
+        analysis_status = _lead_analysis_status
+    else:
+        raise HTTPException(status_code=400, detail="一键分析仅支持竞品账号和客户线索")
+    # 只读取状态所需字段；全量选取不聚合每位客户的来源证据。
+    rows = database.rows_to_dicts(conn.execute(f"""
+        SELECT target.*, aj.status AS job_status
+        FROM ({query}) target
+        LEFT JOIN analysis_jobs aj ON aj.id = (
+            SELECT latest.id FROM analysis_jobs latest
+            WHERE latest.target_type = ? AND latest.target_id = target.id
+            ORDER BY datetime(latest.updated_at) DESC, datetime(latest.created_at) DESC LIMIT 1
+        )
+        WHERE NOT EXISTS (
+            SELECT 1 FROM analysis_jobs busy
+            WHERE busy.target_type = ? AND busy.target_id = target.id AND busy.status IN ('pending', 'running')
+        )
+        ORDER BY target.id
+    """, (target_type, target_type)).fetchall())
+    return [row for row in rows if analysis_status(row, {"status": row["job_status"]}) == "未分析"]
+
+
 def _workbench_leads_query() -> str:
     return f"""
         SELECT lua.id,

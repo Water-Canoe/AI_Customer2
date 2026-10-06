@@ -130,11 +130,8 @@ export default defineComponent({
     }
     function runBatch() {
       const targetType = activeTab.value === 'leads' ? 'lead' : 'competitor'
-      const ids = rows.value
-        .filter(row => row.target_type === targetType)
-        .filter(row => ['未分析', '失败'].includes(String(row.analysis_status || '')))
-        .map(row => Number(row.target_id || row.id))
-      emit('create-batch-jobs', targetType, ids)
+      // 全量对象由后端选择，不受当前列表的搜索、状态或分页限制。
+      emit('create-batch-jobs', targetType)
     }
     function deleteNonCompetitors() {
       const ids = rows.value
@@ -266,15 +263,15 @@ function renderToolbar(
       ...resultOptions.map(result => h('option', { value: result }, result))
     ]) : null,
     h('button', { class: 'filter-button', type: 'button', onClick: applyFilters }, '搜索'),
-    ['competitors', 'leads'].includes(tab) ? h('button', { class: 'primary-action', type: 'button', onClick: runBatch }, [
+    ['competitors', 'leads'].includes(tab) ? h('button', { class: 'primary-action', type: 'button', title: '分析当前类型的全部未分析对象，不受筛选和分页限制', onClick: runBatch }, [
       h(MagicStick, { class: 'inline-icon' }),
-      '批量分析本页'
+      '一键分析'
     ]) : null,
-    tab === 'competitors' ? h('button', { class: 'primary-action ai-danger-action', type: 'button', onClick: deleteNonCompetitors }, [
+    tab === 'competitors' ? h('button', { class: 'secondary-action ai-danger-action', type: 'button', onClick: deleteNonCompetitors }, [
       h(Delete, { class: 'inline-icon' }),
       '删除本页非竞品'
     ]) : null,
-    tab === 'leads' ? h('button', { class: 'primary-action ai-danger-action', type: 'button', onClick: deleteNonCustomers }, [
+    tab === 'leads' ? h('button', { class: 'secondary-action ai-danger-action', type: 'button', onClick: deleteNonCustomers }, [
       h(Delete, { class: 'inline-icon' }),
       '删除本页非客户'
     ]) : null,

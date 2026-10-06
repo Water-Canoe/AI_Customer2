@@ -25,7 +25,12 @@ def create_ai_job(payload: AiJobCreate) -> dict[str, object]:
 def create_ai_jobs(payload: AiBatchCreate) -> list[dict[str, object]]:
     require_license()
     with database.connect() as conn:
-        jobs = ai_service.create_batch_jobs(payload.target_type, payload.target_ids, run_now=False, conn=conn)
+        target_ids = payload.target_ids
+        if target_ids is None:
+            # 先取得写事务，防止重复点击在两次选取之间创建相同分析任务。
+            conn.execute("BEGIN IMMEDIATE")
+            target_ids = [int(row["id"]) for row in ai_service.unanalysed_targets(conn, payload.target_type)]
+        jobs = ai_service.create_batch_jobs(payload.target_type, target_ids, run_now=False, conn=conn)
         if payload.run_now and jobs:
             runtime_job = job_queue.enqueue_ai_batch([str(job["id"]) for job in jobs], conn=conn)
             for job in jobs:

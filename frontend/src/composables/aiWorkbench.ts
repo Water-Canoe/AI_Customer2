@@ -49,17 +49,15 @@ export function useAiWorkbench(options: AiWorkbenchOptions) {
     }
   }
 
-  async function createBatchJobs(targetType: string, targetIds: number[]) {
-    const ids = uniqueIds(targetIds)
-    if (!ids.length) {
-      ElMessage.info('当前筛选范围没有可分析对象')
-      return
-    }
+  async function createBatchJobs(targetType: string) {
     try {
-      await confirmBulkPreview({ action: 'ai_analyze', target_type: targetType, target_ids: ids }, 'AI批量分析预览')
-      const { data } = await api.post('/ai/jobs/batch', { target_type: targetType, target_ids: ids })
-      ElMessage.success(`已将 ${data.length} 个AI分析任务加入队列`)
+      await confirmBulkPreview({ action: 'ai_analyze', target_type: targetType, filters: { unanalysed_only: true } }, '一键分析预览')
+      // 省略对象 ID，由服务端在入队事务内重新选择全部未分析对象。
+      const { data } = await api.post('/ai/jobs/batch', { target_type: targetType })
+      if (data.length) ElMessage.success(`已将 ${data.length} 个AI分析任务加入队列`)
+      else ElMessage.info('没有未分析对象，已分析或正在处理的对象不会重复入队')
     } catch (error: any) {
+      if (error === 'cancel' || error === 'close') return
       ElMessage.error(error?.response?.data?.detail || '批量AI分析失败')
     } finally {
       await refresh()

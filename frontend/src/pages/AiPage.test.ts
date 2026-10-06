@@ -12,6 +12,17 @@ vi.mock('element-plus', async () => {
 
 describe('AI筛选查询上下文', () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.route.query = {} })
+  it.each([['competitors', 'competitor', '非竞品'], ['leads', 'lead', '非客户']])('analyses all unanalysed %s while deletion still uses only the current page', async (tab, targetType, result) => {
+    const wrapper = mount(AiPage, { props: {
+      workbench: { items: [{ id: 7, target_type: targetType, analysis_status: '已分析', result_label: result }], total: 50 },
+      query: { tab, keyword: '当前筛选', status: '已分析', result, page: 3, page_size: 10 },
+    } })
+    await wrapper.findAll('.ai-toolbar button').find(button => button.text() === '一键分析')!.trigger('click')
+    expect(wrapper.emitted('create-batch-jobs')?.[0]).toEqual([targetType])
+    await wrapper.findAll('.ai-toolbar button').find(button => button.text().startsWith('删除本页'))!.trigger('click')
+    expect(wrapper.emitted(tab === 'leads' ? 'delete-non-customers' : 'delete-non-competitors')?.[0]).toEqual([[7]])
+    wrapper.unmount()
+  })
   it('rehydrates filters from the shared query and preserves the keyword when switching object type', async () => {
     const wrapper = mount(AiPage, { props: { workbench: { items: [], page: 1 }, query: { tab: 'competitors', keyword: '企业获客', status: '已分析', result: '竞品', page: 2, page_size: 20 } } })
     expect((wrapper.get('.ai-search input').element as HTMLInputElement).value).toBe('企业获客')

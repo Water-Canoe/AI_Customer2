@@ -23,6 +23,24 @@ vi.mock('element-plus', () => ({
 
 describe('useAiWorkbench', () => {
   beforeEach(() => vi.clearAllMocks())
+  it('previews the full unanalysed scope and lets the server choose targets inside its transaction', async () => {
+    mocks.preview.mockResolvedValue({ eligible_count: 25 })
+    mocks.post.mockResolvedValue({ data: Array.from({ length: 25 }, (_, id) => ({ id })) })
+    mocks.get.mockResolvedValue({ data: { items: [], total_pages: 1 } })
+    const ai = useAiWorkbench({ refreshRelated: mocks.refreshRelated })
+    ai.query.value = { tab: 'leads', keyword: '当前筛选', status: '已分析', result: '非客户', page: 3, page_size: 10 }
+    await ai.createBatchJobs('lead')
+    expect(mocks.preview).toHaveBeenCalledWith({ action: 'ai_analyze', target_type: 'lead', filters: { unanalysed_only: true } }, '一键分析预览')
+    expect(mocks.post).toHaveBeenCalledWith('/ai/jobs/batch', { target_type: 'lead' })
+    expect(mocks.success).toHaveBeenCalledWith('已将 25 个AI分析任务加入队列')
+  })
+  it('does not enqueue anything or report an error after cancelling the full-scope preview', async () => {
+    mocks.preview.mockRejectedValueOnce('cancel')
+    mocks.get.mockResolvedValue({ data: { items: [], total_pages: 1 } })
+    await useAiWorkbench({ refreshRelated: mocks.refreshRelated }).createBatchJobs('competitor')
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(mocks.error).not.toHaveBeenCalled()
+  })
 
   it('creates an AI job and refreshes its related views', async () => {
     mocks.post.mockResolvedValue({ data: {} })

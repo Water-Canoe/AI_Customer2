@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import pytest
@@ -56,9 +57,12 @@ def create_plan(plan_type="keyword_lead") -> dict:
     }))
 
 
-@pytest.mark.parametrize("kind", ["ai_single", "ai_batch", "automation", "automation_message"])
+@pytest.mark.parametrize("kind", ["ai_single", "ai_batch", "ai_all", "automation", "automation_message"])
 def test_runtime_insert_then_failure_rolls_back_the_complete_creation(workspace, monkeypatch, kind):
     ids = seed_customers()
+    if kind == "ai_all":
+        with database.connect() as conn:
+            conn.execute("UPDATE lead_user_accounts SET screening_status='待筛选', follow_status='待筛选', script=''")
     plan = create_plan("message" if kind == "automation_message" else "keyword_lead") if kind.startswith("automation") else None
     parent = automation_workbench.create_run(plan["id"]) if kind == "automation_message" else None
     with database.connect() as conn:
@@ -80,6 +84,8 @@ def test_runtime_insert_then_failure_rolls_back_the_complete_creation(workspace,
     if kind.startswith("ai"):
         url = "/api/ai/jobs" if kind == "ai_single" else "/api/ai/jobs/batch"
         payload = {"target_type": "lead", "target_id": ids[0]} if kind == "ai_single" else {"target_type": "lead", "target_ids": ids}
+        if kind == "ai_all":
+            payload = {"target_type": "lead"}
         assert workspace.post(url, json=payload).status_code == 500
     elif parent:
         result = automation_workbench.run_automation_run(parent["id"])
@@ -114,6 +120,51 @@ def test_ai_run_now_false_prepares_without_enqueueing(workspace, monkeypatch, ba
     assert all(job["status"] == "pending" and "runtime_job" not in job for job in jobs)
     with database.connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM runtime_jobs").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("target_type", ["competitor", "lead"])
+def test_one_click_previews_and_enqueues_all_unanalysed_targets_once(workspace, target_type):
+    # 超过一页的真实记录混合已分析、排队、执行、失败和不可见对象；预览不得写数据。
+    with database.connect() as conn:
+        conn.executemany(
+            "INSERT INTO user_accounts(id,platform,platform_user_id,nickname,account_role) VALUES(?,'dy',?,?,'competitor_candidate')",
+            [(index, str(index), f"对象{index}") for index in range(1, 25)],
+        )
+        conn.execute("INSERT INTO lead_user_accounts(id,account_id) SELECT id,id FROM user_accounts")
+        conn.execute("UPDATE user_accounts SET competitor_status='竞品' WHERE id IN (1,7)")
+        conn.execute("UPDATE user_accounts SET competitor_status='非竞品' WHERE id IN (2,8)")
+        conn.execute("UPDATE user_accounts SET account_role='user' WHERE id=6")
+        conn.execute("UPDATE lead_user_accounts SET screening_status='目标客户' WHERE id=1")
+        conn.execute("UPDATE lead_user_accounts SET screening_status='非客户' WHERE id=2")
+        conn.execute("UPDATE lead_user_accounts SET hidden=1 WHERE id=6")
+        conn.execute("UPDATE lead_user_accounts SET reason='已有分析原因' WHERE id=7")
+        conn.execute("UPDATE lead_user_accounts SET script='已有分析话术' WHERE id=8")
+        conn.executemany(
+            "INSERT INTO analysis_jobs(id,target_type,target_id,status) VALUES(?,?,?,?)",
+            [(f"existing-{index}", target_type, index, status) for index, status in ((3, "pending"), (4, "running"), (5, "failed"))],
+        )
+    preview = workspace.post("/api/bulk-actions/preview", json={
+        "action": "ai_analyze", "target_type": target_type, "filters": {"unanalysed_only": True},
+    })
+    assert preview.status_code == 200 and preview.json()["eligible_count"] == 16
+    assert "不受列表筛选和分页限制" in preview.json()["confirm_text"]
+    with database.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM analysis_jobs").fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM runtime_jobs").fetchone()[0] == 0
+    # 两次并发点击共用真实 SQLite 事务，只有一次能选中未分析对象。
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: workspace.post("/api/ai/jobs/batch", json={"target_type": target_type}), range(2)))
+    assert all(response.status_code == 200 for response in responses)
+    assert sorted(len(response.json()) for response in responses) == [0, 16]
+    jobs = [job for response in responses for job in response.json()]
+    assert {job["target_id"] for job in jobs} == set(range(9, 25))
+    assert all(job["status"] == "pending" and job["runtime_job"]["kind"] == "ai_batch" for job in jobs)
+    with database.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM analysis_jobs").fetchone()[0] == 19
+        runtimes = conn.execute("SELECT payload FROM runtime_jobs").fetchall()
+        assert len(runtimes) == 1
+        assert set(json.loads(runtimes[0]["payload"])["job_ids"]) == {job["id"] for job in jobs}
+    assert workspace.post("/api/ai/jobs/batch", json={"target_type": target_type, "target_ids": []}).json() == []
 
 
 def test_automation_creation_keeps_priority_references_and_skipped_duplicate_rules(workspace):

@@ -2,6 +2,14 @@
 .operations-page { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .operations-page .panel { background: var(--app-surface, #fff); border: 1px solid var(--app-border, #e5eaf1); border-radius: var(--app-radius, 14px); padding: 24px; }
 .operations-page .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+/* 操作控件按内容宽度排列，避免第六个按钮落入搜索框的伸展网格列。 */
+.operations-page .ai-toolbar { display: flex; flex-wrap: wrap; }
+.operations-page .ai-search { flex: 1 1 260px; min-width: 240px; }
+.operations-page .ai-toolbar > button { flex: 0 0 auto; width: auto; white-space: nowrap; }
+#app .ai-toolbar .ai-danger-action { background: #fff; border-color: #fecaca; color: #b42318; }
+#app .ai-toolbar .ai-danger-action:hover:not(:disabled) { background: #fff1f2; border-color: #fca5a5; }
+/* 意向是短筛选项，与状态按钮同排，不继承表单的全宽布局。 */
+.operations-page .message-status-tabs > select { flex: 0 0 120px; width: 120px; min-height: 36px; padding: 0 10px; }
 .operations-page .note { color: var(--app-muted, #667085); }
 .operations-list { display: flex; flex-direction: column; gap: 0; }
 .operations-list-row { display: flex; align-items: center; gap: 20px; padding: 20px 0; border-bottom: 1px solid var(--app-border, #e5eaf1); }
