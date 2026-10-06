@@ -5,9 +5,7 @@
       <el-menu ref="sidebarMenu" :default-active="activeMenuItem" :default-openeds="[]" :unique-opened="true" class="nav" @select="goToView">
         <el-menu-item index="workspace"><el-icon><House /></el-icon><span>工作台</span></el-menu-item>
         <el-menu-item index="acquisition"><el-icon><Operation /></el-icon><span>获客工作台</span></el-menu-item>
-        <el-sub-menu index="message-center"><template #title><el-icon><Message /></el-icon><span>客户</span></template>
-          <el-menu-item index="message-workbench">客户跟进</el-menu-item><el-menu-item index="message-batches">触达记录</el-menu-item>
-        </el-sub-menu>
+        <el-menu-item index="message-workbench"><el-icon><Message /></el-icon><span>客户工作台</span></el-menu-item>
         <el-menu-item index="traffic-plans"><el-icon><Promotion /></el-icon><span>引流运营</span></el-menu-item>
         <el-sub-menu index="content-workbench"><template #title><el-icon><VideoPlay /></el-icon><span>内容</span></template>
           <el-menu-item index="content-create">视频创作</el-menu-item><el-menu-item index="content-assets">素材与音色</el-menu-item>
@@ -29,13 +27,13 @@
         <div class="topbar-actions"><button v-if="showEnvironmentStatus" class="topbar-env-tag" :class="topbarEnvClass" @click="goToView(isContentView ? 'content-settings' : isTrafficView ? 'traffic-settings' : 'settings')">{{ topbarEnvLabel }}</button><el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button></div>
       </el-header>
       <el-main class="main" :class="`view-${activeView}`">
-        <div :class="{ 'workspace-page': isAcquisitionView }">
-          <nav v-if="isAcquisitionView" class="workspace-tabs" aria-label="获客工作区">
-            <button v-for="[name, label] in acquisitionTabs" :key="name" type="button" :class="{ 'is-active': activeView === name }" :aria-current="activeView === name ? 'page' : undefined" @click="goToView(name)">{{ label }}</button>
+        <div :class="{ 'workspace-page': isAcquisitionView || isMessageView }">
+          <nav v-if="isAcquisitionView || isMessageView" class="workspace-tabs" :aria-label="isMessageView ? '客户工作区' : '获客工作区'">
+            <button v-for="[name, label] in (isMessageView ? messageTabs : acquisitionTabs)" :key="name" type="button" :class="{ 'is-active': activeView === name }" :aria-current="activeView === name ? 'page' : undefined" @click="goToView(name)">{{ label }}</button>
           </nav>
           <RouterView v-slot="{ Component }">
-            <!-- 仅保留 AI 详情和来源树；创建表单、规则页仍正常卸载并执行离页保护。 -->
-            <KeepAlive :include="['AiPage', 'OverviewPage']" :max="2"><component :is="Component" v-bind="routeProps" v-on="routeListeners" /></KeepAlive>
+            <!-- 保留详情和来源树的位置；创建表单、设置页仍正常卸载并执行离页保护。 -->
+            <KeepAlive :include="['AiPage', 'OverviewPage', 'MessageWorkbenchPage']" :max="3"><component :is="Component" v-bind="routeProps" v-on="routeListeners" /></KeepAlive>
           </RouterView>
         </div>
       </el-main>
@@ -207,8 +205,6 @@ const {
   batches: messageBatches,
   load: loadMessageWorkbench,
   loadBatches: loadMessageBatches,
-  changeBatchPage: changeMessageBatchPage,
-  changeBatchItemPage: changeMessageBatchItemPage,
   changeFilter: changeMessageWorkbenchFilter,
   selectCustomer: selectMessageWorkbenchCustomer,
   closeDetail: closeMessageWorkbenchDetail,
@@ -227,6 +223,7 @@ const {
 
 const activeView = computed(() => String(route.name || 'workspace'))
 const acquisitionTabs = [['acquisition', '采集与结果'], ['ai', 'AI筛选'], ['overview', '来源与证据'], ['settings', '采集与筛选规则']]
+const messageTabs = [['message-workbench', '客户跟进'], ['message-batches', '触达记录'], ['message-settings', '私信设置']]
 const isAcquisitionView = computed(() => acquisitionTabs.some(([name]) => name === activeView.value) || activeView.value === 'tables')
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
 const isRuntimeView = computed(() => activeView.value === 'runtime-center')
@@ -234,17 +231,13 @@ const isMessageView = computed(() => activeView.value.startsWith('message-'))
 const isGlobalSettingsView = computed(() => activeView.value === 'global-settings')
 const isTrafficView = computed(() => activeView.value.startsWith('traffic-'))
 const isContentView = computed(() => activeView.value.startsWith('content-'))
-const activeMenuItem = computed(() => isAcquisitionView.value ? 'acquisition' : isTrafficView.value ? 'traffic-plans' : ({
-  'message-settings': 'message-workbench', 'content-settings': 'content-create',
+const activeMenuItem = computed(() => isAcquisitionView.value ? 'acquisition' : isMessageView.value ? 'message-workbench' : isTrafficView.value ? 'traffic-plans' : ({
+  'content-settings': 'content-create',
 } as Record<string, string>)[activeView.value] || activeView.value)
-const activeMenuGroup = computed(() => {
-  if (isMessageView.value) return 'message-center'
-  if (isContentView.value) return 'content-workbench'
-  return ''
-})
+const activeMenuGroup = computed(() => isContentView.value ? 'content-workbench' : '')
 const topbarKicker = computed(() => activeView.value === 'workspace' ? '日常工作' : activeView.value === 'accounts' ? '配置' : isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isMessageView.value ? '私信工作台' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))))
-const viewTitle = computed(() => isAcquisitionView.value ? '获客工作台' : String(route.meta.title || '工作台'))
-const viewSubtitle = computed(() => isAcquisitionView.value ? '从采集、筛选到来源证据，在同一工作区推进获客。' : String(route.meta.subtitle || ''))
+const viewTitle = computed(() => isAcquisitionView.value ? '获客工作台' : isMessageView.value ? '客户工作台' : String(route.meta.title || '工作台'))
+const viewSubtitle = computed(() => isAcquisitionView.value ? '从采集、筛选到来源证据，在同一工作区推进获客。' : isMessageView.value ? '跟进客户、查看触达结果和调整私信规则。' : String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
 const showEnvironmentStatus = computed(() => ['acquisition', 'settings', 'content-create', 'content-settings', 'traffic-plans', 'traffic-settings'].includes(activeView.value))
 const topbarEnvOk = computed(() => isContentView.value ? Boolean(contentEnv.value?.ok) : isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)
@@ -401,9 +394,7 @@ const routeListeners = computed(() => {
   }
   if (activeView.value === 'message-batches') {
     return {
-      'select-auto-message-batch': (batch: Dict) => loadMessageBatches(String(batch.id || ''), { page: batch.page || messageBatches.value.page, page_size: batch.page_size || messageBatches.value.page_size, item_page: batch.item_page || 1, item_page_size: batch.item_page_size || messageBatches.value.item_page_size }),
-      'change-auto-message-batch-page': changeMessageBatchPage,
-      'change-auto-message-item-page': changeMessageBatchItemPage,
+      'select-auto-message-batch': (batch: Dict) => loadMessageBatches(String(batch.id || ''), batch),
       'cancel-auto-message-batch': cancelMessageAutoBatch,
       'retry-auto-message-batch': retryMessageAutoBatch,
       'delete-auto-message-batch': deleteMessageAutoBatch,
@@ -445,7 +436,7 @@ const routeListeners = computed(() => {
   return {}
 })
 
-// 获客页签保留完整工作位置；其它模块的侧栏仍只恢复列表筛选。
+// 获客与客户页签保留完整工作位置；其它模块的侧栏仍只恢复列表筛选。
 const listQueryFields: Record<string, string[]> = {
   'traffic-plans': ['archive', 'page'],
   'traffic-monitor': ['archive', 'page'],
@@ -457,7 +448,7 @@ const rememberedViewQueries: Record<string, Dict> = {}
 watch(() => [route.name, route.query] as const, ([name, query], previous) => {
   const view = String(name)
   const fields = listQueryFields[view]
-  if (acquisitionTabs.some(([tab]) => tab === view) || view === 'tables') rememberedViewQueries[view] = { ...query }
+  if ([...acquisitionTabs, ...messageTabs].some(([tab]) => tab === view) || view === 'tables') rememberedViewQueries[view] = { ...query }
   else if (fields?.some(field => field in query)) rememberedViewQueries[view] = Object.fromEntries(fields.filter(field => field in query).map(field => [field, query[field]]))
   if (view !== 'acquisition') return
   // 地址里的采集筛选同时支持刷新、后退和页签返回；同路由变化只重读列表。
@@ -674,7 +665,8 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
     loaders.push(() => loadMessageWorkbench(true))
     if (includeStatic) loaders.push(loadSettings)
   } else if (activeView.value === 'message-batches') {
-    loaders.push(() => loadMessageBatches())
+    // 初次打开和自动刷新均服从地址中的批次及分页，避免覆盖页签恢复的位置。
+    loaders.push(() => loadMessageBatches(String(route.query.batch || ''), { page: Number(route.query.page || 1), page_size: Number(route.query.page_size || 10), item_page: Number(route.query.item_page || 1), item_page_size: Number(route.query.item_page_size || 20) }))
   } else if (activeView.value === 'message-settings') {
     if (!settingsDraftDirty.value) loaders.push(loadSettings)
     if (includeStatic || refreshChild) loaders.push(async () => { messageSettingsRefreshSeq.value += 1 })
@@ -772,10 +764,8 @@ watch(activeView, () => {
 
 watch(activeMenuGroup, async group => {
   await nextTick()
-  for (const item of ['message-center', 'content-workbench']) {
-    if (item !== group) sidebarMenu.value?.close?.(item)
-  }
   if (group) sidebarMenu.value?.open?.(group)
+  else sidebarMenu.value?.close?.('content-workbench')
 }, { immediate: true })
 
 onMounted(async () => {

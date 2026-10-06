@@ -1,4 +1,4 @@
-import { computed, defineComponent, h, onMounted, ref, watch } from 'vue'
+import { computed, defineComponent, h, onActivated, onMounted, ref, watch } from 'vue'
 import { ElDrawer, ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { Close, Collection, CopyDocument, Promotion, Search } from '@element-plus/icons-vue'
@@ -17,6 +17,7 @@ const autoBatchConfigKey = 'message-workbench-auto-batch-config'
 const autoBatchDefaults = { count: 10, min: 5, max: 20 }
 
 export default defineComponent({
+  name: 'MessageWorkbenchPage',
   props: {
     keywords: { type: Array, default: () => [] },
     customers: { type: Object, default: () => ({ rows: [], total: 0, page: 1, page_size: 20, total_pages: 1 }) },
@@ -36,9 +37,14 @@ export default defineComponent({
       if (name === 'select-customer') void router.replace({ query: { ...route.query, customer: String(args[0]) } })
       if (name === 'close-detail') { const { customer, ...query } = route.query; void router.replace({ query }) }
     }
-    watch(() => route.query.customer, value => { if (value && String((props.detail as Dict)?.customer?.lead_id || '') !== String(value)) emit('select-customer', String(value)) }, { immediate: true })
-    watch(() => route.query, value => {
-      if (!['keyword', 'platform', 'status', 'intention', 'query', 'page', 'page_size'].some(key => key in value)) return
+    watch(() => [route.name, route.query.customer] as const, ([name, value]) => {
+      // 缓存页只读取自己的详情参数，避免其它页签触发客户请求或关闭详情。
+      if (name !== 'message-workbench') return
+      if (value && String((props.detail as Dict)?.customer?.lead_id || '') !== String(value)) emit('select-customer', String(value))
+      else if (!value && (props.detail as Dict)?.customer) emit('close-detail')
+    }, { immediate: true })
+    watch(() => [route.name, route.query] as const, ([name, value]) => {
+      if (name !== 'message-workbench') return
       const next = { keyword: String(value.keyword || ''), platform: String(value.platform || ''), status: String(value.status || '待私信'), intention: String(value.intention || ''), query: String(value.query || ''), page: Number(value.page || 1), page_size: Number(value.page_size || 20) }
       if (Object.entries(next).some(([key, item]) => String(props.filters[key] ?? '') !== String(item))) emit('filter-change', next)
     }, { immediate: true })
@@ -57,12 +63,15 @@ export default defineComponent({
         const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'message', platform: 'dy' } })
         accounts.value = data.filter(account => isAccountFeatureReady(account, 'message'))
         const preferred = accounts.value.find(account => account.default_features?.includes('message')) || accounts.value[0]
-        accountId.value = String(preferred?.id || '')
+        if (!accounts.value.some(account => String(account.id) === accountId.value)) accountId.value = String(preferred?.id || '')
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '私信账号加载失败')
       }
     }
     onMounted(loadAccounts)
+    // 返回缓存页时更新账号可用状态，同时保留用户已选账号。
+    let activatedOnce = false
+    onActivated(() => { if (activatedOnce) void loadAccounts(); activatedOnce = true })
     watch(() => (props.filters as Dict).query, value => {
       queryDraft.value = String(value || '')
     })
@@ -110,9 +119,7 @@ export default defineComponent({
       h('section', { class: 'panel' }, [
         sectionTitle({ title: '客户跟进', subtitle: (props.filters as Dict).keyword ? `${platformName((props.filters as Dict).platform)} / ${(props.filters as Dict).keyword}` : '全部来源 · 准备话术，实际发送后确认，再推进回复与成交状态。', icon: Collection }),
         h('div', { class: 'toolbar' }, [
-          String(route.query.return_to || '').startsWith('/message-batches?') ? h('button', { onClick: () => router.push(String(route.query.return_to)) }, '返回触达记录') : null,
-          h('button', { onClick: () => router.push('/message-batches') }, '触达记录'),
-          h('button', { onClick: () => router.push('/message-settings') }, '话术与发送规则'),
+          String(route.query.return_to || '').startsWith('/message-batches?') ? h('button', { onClick: () => router.push(String(route.query.return_to)) }, '返回原批次') : null,
           h('button', { onClick: () => router.push({ path: '/accounts', query: { feature: 'message', platform: 'dy', return_to: route.fullPath } }) }, '配置私信账号'),
         ]),
         h('details', [h('summary', '按平台与来源关键词筛选'), h('div', { class: 'message-keyword-list' }, [
@@ -140,7 +147,6 @@ export default defineComponent({
             account_id: accountId.value
           }),
           cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch),
-          records: () => router.push({ path: '/message-batches', query: (props.batches as Dict).active?.id ? { batch: String((props.batches as Dict).active.id) } : {} })
         })]),
         h('div', { class: 'message-status-tabs' }, [
           h('select', { value: String(props.filters.intention || ''), 'aria-label': '客户意向', onChange: (event: Event) => changeFilter({ intention: (event.target as HTMLSelectElement).value, page: 1 }) }, [h('option', { value: '' }, '全部意向'), ...['高', '中', '低'].map(value => h('option', { value }, `${value}意向`))]),
@@ -168,7 +174,7 @@ export default defineComponent({
           total: total.value,
           onChange: (payload: PageChange) => changeFilter({ page: payload.page, page_size: payload.page_size }),
         }),
-        h(ElDrawer, { modelValue: Boolean((props.detail as Dict)?.customer), title: '客户详情', size: '820px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) handleEvent('close-detail') } }, () => renderDetailDrawer(props.detail as Dict, handleEvent, {
+        h(ElDrawer, { modelValue: route.name === 'message-workbench' && Boolean((props.detail as Dict)?.customer), title: '客户详情', size: '820px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value && route.name === 'message-workbench') handleEvent('close-detail') } }, () => renderDetailDrawer(props.detail as Dict, handleEvent, {
           detailTab: detailTab.value, setDetailTab: (value: string) => detailTab.value = value,
           sourcePage: sourcePage.value,
           eventPage: eventPage.value,
@@ -283,7 +289,6 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
         onClick: actions.start
       }, [h(Promotion), h('span', active ? '运行中' : 'AI一键私信')]),
       active ? h('button', { type: 'button', class: 'secondary-action compact-action', onClick: () => actions.cancel(active) }, '取消批次') : null,
-      h('button', { type: 'button', onClick: actions.records }, '查看触达记录'),
       h('p', { class: 'auto-message-platform-note' }, '当前批量自动私信仅支持抖音。')
     ]),
     // 批次按来源选人，列表筛选和分页不会缩小自动发送范围。

@@ -4,7 +4,7 @@ import MessageWorkbenchPage from './MessageWorkbenchPage'
 import { ref } from 'vue'
 import { useMessageWorkbench } from '../composables/messageWorkbench'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), push: vi.fn(), replace: vi.fn(), route: { query: { customer: '7', status: '全部' } as Record<string, string>, fullPath: '/message-workbench?customer=7&status=全部' } }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), push: vi.fn(), replace: vi.fn(), route: { name: 'message-workbench', query: { customer: '7', status: '全部' } as Record<string, string>, fullPath: '/message-workbench?customer=7&status=全部' } }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get } }))
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => mocks }))
 vi.mock('element-plus', async () => {

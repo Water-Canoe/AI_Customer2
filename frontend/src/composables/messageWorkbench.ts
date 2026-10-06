@@ -37,14 +37,6 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     batches.value = data
   }
 
-  async function changeBatchPage(pagination: Dict) {
-    await loadBatches('', { ...pagination, item_page: 1 })
-  }
-
-  async function changeBatchItemPage(pagination: Dict) {
-    await loadBatches(undefined, { item_page: pagination.page, item_page_size: pagination.page_size })
-  }
-
   async function load(silent = false) {
     if (!silent) loading.value = true
     try {
@@ -220,8 +212,6 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     batches,
     load,
     loadBatches,
-    changeBatchPage,
-    changeBatchItemPage,
     changeFilter,
     selectCustomer,
     closeDetail,

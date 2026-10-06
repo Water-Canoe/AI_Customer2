@@ -14,20 +14,23 @@ export default defineComponent({
   props: {
     batches: { type: Object, default: () => ({ batches: [], active: null, selected_batch_id: '', items: [] }) },
   },
-  emits: ['select-auto-message-batch', 'cancel-auto-message-batch', 'retry-auto-message-batch', 'delete-auto-message-batch', 'change-auto-message-batch-page', 'change-auto-message-item-page'],
+  emits: ['select-auto-message-batch', 'cancel-auto-message-batch', 'retry-auto-message-batch', 'delete-auto-message-batch'],
   setup(props, { emit }) {
     const route = useRoute()
     const router = useRouter()
     const detailOpen = ref(Boolean(route.query.batch))
-    watch(() => route.query.batch, value => {
-      detailOpen.value = Boolean(value)
-      if (value && (String(props.batches.selected_batch_id || '') !== String(value) || Number(route.query.item_page || 1) !== Number(props.batches.item_page || 1) || Number(route.query.page || 1) !== Number(props.batches.page || 1))) emit('select-auto-message-batch', { id: String(value), page: Number(route.query.page || props.batches.page || 1), page_size: Number(route.query.page_size || props.batches.page_size || 10), item_page: Number(route.query.item_page || 1), item_page_size: Number(route.query.item_page_size || props.batches.item_page_size || 20) })
+    watch(() => [route.name, route.query] as const, ([name, query]) => {
+      if (name !== 'message-batches') return
+      detailOpen.value = Boolean(query.batch)
+      // 明细翻页不改变批次 ID，也必须跟随地址恢复列表和明细位置。
+      const id = String(query.batch || '')
+      const pagination = { page: Number(query.page || 1), page_size: Number(query.page_size || 10), item_page: Number(query.item_page || 1), item_page_size: Number(query.item_page_size || 20) }
+      if ((id && String(props.batches.selected_batch_id || '') !== id) || Object.entries(pagination).some(([key, value]) => Number(props.batches[key] || 0) !== value)) emit('select-auto-message-batch', { id, ...pagination })
     }, { immediate: true })
     function batchQuery(id: string, itemPage = Number(props.batches.item_page || 1)) {
       return { batch: id, page: Number(props.batches.page || 1), page_size: Number(props.batches.page_size || 10), item_page: itemPage, item_page_size: Number(props.batches.item_page_size || 20) }
     }
     function select(batch: Dict) {
-      emit('select-auto-message-batch', { ...batch, item_page: 1 })
       detailOpen.value = true
       void router.replace({ path: '/message-batches', query: batchQuery(String(batch.id), 1) })
     }
@@ -40,12 +43,11 @@ export default defineComponent({
       return h('div', { class: 'workspace-page operations-page' }, [
         h('section', { class: 'panel' }, [
           sectionTitle({ title: '触达记录', subtitle: `共 ${Number(data.total || 0)} 个自动私信批次`, icon: Tickets, tone: 'purple' }),
-          h('div', { class: 'toolbar' }, [h('button', { onClick: () => router.push('/message-workbench') }, '返回客户跟进')]),
           batchList.length ? h('div', { class: 'operations-list' }, batchList.map(batch => renderBatchHistoryCard(batch, String(selected?.id || '') === String(batch.id || ''), () => select(batch)))) : emptyState({ title: '还没有触达记录', description: '启动自动私信后，在这里查看每位客户的执行结果。', icon: Tickets }),
-          h(ListPagination, { page: Number(data.page || 1), pageSize: Number(data.page_size || 10), total: Number(data.total || 0), onChange: (payload: PageChange) => { emit('change-auto-message-batch-page', payload); void router.replace({ query: { page: payload.page, page_size: payload.page_size } }) } }),
+          h(ListPagination, { page: Number(data.page || 1), pageSize: Number(data.page_size || 10), total: Number(data.total || 0), onChange: (payload: PageChange) => router.replace({ query: { page: payload.page, page_size: payload.page_size } }) }),
         ]),
         h(ElDrawer, { modelValue: detailOpen.value, title: '批次执行明细', size: '840px', class: 'operations-detail', 'onUpdate:modelValue': (value: boolean) => { if (!value) { detailOpen.value = false; void router.replace({ path: '/message-batches', query: { page: Number(data.page || 1), page_size: Number(data.page_size || 10) } }) } } }, () => selected ? renderBatchDetail(selected, items, data, {
-          cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch), retry: (batch: Dict) => emit('retry-auto-message-batch', batch), remove: (batch: Dict) => emit('delete-auto-message-batch', batch), changeItemPage: (payload: PageChange) => { emit('change-auto-message-item-page', payload); void router.replace({ query: { ...batchQuery(String(selected.id), payload.page), item_page_size: payload.page_size } }) },
+          cancel: (batch: Dict) => emit('cancel-auto-message-batch', batch), retry: (batch: Dict) => emit('retry-auto-message-batch', batch), remove: (batch: Dict) => emit('delete-auto-message-batch', batch), changeItemPage: (payload: PageChange) => router.replace({ query: { ...batchQuery(String(selected.id), payload.page), item_page_size: payload.page_size } }),
           openCustomer: (item: Dict) => {
             const returnQuery = new URLSearchParams(Object.fromEntries(Object.entries(batchQuery(String(selected.id))).map(([key, value]) => [key, String(value)])))
             void router.push({ path: '/message-workbench', query: { customer: String(item.lead_account_id), status: '全部', return_to: `/message-batches?${returnQuery}` } })

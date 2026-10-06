@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import MessageBatchPage from './MessageBatchPage'
 
 const mocks = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: { batch: 'history', page: '2', item_page: '3' } }), useRouter: () => mocks }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ name: 'message-batches', query: { batch: 'history', page: '2', item_page: '3' } }), useRouter: () => mocks }))
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   return { ElPagination: { render: () => null }, ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('div', slots.default?.()) : null }) }
