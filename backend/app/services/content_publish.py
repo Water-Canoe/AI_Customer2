@@ -3,22 +3,26 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from app import database
-from app.services import content_assets
+from app.services import content_assets, video_outputs
 
 
 ACTIVE_TASK_STATUSES = {"waiting_media", "queued", "running"}
 TERMINAL_TASK_STATUSES = {"succeeded", "failed", "review_required", "cancelled"}
 
 
-def validate_auto_publish(plan: dict[str, Any]) -> None:
+def validate_auto_publish(plan: dict[str, Any], title: str = '', description: str = '') -> None:
     if not bool(plan.get("enabled")):
         return
-    _selected_accounts([str(value) for value in plan.get("account_ids", [])])
+    accounts = _selected_accounts([str(value) for value in plan.get("account_ids", [])])
+    if title:
+        for account in accounts:
+            _task_values(account['platform'], title, description, [], {})
     if str(plan.get("output_scope") or "first") not in {"first", "all"}:
         raise ValueError("自动发布成品范围只支持首个或全部")
     _strategy(str(plan.get("publish_strategy") or "immediate"), str(plan.get("scheduled_at") or ""))
@@ -26,32 +30,31 @@ def validate_auto_publish(plan: dict[str, Any]) -> None:
 
 def create_video_output_tasks(
     *,
-    video_job_id: str,
-    output_name: str,
+    output_ids: list[str],
     account_ids: list[str] | None = None,
     title: str = "",
-    description: str = "",
+    description: str | None = None,
     tags: list[str] | None = None,
     publish_strategy: str = "immediate",
     scheduled_at: str = "",
-    platform_overrides: dict[str, Any] | None = None,
+    account_overrides: dict[str, Any] | None = None,
+    draft_key: str = '',
 ) -> list[dict[str, Any]]:
-    job = _video_job(video_job_id)
-    output = next((item for item in job["outputs"] if str(item.get("name") or "") == output_name), None)
-    if not output:
-        raise ValueError("视频成品不存在")
+    if not output_ids or len(set(output_ids)) != len(output_ids):
+        raise ValueError('请选择不重复的视频成品ID')
+    outputs = [video_outputs.get_output(output_id) for output_id in output_ids]
     return _insert_tasks(
         accounts=_selected_accounts(account_ids),
         source_type="video_output",
         content_type="video",
-        video_job_id=video_job_id,
-        output_name=output_name,
-        title=title or str(job["subject"]),
-        description=description or str(job["script"] or ""),
+        outputs=outputs,
+        title=title,
+        description=description,
         tags=tags or [],
         publish_strategy=publish_strategy,
         scheduled_at=scheduled_at,
-        platform_overrides=platform_overrides or {},
+        account_overrides=account_overrides or {},
+        draft_key=draft_key,
     )
 
 
@@ -64,7 +67,8 @@ def create_asset_tasks(
     tags: list[str] | None = None,
     publish_strategy: str = "immediate",
     scheduled_at: str = "",
-    platform_overrides: dict[str, Any] | None = None,
+    account_overrides: dict[str, Any] | None = None,
+    draft_key: str = '',
 ) -> list[dict[str, Any]]:
     assets = [content_assets.get_asset(asset_id) for asset_id in asset_ids]
     if not assets:
@@ -76,8 +80,11 @@ def create_asset_tasks(
         source_type, content_type = "asset_images", "note"
     else:
         raise ValueError("只能选择一个视频，或选择一组图片发布图文")
+    accounts = _selected_accounts(account_ids)
+    if content_type == 'note' and any(account['platform'] == 'dy' for account in accounts) and len(assets) > 35:
+        raise ValueError('抖音图文最多选择35张图片')
     return _insert_tasks(
-        accounts=_selected_accounts(account_ids),
+        accounts=accounts,
         source_type=source_type,
         content_type=content_type,
         title=title,
@@ -85,8 +92,9 @@ def create_asset_tasks(
         tags=tags or [],
         publish_strategy=publish_strategy,
         scheduled_at=scheduled_at,
-        platform_overrides=platform_overrides or {},
+        account_overrides=account_overrides or {},
         assets=assets,
+        draft_key=draft_key,
     )
 
 
@@ -97,15 +105,17 @@ def create_waiting_video_tasks(
     output_scope: str,
     publish_strategy: str,
     scheduled_at: str,
+    *,
+    conn: Any | None = None,
 ) -> list[dict[str, Any]]:
-    job = _video_job(video_job_id)
+    job = _video_job(video_job_id, conn=conn)
     accounts = _selected_accounts(account_ids)
     indexes = range(max(1, int(output_count))) if output_scope == "all" else range(1)
     strategy = _strategy(publish_strategy, scheduled_at)
     schedule = _schedule_value(strategy, scheduled_at)
     batch_id = uuid.uuid4().hex
     task_ids: list[str] = []
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         for account in accounts:
             for output_index in indexes:
                 task_id = uuid.uuid4().hex
@@ -127,10 +137,13 @@ def create_waiting_video_tasks(
                     ),
                 )
                 task_ids.append(task_id)
-    return [get_task(task_id) for task_id in task_ids]
+        tasks = [get_task(task_id, conn=conn) for task_id in task_ids]
+    return tasks
 
 
 def bind_waiting_video_tasks(video_job_id: str, outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from app.services import job_queue
+
     bound: list[str] = []
     with database.connect() as conn:
         rows = conn.execute(
@@ -146,9 +159,11 @@ def bind_waiting_video_tasks(video_job_id: str, outputs: list[dict[str, Any]]) -
                 )
             else:
                 conn.execute(
-                    "UPDATE publish_tasks SET output_name = ?, status = 'queued', current_stage = 'queued', updated_at = datetime('now', 'localtime') WHERE id = ?",
-                    (str(outputs[index].get("name") or ""), row["id"]),
+                    "UPDATE publish_tasks SET output_id = ?, output_name = ?, status = 'queued', current_stage = 'queued', updated_at = datetime('now', 'localtime') WHERE id = ?",
+                    (outputs[index]['id'], str(outputs[index].get("name") or ""), row["id"]),
                 )
+                runtime = job_queue.enqueue_publish_task(str(row['id']), conn=conn)
+                conn.execute('UPDATE publish_tasks SET runtime_job_id=? WHERE id=?', (runtime['id'], row['id']))
                 bound.append(str(row["id"]))
     return [get_task(task_id) for task_id in bound]
 
@@ -194,8 +209,8 @@ def list_tasks(page: int = 1, page_size: int = 30, status: str = "") -> dict[str
     return {"items": [_format_task(row) for row in rows], "total": total, "page": page, "page_size": page_size, "summary": summary}
 
 
-def get_task(task_id: str) -> dict[str, Any]:
-    with database.connect() as conn:
+def get_task(task_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         row = conn.execute(
             """
             SELECT t.*, a.platform, a.name AS account_name
@@ -249,11 +264,7 @@ def update_task_state(
 
 def task_media_paths(task: dict[str, Any]) -> list[Path]:
     if task["source_type"] == "video_output":
-        job = _video_job(str(task["video_job_id"]))
-        output = next((item for item in job["outputs"] if str(item.get("name") or "") == task["output_name"]), None)
-        if not output:
-            raise ValueError("视频成品不存在")
-        return [_resolve_video_output(str(output["relative_path"]))]
+        return [video_outputs.resolve_output_path(str(task['output_id'] or ''))]
     return [
         content_assets.resolve_asset_path(str(asset["relative_path"]))
         for asset in task.get("assets", []) if asset["role"] == "media"
@@ -411,16 +422,20 @@ def retry_task(task_id: str) -> dict[str, Any]:
     from app.services import job_queue
 
     task = get_task(task_id)
-    if task["status"] not in TERMINAL_TASK_STATUSES:
-        raise ValueError("只有已结束的发布任务可以重试")
+    if task["status"] not in {"failed", "cancelled"}:
+        raise ValueError("只允许重试确认未发布的失败或取消任务；结果不明确请先人工核实")
     with database.connect() as conn:
         row = conn.execute(
             "SELECT id FROM runtime_jobs WHERE kind = 'content_publish' AND entity_id = ? ORDER BY created_at DESC LIMIT 1",
             (task_id,),
         ).fetchone()
-    update_task_state(task_id, "queued", stage="queued", progress=0)
-    runtime = job_queue.retry_job(str(row["id"])) if row else job_queue.enqueue_publish_task(task_id)
-    _set_runtime_job(task_id, str(runtime["id"]))
+    if row:
+        job_queue.retry_job(str(row["id"]))
+    else:
+        with database.connect() as conn:
+            conn.execute("UPDATE publish_tasks SET status='queued',current_stage='queued',progress=0,error='',result='{}',started_at=NULL,finished_at=NULL,published_at=NULL,updated_at=datetime('now','localtime') WHERE id=?", (task_id,))
+            runtime = job_queue.enqueue_publish_task(task_id, conn=conn)
+            conn.execute('UPDATE publish_tasks SET runtime_job_id=? WHERE id=?', (runtime['id'], task_id))
     return get_task(task_id)
 
 
@@ -433,73 +448,53 @@ def mark_task_result(task_id: str, status: str, note: str = "") -> dict[str, Any
     return update_task_state(task_id, status, error="" if status == "succeeded" else note, result={"manual": True, "note": note})
 
 
-def enqueue_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    from app.services import job_queue
-
-    result = []
-    for task in tasks:
-        if task["status"] != "queued":
-            result.append(task)
-            continue
-        runtime = job_queue.enqueue_publish_task(str(task["id"]))
-        _set_runtime_job(str(task["id"]), str(runtime["id"]))
-        result.append(get_task(str(task["id"])))
-    return result
-
-
-def _set_runtime_job(task_id: str, runtime_job_id: str) -> None:
-    with database.connect() as conn:
-        conn.execute(
-            "UPDATE publish_tasks SET runtime_job_id = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
-            (runtime_job_id, task_id),
-        )
-
-
 def _insert_tasks(
     *,
     accounts: list[dict[str, Any]],
     source_type: str,
     content_type: str,
     title: str,
-    description: str,
+    description: str | None,
     tags: list[str],
     publish_strategy: str,
     scheduled_at: str,
-    platform_overrides: dict[str, Any],
-    video_job_id: str | None = None,
-    output_name: str = "",
+    account_overrides: dict[str, Any],
+    outputs: list[dict[str, Any]] | None = None,
     assets: list[dict[str, Any]] | None = None,
+    draft_key: str = '',
 ) -> list[dict[str, Any]]:
-    if not str(title or "").strip():
+    from app.services import job_queue
+
+    if not outputs and not str(title or "").strip():
         raise ValueError("发布标题不能为空")
-    strategy = _strategy(publish_strategy, scheduled_at)
-    schedule = _schedule_value(strategy, scheduled_at)
+    if set(account_overrides) - {account['id'] for account in accounts}:
+        raise ValueError('逐账号发布文案包含未选中的账号')
     batch_id, task_ids = uuid.uuid4().hex, []
     with database.connect() as conn:
         for account in accounts:
-            task_id = uuid.uuid4().hex
-            task_title, task_description, task_tags, options = _task_values(
-                account["platform"], title, description, tags, platform_overrides
-            )
-            conn.execute(
-                """
-                INSERT INTO publish_tasks(
-                    id, batch_id, account_id, source_type, content_type, video_job_id, output_name,
-                    title, description, tags, publish_strategy, scheduled_at, platform_options
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    task_id, batch_id, account["id"], source_type, content_type, video_job_id, output_name,
-                    task_title, task_description, json.dumps(task_tags, ensure_ascii=False), strategy,
-                    schedule, json.dumps(options, ensure_ascii=False),
-                ),
-            )
-            for index, asset in enumerate(assets or []):
-                conn.execute(
-                    "INSERT INTO publish_task_assets(task_id, asset_id, role, sort_order) VALUES(?, ?, 'media', ?)",
-                    (task_id, asset["id"], index),
+            override = account_overrides.get(account['id'], {})
+            strategy = _strategy(str(override.get('publish_strategy', publish_strategy)), str(override.get('scheduled_at', scheduled_at)))
+            schedule = _schedule_value(strategy, str(override.get('scheduled_at', scheduled_at)))
+            for output in outputs or [None]:
+                task_id = uuid.uuid4().hex
+                task_title, task_description, task_tags, options = _task_values(
+                    account['platform'], title or (output['subject'] if output else ''),
+                    description if description is not None else (output['script'] if output else ''), tags, override,
                 )
-            task_ids.append(task_id)
+                conn.execute(
+                    """INSERT INTO publish_tasks(id,batch_id,account_id,source_type,content_type,video_job_id,output_id,output_name,output_index,title,description,tags,publish_strategy,scheduled_at,platform_options)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (task_id,batch_id,account['id'],source_type,content_type,output['video_job_id'] if output else None,
+                     output['id'] if output else None,output['name'] if output else '',output['index'] if output else 0,
+                     task_title,task_description,json.dumps(task_tags,ensure_ascii=False),strategy,schedule,json.dumps(options,ensure_ascii=False)),
+                )
+                for index, asset in enumerate(assets or []):
+                    conn.execute("INSERT INTO publish_task_assets(task_id,asset_id,role,sort_order) VALUES(?,?,'media',?)", (task_id,asset['id'],index))
+                runtime = job_queue.enqueue_publish_task(task_id, conn=conn)
+                conn.execute('UPDATE publish_tasks SET runtime_job_id=? WHERE id=?', (runtime['id'], task_id))
+                task_ids.append(task_id)
+        from app.services import drafts
+        drafts.record_submission(conn, 'publish', draft_key, {'route': '/content-publish', 'query': {'task': task_ids[0]}, 'selection': task_ids})
     return [get_task(task_id) for task_id in task_ids]
 
 
@@ -520,40 +515,34 @@ def _selected_accounts(account_ids: list[str] | None) -> list[dict[str, Any]]:
     return selected
 
 
-def _video_job(video_job_id: str) -> dict[str, Any]:
-    with database.connect() as conn:
+def _video_job(video_job_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         row = conn.execute("SELECT * FROM video_jobs WHERE id = ?", (str(video_job_id),)).fetchone()
     if not row:
         raise ValueError("视频任务不存在")
-    result = dict(row)
-    result["outputs"] = json.loads(result.get("outputs") or "[]")
-    return result
-
-
-def _resolve_video_output(relative_path: str) -> Path:
-    root = database.get_video_generation_root().resolve()
-    path = (root / str(relative_path or "")).resolve()
-    if path != root and root not in path.parents:
-        raise ValueError("视频输出路径超出运行目录")
-    if not path.is_file():
-        raise ValueError("视频输出文件不存在")
-    return path
+    return dict(row)
 
 
 def _task_values(platform: str, title: str, description: str, tags: list[str], overrides: dict[str, Any]) -> tuple[str, str, list[str], dict[str, Any]]:
-    override = overrides.get(platform, {}) if isinstance(overrides, dict) else {}
+    override = overrides if isinstance(overrides, dict) else {}
     clean_tags: list[str] = []
     raw_tags = override.get("tags", tags) if isinstance(override, dict) else tags
     for tag in raw_tags if isinstance(raw_tags, list) else []:
         value = str(tag or "").strip().lstrip("#")
         if value and value not in clean_tags:
             clean_tags.append(value)
-        if len(clean_tags) >= 5:
-            break
+    clean_title = str(override.get('title', title) or '').strip()
+    clean_description = str(override.get('description', description) or '').strip()
+    if not clean_title or len(clean_title) > 20:
+        raise ValueError(f'{platform} 发布标题需为1至20个字符，请调整文案')
+    if len(clean_description) > 1000:
+        raise ValueError(f'{platform} 发布正文不能超过1000个字符，请调整文案')
+    if len(clean_tags) > 5:
+        raise ValueError(f'{platform} 发布标签最多5个，请调整标签')
     options = override.get("options", {}) if isinstance(override, dict) else {}
     return (
-        str(override.get("title") or title or "").strip()[:20],
-        str(override.get("description") or description or "").strip()[:1000],
+        clean_title,
+        clean_description,
         clean_tags,
         options if isinstance(options, dict) else {},
     )
@@ -575,6 +564,8 @@ def _schedule_value(strategy: str, value: str) -> str | None:
         scheduled = datetime.fromisoformat(str(value or ""))
     except ValueError as exc:
         raise ValueError("定时发布时间格式不正确") from exc
+    if scheduled.tzinfo is not None:
+        scheduled = scheduled.astimezone().replace(tzinfo=None)
     if scheduled <= datetime.now() + timedelta(hours=2):
         raise ValueError("定时发布时间必须晚于当前时间至少2小时")
     return scheduled.strftime("%Y-%m-%d %H:%M:%S")

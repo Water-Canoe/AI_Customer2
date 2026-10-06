@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -50,8 +51,9 @@ def normalize_path(value: str) -> str:
     return value.strip().strip('"').strip("'")
 
 
-def next_task_id() -> str:
-    with database.connect() as conn:
+def next_task_id(*, conn: Any | None = None) -> str:
+    # 批量创建时计数与任务共用事务，避免另一连接写入造成锁冲突。
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         current = int(database.get_setting(conn, "next_task_number", "1"))
         if current > 0xFFFF:
             raise ValueError("任务ID已超过 4 位十六进制上限 FFFF")
@@ -241,12 +243,12 @@ def _missing_creator_message(mode: str) -> str:
     return f"{_mode_creator_label(mode)}任务必须填写{_creator_input_label(mode)}"
 
 
-def create_task(payload: TaskCreate, *, automation_managed: bool = False) -> dict[str, object]:
+def create_task(payload: TaskCreate, *, automation_managed: bool = False, conn: Any | None = None) -> dict[str, object]:
     task = normalize_task_defaults(payload)
-    task_id = next_task_id()
     crawler_type = infer_crawler_type(task)
     raw_started_ts_ms = int(time.time() * 1000)
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        task_id = next_task_id(conn=conn)
         media_path = normalize_path(database.get_setting(conn, "media_crawler_path"))
         command = build_command(
             {
@@ -294,15 +296,18 @@ def create_task(payload: TaskCreate, *, automation_managed: bool = False) -> dic
             ),
         )
         log_task(conn, task_id, "info", "任务已创建，等待执行")
-    return get_task(task_id) or {}
+        from app.services import drafts
+        drafts.record_submission(conn, 'crawl', payload.draft_key, {'route': '/acquisition', 'query': {'task': task_id}, 'selection': []})
+        task = get_task(task_id, conn=conn) or {}
+    return task
 
 
-def set_task_skip_content_ids(task_id: str, content_ids: list[str]) -> None:
+def set_task_skip_content_ids(task_id: str, content_ids: list[str], *, conn: Any | None = None) -> None:
     # 这些 ID 只传给运行时 shim，用于 creator 补采时跳过已入库内容。
     normalized = sorted({str(content_id).strip() for content_id in content_ids if str(content_id).strip()})
     if not normalized:
         return
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         conn.execute(
             "UPDATE crawl_jobs SET skip_content_ids = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
             (",".join(normalized), task_id),
@@ -329,8 +334,9 @@ def create_profile_enrichment_task(
     mode: Literal["profile_enrichment", "account_analysis"] = "profile_enrichment",
     name_prefix: str = "账号资料补全",
     content_count: int = 1,
+    conn: Any | None = None,
 ) -> dict[str, object]:
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         row = conn.execute("SELECT * FROM user_accounts WHERE id = ?", (account_id,)).fetchone()
         if not row:
             raise ValueError("账号不存在，无法采集主页资料")
@@ -344,35 +350,35 @@ def create_profile_enrichment_task(
         login_type = database.get_setting(conn, "login_type", "qrcode")
         headless = database.get_setting(conn, "headless", "false") == "true"
 
-    nickname = str(account.get("nickname") or account_id)
-    # 创建任务时固定拓客账号，避免运行时才发现未配置默认账号。
-    execution_account_id = account_center.resolve_account_id(platform, "acquisition")
-    task = create_task(
-        TaskCreate(
-            name=f"{name_prefix}-{nickname}",
-            mode=mode,
-            platform=platform,
-            login_type=login_type if login_type in ("qrcode", "phone", "cookie") else "qrcode",
-            creator_id=creator_id,
-            content_count=content_count,
-            comment_count=0,
-            collect_comments=False,
-            collect_sub_comments=False,
-            max_concurrency=1,
-            headless=headless,
-            execute_crawler=True,
-            account_id=execution_account_id,
+        nickname = str(account.get("nickname") or account_id)
+        # 创建任务时固定拓客账号，避免运行时才发现未配置默认账号。
+        execution_account_id = account_center.resolve_account_id(platform, "acquisition")
+        task = create_task(
+            TaskCreate(
+                name=f"{name_prefix}-{nickname}",
+                mode=mode,
+                platform=platform,
+                login_type=login_type if login_type in ("qrcode", "phone", "cookie") else "qrcode",
+                creator_id=creator_id,
+                content_count=content_count,
+                comment_count=0,
+                collect_comments=False,
+                collect_sub_comments=False,
+                max_concurrency=1,
+                headless=headless,
+                execute_crawler=True,
+                account_id=execution_account_id,
+            ),
+            conn=conn,
         )
-    )
-    with database.connect() as conn:
         log_task(conn, str(task["id"]), "info", f"{name_prefix}来源账号：{nickname}（ID={account_id}）")
-    return task
+        return task
 
 
-def create_profile_enrichment_batch(limit: int = 10) -> dict[str, object]:
+def create_profile_enrichment_batch(limit: int = 10, *, conn: Any | None = None) -> dict[str, object]:
     """Create a small serial queue for accounts that can actually be enriched."""
-    safe_limit = max(1, min(int(limit), 50))
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        safe_limit = max(1, min(int(limit), 50))
         rows = conn.execute(
             """
             SELECT ua.id
@@ -407,13 +413,13 @@ def create_profile_enrichment_batch(limit: int = 10) -> dict[str, object]:
             """,
             (safe_limit,),
         ).fetchall()
-    tasks = [create_profile_enrichment_task(int(row["id"])) for row in rows]
-    return {
-        "created": len(tasks),
-        "limit": safe_limit,
-        "task_ids": [str(task["id"]) for task in tasks],
-        "tasks": tasks,
-    }
+        tasks = [create_profile_enrichment_task(int(row["id"]), conn=conn) for row in rows]
+        return {
+            "created": len(tasks),
+            "limit": safe_limit,
+            "task_ids": [str(task["id"]) for task in tasks],
+            "tasks": tasks,
+        }
 
 
 def run_tasks_serially(task_ids: list[str], after_success: Callable[[str], None] | None = None) -> None:
@@ -422,8 +428,8 @@ def run_tasks_serially(task_ids: list[str], after_success: Callable[[str], None]
         run_task(str(task_id), after_success=after_success)
 
 
-def get_task(task_id: str) -> dict[str, object] | None:
-    with database.connect() as conn:
+def get_task(task_id: str, *, conn: Any | None = None) -> dict[str, object] | None:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         row = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (task_id,)).fetchone()
         if not row:
             return None

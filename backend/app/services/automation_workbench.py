@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -183,6 +184,8 @@ def create_plan(payload: AutomationPlanCreate) -> dict[str, Any]:
                 sort_order,
             ),
         )
+        from app.services import drafts
+        drafts.record_submission(conn, 'automation', payload.draft_key, {'route': '/automation-plans', 'query': {'edit': plan_id}, 'selection': []}, entity_id=plan_id)
     return get_plan(plan_id)
 
 
@@ -272,14 +275,16 @@ def archive_plan(plan_id: str) -> dict[str, Any]:
 
 
 def create_run(plan_id: str, trigger_type: str = "manual", scheduled_at: datetime | None = None) -> dict[str, Any]:
-    plan = get_plan(plan_id)
-    config = _parse_config(plan["plan_type"], plan["config"])
-    _validate_message_plan_state(plan["plan_type"], config, True)
     run_id = uuid4().hex[:12]
     scheduled_value = scheduled_at.strftime("%Y-%m-%d %H:%M:%S") if scheduled_at else None
     existing_run_id = ""
     skipped = False
     with database.connect() as conn:
+        plan = conn.execute("SELECT * FROM automation_plans WHERE id = ?", (plan_id,)).fetchone()
+        if not plan:
+            raise ValueError("自动化计划不存在")
+        config = _parse_config(plan["plan_type"], plan["config"])
+        _validate_message_plan_state(plan["plan_type"], config, True)
         duplicate = conn.execute(
             "SELECT id FROM automation_runs WHERE plan_id = ? AND scheduled_at = ? LIMIT 1",
             (plan_id, scheduled_value),
@@ -351,28 +356,22 @@ def create_run(plan_id: str, trigger_type: str = "manual", scheduled_at: datetim
                 "UPDATE automation_plans SET last_triggered_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime') WHERE id = ?",
                 (plan_id,),
             )
-
-    if existing_run_id:
-        return get_run(existing_run_id)
-    if skipped:
-        return get_run(run_id)
-
-    from app.services import job_queue
-
-    runtime_job = job_queue.enqueue_automation_run(run_id)
-    with database.connect() as conn:
-        conn.execute("UPDATE automation_runs SET runtime_job_id = ? WHERE id = ?", (runtime_job["id"], run_id))
-    return get_run(run_id)
+            from app.services import job_queue
+            # 运行、关键词明细、触发时间和队列引用一次提交，入队失败全部回滚。
+            runtime_job = job_queue.enqueue_automation_run(run_id, conn=conn)
+            conn.execute("UPDATE automation_runs SET runtime_job_id = ? WHERE id = ?", (runtime_job["id"], run_id))
+    return get_run(existing_run_id or run_id)
 
 
-def list_runs(page: int = 1, page_size: int = 30) -> dict[str, Any]:
+def list_runs(page: int = 1, page_size: int = 30, plan_id: str = '') -> dict[str, Any]:
     page = max(1, page)
     page_size = max(1, min(100, page_size))
+    where, params = ('WHERE plan_id=?', [plan_id]) if plan_id else ('', [])
     with database.connect() as conn:
-        total = int(conn.execute("SELECT COUNT(*) AS c FROM automation_runs").fetchone()["c"])
+        total = int(conn.execute(f"SELECT COUNT(*) AS c FROM automation_runs {where}", params).fetchone()["c"])
         rows = conn.execute(
-            "SELECT * FROM automation_runs ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-            (page_size, (page - 1) * page_size),
+            f"SELECT * FROM automation_runs {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+            [*params,page_size, (page - 1) * page_size],
         ).fetchall()
         items = [_format_run(row) for row in rows]
     return {"items": items, "total": total, "page": page, "page_size": page_size}
@@ -506,31 +505,35 @@ def _run_keyword_item(run_id: str, item: dict[str, Any], config: KeywordLeadPlan
 
     _set_item_stage(run_id, item_id, "competitor_analysis", context)
     analysis_task_id = str(context.get("analysis_task_id") or "")
-    if not analysis_task_id:
+    analysis_runtime_id = str(context.get("analysis_runtime_job_id") or "")
+    if not analysis_task_id or not analysis_runtime_id:
         from app.services import account_actions
 
-        prepared = account_actions.create_task_account_analysis_task(
-            discovery_id,
-            limit=config.competitor_limit,
-            automation_managed=True,
-        )
-        if prepared.get("task_ids"):
-            analysis_task_id = str(prepared["task_ids"][0])
-            context["analysis_task_id"] = analysis_task_id
-            context["analysis_account_ids"] = [int(value["account_id"]) for value in prepared.get("accounts", [])]
-            _save_item_context(item_id, context)
+        # 子任务、运行队列和父项关联一起提交；等待执行时不持有写事务。
+        with database.connect() as conn:
+            if not analysis_task_id:
+                prepared = account_actions.create_task_account_analysis_task(
+                    discovery_id,
+                    limit=config.competitor_limit,
+                    automation_managed=True,
+                    conn=conn,
+                )
+                if prepared.get("task_ids"):
+                    analysis_task_id = str(prepared["task_ids"][0])
+                    context["analysis_task_id"] = analysis_task_id
+                    context["analysis_account_ids"] = [int(value["account_id"]) for value in prepared.get("accounts", [])]
+            if analysis_task_id:
+                runtime = _enqueue_account_analysis(
+                    context["analysis_account_ids"],
+                    analysis_task_id,
+                    config.auto_delete_non_competitors,
+                    conn=conn,
+                )
+                analysis_runtime_id = str(runtime["id"])
+                context["analysis_runtime_job_id"] = analysis_runtime_id
+                _save_item_context(item_id, context, conn=conn)
     if analysis_task_id:
-        result = _wait_child_job(
-            run_id,
-            item_id,
-            context,
-            "analysis_runtime_job_id",
-            lambda: _enqueue_account_analysis(
-                context["analysis_account_ids"],
-                analysis_task_id,
-                config.auto_delete_non_competitors,
-            ),
-        )
+        result = _wait_existing_child(run_id, analysis_runtime_id)
         context["competitor_ai_job_ids"] = [str(value) for value in (result or {}).get("job_ids", [])]
         _save_item_context(item_id, context)
         ai_runtime = str((result or {}).get("ai_runtime_job", {}).get("id") or "")
@@ -541,24 +544,32 @@ def _run_keyword_item(run_id: str, item: dict[str, Any], config: KeywordLeadPlan
 
     _set_item_stage(run_id, item_id, "comment_collection", context)
     task_ids = [str(value) for value in context.get("customer_task_ids", [])]
-    if not task_ids:
+    customer_runtime_id = str(context.get("customer_runtime_job_id") or "")
+    if not task_ids or not customer_runtime_id:
         from app.services import account_actions
 
-        prepared = account_actions.create_keyword_find_customer_task(
-            config.platform,
-            keyword,
-            limit=config.competitor_limit,
-            automation_managed=True,
-            content_count=config.competitor_content_count,
-            comment_count=config.comment_count,
-            collect_sub_comments=config.collect_sub_comments,
-            execution_account_id=config.acquisition_account_id,
-        )
-        task_ids = [str(value) for value in prepared.get("task_ids", [])]
-        context["customer_task_ids"] = task_ids
-        _save_item_context(item_id, context)
+        with database.connect() as conn:
+            if not task_ids:
+                prepared = account_actions.create_keyword_find_customer_task(
+                    config.platform,
+                    keyword,
+                    limit=config.competitor_limit,
+                    automation_managed=True,
+                    content_count=config.competitor_content_count,
+                    comment_count=config.comment_count,
+                    collect_sub_comments=config.collect_sub_comments,
+                    execution_account_id=config.acquisition_account_id,
+                    conn=conn,
+                )
+                task_ids = [str(value) for value in prepared.get("task_ids", [])]
+                context["customer_task_ids"] = task_ids
+            if task_ids:
+                runtime = _enqueue_crawl_batch(task_ids, conn=conn)
+                customer_runtime_id = str(runtime["id"])
+                context["customer_runtime_job_id"] = customer_runtime_id
+            _save_item_context(item_id, context, conn=conn)
     if task_ids:
-        _wait_child_job(run_id, item_id, context, "customer_runtime_job_id", lambda: _enqueue_crawl_batch(task_ids))
+        _wait_existing_child(run_id, customer_runtime_id)
 
     if config.auto_analyze_leads and task_ids:
         _set_item_stage(run_id, item_id, "lead_analysis", context)
@@ -586,22 +597,20 @@ def _run_keyword_item(run_id: str, item: dict[str, Any], config: KeywordLeadPlan
 
 def _run_message_plan(run_id: str, config: MessagePlanConfig) -> None:
     _validate_message_plan_state("message", config, True)
+    from app.services import job_queue, message_workbench
+
     with database.connect() as conn:
         run = conn.execute("SELECT * FROM automation_runs WHERE id = ?", (run_id,)).fetchone()
         batch_id = str(run["message_batch_id"] or "") if run else ""
-    if not batch_id:
-        from app.services import message_workbench
-
-        batch = message_workbench.create_scheduled_message_batch(run_id, config)
-        batch_id = str(batch["id"])
-        with database.connect() as conn:
+        if not batch_id:
+            # 首次批次与父运行关联、排队一起提交，不留下占住私信入口的孤立批次。
+            batch = message_workbench.create_scheduled_message_batch(run_id, config, conn=conn)
+            batch_id = str(batch["id"])
             conn.execute(
                 "UPDATE automation_runs SET message_batch_id = ?, total_count = ?, current_stage = 'message_sending', updated_at = datetime('now', 'localtime') WHERE id = ?",
                 (batch_id, int(batch["total_count"]), run_id),
             )
-    from app.services import job_queue
-
-    runtime_job = job_queue.enqueue_message_batch(batch_id)
+        runtime_job = job_queue.enqueue_message_batch(batch_id, conn=conn)
     _wait_existing_child(run_id, str(runtime_job["id"]))
     with database.connect() as conn:
         batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
@@ -760,20 +769,22 @@ def _enqueue_crawl(task_id: str) -> dict[str, Any]:
     return job_queue.enqueue_crawl_task(task_id)
 
 
-def _enqueue_crawl_batch(task_ids: list[str]) -> dict[str, Any]:
+def _enqueue_crawl_batch(task_ids: list[str], *, conn: Any | None = None) -> dict[str, Any]:
     from app.services import job_queue
 
-    return job_queue.enqueue_crawl_batch(task_ids)
+    return job_queue.enqueue_crawl_batch(task_ids, conn=conn)
 
 
 def _enqueue_account_analysis(
     account_ids: list[int],
     task_id: str,
     auto_delete: bool,
+    *,
+    conn: Any | None = None,
 ) -> dict[str, Any]:
     from app.services import job_queue
 
-    return job_queue.enqueue_account_analysis(account_ids, task_id, auto_delete=auto_delete)
+    return job_queue.enqueue_account_analysis(account_ids, task_id, auto_delete=auto_delete, conn=conn)
 
 
 def _enqueue_ai(job_ids: list[str], run_id: str, item_id: int) -> dict[str, Any]:
@@ -973,8 +984,8 @@ def _set_item_stage(run_id: str, item_id: int, stage: str, context: dict[str, An
         conn.execute("UPDATE automation_runs SET current_stage = ?, updated_at = datetime('now', 'localtime') WHERE id = ?", (stage, run_id))
 
 
-def _save_item_context(item_id: int, context: dict[str, Any]) -> None:
-    with database.connect() as conn:
+def _save_item_context(item_id: int, context: dict[str, Any], *, conn: Any | None = None) -> None:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         conn.execute(
             "UPDATE automation_run_items SET context = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
             (json.dumps(context, ensure_ascii=False), item_id),

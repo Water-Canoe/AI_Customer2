@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app import database
 from app.api_dependencies import require_license
 from app.schemas import AiBatchCreate, AiBulkDelete, AiJobCreate
 from app.services import ai_service, job_queue
@@ -13,26 +14,33 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 @router.post("/jobs")
 def create_ai_job(payload: AiJobCreate) -> dict[str, object]:
     require_license()
-    job = ai_service.create_ai_job(payload.target_type, payload.target_id, run_now=False)
-    if payload.run_now:
-        job["runtime_job"] = job_queue.enqueue_ai_job(str(job["id"]))
+    with database.connect() as conn:
+        job = ai_service.create_ai_job(payload.target_type, payload.target_id, run_now=False, conn=conn)
+        if payload.run_now:
+            job["runtime_job"] = job_queue.enqueue_ai_job(str(job["id"]), conn=conn)
     return job
 
 
 @router.post("/jobs/batch")
 def create_ai_jobs(payload: AiBatchCreate) -> list[dict[str, object]]:
     require_license()
-    jobs = ai_service.create_batch_jobs(payload.target_type, payload.target_ids, run_now=False)
-    if payload.run_now and jobs:
-        runtime_job = job_queue.enqueue_ai_batch([str(job["id"]) for job in jobs])
-        for job in jobs:
-            job["runtime_job"] = runtime_job
+    with database.connect() as conn:
+        jobs = ai_service.create_batch_jobs(payload.target_type, payload.target_ids, run_now=False, conn=conn)
+        if payload.run_now and jobs:
+            runtime_job = job_queue.enqueue_ai_batch([str(job["id"]) for job in jobs], conn=conn)
+            for job in jobs:
+                job["runtime_job"] = runtime_job
     return jobs
 
 
 @router.get("/jobs")
 def list_ai_jobs() -> list[dict[str, object]]:
     return ai_service.list_ai_jobs()
+
+
+@router.get('/jobs/{job_id}')
+def get_ai_job_detail(job_id: str) -> dict[str, object]:
+    return ai_service.get_ai_job_detail(job_id)
 
 
 @router.get("/workbench")
@@ -63,6 +71,7 @@ def delete_ai_workbench_non_customers(payload: AiBulkDelete) -> dict[str, object
 @router.post("/jobs/{job_id}/retry")
 def retry_ai_job(job_id: str) -> dict[str, object]:
     require_license()
-    job = ai_service.retry_ai_job(job_id, run_now=False)
-    job["runtime_job"] = job_queue.enqueue_ai_job(job_id)
+    with database.connect() as conn:
+        job = ai_service.retry_ai_job(job_id, conn=conn)
+        job["runtime_job"] = job_queue.enqueue_ai_job(job_id, conn=conn)
     return job

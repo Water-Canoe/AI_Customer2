@@ -126,11 +126,11 @@ def test_content_settings_mask_and_preserve_secrets(tmp_path, monkeypatch: pytes
     saved = content_workbench.update_settings(
         {"app": {"openai_api_key": "secret", "pexels_api_keys": ["pexels-secret"]}}
     )
-    assert saved["app"]["openai_api_key"] == content_workbench.MASKED_SECRET
-    assert saved["app"]["pexels_api_keys"] == [content_workbench.MASKED_SECRET]
+    assert saved['app']['openai_api_key'] == '' and saved['app']['openai_api_key_configured'] is True
+    assert saved['app']['pexels_api_keys'] == [] and saved['app']['pexels_api_keys_configured'] is True
 
     content_workbench.update_settings(
-        {"app": {"openai_api_key": "", "pexels_api_keys": [content_workbench.MASKED_SECRET]}}
+        {"app": {"openai_api_key": "", "pexels_api_keys": []}}
     )
     unmasked = content_workbench.get_settings(mask_secrets=False)
     assert unmasked["app"]["openai_api_key"] == "secret"
@@ -156,12 +156,12 @@ def test_video_progress_listener_preserves_partial_updates(tmp_path, monkeypatch
     from app.video_engine.models import const
     from app.video_engine.services import state, task
 
-    previous_outputs = [{"name": "previous.mp4"}]
     with database.connect() as conn:
         conn.execute(
-            "INSERT INTO video_jobs(id, subject, params, outputs) VALUES(?, ?, ?, ?)",
-            ("progress-job", "进度回归", json.dumps({"video_subject": "进度回归"}), json.dumps(previous_outputs)),
+            "INSERT INTO video_jobs(id, subject, params, attempt) VALUES(?, ?, ?, 1)",
+            ("progress-job", "进度回归", json.dumps({"video_subject": "进度回归"})),
         )
+        conn.execute("INSERT INTO video_outputs(id,video_job_id,attempt,output_index,name,relative_path,subject) VALUES('previous-output','progress-job',1,0,'previous.mp4','previous.mp4','进度回归')")
     output = database.get_video_generation_root() / "final.mp4"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(b"generated-video")
@@ -171,10 +171,11 @@ def test_video_progress_listener_preserves_partial_updates(tmp_path, monkeypatch
         state.state.update_task(task_id, progress=35)
         state.state.update_task(task_id, state=const.TASK_STATE_PROCESSING)
         with database.connect() as conn:
-            row = conn.execute("SELECT status, progress, outputs FROM video_jobs WHERE id = 'progress-job'").fetchone()
+            row = conn.execute("SELECT status, progress FROM video_jobs WHERE id = 'progress-job'").fetchone()
+            outputs = conn.execute("SELECT id,name FROM video_outputs WHERE video_job_id='progress-job'").fetchall()
         assert row["status"] == "running"
         assert row["progress"] == 35
-        assert json.loads(row["outputs"]) == previous_outputs
+        assert [dict(item) for item in outputs] == [{'id': 'previous-output', 'name': 'previous.mp4'}]
         return {"videos": [str(output)], "script": "旁白"}
 
     monkeypatch.setattr(task, "start", generate)
@@ -182,7 +183,7 @@ def test_video_progress_listener_preserves_partial_updates(tmp_path, monkeypatch
     result = content_workbench.run_video_job("progress-job")
     assert result["status"] == "succeeded"
     assert result["progress"] == 100
-    assert result["outputs"][0]["name"] == "final.mp4"
+    assert [item['name'] for item in result['outputs']] == ['previous.mp4', 'final.mp4']
     assert "publish_results" not in result
     assert state.state._listener is None
 
@@ -213,11 +214,11 @@ def test_video_output_upload_status_can_be_updated(tmp_path, monkeypatch: pytest
 
     with database.connect() as conn:
         conn.execute(
-            "INSERT INTO video_jobs(id, subject, status, outputs) VALUES('upload-job', '主题', 'succeeded', ?)",
-            ('[{"name":"final.mp4","upload_status":"not_uploaded"}]',),
+            "INSERT INTO video_jobs(id, subject, status) VALUES('upload-job', '主题', 'succeeded')",
         )
+        conn.execute("INSERT INTO video_outputs(id,video_job_id,attempt,output_index,name,relative_path,subject) VALUES('upload-output','upload-job',1,0,'final.mp4','upload-job/final.mp4','主题')")
 
-    updated = content_workbench.update_video_output_status("upload-job", "final.mp4", "uploaded")
+    updated = content_workbench.update_video_output_status("upload-job", "upload-output", "uploaded")
     assert updated["outputs"][0]["upload_status"] == "uploaded"
 
 

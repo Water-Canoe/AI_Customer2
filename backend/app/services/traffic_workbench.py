@@ -6,6 +6,7 @@ import random
 import re
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -99,6 +100,8 @@ def create_plan(payload: TrafficPlanCreate) -> dict[str, Any]:
                 plan["account_id"],
             ),
         )
+        from app.services import drafts
+        drafts.record_submission(conn, 'traffic', payload.draft_key, {'route': '/traffic-plans', 'query': {'edit': plan_id}, 'selection': []})
     created = get_plan(plan_id)
     assert created is not None
     return created
@@ -254,7 +257,7 @@ def _set_plan_archived(conn: Any, plan_id: str, archived: bool) -> dict[str, Any
     return _format_plan(row)
 
 
-def create_run(plan_id: str) -> dict[str, Any]:
+def create_run(plan_id: str, *, conn: Any | None = None) -> dict[str, Any]:
     plan = get_plan(plan_id)
     if not plan:
         raise ValueError("引流计划不存在")
@@ -263,7 +266,7 @@ def create_run(plan_id: str) -> dict[str, Any]:
     _validate_run_plan(plan)
     account_id = account_center.resolve_account_id(str(plan["platform"]), "traffic", str(plan.get("account_id") or ""))
     run_id = uuid.uuid4().hex
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         conn.execute("UPDATE traffic_plans SET account_id = ? WHERE id = ?", (account_id, plan_id))
         _insert_run(conn, run_id, plan_id, account_id)
         _insert_log(
@@ -276,22 +279,28 @@ def create_run(plan_id: str) -> dict[str, Any]:
             "请保持网络正常，不要关闭本地服务。",
             {"plan_id": plan_id},
         )
-    run = get_run(run_id)
+        run = get_run(run_id, conn=conn)
     assert run is not None
     return run
 
 
 def _insert_run(conn: Any, run_id: str, plan_id: str, account_id: str) -> None:
-    # 批次统一使用当前计划和执行账号字段。
+    # 冻结本次来源、动作和轮次，后续编辑计划只影响新批次。
+    plan = _format_plan(conn.execute('SELECT * FROM traffic_plans WHERE id=?', (plan_id,)).fetchone())
+    plan['account_id'] = account_id
     conn.execute(
-        "INSERT INTO traffic_runs(id, plan_id, status, account_id) VALUES(?, ?, 'queued', ?)",
-        (run_id, plan_id, account_id),
+        "INSERT INTO traffic_runs(id, plan_id, plan_snapshot, status, account_id) VALUES(?, ?, ?, 'queued', ?)",
+        (run_id, plan_id, json.dumps(plan, ensure_ascii=False), account_id),
     )
 
 
-def list_runs(include_archived: bool = False) -> list[dict[str, Any]]:
+def list_runs(include_archived: bool = False, plan_id: str = '') -> list[dict[str, Any]]:
     with database.connect() as conn:
-        where = "" if include_archived else "WHERE r.archived = 0"
+        conditions, params = ([] if include_archived else ['r.archived=0']), []
+        if plan_id:
+            conditions.append('r.plan_id=?')
+            params.append(plan_id)
+        where = 'WHERE ' + ' AND '.join(conditions) if conditions else ''
         rows = conn.execute(
             f"""
             SELECT r.*, p.name AS plan_name, p.platform, p.source_mode
@@ -299,13 +308,13 @@ def list_runs(include_archived: bool = False) -> list[dict[str, Any]]:
             JOIN traffic_plans p ON p.id = r.plan_id
             {where}
             ORDER BY r.created_at DESC
-            """
+            """, params
         ).fetchall()
     return [_format_run(row) for row in rows]
 
 
-def get_run(run_id: str) -> dict[str, Any] | None:
-    with database.connect() as conn:
+def get_run(run_id: str, *, conn: Any | None = None) -> dict[str, Any] | None:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         row = conn.execute(
             """
             SELECT r.*, p.name AS plan_name, p.platform, p.source_mode
@@ -334,9 +343,8 @@ def get_run(run_id: str) -> dict[str, Any] | None:
             _format_record(row)
             for row in conn.execute(
                 """
-                SELECT tr.*, p.name AS plan_name, r.status AS run_status
+                SELECT tr.*, json_extract(r.plan_snapshot,'$.name') AS plan_name, r.status AS run_status
                 FROM traffic_records tr
-                LEFT JOIN traffic_plans p ON p.id = tr.plan_id
                 LEFT JOIN traffic_runs r ON r.id = tr.run_id
                 WHERE tr.run_id = ?
                 ORDER BY tr.created_at DESC, tr.id DESC
@@ -472,9 +480,8 @@ def list_records(
         total = conn.execute(f"SELECT COUNT(*) AS c FROM traffic_records tr {where}", params).fetchone()["c"]
         rows = conn.execute(
             f"""
-            SELECT tr.*, p.name AS plan_name, r.status AS run_status
+            SELECT tr.*, json_extract(r.plan_snapshot,'$.name') AS plan_name, r.status AS run_status
             FROM traffic_records tr
-            LEFT JOIN traffic_plans p ON p.id = tr.plan_id
             LEFT JOIN traffic_runs r ON r.id = tr.run_id
             {where}
             ORDER BY tr.created_at DESC, tr.id DESC
@@ -523,9 +530,7 @@ def run_traffic_run(run_id: str) -> None:
         return
     if str(run.get("status")) not in ACTIVE_RUN_STATUSES:
         return
-    plan = get_plan(str(run["plan_id"]))
-    if not plan:
-        return
+    plan = run['plan_snapshot']
     plan["account_id"] = str(run.get("account_id") or plan.get("account_id") or "")
     _mark_run_running(run_id)
     try:
@@ -2822,6 +2827,10 @@ def _format_plan(row: Any) -> dict[str, Any]:
 
 def _format_run(row: Any) -> dict[str, Any]:
     data = database.row_to_dict(row) or {}
+    data['plan_snapshot'] = json.loads(data['plan_snapshot'])
+    data['plan_name'] = str(data['plan_snapshot'].get('name') or '')
+    data['platform'] = str(data['plan_snapshot'].get('platform') or '')
+    data['source_mode'] = str(data['plan_snapshot'].get('source_mode') or '')
     if "archived" in data:
         data["archived"] = bool(data.get("archived"))
     return data

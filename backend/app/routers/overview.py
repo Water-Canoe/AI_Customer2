@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app import views
+from app import database, views
 from app.api_dependencies import require_license
 from app.schemas import CustomerFollowStatusUpdate
 from app.services import account_actions, deletion, job_queue
@@ -14,12 +14,14 @@ router = APIRouter(prefix="/api", tags=["overview"])
 @router.post("/overview/customers/{lead_id}/intent-analysis")
 def analyze_overview_customer_intent(lead_id: int, run_now: bool = True) -> dict[str, object]:
     require_license()
-    try:
-        job = account_actions.create_customer_intent_analysis(lead_id, run_now=False)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if run_now:
-        job["runtime_job"] = job_queue.enqueue_ai_job(str(job["id"]))
+    # 创建与排队共用事务，失败时客户分析记录也回滚。
+    with database.connect() as conn:
+        try:
+            job = account_actions.create_customer_intent_analysis(lead_id, run_now=False, conn=conn)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if run_now:
+            job["runtime_job"] = job_queue.enqueue_ai_job(str(job["id"]), conn=conn)
     return job
 
 
@@ -42,18 +44,20 @@ def update_overview_customer_follow_status(
 @router.post("/overview/accounts/{account_id}/customers/analyze")
 def analyze_overview_account_customers(account_id: int, run_now: bool = True) -> dict[str, object]:
     require_license()
-    try:
-        result = account_actions.create_account_customer_intent_jobs(account_id, run_now=False)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if run_now and result["job_ids"]:
-        result["runtime_job"] = job_queue.enqueue(
-            "account_customer_intent",
-            entity_id=f"account:{account_id}",
-            payload={"job_ids": result["job_ids"]},
-            resource="ai",
-            max_attempts=2,
-        )
+    with database.connect() as conn:
+        try:
+            result = account_actions.create_account_customer_intent_jobs(account_id, run_now=False, conn=conn)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if run_now and result["job_ids"]:
+            result["runtime_job"] = job_queue.enqueue(
+                "account_customer_intent",
+                entity_id=f"account:{account_id}",
+                payload={"job_ids": result["job_ids"]},
+                resource="ai",
+                max_attempts=2,
+                conn=conn,
+            )
     return result
 
 
@@ -97,14 +101,16 @@ def analyze_keyword_accounts(
     run_now: bool = True,
 ) -> dict[str, object]:
     require_license()
-    result = account_actions.create_keyword_account_analysis_tasks(platform, keyword)
-    if run_now and result["task_ids"]:
-        account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
-        result["runtime_job"] = job_queue.enqueue_account_analysis(
-            account_ids,
-            str(result["task_ids"][0]),
-            kind="keyword_account_analysis",
-        )
+    with database.connect() as conn:
+        result = account_actions.create_keyword_account_analysis_tasks(platform, keyword, conn=conn)
+        if run_now and result["task_ids"]:
+            account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
+            result["runtime_job"] = job_queue.enqueue_account_analysis(
+                account_ids,
+                str(result["task_ids"][0]),
+                kind="keyword_account_analysis",
+                conn=conn,
+            )
     return result
 
 
@@ -115,9 +121,10 @@ def find_keyword_customers(
     run_now: bool = True,
 ) -> dict[str, object]:
     require_license()
-    result = account_actions.create_keyword_find_customer_task(platform, keyword)
-    if run_now and result["task_ids"]:
-        result["runtime_job"] = job_queue.enqueue_crawl_batch(result["task_ids"])
+    with database.connect() as conn:
+        result = account_actions.create_keyword_find_customer_task(platform, keyword, conn=conn)
+        if run_now and result["task_ids"]:
+            result["runtime_job"] = job_queue.enqueue_crawl_batch(result["task_ids"], conn=conn)
     return result
 
 

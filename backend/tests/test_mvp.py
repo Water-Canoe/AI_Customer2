@@ -2118,6 +2118,9 @@ def test_account_login_route_enqueues_generic_job(tmp_path: Path, monkeypatch: p
         calls.append((account_id, action, login_kind))
         return {
             "id": "runtime-account-login",
+            "display_name": "账号登录 · 测试执行账号",
+            "detail_url": f'/accounts?account={account_id}',
+            "retry_allowed": False,
             "kind": "account_login",
             "entity_id": account_id,
             "resource": "browser",
@@ -3542,7 +3545,7 @@ def test_auto_analyze_competitors_queues_creator_batch_after_search(tmp_path: Pa
 
     called: dict[str, object] = {}
 
-    def fake_enqueue(account_ids: list[int], task_id: str, kind: str = "account_analysis") -> dict[str, object]:
+    def fake_enqueue(account_ids: list[int], task_id: str, kind: str = "account_analysis", *, conn=None) -> dict[str, object]:
         called["account_ids"] = account_ids
         called["task_id"] = task_id
         return {"id": "runtime-account-analysis"}

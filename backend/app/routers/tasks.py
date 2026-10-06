@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app import database
 from app.api_dependencies import apply_own_account_defaults, require_license
 from app.schemas import TaskCreate, TaskPageResponse, TaskResponse
-from app.services import account_actions, crawler_adapter, deletion, diagnostics, job_queue, ops_visibility
+from app.services import account_actions, crawler_adapter, deletion, diagnostics, drafts, job_queue, ops_visibility
 
 
 router = APIRouter(prefix="/api", tags=["tasks"])
@@ -20,13 +21,15 @@ def create_task(payload: TaskCreate) -> dict[str, object]:
             if payload.mode == "account_analysis"
             else []
         )
-        task = crawler_adapter.create_task(payload)
+        # 业务记录、草稿提交结果与运行队列同时提交，任一写入失败均回滚。
+        with database.connect() as conn:
+            task = crawler_adapter.create_task(payload, conn=conn)
+            if payload.mode == "account_analysis" and account_ids:
+                task["runtime_job"] = job_queue.enqueue_account_analysis(account_ids, str(task["id"]), conn=conn)
+            else:
+                task["runtime_job"] = job_queue.enqueue_crawl_task(str(task["id"]), conn=conn)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if payload.mode == "account_analysis" and account_ids:
-        task["runtime_job"] = job_queue.enqueue_account_analysis(account_ids, str(task["id"]))
-    else:
-        task["runtime_job"] = job_queue.enqueue_crawl_task(str(task["id"]))
+        raise HTTPException(status_code=409 if isinstance(exc, drafts.DraftAlreadySubmitted) else 400, detail=str(exc)) from exc
     return task
 
 

@@ -75,7 +75,7 @@ EDITABLE_SETTING_KEYS = {
     "own_accounts",
     "icp_profile",
 }
-INTERNAL_SETTING_KEYS = {"media_crawler_path", "media_crawler_db_path", "license_server_url"}
+INTERNAL_SETTING_KEYS = {"media_crawler_path", "media_crawler_db_path", "license_server_url", "content_video_config"}
 
 
 def get_settings() -> dict[str, Any]:
@@ -117,13 +117,17 @@ def get_settings() -> dict[str, Any]:
     return result
 
 
-def update_settings(values: dict[str, Any]) -> dict[str, Any]:
+def update_settings(values: dict[str, Any], clear_secrets: list[str] | None = None) -> dict[str, Any]:
+    from app import protected_settings
+
     with database.connect() as conn:
         for key, value in values.items():
             if key not in EDITABLE_SETTING_KEYS:
                 continue
             if key == "ai_api_key" and not str(value or "").strip():
                 continue
+            if key == 'ai_base_url':
+                protected_settings.validate_connection_url(str(value or ''))
             if key in (
                 "icp_profile",
                 "own_accounts",
@@ -132,6 +136,8 @@ def update_settings(values: dict[str, Any]) -> dict[str, Any]:
             elif isinstance(value, bool):
                 value = "true" if value else "false"
             database.set_setting(conn, key, value)
+        if 'ai_api_key' in (clear_secrets or []):
+            database.set_setting(conn, 'ai_api_key', '')
     return get_settings()
 
 

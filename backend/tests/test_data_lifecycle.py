@@ -42,7 +42,7 @@ def test_backup_restore_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         database.get_backup_data_roots()["traffic_images"] / "comment.png": b"old-image",
         database.get_backup_data_roots()["content_assets"] / "originals" / "asset.mp4": b"old-asset",
         database.get_backup_data_roots()["video_tasks"] / "job-1" / "final.mp4": b"old-video",
-        database.get_backup_data_roots()["social_publish"] / "accounts" / "account.json": b"old-login",
+        database.get_backup_data_roots()["platform_accounts"] / "dy" / "account-1" / "user-profile" / "Cookies": b"old-login",
     }
     for path, content in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +70,7 @@ def test_backup_restore_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         "traffic_images": 1,
         "content_assets": 1,
         "video_tasks": 1,
-        "social_publish": 1,
+        "platform_accounts": 1,
     }
     for path, content in files.items():
         assert path.read_bytes() == content
@@ -115,6 +115,7 @@ def test_restore_rejects_old_schema_before_overwriting_current_data(
         backup_db = backup_dir / "ai_customer.sqlite3"
         with sqlite3.connect(backup_db) as conn:
             conn.execute("PRAGMA user_version = 13")
+        conn.close()  # 关闭连接，确保 WAL 的版本修改已写回待校验的备份文件。
         manifest["database_sha256"] = data_lifecycle._sha256(backup_db)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     with database.connect() as conn:
@@ -125,7 +126,7 @@ def test_restore_rejects_old_schema_before_overwriting_current_data(
 
     with database.connect() as conn:
         assert database.get_setting(conn, "ai_model") == "保留当前配置"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
 
 
 def test_active_jobs_covers_runtime_content_and_pending_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

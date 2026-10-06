@@ -90,6 +90,7 @@ def _content_metrics(conn: sqlite3.Connection) -> dict[str, int]:
     return {
         "assets": _count(conn, "SELECT COUNT(*) FROM content_assets WHERE deleted_at IS NULL"),
         "active_jobs": _count(conn, "SELECT COUNT(*) FROM video_jobs WHERE status IN ('queued', 'running') AND archived = 0"),
+        "unpublished_outputs": _count(conn, "SELECT COUNT(*) FROM video_outputs output WHERE NOT EXISTS (SELECT 1 FROM publish_tasks task WHERE task.output_id=output.id AND task.status='succeeded')"),
         "succeeded_jobs": _count(conn, "SELECT COUNT(*) FROM video_jobs WHERE status = 'succeeded' AND archived = 0"),
         "failed_jobs": _count(conn, "SELECT COUNT(*) FROM video_jobs WHERE status = 'failed' AND archived = 0"),
     }

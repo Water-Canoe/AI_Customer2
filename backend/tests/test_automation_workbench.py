@@ -148,7 +148,7 @@ def test_keyword_plan_cleanup_switches_require_analysis(monkeypatch: pytest.Monk
 
     captured: dict[str, object] = {}
 
-    def fake_enqueue(account_ids, task_id, auto_delete=False):
+    def fake_enqueue(account_ids, task_id, auto_delete=False, *, conn=None):
         captured.update({"account_ids": account_ids, "task_id": task_id, "auto_delete": auto_delete})
         return {"id": "runtime-job"}
 
@@ -275,7 +275,7 @@ def test_traffic_run_uses_snapshot_and_hides_internal_plan(tmp_path: Path, monke
     from app.schemas import AutomationPlanPatch, TrafficAutomationPlanConfig
     from app.services import automation_workbench, job_queue, traffic_workbench
 
-    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"automation-job-{run_id}"})
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id, *, conn=None: {"id": f"automation-job-{run_id}"})
     monkeypatch.setattr(job_queue, "enqueue_traffic_run", lambda run_id: {"id": f"traffic-job-{run_id}"})
     plan = automation_workbench.create_plan(
         traffic_plan_payload(
@@ -347,7 +347,7 @@ def test_cancelling_traffic_automation_stops_child_run(tmp_path: Path, monkeypat
     from app.schemas import TrafficAutomationPlanConfig
     from app.services import automation_workbench, job_queue, traffic_workbench
 
-    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"automation-job-{run_id}"})
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id, *, conn=None: {"id": f"automation-job-{run_id}"})
     plan = automation_workbench.create_plan(traffic_plan_payload())
     run = automation_workbench.create_run(plan["id"])
     traffic_run = traffic_workbench.create_automation_run(
@@ -383,7 +383,7 @@ def test_automation_routes_split_lead_and_traffic_authorization(tmp_path: Path, 
     calls: list[str] = []
     monkeypatch.setattr(license_service, "ensure_authorized", lambda: calls.append("lead") or {"authorized": True})
     monkeypatch.setattr(license_service, "ensure_authorized_for", lambda scope: calls.append(scope) or {"authorized": True})
-    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"runtime-{run_id}"})
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id, *, conn=None: {"id": f"runtime-{run_id}"})
     client = TestClient(app)
 
     traffic_response = client.post("/api/automation/plans", json=traffic_plan_payload().model_dump(mode="json"))
@@ -405,7 +405,7 @@ def test_keyword_selection_prefers_never_run_then_oldest(tmp_path: Path, monkeyp
     from app import database
     from app.services import automation_workbench, job_queue
 
-    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"runtime-{run_id}"})
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id, *, conn=None: {"id": f"runtime-{run_id}"})
     plan = automation_workbench.create_plan(keyword_plan_payload())
     first = automation_workbench.create_run(plan["id"])
     assert [item["keyword"] for item in first["items"]] == ["关键词A", "关键词B"]
@@ -423,7 +423,7 @@ def test_queued_run_can_be_cancelled_without_blocking_plan(tmp_path: Path, monke
     prepare_project(tmp_path)
     from app.services import automation_workbench, job_queue
 
-    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"runtime-{run_id}"})
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id, *, conn=None: {"id": f"runtime-{run_id}"})
     plan = automation_workbench.create_plan(keyword_plan_payload())
     run = automation_workbench.create_run(plan["id"])
 
@@ -438,7 +438,7 @@ def test_same_plan_active_and_same_schedule_are_not_duplicated(tmp_path: Path, m
     prepare_project(tmp_path)
     from app.services import automation_workbench, job_queue
 
-    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id: {"id": f"runtime-{run_id}"})
+    monkeypatch.setattr(job_queue, "enqueue_automation_run", lambda run_id, *, conn=None: {"id": f"runtime-{run_id}"})
     plan = automation_workbench.create_plan(keyword_plan_payload())
     scheduled_at = datetime(2026, 7, 13, 9, 0, 0)
     first = automation_workbench.create_run(plan["id"], "scheduled", scheduled_at)

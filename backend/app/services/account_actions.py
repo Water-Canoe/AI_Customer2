@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -20,8 +21,8 @@ TARGET_FOLLOW_STATUSES = {"未私信", "已私信", "未回复", "已回复", "�
 NON_CUSTOMER_FOLLOW_STATUSES = {"非客户", "无需跟进"}
 
 
-def _account_analysis_content_count() -> int:
-    with database.connect() as conn:
+def _account_analysis_content_count(*, conn: Any | None = None) -> int:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         value = database.get_setting(conn, "account_analysis_content_count", str(ACCOUNT_ANALYSIS_CONTENT_COUNT))
     try:
         count = int(value)
@@ -31,13 +32,15 @@ def _account_analysis_content_count() -> int:
     return max(1, min(count, 50))
 
 
-def create_account_analysis_task(account_id: int) -> dict[str, object]:
-    return crawler_adapter.create_profile_enrichment_task(
-        account_id,
-        mode="account_analysis",
-        name_prefix="账号分析",
-        content_count=_account_analysis_content_count(),
-    )
+def create_account_analysis_task(account_id: int, *, conn: Any | None = None) -> dict[str, object]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        return crawler_adapter.create_profile_enrichment_task(
+            account_id,
+            mode="account_analysis",
+            name_prefix="账号分析",
+            content_count=_account_analysis_content_count(conn=conn),
+            conn=conn,
+        )
 
 
 def _account_profile_identifier(account: dict[str, Any]) -> str:
@@ -84,86 +87,87 @@ def _build_account_analysis_task(
     skipped: list[dict[str, Any]] | None = None,
     automation_managed: bool = False,
     execution_account_id: str = "",
+    conn: Any | None = None,
 ) -> dict[str, Any]:
-    skipped = skipped or []
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        skipped = skipped or []
         login_type = database.get_setting(conn, "login_type", "qrcode")
         headless = database.get_setting(conn, "headless", "false") == "true"
         active_identifiers = _active_account_analysis_identifiers(conn, platform)
 
-    accounts: list[dict[str, Any]] = []
-    for row in rows:
-        account = database.row_to_dict(row)
-        identifier = _account_profile_identifier(account)
-        if not identifier:
-            skipped.append({"account_id": int(row["id"]), "nickname": row["nickname"], "reason": "账号缺少主页链接或平台ID"})
-            continue
-        if identifier in active_identifiers:
-            skipped.append({"account_id": int(row["id"]), "nickname": row["nickname"], "reason": "已有账号分析任务正在等待或运行"})
-            continue
-        accounts.append(
-            {
-                "account_id": int(row["id"]),
-                "nickname": row["nickname"],
-                "creator_id": identifier,
-            }
-        )
+        accounts: list[dict[str, Any]] = []
+        for row in rows:
+            account = database.row_to_dict(row)
+            identifier = _account_profile_identifier(account)
+            if not identifier:
+                skipped.append({"account_id": int(row["id"]), "nickname": row["nickname"], "reason": "账号缺少主页链接或平台ID"})
+                continue
+            if identifier in active_identifiers:
+                skipped.append({"account_id": int(row["id"]), "nickname": row["nickname"], "reason": "已有账号分析任务正在等待或运行"})
+                continue
+            accounts.append(
+                {
+                    "account_id": int(row["id"]),
+                    "nickname": row["nickname"],
+                    "creator_id": identifier,
+                }
+            )
 
-    if not accounts:
+        if not accounts:
+            return {
+                "ok": True,
+                "platform": platform,
+                "keyword": label,
+                "created": 0,
+                "account_count": 0,
+                "task_ids": [],
+                "tasks": [],
+                "accounts": [],
+                "skipped": skipped,
+            }
+
+        # 创建任务时固定拓客账号，避免排队期间默认账号变化。
+        if not execution_account_id:
+            execution_account_id = account_center.resolve_account_id(platform, "acquisition")
+        creator_ids = ",".join(item["creator_id"] for item in accounts)
+        task = crawler_adapter.create_task(
+            TaskCreate(
+                name=f"账号分析-{len(accounts)}个竞品账号",
+                mode="account_analysis",
+                platform=platform,  # type: ignore[arg-type]
+                login_type=login_type if login_type in ("qrcode", "phone", "cookie") else "qrcode",
+                creator_id=creator_ids,
+                content_count=_account_analysis_content_count(conn=conn),
+                comment_count=0,
+                collect_comments=False,
+                collect_sub_comments=False,
+                max_concurrency=1,
+                headless=headless,
+                execute_crawler=True,
+                account_id=execution_account_id,
+            ),
+            automation_managed=automation_managed,
+            conn=conn,
+        )
+        crawler_adapter.log_task(conn, str(task["id"]), "info", log_message)
+
         return {
             "ok": True,
             "platform": platform,
             "keyword": label,
-            "created": 0,
-            "account_count": 0,
-            "task_ids": [],
-            "tasks": [],
-            "accounts": [],
+            "created": 1,
+            "account_count": len(accounts),
+            "task_ids": [task["id"]],
+            "tasks": [{"task_id": task["id"], "task_name": task["name"], "account_count": len(accounts)}],
+            "accounts": accounts,
             "skipped": skipped,
         }
 
-    # 创建任务时固定拓客账号，避免排队期间默认账号变化。
-    if not execution_account_id:
-        execution_account_id = account_center.resolve_account_id(platform, "acquisition")
-    creator_ids = ",".join(item["creator_id"] for item in accounts)
-    task = crawler_adapter.create_task(
-        TaskCreate(
-            name=f"账号分析-{len(accounts)}个竞品账号",
-            mode="account_analysis",
-            platform=platform,  # type: ignore[arg-type]
-            login_type=login_type if login_type in ("qrcode", "phone", "cookie") else "qrcode",
-            creator_id=creator_ids,
-            content_count=_account_analysis_content_count(),
-            comment_count=0,
-            collect_comments=False,
-            collect_sub_comments=False,
-            max_concurrency=1,
-            headless=headless,
-            execute_crawler=True,
-            account_id=execution_account_id,
-        ),
-        automation_managed=automation_managed,
-    )
-    with database.connect() as conn:
-        crawler_adapter.log_task(conn, str(task["id"]), "info", log_message)
 
-    return {
-        "ok": True,
-        "platform": platform,
-        "keyword": label,
-        "created": 1,
-        "account_count": len(accounts),
-        "task_ids": [task["id"]],
-        "tasks": [{"task_id": task["id"], "task_name": task["name"], "account_count": len(accounts)}],
-        "accounts": accounts,
-        "skipped": skipped,
-    }
-
-
-def create_keyword_account_analysis_tasks(platform: str, keyword: str, limit: int = 100) -> dict[str, Any]:
-    keyword_value = keyword or "未标记关键词"
-    safe_limit = max(1, min(int(limit), 100))
-    with database.connect() as conn:
+def create_keyword_account_analysis_tasks(platform: str, keyword: str, limit: int = 100, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        keyword_value = keyword or "未标记关键词"
+        safe_limit = max(1, min(int(limit), 100))
         rows = conn.execute(
             """
             SELECT DISTINCT ua.id, ua.nickname, ua.profile_url, ua.platform_user_id, ua.sec_uid
@@ -178,12 +182,13 @@ def create_keyword_account_analysis_tasks(platform: str, keyword: str, limit: in
             """,
             (platform, keyword_value, safe_limit),
         ).fetchall()
-    return _build_account_analysis_task(
-        platform,
-        rows,
-        keyword_value,
-        f"关键词一键竞品分析：{platform}/{keyword_value}，账号 {len(rows)} 个",
-    )
+        return _build_account_analysis_task(
+            platform,
+            rows,
+            keyword_value,
+            f"关键词一键竞品分析：{platform}/{keyword_value}，账号 {len(rows)} 个",
+            conn=conn,
+        )
 
 
 def create_task_account_analysis_task(
@@ -191,9 +196,10 @@ def create_task_account_analysis_task(
     limit: int = 100,
     *,
     automation_managed: bool = False,
+    conn: Any | None = None,
 ) -> dict[str, Any]:
-    safe_limit = max(1, min(int(limit), 100))
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        safe_limit = max(1, min(int(limit), 100))
         task = conn.execute("SELECT * FROM crawl_jobs WHERE id = ?", (source_task_id,)).fetchone()
         if not task:
             raise ValueError("来源任务不存在，无法自动分析竞品账号")
@@ -212,18 +218,19 @@ def create_task_account_analysis_task(
             """,
             (source_task_id, safe_limit),
         ).fetchall()
-    return _build_account_analysis_task(
-        platform,
-        rows,
-        str(task["keywords"] or task["name"] or source_task_id),
-        f"自动竞品分析：来源任务 {source_task_id}，账号 {len(rows)} 个",
-        automation_managed=automation_managed,
-        execution_account_id=str(task["account_id"] or ""),
-    )
+        return _build_account_analysis_task(
+            platform,
+            rows,
+            str(task["keywords"] or task["name"] or source_task_id),
+            f"自动竞品分析：来源任务 {source_task_id}，账号 {len(rows)} 个",
+            automation_managed=automation_managed,
+            execution_account_id=str(task["account_id"] or ""),
+            conn=conn,
+        )
 
 
-def _find_customer_defaults() -> dict[str, Any]:
-    with database.connect() as conn:
+def _find_customer_defaults(*, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         login_type = database.get_setting(conn, "login_type", "qrcode")
         headless = database.get_setting(conn, "headless", "false") == "true"
         content_count = _safe_int_setting(conn, "default_content_count", 20, 1, 500)
@@ -369,187 +376,188 @@ def _build_find_customer_task(
     comment_count: int | None = None,
     collect_sub_comments: bool | None = None,
     execution_account_id: str = "",
+    conn: Any | None = None,
 ) -> dict[str, Any]:
-    skipped = skipped or []
-    defaults = _find_customer_defaults()
-    if content_count is not None:
-        defaults["content_count"] = max(1, min(int(content_count), 500))
-    if comment_count is not None:
-        defaults["comment_count"] = max(0, min(int(comment_count), 1000))
-    sub_comments = True if collect_sub_comments is None else bool(collect_sub_comments)
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        skipped = skipped or []
+        defaults = _find_customer_defaults(conn=conn)
+        if content_count is not None:
+            defaults["content_count"] = max(1, min(int(content_count), 500))
+        if comment_count is not None:
+            defaults["comment_count"] = max(0, min(int(comment_count), 1000))
+        sub_comments = True if collect_sub_comments is None else bool(collect_sub_comments)
         active_identifiers = _active_find_customer_identifiers(conn, platform)
         active_specified_ids = _active_find_customer_specified_ids(conn, platform)
 
-    accounts: list[dict[str, Any]] = []
-    for row in rows:
-        account = database.row_to_dict(row)
-        identifier = _account_profile_identifier(account)
-        if not identifier:
-            skipped.append({"account_id": int(row["id"]), "nickname": row["nickname"], "reason": "账号缺少主页链接或平台ID"})
-            continue
-        if identifier in active_identifiers:
-            skipped.append({"account_id": int(row["id"]), "nickname": row["nickname"], "reason": "已有找客户任务正在等待或运行"})
-            continue
-        accounts.append(
-            {
-                "account_id": int(row["id"]),
-                "nickname": row["nickname"],
-                "creator_id": identifier,
-                "content_total_count": row["content_total_count"] if "content_total_count" in row.keys() else None,
-            }
-        )
-
-    result: dict[str, Any] = {
-        "ok": True,
-        "platform": platform,
-        "keyword": label,
-        "created": 0,
-        "account_count": len(accounts),
-        "task_ids": [],
-        "tasks": [],
-        "accounts": accounts,
-        "skipped": skipped,
-        "reuse_content_count": 0,
-        "detail_content_count": 0,
-        "creator_account_count": 0,
-        "recent_comment_skip_count": 0,
-        "skip_content_count": 0,
-        "supplement_content_count": 0,
-    }
-    if not accounts:
-        return result
-    if not execution_account_id:
-        from app.services import account_center
-
-        execution_account_id = account_center.resolve_account_id(platform, "acquisition")
-
-    account_ids = [int(item["account_id"]) for item in accounts]
-    with database.connect() as conn:
-        existing_by_account = _existing_find_customer_contents(conn, platform, account_ids)
-
-    detail_items: list[dict[str, Any]] = []
-    seen_detail_identifiers: set[str] = set()
-    recent_comment_skip_count = 0
-    detail_counts_by_account: dict[int, int] = {}
-    for account in accounts:
-        for content in existing_by_account.get(int(account["account_id"]), []):
-            account_id = int(account["account_id"])
-            if detail_counts_by_account.get(account_id, 0) >= int(defaults["content_count"]):
+        accounts: list[dict[str, Any]] = []
+        for row in rows:
+            account = database.row_to_dict(row)
+            identifier = _account_profile_identifier(account)
+            if not identifier:
+                skipped.append({"account_id": int(row["id"]), "nickname": row["nickname"], "reason": "账号缺少主页链接或平台ID"})
                 continue
-            if _recently_crawled_comments(content, int(defaults["comment_recrawl_cooldown_hours"])):
-                recent_comment_skip_count += 1
+            if identifier in active_identifiers:
+                skipped.append({"account_id": int(row["id"]), "nickname": row["nickname"], "reason": "已有找客户任务正在等待或运行"})
                 continue
-            identifier = _content_detail_identifier(platform, content)
-            if not identifier or identifier in active_specified_ids or identifier in seen_detail_identifiers:
-                continue
-            seen_detail_identifiers.add(identifier)
-            detail_counts_by_account[account_id] = detail_counts_by_account.get(account_id, 0) + 1
-            detail_items.append(
+            accounts.append(
                 {
-                    "identifier": identifier,
-                    "account_id": account_id,
-                    "nickname": account["nickname"],
-                    "content_id": content["content_id"],
-                    "title": content["title"],
+                    "account_id": int(row["id"]),
+                    "nickname": row["nickname"],
+                    "creator_id": identifier,
+                    "content_total_count": row["content_total_count"] if "content_total_count" in row.keys() else None,
                 }
             )
 
-    for chunk in _chunks(detail_items, FIND_CUSTOMER_DETAIL_CHUNK_SIZE):
-        specified_ids = ",".join(item["identifier"] for item in chunk)
-        task = crawler_adapter.create_task(
-            TaskCreate(
-                name=f"找客户-复用{len(chunk)}条内容",
-                mode=task_mode,  # type: ignore[arg-type]
-                platform=platform,  # type: ignore[arg-type]
-                login_type=defaults["login_type"],
-                specified_id=specified_ids,
-                content_count=max(1, min(len(chunk), 500)),
-                comment_count=defaults["comment_count"],
-                collect_comments=True,
-                collect_sub_comments=sub_comments,
-                max_concurrency=1,
-                headless=defaults["headless"],
-                execute_crawler=True,
-                account_id=execution_account_id,
-            ),
-            automation_managed=automation_managed,
-        )
-        result["task_ids"].append(task["id"])
-        result["tasks"].append(
-            {
-                "task_id": task["id"],
-                "task_name": task["name"],
-                "account_count": len({item["account_id"] for item in chunk}),
-                "content_count": len(chunk),
-                "strategy": "reuse_existing_contents",
-            }
-        )
+        result: dict[str, Any] = {
+            "ok": True,
+            "platform": platform,
+            "keyword": label,
+            "created": 0,
+            "account_count": len(accounts),
+            "task_ids": [],
+            "tasks": [],
+            "accounts": accounts,
+            "skipped": skipped,
+            "reuse_content_count": 0,
+            "detail_content_count": 0,
+            "creator_account_count": 0,
+            "recent_comment_skip_count": 0,
+            "skip_content_count": 0,
+            "supplement_content_count": 0,
+        }
+        if not accounts:
+            return result
+        if not execution_account_id:
+            from app.services import account_center
 
-    supplement_accounts: list[dict[str, Any]] = []
-    max_missing_count = 0
-    skip_content_ids: list[str] = []
-    for account in accounts:
-        # 未达到默认数时补足缺口；已达到默认数时继续向后扩展一批新内容。
-        account_existing = existing_by_account.get(int(account["account_id"]), [])
-        imported_count = len(account_existing)
-        known_total = _known_content_total(account)
-        if known_total is not None and imported_count >= known_total:
-            continue
-        if imported_count < int(defaults["content_count"]):
-            supplement_count = int(defaults["content_count"]) - imported_count
-        else:
-            supplement_count = int(defaults["content_count"])
-        if known_total is not None:
-            supplement_count = min(supplement_count, max(0, known_total - imported_count))
-        if supplement_count <= 0:
-            continue
-        supplement_account = {**account, "supplement_count": supplement_count}
-        supplement_accounts.append(supplement_account)
-        max_missing_count = max(max_missing_count, supplement_count)
-        skip_content_ids.extend(str(content["content_id"] or "") for content in account_existing)
+            execution_account_id = account_center.resolve_account_id(platform, "acquisition")
 
-    if supplement_accounts:
-        creator_ids = ",".join(item["creator_id"] for item in supplement_accounts)
-        task = crawler_adapter.create_task(
-            TaskCreate(
-                name=f"找客户-补采{len(supplement_accounts)}个{account_label}新内容",
-                mode=task_mode,  # type: ignore[arg-type]
-                platform=platform,  # type: ignore[arg-type]
-                login_type=defaults["login_type"],
-                creator_id=creator_ids,
-                content_count=max(1, min(max_missing_count, 500)),
-                comment_count=defaults["comment_count"],
-                collect_comments=True,
-                collect_sub_comments=sub_comments,
-                max_concurrency=1,
-                headless=defaults["headless"],
-                execute_crawler=True,
-                account_id=execution_account_id,
-            ),
-            automation_managed=automation_managed,
-        )
-        crawler_adapter.set_task_skip_content_ids(str(task["id"]), skip_content_ids)
-        result["task_ids"].append(task["id"])
-        result["tasks"].append(
-            {
-                "task_id": task["id"],
-                "task_name": task["name"],
-                "account_count": len(supplement_accounts),
-                "content_count": max_missing_count,
-                "skip_content_count": len({item for item in skip_content_ids if item}),
-                "strategy": "supplement_creator_contents",
-            }
-        )
-        result["creator_account_count"] = len(supplement_accounts)
-        result["skip_content_count"] = len({item for item in skip_content_ids if item})
-        result["supplement_content_count"] = max_missing_count
+        account_ids = [int(item["account_id"]) for item in accounts]
+        existing_by_account = _existing_find_customer_contents(conn, platform, account_ids)
 
-    result["created"] = len(result["task_ids"])
-    result["reuse_content_count"] = len(detail_items)
-    result["detail_content_count"] = len(detail_items)
-    result["recent_comment_skip_count"] = recent_comment_skip_count
-    with database.connect() as conn:
+        detail_items: list[dict[str, Any]] = []
+        seen_detail_identifiers: set[str] = set()
+        recent_comment_skip_count = 0
+        detail_counts_by_account: dict[int, int] = {}
+        for account in accounts:
+            for content in existing_by_account.get(int(account["account_id"]), []):
+                account_id = int(account["account_id"])
+                if detail_counts_by_account.get(account_id, 0) >= int(defaults["content_count"]):
+                    continue
+                if _recently_crawled_comments(content, int(defaults["comment_recrawl_cooldown_hours"])):
+                    recent_comment_skip_count += 1
+                    continue
+                identifier = _content_detail_identifier(platform, content)
+                if not identifier or identifier in active_specified_ids or identifier in seen_detail_identifiers:
+                    continue
+                seen_detail_identifiers.add(identifier)
+                detail_counts_by_account[account_id] = detail_counts_by_account.get(account_id, 0) + 1
+                detail_items.append(
+                    {
+                        "identifier": identifier,
+                        "account_id": account_id,
+                        "nickname": account["nickname"],
+                        "content_id": content["content_id"],
+                        "title": content["title"],
+                    }
+                )
+
+        for chunk in _chunks(detail_items, FIND_CUSTOMER_DETAIL_CHUNK_SIZE):
+            specified_ids = ",".join(item["identifier"] for item in chunk)
+            task = crawler_adapter.create_task(
+                TaskCreate(
+                    name=f"找客户-复用{len(chunk)}条内容",
+                    mode=task_mode,  # type: ignore[arg-type]
+                    platform=platform,  # type: ignore[arg-type]
+                    login_type=defaults["login_type"],
+                    specified_id=specified_ids,
+                    content_count=max(1, min(len(chunk), 500)),
+                    comment_count=defaults["comment_count"],
+                    collect_comments=True,
+                    collect_sub_comments=sub_comments,
+                    max_concurrency=1,
+                    headless=defaults["headless"],
+                    execute_crawler=True,
+                    account_id=execution_account_id,
+                ),
+                automation_managed=automation_managed,
+                conn=conn,
+            )
+            result["task_ids"].append(task["id"])
+            result["tasks"].append(
+                {
+                    "task_id": task["id"],
+                    "task_name": task["name"],
+                    "account_count": len({item["account_id"] for item in chunk}),
+                    "content_count": len(chunk),
+                    "strategy": "reuse_existing_contents",
+                }
+            )
+
+        supplement_accounts: list[dict[str, Any]] = []
+        max_missing_count = 0
+        skip_content_ids: list[str] = []
+        for account in accounts:
+            # 未达到默认数时补足缺口；已达到默认数时继续向后扩展一批新内容。
+            account_existing = existing_by_account.get(int(account["account_id"]), [])
+            imported_count = len(account_existing)
+            known_total = _known_content_total(account)
+            if known_total is not None and imported_count >= known_total:
+                continue
+            if imported_count < int(defaults["content_count"]):
+                supplement_count = int(defaults["content_count"]) - imported_count
+            else:
+                supplement_count = int(defaults["content_count"])
+            if known_total is not None:
+                supplement_count = min(supplement_count, max(0, known_total - imported_count))
+            if supplement_count <= 0:
+                continue
+            supplement_account = {**account, "supplement_count": supplement_count}
+            supplement_accounts.append(supplement_account)
+            max_missing_count = max(max_missing_count, supplement_count)
+            skip_content_ids.extend(str(content["content_id"] or "") for content in account_existing)
+
+        if supplement_accounts:
+            creator_ids = ",".join(item["creator_id"] for item in supplement_accounts)
+            task = crawler_adapter.create_task(
+                TaskCreate(
+                    name=f"找客户-补采{len(supplement_accounts)}个{account_label}新内容",
+                    mode=task_mode,  # type: ignore[arg-type]
+                    platform=platform,  # type: ignore[arg-type]
+                    login_type=defaults["login_type"],
+                    creator_id=creator_ids,
+                    content_count=max(1, min(max_missing_count, 500)),
+                    comment_count=defaults["comment_count"],
+                    collect_comments=True,
+                    collect_sub_comments=sub_comments,
+                    max_concurrency=1,
+                    headless=defaults["headless"],
+                    execute_crawler=True,
+                    account_id=execution_account_id,
+                ),
+                automation_managed=automation_managed,
+                conn=conn,
+            )
+            crawler_adapter.set_task_skip_content_ids(str(task["id"]), skip_content_ids, conn=conn)
+            result["task_ids"].append(task["id"])
+            result["tasks"].append(
+                {
+                    "task_id": task["id"],
+                    "task_name": task["name"],
+                    "account_count": len(supplement_accounts),
+                    "content_count": max_missing_count,
+                    "skip_content_count": len({item for item in skip_content_ids if item}),
+                    "strategy": "supplement_creator_contents",
+                }
+            )
+            result["creator_account_count"] = len(supplement_accounts)
+            result["skip_content_count"] = len({item for item in skip_content_ids if item})
+            result["supplement_content_count"] = max_missing_count
+
+        result["created"] = len(result["task_ids"])
+        result["reuse_content_count"] = len(detail_items)
+        result["detail_content_count"] = len(detail_items)
+        result["recent_comment_skip_count"] = recent_comment_skip_count
         for task_id in result["task_ids"]:
             crawler_adapter.log_task(
                 conn,
@@ -557,11 +565,11 @@ def _build_find_customer_task(
                 "info",
                 f"{log_message}；找客户采集策略：复用已有内容 {len(detail_items)} 条，补采账号 {len(supplement_accounts)} 个，补采内容目标 {max_missing_count} 条，已采内容跳过 {result['skip_content_count']} 条，近期已采评论跳过 {recent_comment_skip_count} 条",
             )
-    return result
+        return result
 
 
-def create_account_find_customer_task(account_id: int) -> dict[str, Any]:
-    with database.connect() as conn:
+def create_account_find_customer_task(account_id: int, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         row = conn.execute(
             """
             SELECT id, platform, platform_user_id, sec_uid, nickname, profile_url, content_total_count,
@@ -576,15 +584,16 @@ def create_account_find_customer_task(account_id: int) -> dict[str, Any]:
         is_own_account = bool(row["is_own_account"]) or str(row["account_role"] or "") == "own_account"
         if str(row["competitor_status"] or "") != "竞品" and not is_own_account:
             raise ValueError("只有已判定为竞品或已标记为自家账号的账号才能找客户")
-    account_label = "自家账号" if is_own_account else "竞品账号"
-    return _build_find_customer_task(
-        str(row["platform"]),
-        [row],
-        str(row["nickname"] or account_id),
-        f"{account_label}找客户：账号 {row['nickname'] or account_id}（ID={account_id}）",
-        task_mode="own_account" if is_own_account else "competitor_crawl",
-        account_label=account_label,
-    )
+        account_label = "自家账号" if is_own_account else "竞品账号"
+        return _build_find_customer_task(
+            str(row["platform"]),
+            [row],
+            str(row["nickname"] or account_id),
+            f"{account_label}找客户：账号 {row['nickname'] or account_id}（ID={account_id}）",
+            task_mode="own_account" if is_own_account else "competitor_crawl",
+            account_label=account_label,
+            conn=conn,
+        )
 
 
 def create_keyword_find_customer_task(
@@ -597,10 +606,11 @@ def create_keyword_find_customer_task(
     comment_count: int | None = None,
     collect_sub_comments: bool | None = None,
     execution_account_id: str = "",
+    conn: Any | None = None,
 ) -> dict[str, Any]:
-    keyword_value = keyword or "未标记关键词"
-    safe_limit = max(1, min(int(limit), 100))
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        keyword_value = keyword or "未标记关键词"
+        safe_limit = max(1, min(int(limit), 100))
         rows = conn.execute(
             """
             SELECT DISTINCT ua.id, ua.platform, ua.platform_user_id, ua.sec_uid,
@@ -619,17 +629,18 @@ def create_keyword_find_customer_task(
             """,
             (platform, keyword_value, keyword_value, safe_limit),
         ).fetchall()
-    return _build_find_customer_task(
-        platform,
-        rows,
-        keyword_value,
-        f"关键词一键找客户：{platform}/{keyword_value}，竞品账号 {len(rows)} 个",
-        automation_managed=automation_managed,
-        content_count=content_count,
-        comment_count=comment_count,
-        collect_sub_comments=collect_sub_comments,
-        execution_account_id=execution_account_id,
-    )
+        return _build_find_customer_task(
+            platform,
+            rows,
+            keyword_value,
+            f"关键词一键找客户：{platform}/{keyword_value}，竞品账号 {len(rows)} 个",
+            automation_managed=automation_managed,
+            content_count=content_count,
+            comment_count=comment_count,
+            collect_sub_comments=collect_sub_comments,
+            execution_account_id=execution_account_id,
+            conn=conn,
+        )
 
 
 def prepare_account_analysis_jobs(
@@ -756,8 +767,8 @@ def run_account_analysis(account_id: int, task_id: str) -> None:
         crawler_adapter.log_task(conn, task_id, "info", f"账号 AI 分析完成：{job['id']}")
 
 
-def create_customer_intent_analysis(lead_id: int, run_now: bool = True) -> dict[str, Any]:
-    with database.connect() as conn:
+def create_customer_intent_analysis(lead_id: int, run_now: bool = True, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         row = conn.execute(
             """
             SELECT lua.id
@@ -768,7 +779,9 @@ def create_customer_intent_analysis(lead_id: int, run_now: bool = True) -> dict[
         ).fetchone()
         if not row:
             raise ValueError("客户账号不存在或已隐藏，无法意向分析")
-    return ai_service.create_ai_job("lead", lead_id, run_now=run_now)
+        job = ai_service.create_ai_job("lead", lead_id, run_now=False, conn=conn)
+    # 同步调用仍在记录提交后执行；路由仅准备并在同事务入队。
+    return ai_service.run_ai_job(str(job["id"])) if run_now else job
 
 
 def update_customer_follow_status(
@@ -779,7 +792,10 @@ def update_customer_follow_status(
     record_message_attempt: bool = False,
 ) -> dict[str, Any]:
     follow_status = str(follow_status or "").strip()
+    if record_message_attempt and follow_status != '已私信':
+        raise ValueError('只有明确确认已发送私信时才能记录发送尝试')
     with database.connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
         row = conn.execute(
             """
             SELECT id, screening_status, follow_status, hidden
@@ -813,9 +829,8 @@ def update_customer_follow_status(
                 "INSERT INTO lead_status_events(lead_account_id, from_status, to_status, note) VALUES(?, ?, ?, ?)",
                 (lead_id, current_status, follow_status, note.strip() or "人工修改跟进状态"),
             )
-    if record_message_attempt and follow_status == "已私信":
-        # 手工点击发生在浏览器外，状态落库时同步计入软件额度统计。
-        message_attempts.record_manual_message_attempt(lead_id, "follow-status")
+        if record_message_attempt:
+            message_attempts.record_manual_message_attempt(lead_id, 'follow-status', conn=conn)
     return {
         "ok": True,
         "lead_id": lead_id,
@@ -870,8 +885,8 @@ def _customer_lead_rows_for_account(conn: sqlite3.Connection, account_id: int) -
     ).fetchall()
 
 
-def create_account_customer_intent_jobs(account_id: int, run_now: bool = False) -> dict[str, Any]:
-    with database.connect() as conn:
+def create_account_customer_intent_jobs(account_id: int, run_now: bool = False, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         account = conn.execute(
             "SELECT id, nickname, competitor_status FROM user_accounts WHERE id = ?",
             (account_id,),
@@ -884,21 +899,21 @@ def create_account_customer_intent_jobs(account_id: int, run_now: bool = False) 
         lead_ids = [int(row["lead_id"]) for row in rows]
         existing_jobs = _existing_customer_intent_jobs(conn, lead_ids)
 
-    jobs: list[dict[str, Any]] = []
-    resumed_job_ids: list[str] = []
-    skipped: list[dict[str, Any]] = []
-    for row in rows:
-        lead_id = int(row["lead_id"])
-        existing_job = existing_jobs.get(lead_id)
-        if existing_job:
-            if existing_job["status"] == "running":
-                skipped.append({"lead_id": lead_id, "nickname": row["nickname"], "reason": "已有意向分析任务正在运行"})
-            else:
-                resumed_job_ids.append(str(existing_job["id"]))
-            continue
-        jobs.append(ai_service.create_ai_job("lead", lead_id, run_now=False))
+        jobs: list[dict[str, Any]] = []
+        resumed_job_ids: list[str] = []
+        skipped: list[dict[str, Any]] = []
+        for row in rows:
+            lead_id = int(row["lead_id"])
+            existing_job = existing_jobs.get(lead_id)
+            if existing_job:
+                if existing_job["status"] == "running":
+                    skipped.append({"lead_id": lead_id, "nickname": row["nickname"], "reason": "已有意向分析任务正在运行"})
+                else:
+                    resumed_job_ids.append(str(existing_job["id"]))
+                continue
+            jobs.append(ai_service.create_ai_job("lead", lead_id, run_now=False, conn=conn))
 
-    job_ids = [str(job["id"]) for job in jobs] + resumed_job_ids
+        job_ids = [str(job["id"]) for job in jobs] + resumed_job_ids
     summary: dict[str, Any] | None = None
     if run_now and job_ids:
         summary = ai_service.run_ai_jobs_parallel(job_ids)

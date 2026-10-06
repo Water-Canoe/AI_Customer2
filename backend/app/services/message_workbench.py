@@ -5,6 +5,7 @@ import json
 import random
 import sys
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from math import ceil
 from typing import Any
@@ -99,6 +100,8 @@ def create_auto_message_batch(
     interval_max_seconds: int,
     run_now: bool = True,
     account_id: str = "",
+    *,
+    conn: Any | None = None,
 ) -> dict[str, Any]:
     platform = str(platform or "").strip()
     keyword = _normalize_keyword_filter(keyword)
@@ -113,7 +116,7 @@ def create_auto_message_batch(
         raise ValueError("最大时间间隔不能小于最小时间间隔")
     account_id = account_center.resolve_account_id(platform, "message", account_id)
 
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         active = conn.execute(
             "SELECT id FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
@@ -145,12 +148,13 @@ def create_auto_message_batch(
                 (batch_id, customer["lead_id"], customer["nickname"], customer["profile_url"], customer["selected_script"]),
             )
 
-    return get_auto_message_batch(batch_id)
+        batch = get_auto_message_batch(batch_id, conn=conn)
+    return batch
 
 
-def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig) -> dict[str, Any]:
+def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig, *, conn: Any | None = None) -> dict[str, Any]:
     account_id = account_center.resolve_account_id(config.platform, "message", config.account_id)
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         active = conn.execute(
             "SELECT id FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
@@ -196,7 +200,8 @@ def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig) -> di
                 "INSERT INTO message_batch_items(batch_id, lead_account_id, nickname, profile_url, script) VALUES(?, ?, ?, ?, ?)",
                 (batch_id, customer["lead_id"], customer["nickname"], customer["profile_url"], script),
             )
-    return get_auto_message_batch(batch_id)
+        batch = get_auto_message_batch(batch_id, conn=conn)
+    return batch
 
 
 def list_auto_message_batches(
@@ -262,8 +267,8 @@ def list_auto_message_batches(
     }
 
 
-def get_auto_message_batch(batch_id: str) -> dict[str, Any]:
-    with database.connect() as conn:
+def get_auto_message_batch(batch_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         batch = database.row_to_dict(conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone())
         if not batch:
             raise ValueError("自动私信批次不存在")
@@ -310,8 +315,8 @@ def delete_auto_message_batch(batch_id: str) -> dict[str, Any]:
     return {"ok": True, "deleted_id": batch_id}
 
 
-def retry_auto_message_batch(batch_id: str) -> dict[str, Any]:
-    with database.connect() as conn:
+def retry_auto_message_batch(batch_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         active = conn.execute(
             "SELECT id FROM message_batches WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
@@ -368,7 +373,8 @@ def retry_auto_message_batch(batch_id: str) -> dict[str, Any]:
                 """,
                 (new_batch_id, row["lead_account_id"], row["nickname"], row["profile_url"], row["script"]),
             )
-    return get_auto_message_batch(new_batch_id)
+        result = get_auto_message_batch(new_batch_id, conn=conn)
+    return result
 
 
 def customer_detail(lead_id: int) -> dict[str, Any]:
@@ -561,7 +567,10 @@ async def _run_batch_item(page: Any, item: dict[str, Any], batch: dict[str, Any]
         if not str(item.get("script") or "").strip():
             _mark_batch_item(item["id"], "skipped", "缺少私信话术")
             return
-        fill_only = bool(batch.get("fill_only"))
+        with database.connect() as conn:
+            current_fill_only = database.get_setting(conn, 'auto_dm_fill_only', 'false') == 'true'
+        # 安全开关可以收紧已排队的批次，不能被旧配置绕过。
+        fill_only = bool(batch.get("fill_only") or current_fill_only)
         if not fill_only:
             attempt_id = reserve_message_attempt(int(item["lead_account_id"]), str(batch.get("source") or "batch"), str(batch["id"]))
         await module.send_douyin_dm_on_page(

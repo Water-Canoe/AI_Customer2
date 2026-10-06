@@ -56,7 +56,10 @@ def get_settings() -> dict[str, object]:
 
 @router.put("/settings")
 def update_settings(payload: SettingsUpdate) -> dict[str, object]:
-    return views.update_settings(payload.values)
+    try:
+        return views.update_settings(payload.values, payload.clear_secrets)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/settings/env-check")

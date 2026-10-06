@@ -78,16 +78,16 @@ def finish_message_attempt(attempt_id: int, status: str, error: str = "") -> Non
         )
 
 
-def record_manual_message_attempt(lead_id: int, source_id: str = "") -> int:
-    with database.connect() as conn:
-        existing = conn.execute(
-            "SELECT id FROM message_send_attempts WHERE lead_account_id = ? AND date(attempted_at) = date('now', 'localtime') ORDER BY id LIMIT 1",
-            (lead_id,),
-        ).fetchone()
-        if existing:
-            return int(existing["id"])
-        cursor = conn.execute(
-            "INSERT INTO message_send_attempts(lead_account_id, source, source_id, status, finished_at) VALUES(?, 'manual', ?, 'succeeded', datetime('now', 'localtime'))",
-            (lead_id, source_id),
-        )
-        return int(cursor.lastrowid)
+def record_manual_message_attempt(lead_id: int, source_id: str = '', *, conn: Any = None) -> int:
+    """只记录人工确认的发送事实；与客户状态共用事务，重复确认不重复计数。"""
+    if conn is None:
+        with database.connect() as own_conn:
+            own_conn.execute('BEGIN IMMEDIATE')
+            return record_manual_message_attempt(lead_id, source_id, conn=own_conn)
+    existing = conn.execute("SELECT id,status FROM message_send_attempts WHERE lead_account_id=? AND date(attempted_at)=date('now','localtime') ORDER BY id LIMIT 1", (lead_id,)).fetchone()
+    if existing:
+        if existing['status'] != 'succeeded':
+            conn.execute("UPDATE message_send_attempts SET source='manual',source_id=?,status='succeeded',error='',finished_at=datetime('now','localtime') WHERE id=?", (source_id, existing['id']))
+        return int(existing['id'])
+    cursor = conn.execute("INSERT INTO message_send_attempts(lead_account_id,source,source_id,status,finished_at) VALUES(?,'manual',?,'succeeded',datetime('now','localtime'))", (lead_id, source_id))
+    return int(cursor.lastrowid)

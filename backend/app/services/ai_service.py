@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from typing import Any
 
 from fastapi import HTTPException
@@ -38,24 +39,28 @@ def create_ai_job(
     run_now: bool = True,
     *,
     auto_delete: bool | None = None,
+    conn: Any | None = None,
 ) -> dict[str, Any]:
+    # 外部连接用于纯准备，让调用方把分析记录和运行队列一起提交。
     job_id = f"{target_type}-{target_id}-{int(time.time() * 1000)}"
-    with database.connect() as conn:
-        payload = build_input_payload(conn, target_type, target_id)
-        conn.execute(
+    with database.connect() if conn is None else nullcontext(conn) as active_conn:
+        payload = build_input_payload(active_conn, target_type, target_id)
+        active_conn.execute(
             """
             INSERT INTO analysis_jobs(id, target_type, target_id, status, input_payload, auto_delete)
             VALUES(?, ?, ?, 'pending', ?, ?)
             """,
             (job_id, target_type, target_id, json.dumps(payload, ensure_ascii=False), -1 if auto_delete is None else int(auto_delete)),
         )
+        job = get_ai_job(job_id, conn=active_conn)
     if run_now:
         return run_ai_job(job_id)
-    return get_ai_job(job_id)
+    return job
 
 
-def create_batch_jobs(target_type: str, target_ids: list[int], run_now: bool = True) -> list[dict[str, Any]]:
-    jobs = [create_ai_job(target_type, target_id, run_now=False) for target_id in target_ids]
+def create_batch_jobs(target_type: str, target_ids: list[int], run_now: bool = True, *, conn: Any | None = None) -> list[dict[str, Any]]:
+    with database.connect() if conn is None else nullcontext(conn) as active_conn:
+        jobs = [create_ai_job(target_type, target_id, run_now=False, conn=active_conn) for target_id in target_ids]
     if run_now and jobs:
         run_ai_jobs_parallel([str(job["id"]) for job in jobs])
         return [get_ai_job(str(job["id"])) for job in jobs]
@@ -500,8 +505,8 @@ def _workbench_leads_query() -> str:
         """
 
 
-def _workbench_history_query(tab: str) -> str:
-    status_clause = "aj.status = 'failed'" if tab == "failed" else "aj.status IN ('succeeded', 'failed')"
+def _workbench_history_query(tab: str, *, include_active: bool = False) -> str:
+    status_clause = '1 = 1' if include_active else "aj.status = 'failed'" if tab == "failed" else "aj.status IN ('succeeded', 'failed')"
     return f"""
         SELECT aj.*,
                CASE aj.target_type
@@ -699,24 +704,32 @@ def _output_summary(payload: dict[str, Any]) -> str:
     return str(payload)[:200]
 
 
-def get_ai_job(job_id: str) -> dict[str, Any]:
-    with database.connect() as conn:
-        row = conn.execute("SELECT * FROM analysis_jobs WHERE id = ?", (job_id,)).fetchone()
+def get_ai_job(job_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as active_conn:
+        row = active_conn.execute("SELECT * FROM analysis_jobs WHERE id = ?", (job_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="AI任务不存在")
         return database.row_to_dict(row) or {}
 
 
-def retry_ai_job(job_id: str, run_now: bool = True) -> dict[str, Any]:
+def get_ai_job_detail(job_id: str) -> dict[str, Any]:
+    """单条运行详情沿用历史页证据字段，排队中的任务也可定位。"""
     with database.connect() as conn:
-        row = conn.execute("SELECT id FROM analysis_jobs WHERE id = ?", (job_id,)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="AI任务不存在")
-        conn.execute(
-            "UPDATE analysis_jobs SET status = 'pending', error = '', updated_at = datetime('now', 'localtime') WHERE id = ?",
-            (job_id,),
-        )
-    return run_ai_job(job_id) if run_now else get_ai_job(job_id)
+        row = conn.execute(_workbench_history_query('history', include_active=True) + ' AND aj.id = ?', (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail='AI任务不存在')
+        return _workbench_item(dict(row), 'history')
+
+
+def retry_ai_job(job_id: str, *, conn: Any) -> dict[str, Any]:
+    row = conn.execute("SELECT id FROM analysis_jobs WHERE id = ?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="AI任务不存在")
+    conn.execute(
+        "UPDATE analysis_jobs SET status = 'pending', error = '', updated_at = datetime('now', 'localtime') WHERE id = ?",
+        (job_id,),
+    )
+    return database.row_to_dict(conn.execute('SELECT * FROM analysis_jobs WHERE id=?', (job_id,)).fetchone()) or {}
 
 
 def run_ai_job(job_id: str) -> dict[str, Any]:
@@ -795,8 +808,9 @@ def run_ai_job(job_id: str) -> dict[str, Any]:
                     """,
                     (output, job_id),
                 )
-            _mark_failed(conn, job_id, f"AI分析失败：{exc}")
-        raise HTTPException(status_code=502, detail=f"AI分析失败：{exc}") from exc
+            error = str(exc).replace(api_key, '[密钥已隐藏]') if api_key else str(exc)
+            _mark_failed(conn, job_id, f"AI分析失败：{error}")
+        raise HTTPException(status_code=502, detail=f"AI分析失败：{error}") from exc
 
     with database.connect() as conn:
         apply_ai_result(conn, target_type, target_id, parsed)
@@ -1009,6 +1023,8 @@ def call_openai_compatible(
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        if api_key:
+            detail = detail.replace(api_key, '[密钥已隐藏]')
         raise RuntimeError(f"AI接口返回 HTTP {exc.code}: {detail}") from exc
     data = json.loads(raw)
     return data["choices"][0]["message"]["content"]

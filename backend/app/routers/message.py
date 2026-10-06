@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app import database
 from app.api_dependencies import require_license
 from app.schemas import CustomerAutoMessageRequest, MessageAutoBatchCreate, MessageLimitsUpdate
 from app.services import job_queue, message_workbench
@@ -85,16 +86,18 @@ def message_workbench_auto_message_batches(
 async def create_message_workbench_auto_message_batch(payload: MessageAutoBatchCreate) -> dict[str, object]:
     require_license()
     try:
-        batch = message_workbench.create_auto_message_batch(
-            platform=payload.platform,
-            keyword=payload.keyword,
-            count=payload.count,
-            interval_min_seconds=payload.interval_min_seconds,
-            interval_max_seconds=payload.interval_max_seconds,
-            account_id=payload.account_id,
-            run_now=False,
-        )
-        batch["runtime_job"] = job_queue.enqueue_message_batch(str(batch["id"]))
+        with database.connect() as conn:
+            batch = message_workbench.create_auto_message_batch(
+                platform=payload.platform,
+                keyword=payload.keyword,
+                count=payload.count,
+                interval_min_seconds=payload.interval_min_seconds,
+                interval_max_seconds=payload.interval_max_seconds,
+                account_id=payload.account_id,
+                run_now=False,
+                conn=conn,
+            )
+            batch["runtime_job"] = job_queue.enqueue_message_batch(str(batch["id"]), conn=conn)
         return batch
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -114,8 +117,9 @@ def cancel_message_workbench_auto_message_batch(batch_id: str) -> dict[str, obje
 def retry_message_workbench_auto_message_batch(batch_id: str) -> dict[str, object]:
     require_license()
     try:
-        batch = message_workbench.retry_auto_message_batch(batch_id)
-        batch["runtime_job"] = job_queue.enqueue_message_batch(str(batch["id"]))
+        with database.connect() as conn:
+            batch = message_workbench.retry_auto_message_batch(batch_id, conn=conn)
+            batch["runtime_job"] = job_queue.enqueue_message_batch(str(batch["id"]), conn=conn)
         return batch
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

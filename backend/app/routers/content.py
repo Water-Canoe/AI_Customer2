@@ -15,11 +15,11 @@ from app.schemas import (
     ContentTermsRequest,
     ContentVideoJobCreate,
     ContentVideoJobUpdate,
-    ContentVideoOutputUpdate,
+    VideoOutputStatusUpdate,
     ContentVoiceProfileCreate,
     ContentVoiceProfileUpdate,
 )
-from app.services import content_assets, content_publish, content_workbench, job_queue, voice_profiles
+from app.services import content_assets, content_publish, content_workbench, drafts, job_queue, voice_profiles, video_outputs
 
 
 router = APIRouter(prefix="/api/content", tags=["content"])
@@ -106,8 +106,7 @@ def one_click_publish(payload: ContentPublishOneClick) -> list[dict[str, object]
         source = payload.source
         if source.type == "video_output":
             tasks = content_publish.create_video_output_tasks(
-                video_job_id=source.video_job_id,
-                output_name=source.output_name,
+                output_ids=source.output_ids,
             )
         else:
             if len(source.asset_ids) != 1:
@@ -118,28 +117,27 @@ def one_click_publish(payload: ContentPublishOneClick) -> list[dict[str, object]
                 account_ids=None,
                 title=str(asset["name"]),
             )
-        return content_publish.enqueue_tasks(tasks)
+        return tasks
     except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409 if isinstance(exc, drafts.DraftAlreadySubmitted) else 400, detail=str(exc)) from exc
 
 
 @router.post("/publish-tasks")
 def create_publish_tasks(payload: ContentPublishTaskCreate) -> list[dict[str, object]]:
     require_license_for("content")
     try:
-        values = payload.model_dump()
+        values = payload.model_dump(exclude_none=True)
         source = values.pop("source")
         if source["type"] == "video_output":
             tasks = content_publish.create_video_output_tasks(
-                video_job_id=source["video_job_id"],
-                output_name=source["output_name"],
+                output_ids=source['output_ids'],
                 **values,
             )
         else:
             tasks = content_publish.create_asset_tasks(asset_ids=source["asset_ids"], **values)
-        return content_publish.enqueue_tasks(tasks)
+        return tasks
     except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409 if isinstance(exc, drafts.DraftAlreadySubmitted) else 400, detail=str(exc)) from exc
 
 
 @router.get("/publish-tasks")
@@ -194,9 +192,10 @@ def create_video_job(payload: ContentVideoJobCreate) -> dict[str, object]:
             payload.audio_asset_id,
             payload.bgm_asset_id,
             payload.publish,
+            payload.draft_key,
         )
     except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409 if isinstance(exc, drafts.DraftAlreadySubmitted) else 400, detail=str(exc)) from exc
 
 
 @router.get("/video-jobs")
@@ -204,8 +203,9 @@ def list_video_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     include_archived: bool = False,
+    search: str = '',
 ) -> dict[str, object]:
-    return content_workbench.list_video_jobs(page, page_size, include_archived)
+    return content_workbench.list_video_jobs(page, page_size, include_archived, search)
 
 
 @router.get("/video-jobs/{video_job_id}")
@@ -220,14 +220,6 @@ def get_video_job(video_job_id: str) -> dict[str, object]:
 def update_video_job(video_job_id: str, payload: ContentVideoJobUpdate) -> dict[str, object]:
     try:
         return content_workbench.update_video_job(video_job_id, payload.subject)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.patch("/video-jobs/{video_job_id}/output-status")
-def update_video_output_status(video_job_id: str, payload: ContentVideoOutputUpdate) -> dict[str, object]:
-    try:
-        return content_workbench.update_video_output_status(video_job_id, payload.output_name, payload.upload_status)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -257,17 +249,33 @@ def archive_video_job(video_job_id: str) -> dict[str, object]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-@router.get("/video-jobs/{video_job_id}/files/{filename}")
-def get_video_file(video_job_id: str, filename: str) -> FileResponse:
+@router.get('/outputs')
+def list_video_outputs(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), search: str = '', video_job_id: str = ''):
+    return video_outputs.list_outputs(page, page_size, search, video_job_id)
+
+
+@router.get('/outputs/{output_id}')
+def get_video_output(output_id: str):
     try:
-        job = content_workbench.get_video_job(video_job_id, include_archived=True)
+        return video_outputs.get_output(output_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    output = next((item for item in job["outputs"] if str(item.get("name") or "") == filename), None)
-    if not output:
-        raise HTTPException(status_code=404, detail="视频文件不存在")
+
+
+@router.patch('/outputs/{output_id}/status')
+def update_output_status(output_id: str, payload: VideoOutputStatusUpdate):
     try:
-        path = content_workbench.resolve_video_output(str(output.get("relative_path") or ""))
+        output = video_outputs.get_output(output_id)
+        content_workbench.update_video_output_status(output['video_job_id'], output_id, payload.upload_status)
+        return video_outputs.get_output(output_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get('/outputs/{output_id}/file')
+def get_video_file(output_id: str) -> FileResponse:
+    try:
+        path = video_outputs.resolve_output_path(output_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return FileResponse(path, media_type="video/mp4", filename=path.name)
@@ -356,7 +364,10 @@ def get_content_settings() -> dict[str, object]:
 
 @router.put("/settings")
 def update_content_settings(payload: ContentSettingsUpdate) -> dict[str, object]:
-    return content_workbench.update_settings(payload.values)
+    try:
+        return content_workbench.update_settings(payload.values, payload.clear_secrets)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/environment-check")

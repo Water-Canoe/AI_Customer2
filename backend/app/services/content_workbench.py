@@ -11,11 +11,10 @@ from typing import Any
 import toml
 from pydantic import ValidationError
 
-from app import database
-from app.services import content_assets
+from app import database, protected_settings
+from app.services import content_assets, video_outputs
 
 
-MASKED_SECRET = "********"
 TERMINAL_VIDEO_STATUSES = {"succeeded", "failed", "cancelled", "interrupted"}
 
 
@@ -25,7 +24,7 @@ class VideoJobCancelled(RuntimeError):
 
 def default_settings() -> dict[str, Any]:
     path = Path(__file__).resolve().parents[1] / "video_engine" / "config.default.toml"
-    return toml.load(path)
+    return toml.load(path) | {'model_connection_mode': 'shared'}
 
 
 def get_settings(*, mask_secrets: bool = True) -> dict[str, Any]:
@@ -36,12 +35,34 @@ def get_settings(*, mask_secrets: bool = True) -> dict[str, Any]:
     except json.JSONDecodeError:
         saved = {}
     result = _deep_merge(default_settings(), saved if isinstance(saved, dict) else {})
-    return _mask_settings(result) if mask_secrets else result
+    if not mask_secrets:
+        return result
+    public = _mask_settings(result)
+    mode = str(result.get('model_connection_mode') or 'shared')
+    if mode == 'shared':
+        with database.connect() as conn:
+            public['model_connection'] = {'mode': mode, 'base_url': database.get_setting(conn, 'ai_base_url'), 'model': database.get_setting(conn, 'ai_model'), 'api_key_configured': bool(database.get_setting(conn, 'ai_api_key'))}
+    else:
+        app_values = result.get('app', {})
+        provider = str(app_values.get('llm_provider') or '')
+        public['model_connection'] = {'mode': mode, 'provider': provider, 'base_url': app_values.get(f'{provider}_base_url', ''), 'model': app_values.get(f'{provider}_model_name', ''), 'api_key_configured': bool(app_values.get(f'{provider}_api_key'))}
+    return public
 
 
-def update_settings(values: dict[str, Any]) -> dict[str, Any]:
+def update_settings(values: dict[str, Any], clear_secrets: list[str] | None = None) -> dict[str, Any]:
     current = get_settings(mask_secrets=False)
     merged = _merge_user_settings(current, values if isinstance(values, dict) else {})
+    if merged.get('model_connection_mode') not in {'shared', 'custom'}:
+        raise ValueError('模型连接模式仅支持复用全局或单独配置')
+    for path in clear_secrets or []:
+        parts = path.split('.')
+        target = merged
+        for part in parts[:-1]:
+            target = target.get(part, {}) if isinstance(target, dict) else {}
+        key = parts[-1]
+        if not isinstance(target, dict) or key not in target or not _is_secret_key(key):
+            raise ValueError('清除密钥字段不存在')
+        target[key] = [] if isinstance(target[key], list) else ''
     with database.connect() as conn:
         database.set_setting(
             conn,
@@ -57,9 +78,11 @@ def create_video_job(
     audio_asset_id: str = "",
     bgm_asset_id: str = "",
     publish: dict[str, Any] | None = None,
+    draft_key: str = '',
 ) -> dict[str, Any]:
     from app.video_engine.models.schema import TaskVideoRequest
     from app.services import content_publish
+    from app.services import job_queue
 
     payload = deepcopy(params or {})
     material_assets = [_require_asset(asset_id, {"video", "image"}) for asset_id in asset_ids]
@@ -91,21 +114,27 @@ def create_video_job(
         raise ValueError(_validation_message(exc)) from exc
 
     publish_plan = publish or {}
-    content_publish.validate_auto_publish(publish_plan)
+    content_publish.validate_auto_publish(publish_plan, str(validated.video_subject), str(validated.video_script or ''))
+    if draft_key:
+        from app.services import drafts
+        if not drafts.get_draft('video', draft_key)['exists']:
+            raise ValueError('视频草稿不存在')
 
     job_id = uuid.uuid4().hex
     serialized = validated.model_dump(mode="json", warnings=False)
+    _validate_voice_reference(serialized)
     with database.connect() as conn:
         conn.execute(
             """
-            INSERT INTO video_jobs(id, subject, script, params, status, current_stage)
-            VALUES(?, ?, ?, ?, 'queued', 'queued')
+            INSERT INTO video_jobs(id, subject, script, params, draft_key, status, current_stage)
+            VALUES(?, ?, ?, ?, ?, 'queued', 'queued')
             """,
             (
                 job_id,
                 str(validated.video_subject),
                 str(validated.video_script or ""),
                 json.dumps(serialized, ensure_ascii=False),
+                draft_key,
             ),
         )
         for index, asset in enumerate(material_assets):
@@ -123,21 +152,19 @@ def create_video_job(
                 "INSERT INTO video_job_assets(video_job_id, asset_id, role, sort_order) VALUES(?, ?, 'bgm', 0)",
                 (job_id, str(bgm_asset["id"])),
             )
-
-    if bool(publish_plan.get("enabled")):
-        content_publish.create_waiting_video_tasks(
-            job_id,
-            [str(value) for value in publish_plan.get("account_ids", [])],
-            int(serialized.get("video_count") or 1),
-            str(publish_plan.get("output_scope") or "first"),
-            str(publish_plan.get("publish_strategy") or "immediate"),
-            str(publish_plan.get("scheduled_at") or ""),
-        )
-
-    from app.services import job_queue
-
-    runtime_job = job_queue.enqueue_video_job(job_id)
-    with database.connect() as conn:
+        from app.services import drafts
+        drafts.record_submission(conn, 'video', draft_key, {'route': '/content-records', 'query': {'job': job_id}, 'selection': []})
+        if bool(publish_plan.get("enabled")):
+            content_publish.create_waiting_video_tasks(
+                job_id,
+                [str(value) for value in publish_plan.get("account_ids", [])],
+                int(serialized.get("video_count") or 1),
+                str(publish_plan.get("output_scope") or "first"),
+                str(publish_plan.get("publish_strategy") or "immediate"),
+                str(publish_plan.get("scheduled_at") or ""),
+                conn=conn,
+            )
+        runtime_job = job_queue.enqueue_video_job(job_id, conn=conn)
         conn.execute(
             "UPDATE video_jobs SET runtime_job_id = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
             (str(runtime_job["id"]), job_id),
@@ -190,26 +217,28 @@ def run_video_job(video_job_id: str) -> dict[str, Any]:
 
     state.set_progress_listener(on_progress)
     try:
+        # 先核对本地输入，避免素材已删除后仍先消耗脚本或配音额度。
+        _validate_video_inputs(job)
         result = task.start(engine_task_id, params, stop_at="video")
         if not result or not result.get("videos"):
             raise RuntimeError("视频生成未产生有效成品，请查看任务错误后重试")
-        outputs = [_format_output(video_job_id, path) for path in result.get("videos", [])]
         with database.connect() as conn:
+            script = str(result.get('script') or params.video_script or '')
+            output_ids = video_outputs.register_outputs(conn, video_job_id, attempt, result['videos'], script)
             conn.execute(
                 """
                 UPDATE video_jobs
                 SET status = 'succeeded', progress = 100, current_stage = 'completed',
-                    script = ?, outputs = ?, error = '',
+                    script = ?, error = '',
                     finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime')
                 WHERE id = ?
                 """,
                 (
-                    str(result.get("script") or params.video_script or ""),
-                    json.dumps(outputs, ensure_ascii=False),
+                    script,
                     video_job_id,
                 ),
             )
-        content_publish.enqueue_tasks(content_publish.bind_waiting_video_tasks(video_job_id, outputs))
+        content_publish.bind_waiting_video_tasks(video_job_id, [video_outputs.get_output(output_id) for output_id in output_ids])
         return get_video_job(video_job_id, include_archived=True)
     except VideoJobCancelled as exc:
         _finish_video_job(video_job_id, "cancelled", str(exc))
@@ -221,21 +250,26 @@ def run_video_job(video_job_id: str) -> dict[str, Any]:
         state.set_progress_listener(None)
 
 
-def list_video_jobs(page: int = 1, page_size: int = 20, include_archived: bool = False) -> dict[str, Any]:
+def list_video_jobs(page: int = 1, page_size: int = 20, include_archived: bool = False, search: str = '') -> dict[str, Any]:
     safe_page = max(1, int(page))
     safe_size = max(1, min(100, int(page_size)))
     where = "1 = 1" if include_archived else "archived = 0"
+    params: list[Any] = []
+    if search:
+        where += ' AND instr(lower(subject),lower(?)) > 0'
+        params.append(search)
     with database.connect() as conn:
-        total = int(conn.execute(f"SELECT COUNT(*) FROM video_jobs WHERE {where}").fetchone()[0])
+        total = int(conn.execute(f"SELECT COUNT(*) FROM video_jobs WHERE {where}", params).fetchone()[0])
         active = int(conn.execute(
-            f"SELECT COUNT(*) FROM video_jobs WHERE {where} AND status IN ('queued', 'running')"
+            f"SELECT COUNT(*) FROM video_jobs WHERE {where} AND status IN ('queued', 'running')", params
         ).fetchone()[0])
         rows = conn.execute(
             f"SELECT * FROM video_jobs WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-            (safe_size, (safe_page - 1) * safe_size),
+            [*params, safe_size, (safe_page - 1) * safe_size],
         ).fetchall()
+        items = _format_video_jobs(rows, conn)
     return {
-        "items": [_format_video_job(row) for row in rows],
+        "items": items,
         "total": total,
         "page": safe_page,
         "page_size": safe_size,
@@ -264,21 +298,11 @@ def update_video_job(video_job_id: str, subject: str) -> dict[str, Any]:
     return get_video_job(video_job_id, include_archived=True)
 
 
-def update_video_output_status(video_job_id: str, output_name: str, upload_status: str) -> dict[str, Any]:
-    job = get_video_job(video_job_id, include_archived=True)
-    matched = False
-    for output in job["outputs"]:
-        if str(output.get("name") or "") == output_name:
-            output["upload_status"] = upload_status
-            matched = True
-            break
-    if not matched:
-        raise ValueError("视频成品不存在")
+def update_video_output_status(video_job_id: str, output_id: str, upload_status: str) -> dict[str, Any]:
     with database.connect() as conn:
-        conn.execute(
-            "UPDATE video_jobs SET outputs = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
-            (json.dumps(job["outputs"], ensure_ascii=False), video_job_id),
-        )
+        cursor = conn.execute('UPDATE video_outputs SET upload_status=? WHERE id=? AND video_job_id=?', (upload_status, output_id, video_job_id))
+        if not cursor.rowcount:
+            raise ValueError('视频成品不存在')
     return get_video_job(video_job_id, include_archived=True)
 
 
@@ -304,15 +328,12 @@ def retry_video_job(video_job_id: str) -> dict[str, Any]:
             (video_job_id,),
         ).fetchone()
     if runtime:
-        runtime_job = job_queue.retry_job(str(runtime["id"]))
+        job_queue.retry_job(str(runtime["id"]))
     else:
-        _reset_video_job(video_job_id)
-        runtime_job = job_queue.enqueue_video_job(video_job_id)
-    with database.connect() as conn:
-        conn.execute(
-            "UPDATE video_jobs SET runtime_job_id = ?, archived = 0, updated_at = datetime('now', 'localtime') WHERE id = ?",
-            (str(runtime_job["id"]), video_job_id),
-        )
+        with database.connect() as conn:
+            reset_video_job_for_retry(conn, video_job_id)
+            runtime_job = job_queue.enqueue_video_job(video_job_id, conn=conn)
+            conn.execute('UPDATE video_jobs SET runtime_job_id=? WHERE id=?', (runtime_job['id'], video_job_id))
     return get_video_job(video_job_id, include_archived=True)
 
 
@@ -466,17 +487,11 @@ def environment_check() -> dict[str, Any]:
     }
 
 
-def resolve_video_output(relative_path: str) -> Path:
-    root = database.get_video_generation_root().resolve()
-    candidate = (root / str(relative_path or "")).resolve()
-    if candidate != root and root not in candidate.parents:
-        raise ValueError("视频输出路径超出运行目录")
-    if not candidate.is_file():
-        raise ValueError("视频输出文件不存在")
-    return candidate
-
-
 def reset_video_job_for_retry(conn: Any, video_job_id: str) -> None:
+    row = conn.execute('SELECT * FROM video_jobs WHERE id=?', (video_job_id,)).fetchone()
+    if not row:
+        raise ValueError('视频任务不存在')
+    _validate_video_inputs(_format_video_jobs([row], conn)[0])
     conn.execute(
         """
         UPDATE video_jobs
@@ -511,6 +526,10 @@ def _apply_runtime_settings() -> dict[str, Any]:
 def _runtime_settings() -> dict[str, Any]:
     values = get_settings(mask_secrets=False)
     app_values = values.setdefault("app", {})
+    if values.get('model_connection_mode') == 'shared':
+        # 执行时解析同一连接引用，密钥不会复制到内容配置、草稿或生成参数快照。
+        with database.connect() as conn:
+            app_values.update({'llm_provider': 'openai', 'openai_base_url': database.get_setting(conn, 'ai_base_url'), 'openai_model_name': database.get_setting(conn, 'ai_model'), 'openai_api_key': database.get_setting(conn, 'ai_api_key')})
     app_values["local_material_directory"] = str(database.get_content_assets_root() / "originals")
     app_values["bgm_directory"] = str(database.get_content_assets_root() / "originals")
     app_values["material_directory"] = str(database.get_video_generation_root() / "cache_videos")
@@ -518,40 +537,25 @@ def _runtime_settings() -> dict[str, Any]:
 
 
 def _format_video_job(row: Any) -> dict[str, Any]:
-    item = database.row_to_dict(row) or {}
-    for key, fallback in (("params", {}), ("outputs", [])):
-        try:
-            item[key] = json.loads(str(item.get(key) or json.dumps(fallback)))
-        except json.JSONDecodeError:
-            item[key] = fallback
     with database.connect() as conn:
-        assets = conn.execute(
-            """
-            SELECT asset.*, link.role, link.sort_order
-            FROM video_job_assets link
-            JOIN content_assets asset ON asset.id = link.asset_id
-            WHERE link.video_job_id = ?
-            ORDER BY CASE link.role WHEN 'material' THEN 0 WHEN 'audio' THEN 1 ELSE 2 END, link.sort_order
-            """,
-            (str(item.get("id") or ""),),
-        ).fetchall()
-    item["assets"] = [database.row_to_dict(asset) or {} for asset in assets]
-    return item
+        return _format_video_jobs([row], conn)[0]
 
 
-def _format_output(video_job_id: str, file_path: str) -> dict[str, Any]:
-    root = database.get_video_generation_root().resolve()
-    path = Path(file_path).resolve()
-    if root not in path.parents:
-        raise ValueError("生成结果不在视频运行目录中")
-    relative = path.relative_to(root).as_posix()
-    return {
-        "name": path.name,
-        "relative_path": relative,
-        "size": path.stat().st_size,
-        "url": f"/api/content/video-jobs/{video_job_id}/files/{path.name}",
-        "upload_status": "not_uploaded",
-    }
+def _format_video_jobs(rows: list[Any], conn: Any) -> list[dict[str, Any]]:
+    items = [dict(row) for row in rows]
+    if not items:
+        return []
+    ids = [item['id'] for item in items]
+    outputs = video_outputs.outputs_for_jobs(ids, conn)
+    assets = conn.execute(f"SELECT asset.*,link.video_job_id,link.role,link.sort_order FROM video_job_assets link JOIN content_assets asset ON asset.id=link.asset_id WHERE link.video_job_id IN ({','.join('?' for _ in ids)}) ORDER BY CASE link.role WHEN 'material' THEN 0 WHEN 'audio' THEN 1 ELSE 2 END,link.sort_order", ids).fetchall()
+    by_job: dict[str, list[dict[str, Any]]] = {job_id: [] for job_id in ids}
+    for asset in assets:
+        by_job[asset['video_job_id']].append(dict(asset))
+    for item in items:
+        item['params'] = json.loads(item['params'])
+        item['outputs'] = outputs[item['id']]
+        item['assets'] = by_job[item['id']]
+    return items
 
 
 def _require_asset(asset_id: str, allowed_types: set[str]) -> dict[str, Any]:
@@ -562,6 +566,24 @@ def _require_asset(asset_id: str, allowed_types: set[str]) -> dict[str, Any]:
     if not path.is_file():
         raise ValueError(f"内容资产文件不存在：{asset.get('name') or asset_id}")
     return asset
+
+
+def _validate_video_inputs(job: dict[str, Any]) -> None:
+    for asset in job['assets']:
+        _require_asset(str(asset['id']), {'video', 'image'} if asset['role'] == 'material' else {'audio'})
+    _validate_voice_reference(job['params'])
+
+
+def _validate_voice_reference(params: dict[str, Any]) -> None:
+    voice_name = str(params.get('voice_name') or '')
+    if params.get('custom_audio_file') or not voice_name.startswith('voxcpm2:'):
+        return
+    from app.services import voice_profiles
+
+    profile = voice_profiles.get_profile(voice_name.split(':', 1)[1])
+    if not profile['consent_confirmed']:
+        raise ValueError('克隆音色尚未确认参考声音的使用授权')
+    _require_asset(str(profile['reference_asset_id']), {'audio'})
 
 
 def _finish_video_job(video_job_id: str, status: str, error: str) -> None:
@@ -579,11 +601,6 @@ def _finish_video_job(video_job_id: str, status: str, error: str) -> None:
         )
     if status in {"failed", "cancelled", "interrupted"}:
         content_publish.fail_waiting_video_tasks(video_job_id, error or "视频未生成")
-
-
-def _reset_video_job(video_job_id: str) -> None:
-    with database.connect() as conn:
-        reset_video_job_for_retry(conn, video_job_id)
 
 
 def _stage_for_progress(progress: int) -> str:
@@ -615,14 +632,18 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 def _merge_user_settings(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     result = deepcopy(current)
     for key, value in incoming.items():
+        if key not in current:
+            continue
         if isinstance(value, dict):
             result[key] = _merge_user_settings(
                 result.get(key, {}) if isinstance(result.get(key), dict) else {},
                 value,
             )
-        elif _is_secret_key(key) and _is_masked_secret_value(value):
+        elif _is_secret_key(key) and (value is None or value == '' or value == []):
             continue
         else:
+            if 'base_url' in key:
+                protected_settings.validate_connection_url(str(value or ''))
             result[key] = deepcopy(value)
     return result
 
@@ -632,20 +653,15 @@ def _mask_settings(values: dict[str, Any]) -> dict[str, Any]:
     for key, value in list(result.items()):
         if isinstance(value, dict):
             result[key] = _mask_settings(value)
-        elif _is_secret_key(key) and value:
-            result[key] = [MASKED_SECRET] if isinstance(value, list) else MASKED_SECRET
+        elif _is_secret_key(key):
+            result[f'{key}_configured'] = bool(value)
+            result[key] = [] if isinstance(value, list) else ''
     return result
 
 
 def _is_secret_key(key: str) -> bool:
     normalized = str(key or "").lower()
     return any(token in normalized for token in ("api_key", "api_keys", "speech_key", "password"))
-
-
-def _is_masked_secret_value(value: Any) -> bool:
-    if value is None or value == "" or value == MASKED_SECRET:
-        return True
-    return isinstance(value, list) and all(item in {"", MASKED_SECRET} for item in value)
 
 
 def _validation_message(exc: ValidationError) -> str:

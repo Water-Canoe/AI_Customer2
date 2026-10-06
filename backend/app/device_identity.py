@@ -67,7 +67,7 @@ def _input_blob(data: bytes) -> tuple[_DataBlob, ctypes.Array[ctypes.c_char]]:
     return blob, buffer
 
 
-def _protect(data: bytes) -> bytes:
+def _protect(data: bytes, *, machine_scope: bool = True) -> bytes:
     crypt32, kernel32 = _windows_libraries()
     source, buffer = _input_blob(data)
     output = _DataBlob()
@@ -77,7 +77,7 @@ def _protect(data: bytes) -> bytes:
         None,
         None,
         None,
-        CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE,
+        CRYPTPROTECT_UI_FORBIDDEN | (CRYPTPROTECT_LOCAL_MACHINE if machine_scope else 0),
         ctypes.byref(output),
     ):
         raise ctypes.WinError(ctypes.get_last_error())

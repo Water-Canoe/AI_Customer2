@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.api_dependencies import require_license, require_license_for
 from app.schemas import AutomationPlanCreate, AutomationPlanOrderUpdate, AutomationPlanPatch
-from app.services import automation_workbench, job_queue
+from app.services import automation_workbench, drafts, job_queue
 
 
 router = APIRouter(prefix="/api/automation", tags=["automation"])
@@ -22,7 +22,7 @@ def create_automation_plan(payload: AutomationPlanCreate) -> dict[str, object]:
             _require_plan_license(payload.plan_type)
         return automation_workbench.create_plan(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409 if isinstance(exc, drafts.DraftAlreadySubmitted) else 400, detail=str(exc)) from exc
 
 
 @router.put("/plans/order")
@@ -66,8 +66,9 @@ def archive_automation_plan(plan_id: str) -> dict[str, object]:
 def automation_runs(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=30, ge=1, le=100),
+    plan_id: str = '',
 ) -> dict[str, object]:
-    return automation_workbench.list_runs(page=page, page_size=page_size)
+    return automation_workbench.list_runs(page=page, page_size=page_size, plan_id=plan_id)
 
 
 @router.get("/runs/{run_id}")

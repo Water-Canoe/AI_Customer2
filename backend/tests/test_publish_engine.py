@@ -129,11 +129,11 @@ def test_publish_accounts_and_tasks_do_not_expose_cookie_path(tmp_path: Path, mo
     assert "auth_relative_path" not in account
     with database.connect() as conn:
         conn.execute(
-            "INSERT INTO video_jobs(id, subject, script, status, outputs) VALUES('job-publish', '测试主题', '测试正文', 'succeeded', ?)",
-            ('[{"name":"final.mp4","relative_path":"tasks/job-publish/attempt-1/final.mp4"}]',),
+            "INSERT INTO video_jobs(id, subject, script, status) VALUES('job-publish', '测试主题', '测试正文', 'succeeded')",
         )
+        conn.execute("INSERT INTO video_outputs(id,video_job_id,attempt,output_index,name,relative_path,subject,script) VALUES('output-publish','job-publish',1,0,'final.mp4','tasks/job-publish/attempt-1/final.mp4','测试主题','测试正文')")
 
-    tasks = content_publish.create_video_output_tasks(video_job_id="job-publish", output_name="final.mp4")
+    tasks = content_publish.create_video_output_tasks(output_ids=['output-publish'])
     assert len(tasks) == 1
     assert tasks[0]["platform"] == "dy"
     assert tasks[0]["title"] == "测试主题"
@@ -198,11 +198,10 @@ def test_publish_tasks_use_serial_browser_queue_and_old_http_route_is_removed(tm
     account = _create_publish_account("ks", "默认快手", is_default=True)
     with database.connect() as conn:
         conn.execute(
-            "INSERT INTO video_jobs(id, subject, script, status, outputs) VALUES('queue-video', '队列测试', '', 'succeeded', ?)",
-            ('[{"name":"final.mp4","relative_path":"tasks/queue-video/attempt-1/final.mp4"}]',),
+            "INSERT INTO video_jobs(id, subject, script, status) VALUES('queue-video', '队列测试', '', 'succeeded')",
         )
-    tasks = content_publish.create_video_output_tasks(video_job_id="queue-video", output_name="final.mp4")
-    queued = content_publish.enqueue_tasks(tasks)
+        conn.execute("INSERT INTO video_outputs(id,video_job_id,attempt,output_index,name,relative_path,subject) VALUES('queue-output','queue-video',1,0,'final.mp4','tasks/queue-video/attempt-1/final.mp4','队列测试')")
+    queued = content_publish.create_video_output_tasks(output_ids=['queue-output'])
 
     with database.connect() as conn:
         runtime = conn.execute("SELECT kind, resource, priority, max_attempts FROM runtime_jobs WHERE id = ?", (queued[0]["runtime_job_id"],)).fetchone()
@@ -223,9 +222,13 @@ def test_auto_publish_waits_for_generated_output_then_queues(tmp_path: Path, mon
         conn.execute("INSERT INTO video_jobs(id, subject, script, status) VALUES('auto-video', '自动发布', '正文', 'queued')")
     waiting = content_publish.create_waiting_video_tasks("auto-video", [account["id"]], 2, "all", "immediate", "")
     assert [task["status"] for task in waiting] == ["waiting_media", "waiting_media"]
+    with database.connect() as conn:
+        for index, name in enumerate(['one.mp4', 'two.mp4']):
+            conn.execute('INSERT INTO video_outputs(id,video_job_id,attempt,output_index,name,relative_path,subject) VALUES(?,?,?,?,?,?,?)', (f'auto-output-{index}', 'auto-video', 1, index, name, f'auto-video/{name}', '自动发布'))
 
     bound = content_publish.bind_waiting_video_tasks(
         "auto-video",
-        [{"name": "one.mp4"}, {"name": "two.mp4"}],
+        [{"id": "auto-output-0", "name": "one.mp4"}, {"id": "auto-output-1", "name": "two.mp4"}],
     )
     assert [task["output_name"] for task in bound] == ["one.mp4", "two.mp4"]
+    assert [task['output_id'] for task in bound] == ['auto-output-0', 'auto-output-1']

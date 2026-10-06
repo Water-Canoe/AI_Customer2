@@ -296,10 +296,13 @@ def _upsert_account(
     content_total_count: int | None = None,
     raw_payload: dict[str, Any] | None = None,
 ) -> int | None:
-    if not platform_user_id:
-        platform_user_id = f"unknown-{platform}-{nickname or 'user'}"
-    platform_user_id = str(platform_user_id)
+    platform_user_id = str(platform_user_id or '').strip()
     sec_uid = str(sec_uid or "")
+    # 昵称不能证明身份；缺少可靠标识时保留原始证据，不创建可外发的客户。
+    if not platform_user_id:
+        if not sec_uid:
+            return None
+        platform_user_id = sec_uid
     if platform == "dy" and not sec_uid and _looks_like_douyin_sec_uid(platform_user_id):
         sec_uid = platform_user_id
     profile_url = _profile_url(platform, platform_user_id, sec_uid)
@@ -310,17 +313,23 @@ def _upsert_account(
         if not value:
             continue
         existing = conn.execute(
-            f"SELECT id FROM user_accounts WHERE platform = ? AND {column} = ? ORDER BY id LIMIT 1",
+            f"SELECT id,platform_user_id,sec_uid FROM user_accounts WHERE platform = ? AND {column} = ? ORDER BY id LIMIT 1",
             (platform, value),
         ).fetchone()
         if existing:
             break
     if existing:
+        canonical_id = existing['platform_user_id']
+        # 先拿到 sec_uid 后补齐原生 ID：内部主键不变，后续只有原生 ID 的评论仍可归并。
+        if canonical_id == existing['sec_uid'] and platform_user_id != sec_uid:
+            conflict = conn.execute('SELECT id FROM user_accounts WHERE platform=? AND platform_user_id=?', (platform, platform_user_id)).fetchone()
+            if conflict is None:
+                canonical_id = platform_user_id
         # creator 表常用 sec_uid；优先回写到已有账号，避免总览树挂在旧账号上。
         conn.execute(
             """
             UPDATE user_accounts
-            SET sec_uid = COALESCE(NULLIF(?, ''), sec_uid),
+            SET platform_user_id = ?, sec_uid = COALESCE(NULLIF(?, ''), sec_uid),
                 user_unique_id = COALESCE(NULLIF(?, ''), user_unique_id),
                 nickname = COALESCE(NULLIF(?, ''), nickname),
                 avatar = COALESCE(NULLIF(?, ''), avatar),
@@ -333,6 +342,7 @@ def _upsert_account(
             WHERE id = ?
             """,
             (
+                canonical_id,
                 sec_uid,
                 str(unique_id or ""),
                 str(nickname or ""),
@@ -482,7 +492,7 @@ def _import_contents(
         author_profile_url = _profile_url(platform, author_platform_user_id, author_sec_uid)
         if tombstones.is_deleted_author(conn, platform, author_platform_user_id, author_sec_uid, author_unique_id, author_profile_url):
             continue
-        author_key = str(_value(row, mapping["author_id"])) or str(_value(row, mapping["sec_uid"]))
+        author_key = str(_value(row, mapping["author_id"])) or str(_value(row, mapping["sec_uid"])) or f'content:{content_native_id}'
         if content_limit is not None:
             imported_for_account = per_account_counts.get(author_key, 0)
             if imported_for_account >= content_limit:
@@ -505,9 +515,8 @@ def _import_contents(
             signature=author_signature,
             raw_payload=dict(row),
         )
-        if account_id is None:
-            continue
-        _mark_own_account(conn, account_id, task)
+        if account_id is not None:
+            _mark_own_account(conn, account_id, task)
         existing_content = conn.execute(
             "SELECT id FROM contents WHERE platform = ? AND content_id = ?",
             (platform, content_native_id),
@@ -520,7 +529,7 @@ def _import_contents(
             )
             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(platform, content_id) DO UPDATE SET
-                author_account_id = excluded.author_account_id,
+                author_account_id = COALESCE(excluded.author_account_id, contents.author_account_id),
                 title = excluded.title,
                 description = excluded.description,
                 content_url = excluded.content_url,
@@ -553,7 +562,7 @@ def _import_contents(
             per_account_counts[author_key] = per_account_counts.get(author_key, 0) + 1
         if search_limit is not None:
             per_keyword_counts[keyword_key] = per_keyword_counts.get(keyword_key, 0) + 1
-        if task["mode"] in ("competitor_discovery", "demand_content"):
+        if account_id is not None and task["mode"] in ("competitor_discovery", "demand_content"):
             if _handle_keyword_author(conn, task, account_id, content_id, str(_value(row, mapping["keyword"]))):
                 counts["competitor_candidates"] += 1
 
@@ -652,8 +661,6 @@ def _import_comments(
             signature=str(_value(row, mapping["signature"])),
             raw_payload=dict(row),
         )
-        if account_id is None:
-            continue
         existing_comment = conn.execute(
             "SELECT id FROM comments WHERE platform = ? AND comment_id = ?",
             (platform, comment_native_id),
@@ -667,7 +674,7 @@ def _import_comments(
             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(platform, comment_id) DO UPDATE SET
                 content_id = excluded.content_id,
-                author_account_id = excluded.author_account_id,
+                author_account_id = COALESCE(excluded.author_account_id, comments.author_account_id),
                 parent_comment_id = excluded.parent_comment_id,
                 body = excluded.body,
                 like_count = excluded.like_count,
@@ -691,7 +698,7 @@ def _import_comments(
         _add_raw_ref(conn, "comment", comment_id, platform, mapping["table"], row["__raw_pk"], task["id"])
         if existing_comment is None:
             counts["comments"] += 1
-        if task["mode"] in ("competitor_crawl", "own_account"):
+        if account_id is not None and task["mode"] in ("competitor_crawl", "own_account"):
             lead_id = _ensure_lead(conn, account_id)
             source_account_id = int(content_row["author_account_id"]) if content_row and content_row["author_account_id"] else None
             source_keyword = str(content_row["source_keyword"] if content_row else "") or str(task["keywords"] or "")

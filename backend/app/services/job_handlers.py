@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from typing import Any
 
 from app import database
@@ -125,17 +126,16 @@ def run_post_crawl_automation(task_id: str) -> None:
 
     if auto_competitor and task_mode == "competitor_discovery":
         try:
-            result = account_actions.create_task_account_analysis_task(task_id)
-            if not result.get("task_ids"):
-                with database.connect() as conn:
+            # 纯创建与入队一起提交，失败不会留下阻止下次分析的 pending 子任务。
+            with database.connect() as conn:
+                result = account_actions.create_task_account_analysis_task(task_id, conn=conn)
+                if not result.get("task_ids"):
                     crawler_adapter.log_task(conn, task_id, "info", f"自动分析竞品账号未创建任务：待分析账号 {result.get('account_count', 0)} 个，跳过 {len(result.get('skipped', []))} 个")
-                return
-            analysis_task_id = str(result["task_ids"][0])
-            account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
-            with database.connect() as conn:
+                    return
+                analysis_task_id = str(result["task_ids"][0])
+                account_ids = [int(item["account_id"]) for item in result.get("accounts", [])]
                 crawler_adapter.log_task(conn, task_id, "info", f"已创建自动账号分析任务 {analysis_task_id}，账号 {len(account_ids)} 个")
-            runtime_job = job_queue.enqueue_account_analysis(account_ids, analysis_task_id)
-            with database.connect() as conn:
+                runtime_job = job_queue.enqueue_account_analysis(account_ids, analysis_task_id, conn=conn)
                 crawler_adapter.log_task(conn, task_id, "info", f"账号分析已加入运行队列：{runtime_job['id']}")
         except Exception as exc:
             with database.connect() as conn:
@@ -296,10 +296,16 @@ def cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, queu
         return
 
 
-def prepare_domain_retry(job: dict[str, Any]) -> None:
+def enrich_jobs(jobs: list[dict[str, Any]], conn: Any) -> list[dict[str, Any]]:
+    from app.services.runtime_context import enrich_jobs as enrich
+
+    return enrich(jobs, conn)
+
+
+def prepare_domain_retry(job: dict[str, Any], conn: Any | None = None) -> None:
     kind = str(job["kind"])
     payload = dict(job["payload"])
-    with database.connect() as conn:
+    with database.connect() if conn is None else nullcontext(conn) as conn:
         if kind == "crawl_task":
             _reset_crawl_task(conn, str(payload["task_id"]))
         elif kind == "crawl_batch":

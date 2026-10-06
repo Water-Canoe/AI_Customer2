@@ -4,6 +4,7 @@ import json
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -135,6 +136,7 @@ def enqueue(
     resource: str = "default",
     priority: int = 0,
     max_attempts: int = 1,
+    conn: Any | None = None,
 ) -> dict[str, Any]:
     if resource not in RESOURCE_LIMITS:
         raise ValueError(f"未知任务资源：{resource}")
@@ -143,7 +145,8 @@ def enqueue(
     if not clean_kind:
         raise ValueError("任务类型不能为空")
 
-    with database.connect() as conn:
+    owned_connection = conn is None
+    with database.connect() if owned_connection else nullcontext(conn) as conn:
         if clean_entity_id:
             existing = conn.execute(
                 """
@@ -154,7 +157,7 @@ def enqueue(
                 (clean_kind, clean_entity_id),
             ).fetchone()
             if existing:
-                return _format_job(existing)
+                return _handlers().enrich_jobs([_format_job(existing)], conn)[0]
         job_id = uuid.uuid4().hex
         conn.execute(
             """
@@ -172,21 +175,26 @@ def enqueue(
                 max(1, int(max_attempts)),
             ),
         )
-    _WAKE.set()
-    return get_job(job_id)
+        row = conn.execute('SELECT * FROM runtime_jobs WHERE id=?', (job_id,)).fetchone()
+        result = _handlers().enrich_jobs([_format_job(row)], conn)[0]
+    # 调用方持有写事务时，周期扫描只会看到其最终提交的队列记录。
+    if owned_connection:
+        _WAKE.set()
+    return result
 
 
-def enqueue_crawl_task(task_id: str) -> dict[str, Any]:
-    return enqueue("crawl_task", entity_id=task_id, payload={"task_id": task_id}, resource="browser")
+def enqueue_crawl_task(task_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    return enqueue("crawl_task", entity_id=task_id, payload={"task_id": task_id}, resource="browser", conn=conn)
 
 
-def enqueue_crawl_batch(task_ids: list[str]) -> dict[str, Any]:
+def enqueue_crawl_batch(task_ids: list[str], *, conn: Any | None = None) -> dict[str, Any]:
     clean_ids = [str(task_id) for task_id in task_ids if str(task_id).strip()]
     return enqueue(
         "crawl_batch",
         entity_id=":".join(clean_ids),
         payload={"task_ids": clean_ids},
         resource="browser",
+        conn=conn,
     )
 
 
@@ -196,31 +204,33 @@ def enqueue_account_analysis(
     kind: str = "account_analysis",
     *,
     auto_delete: bool | None = None,
+    conn: Any | None = None,
 ) -> dict[str, Any]:
     return enqueue(
         kind,
         entity_id=task_id,
         payload={"account_ids": [int(value) for value in account_ids], "task_id": task_id, "auto_delete": auto_delete},
         resource="browser",
+        conn=conn,
     )
 
 
-def enqueue_ai_batch(job_ids: list[str], entity_id: str = "") -> dict[str, Any]:
+def enqueue_ai_batch(job_ids: list[str], entity_id: str = "", *, conn: Any | None = None) -> dict[str, Any]:
     clean_ids = [str(job_id) for job_id in job_ids if str(job_id).strip()]
     identity = entity_id or ":".join(clean_ids)
-    return enqueue("ai_batch", entity_id=identity, payload={"job_ids": clean_ids}, resource="ai", max_attempts=2)
+    return enqueue("ai_batch", entity_id=identity, payload={"job_ids": clean_ids}, resource="ai", max_attempts=2, conn=conn)
 
 
-def enqueue_ai_job(job_id: str) -> dict[str, Any]:
-    return enqueue("ai_job", entity_id=job_id, payload={"job_id": job_id}, resource="ai", max_attempts=2)
+def enqueue_ai_job(job_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    return enqueue("ai_job", entity_id=job_id, payload={"job_id": job_id}, resource="ai", max_attempts=2, conn=conn)
 
 
-def enqueue_traffic_run(run_id: str) -> dict[str, Any]:
-    return enqueue("traffic_run", entity_id=run_id, payload={"run_id": run_id}, resource="browser")
+def enqueue_traffic_run(run_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    return enqueue("traffic_run", entity_id=run_id, payload={"run_id": run_id}, resource="browser", conn=conn)
 
 
-def enqueue_message_batch(batch_id: str) -> dict[str, Any]:
-    return enqueue("message_batch", entity_id=batch_id, payload={"batch_id": batch_id}, resource="browser")
+def enqueue_message_batch(batch_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    return enqueue("message_batch", entity_id=batch_id, payload={"batch_id": batch_id}, resource="browser", conn=conn)
 
 
 def enqueue_single_message(
@@ -247,9 +257,9 @@ def enqueue_single_message(
     )
 
 
-def enqueue_automation_run(run_id: str) -> dict[str, Any]:
-    with database.connect() as conn:
-        row = conn.execute(
+def enqueue_automation_run(run_id: str, *, conn: Any | None = None) -> dict[str, Any]:
+    with database.connect() if conn is None else nullcontext(conn) as active_conn:
+        row = active_conn.execute(
             "SELECT p.sort_order FROM automation_runs r JOIN automation_plans p ON p.id = r.plan_id WHERE r.id = ?",
             (run_id,),
         ).fetchone()
@@ -260,15 +270,17 @@ def enqueue_automation_run(run_id: str) -> dict[str, Any]:
         resource="automation",
         priority=-int(row["sort_order"] or 0) if row else 0,
         max_attempts=20,
+        conn=conn,
     )
 
 
-def enqueue_video_job(video_job_id: str) -> dict[str, Any]:
+def enqueue_video_job(video_job_id: str, *, conn: Any | None = None) -> dict[str, Any]:
     return enqueue(
         "video_generation",
         entity_id=str(video_job_id),
         payload={"video_job_id": str(video_job_id)},
         resource="video",
+        conn=conn,
     )
 
 
@@ -296,7 +308,7 @@ def enqueue_account_job(account_id: str, action: str, login_kind: str = "user") 
     )
 
 
-def enqueue_publish_task(task_id: str) -> dict[str, Any]:
+def enqueue_publish_task(task_id: str, *, conn: Any | None = None) -> dict[str, Any]:
     return enqueue(
         "content_publish",
         entity_id=str(task_id),
@@ -304,15 +316,16 @@ def enqueue_publish_task(task_id: str) -> dict[str, Any]:
         resource="browser",
         priority=50,
         max_attempts=100,
+        conn=conn,
     )
 
 
 def get_job(job_id: str) -> dict[str, Any]:
     with database.connect() as conn:
         row = conn.execute("SELECT * FROM runtime_jobs WHERE id = ?", (job_id,)).fetchone()
-    if not row:
-        raise ValueError("运行任务不存在")
-    return _format_job(row)
+        if not row:
+            raise ValueError("运行任务不存在")
+        return _handlers().enrich_jobs([_format_job(row)], conn)[0]
 
 
 def update_job_result(job_id: str, result: dict[str, Any]) -> None:
@@ -354,8 +367,9 @@ def list_jobs(
             """,
             [*params, safe_page_size, (safe_page - 1) * safe_page_size],
         ).fetchall()
+        items = _handlers().enrich_jobs([_format_job(row) for row in rows], conn)
     return {
-        "items": [_format_job(row) for row in rows],
+        "items": items,
         "total": total,
         "page": safe_page,
         "page_size": safe_page_size,
@@ -370,7 +384,7 @@ def request_cancel(job_id: str, reason: str = "用户取消") -> dict[str, Any]:
             raise ValueError("运行任务不存在")
         status = str(row["status"])
         if status in TERMINAL_STATUSES:
-            return _format_job(row)
+            return _handlers().enrich_jobs([_format_job(row)], conn)[0]
         if status == "queued":
             conn.execute(
                 """
@@ -436,15 +450,25 @@ def retry_job(job_id: str) -> dict[str, Any]:
         raise ValueError("自动私信批次请使用业务页面的“重试失败项”")
     if job["kind"] == "automation_run":
         raise ValueError("自动化计划请从计划页面重新运行")
-    _prepare_domain_retry(job)
-    return enqueue(
-        str(job["kind"]),
-        entity_id=str(job["entity_id"]),
-        payload=dict(job["payload"]),
-        resource=str(job["resource"]),
-        priority=int(job["priority"]),
-        max_attempts=int(job["max_attempts"]),
-    )
+    if not job['retry_allowed']:
+        raise ValueError('当前任务不能直接重试，请进入业务详情核实结果')
+    with database.connect() as conn:
+        _prepare_domain_retry(job, conn)
+        runtime = enqueue(
+            str(job["kind"]),
+            entity_id=str(job["entity_id"]),
+            payload=dict(job["payload"]),
+            resource=str(job["resource"]),
+            priority=int(job["priority"]),
+            max_attempts=int(job["max_attempts"]),
+            conn=conn,
+        )
+        # 业务状态、运行引用与新队列同时提交，写入失败保留原终态。
+        linked = {'video_generation': ('video_jobs', 'video_job_id'), 'content_publish': ('publish_tasks', 'publish_task_id')}
+        if job['kind'] in linked:
+            table, field = linked[job['kind']]
+            conn.execute(f"UPDATE {table} SET runtime_job_id=? WHERE id=?", (runtime['id'], job['payload'][field]))
+    return runtime
 
 
 def delete_job(job_id: str) -> dict[str, Any]:
@@ -711,8 +735,8 @@ def _cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, que
     _handlers().cancel_domain_job(job, reason, queued=queued)
 
 
-def _prepare_domain_retry(job: dict[str, Any]) -> None:
-    _handlers().prepare_domain_retry(job)
+def _prepare_domain_retry(job: dict[str, Any], conn: Any) -> None:
+    _handlers().prepare_domain_retry(job, conn)
 
 
 def _normalize_resumable_domain(conn: Any, job: dict[str, Any]) -> None:

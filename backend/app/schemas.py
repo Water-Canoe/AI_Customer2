@@ -18,6 +18,7 @@ LoginType = Literal["qrcode", "phone", "cookie"]
 
 
 class TaskCreate(BaseModel):
+    draft_key: str = Field(default='', max_length=200)
     name: str = ""
     mode: TaskMode
     platform: Platform
@@ -44,6 +45,14 @@ class TableUpdate(BaseModel):
 
 class SettingsUpdate(BaseModel):
     values: dict[str, Any]
+    clear_secrets: list[Literal['ai_api_key']] = Field(default_factory=list)
+
+
+DraftKind = Literal['crawl', 'video', 'publish', 'traffic', 'automation']
+
+
+class DraftUpdate(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class ContentAssetUpdate(BaseModel):
@@ -51,6 +60,7 @@ class ContentAssetUpdate(BaseModel):
 
 
 class ContentVideoJobCreate(BaseModel):
+    draft_key: str = ''
     params: dict[str, Any] = Field(default_factory=dict)
     asset_ids: list[str] = Field(default_factory=list)
     audio_asset_id: str = ""
@@ -62,9 +72,8 @@ class ContentVideoJobUpdate(BaseModel):
     subject: str = Field(min_length=1, max_length=500)
 
 
-class ContentVideoOutputUpdate(BaseModel):
-    output_name: str = Field(min_length=1, max_length=255)
-    upload_status: Literal["not_uploaded", "uploaded"]
+class VideoOutputStatusUpdate(BaseModel):
+    upload_status: Literal['not_uploaded', 'uploaded']
 
 
 AccountRole = Literal["brand", "service", "operations", "traffic", "test"]
@@ -174,6 +183,9 @@ class RuntimeJobResponse(BaseModel):
     finished_at: str | None
     created_at: str
     updated_at: str
+    display_name: str
+    detail_url: str
+    retry_allowed: bool
 
 
 class RuntimeJobPageResponse(BaseModel):
@@ -185,21 +197,43 @@ class RuntimeJobPageResponse(BaseModel):
 
 
 class ContentPublishSource(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     type: Literal["video_output", "assets"]
-    video_job_id: str = ""
-    output_name: str = ""
+    output_ids: list[str] = Field(default_factory=list, max_length=100)
     asset_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def validate_source(self) -> 'ContentPublishSource':
+        if self.type == 'video_output' and (not self.output_ids or self.asset_ids):
+            raise ValueError('发布视频成品必须选择稳定的成品ID')
+        if self.type == 'assets' and (not self.asset_ids or self.output_ids):
+            raise ValueError('发布内容资产必须选择资产ID')
+        if len(set(self.output_ids)) != len(self.output_ids) or len(set(self.asset_ids)) != len(self.asset_ids):
+            raise ValueError('发布来源不能重复')
+        return self
 
 
 class ContentPublishTaskCreate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     source: ContentPublishSource
+    draft_key: str = Field(default='', max_length=200)
     account_ids: list[str] = Field(default_factory=list)
-    title: str = Field(min_length=1, max_length=500)
-    description: str = Field(default="", max_length=20000)
-    tags: list[str] = Field(default_factory=list, max_length=20)
+    title: str = Field(min_length=1, max_length=20)
+    description: str = Field(default="", max_length=1000)
+    tags: list[str] = Field(default_factory=list, max_length=5)
     publish_strategy: Literal["immediate", "scheduled"] = "immediate"
     scheduled_at: str = ""
-    platform_overrides: dict[str, Any] = Field(default_factory=dict)
+    account_overrides: dict[str, 'ContentPublishAccountOverride'] = Field(default_factory=dict)
+
+
+class ContentPublishAccountOverride(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    title: str | None = Field(default=None, min_length=1, max_length=20)
+    description: str | None = Field(default=None, max_length=1000)
+    tags: list[str] | None = Field(default=None, max_length=5)
+    publish_strategy: Literal['immediate', 'scheduled'] | None = None
+    scheduled_at: str | None = None
+    options: dict[str, str] | None = None
 
 
 class ContentPublishOneClick(BaseModel):
@@ -228,6 +262,7 @@ class ContentVoiceProfileUpdate(BaseModel):
 
 class ContentSettingsUpdate(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
+    clear_secrets: list[str] = Field(default_factory=list)
 
 
 class ContentScriptRequest(BaseModel):
@@ -257,6 +292,7 @@ class LicenseUpdate(BaseModel):
 
 
 class TrafficPlanCreate(BaseModel):
+    draft_key: str = Field(default='', max_length=200)
     name: str = ""
     platform: Platform = "dy"
     source_mode: Literal["random_feed", "competitor_videos", "collected_keyword", "search_keyword"] = "random_feed"
@@ -429,6 +465,7 @@ def _automation_config_type(plan_type: str) -> type[KeywordLeadPlanConfig] | typ
 
 
 class AutomationPlanCreate(BaseModel):
+    draft_key: str = Field(default='', max_length=200)
     name: str = Field(min_length=1, max_length=80)
     plan_type: Literal["keyword_lead", "message", "traffic"]
     weekdays: list[int] = Field(min_length=1, max_length=7)

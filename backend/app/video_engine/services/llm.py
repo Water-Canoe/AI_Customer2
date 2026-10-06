@@ -78,6 +78,12 @@ def _sanitize_error_message(error: object) -> str:
     message = str(error)
     message = _URL_USERINFO_RE.sub(r"\1***:***@", message)
     message = _SENSITIVE_QUERY_RE.sub(r"\1***", message)
+    for section in (config.app, config.azure, config.siliconflow, config.elevenlabs, config.chatterbox):
+        for key, value in section.items():
+            if any(token in key.lower() for token in ('api_key', 'speech_key', 'password')):
+                for secret in value if isinstance(value, list) else [value]:
+                    if isinstance(secret, str) and secret:
+                        message = message.replace(secret, '[密钥已隐藏]')
     return message
 
 
@@ -684,7 +690,7 @@ def generate_script(
             if final_script:
                 break
         except Exception as e:
-            logger.error(f"failed to generate script: {e}")
+            logger.error(f"failed to generate script: {_sanitize_error_message(e)}")
 
         if i < _max_retries:
             logger.warning(f"failed to generate video script, trying again... {i + 1}")
@@ -826,6 +832,10 @@ Please note that you must use English for generating video search terms; Chinese
 # 不同平台的文案长度和 hashtag 数量偏好不同。这里使用保守上限，避免模型返回
 # 过长内容后调用方还需要二次裁剪。
 SOCIAL_PLATFORMS = {
+    # 应用当前支持的发布平台沿用提交接口的保守上限。
+    "dy": {"title_max": 20, "caption_max": 1000, "hashtag_count": 5},
+    "ks": {"title_max": 20, "caption_max": 1000, "hashtag_count": 5},
+    "xhs": {"title_max": 20, "caption_max": 1000, "hashtag_count": 5},
     "tiktok": {"title_max": 100, "caption_max": 2200, "hashtag_count": 5},
     "youtube_shorts": {"title_max": 100, "caption_max": 5000, "hashtag_count": 3},
     "instagram_reels": {"title_max": 125, "caption_max": 2200, "hashtag_count": 8},
@@ -838,6 +848,9 @@ MAX_SOCIAL_SCRIPT_LENGTH = 8000
 MAX_SOCIAL_LANGUAGE_LENGTH = 64
 
 SOCIAL_PLATFORM_LABELS = {
+    "dy": "抖音",
+    "ks": "快手",
+    "xhs": "小红书",
     "tiktok": "TikTok",
     "youtube_shorts": "YouTube Shorts",
     "instagram_reels": "Instagram Reels",

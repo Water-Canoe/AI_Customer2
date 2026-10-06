@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app import migrations
+from app import migrations, protected_settings
 
 
 DATABASE_FILE = "ai_customer.sqlite3"
@@ -58,6 +58,7 @@ def create_backup(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "reason": _clean_reason(reason),
         "schema_version": schema_version,
+        "secret_protection": 'windows-dpapi-current-user',
         "database_file": DATABASE_FILE,
         "database_size": database_path.stat().st_size,
         "database_sha256": _sha256(database_path),
@@ -268,6 +269,10 @@ def _validate_database(path: Path, expected_hash: str, label: str, *, schema_ver
             raise ValueError(f"{label}完整性检查失败：{integrity}")
         if schema_version is not None and migrations.current_version(source) != schema_version:
             raise ValueError(f"{label}结构版本与当前版本 {schema_version} 不一致，已拒绝恢复")
+        if schema_version is not None:
+            # 在覆盖当前数据库和会话文件前，先验证备份凭据属于当前 Windows 用户。
+            for key, value in source.execute("SELECT key,value FROM settings WHERE key IN ('ai_api_key','content_video_config')"):
+                protected_settings.unprotect(str(value))
     finally:
         source.close()
 

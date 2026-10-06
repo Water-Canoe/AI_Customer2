@@ -3,9 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
+from app import database
 from app.api_dependencies import require_license_for
 from app.schemas import TrafficPlanCreate, TrafficSettingsUpdate
-from app.services import job_queue, traffic_resources, traffic_workbench
+from app.services import drafts, job_queue, traffic_resources, traffic_workbench
 
 
 router = APIRouter(prefix="/api/traffic", tags=["traffic"])
@@ -21,7 +22,7 @@ def create_traffic_plan(payload: TrafficPlanCreate) -> dict[str, object]:
     try:
         return traffic_workbench.create_plan(payload)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=409 if isinstance(exc, drafts.DraftAlreadySubmitted) else 400, detail=str(exc)) from exc
 
 
 @router.patch("/plans/{plan_id}")
@@ -60,16 +61,17 @@ def restore_traffic_plan(plan_id: str) -> dict[str, object]:
 def create_traffic_run(plan_id: str) -> dict[str, object]:
     require_license_for("traffic")
     try:
-        run = traffic_workbench.create_run(plan_id)
+        with database.connect() as conn:
+            run = traffic_workbench.create_run(plan_id, conn=conn)
+            run["runtime_job"] = job_queue.enqueue_traffic_run(str(run["id"]), conn=conn)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    run["runtime_job"] = job_queue.enqueue_traffic_run(str(run["id"]))
     return run
 
 
 @router.get("/runs")
-def list_traffic_runs(include_archived: bool = False) -> list[dict[str, object]]:
-    return traffic_workbench.list_runs(include_archived)
+def list_traffic_runs(include_archived: bool = False, plan_id: str = '') -> list[dict[str, object]]:
+    return traffic_workbench.list_runs(include_archived, plan_id)
 
 
 @router.get("/runs/{run_id}")

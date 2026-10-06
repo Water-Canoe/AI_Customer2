@@ -2,7 +2,7 @@
 
 ## 整体重构进度（2026-10-06）
 
-当前按新的本地运营工作台方案重构。完整范围与验收标准见 `docs/project_rebuild_plan.md`；下文旧页面描述会随各模块验收同步替换，当前不能把源码或构建通过当作全部重构完成。
+当前按新的本地运营工作台方案重构。完整页面、数据对象及验收标准见 `docs/project_rebuild_plan.md`；页面和数据结构说明已同步，源码、组件测试与构建通过不代表真实浏览器及外部操作验收完成。
 
 - 共享持久草稿：`frontend/src/shared/usePersistentDraft.ts` 对接 `/api/drafts/{kind}/{key}`，恢复时不重复写入，串行保存避免旧请求覆盖新输入；离开页面前等待保存，保存失败保留输入并阻止离页。提交后的清理等待在途保存结束，不自动重建空草稿。
 - 草稿只保存非敏感业务参数，不包含模型密钥或浏览器登录信息。读取失败保留当前输入并明确反馈，不切换为浏览器本地存储兜底。
@@ -12,17 +12,20 @@
 - 页面、交互与数据对象的完整设计已补充到 `docs/project_rebuild_plan.md`。首页与任务中心采用业务详情跳转，账号页面保留原工作查询参数；当前这些页面已通过组件回归，浏览器视觉验收尚未完成。
 - 获客、客户、引流、自动化与 AI 密钥设置的 10 个测试文件共 37 项回归通过，`vue-tsc --noEmit` 通过；覆盖查询返回、客户/批次/运行/AI任务精确详情、人工发送确认、草稿读取与清理失败、设置离页和晚到上传。未执行真实采集、私信、付费 AI 或发布。
 - 前端完整回归现为 24 个文件、104 项通过，类型检查与生产构建通过；包括首页、独立账号入口、任务中心深链、创作/素材/作品/发布及共享输入保护。仅属源码与组件验收，Chrome 调试端口仍未开启，实际浏览器视觉验收待完成。
+- 最终后端完整回归为 569 项通过、8 项联网测试跳过；覆盖身份与来源、草稿提交确认、稳定成品、发布矩阵、人工发送、运行配置快照、凭据及备份，以及公开创建/重试和阻塞性派生任务的事务失败回滚。
+- 本机旧后台通过安全退出正常关闭，仅删除明确的 `data/ai_customer.sqlite3` 测试库文件后重建结构 15；新库 39 张表、48 项默认设置、0 条业务记录，完整性和外键检查通过。素材及账号会话文件未执行批量删除。新后台使用原启动脚本启动，健康、工作台、账号、草稿、素材、成品、发布、引流、自动化与公开设置共 19 个真实空库读取接口检查通过。
+- 页面提交的业务创建和立即入队共用事务，批量后项失败时前项、任务编号、日志与提交确认一起回滚。自动化创建子采集/私信任务时同时保存父关联，真实执行等待在事务提交后进行；失败不会遗留阻塞后续操作的排队记录。
 
 ## 项目定位
 
 这是一个本地自用的 AI 获客系统。当前功能按工作台、获客、客户、引流、内容、自动化和任务中心组织，账号中心与系统设置独立放在侧栏底部。拓客工作台不替代 MyCrawler，而是在其之上增加任务管理、业务数据归一化、证据链、AI筛选和客户分析；私信工作台负责客户触达与跟进；引流工作台提供计划配置、执行监控和操作记录；内容工作台将视频文案、素材、配音、字幕、合成和发布直接接入本地后端。
 
-数据分三层：
+数据按以下职责组织：
 
-1. MyCrawler 底层原始库：默认 `D:\Dev\Projects\MyCrawler\database\sqlite_tables.db`，只做采集保底和追溯。
-2. 项目业务库：默认 `data/ai_customer.sqlite3`，保存账号、内容、评论、线索、目标客户、证据链、AI结果和状态事件；可用 `AI_CUSTOMER_DATA_DIR` 指定整个数据目录，或用 `AI_CUSTOMER_DB` 指定单独数据库文件。
-3. 内容文件：客户视频、图片和音频存入 `data/content_assets/`，视频缓存、模型和每次生成结果存入 `data/video_generation/`。业务库只保存稳定相对路径，不记录客户导入前的绝对路径。
-4. 页面视图：采集与结果、AI筛选、客户跟进、来源证据和数据表只是同一业务数据的不同视角，不复制客户或采集数据；账号中心复用 `publish_accounts` 并通过 `account_feature_bindings` 分配用途；引流工作台共用 `traffic_*` 表和 `/api/traffic/*` 接口；内容工作台共用 `content_assets / video_jobs / video_job_assets / publish_tasks / publish_task_assets` 表和 `/api/content/*` 接口。
+1. MyCrawler 原始库：默认位于工程 `MyCrawler/database/sqlite_tables.db`，保留采集原始记录供导入和追溯，可用 `AI_CUSTOMER_MEDIA_CRAWLER_PATH` 或 `AI_CUSTOMER_MEDIA_CRAWLER_DB` 配置。
+2. 项目业务库：默认 `data/ai_customer.sqlite3`，保存平台身份、内容、评论、客户与来源证据、AI判断、跟进事件、草稿、业务任务、运行尝试和稳定成品；可用 `AI_CUSTOMER_DATA_DIR` 指定整个数据目录，或用 `AI_CUSTOMER_DB` 指定单独数据库文件。
+3. 文件与凭据：视频、图片和音频放在 `data/content_assets/`，各次生成放在 `data/video_generation/tasks/` 的独立尝试目录，登录会话放在 `data/platform_accounts/`。业务库保存受限相对路径和元数据，模型凭据使用 Windows 当前用户保护，不写入草稿或任务快照。
+4. 页面视图：采集、AI筛选、客户跟进、来源证据和数据表查询同一组业务对象，不复制客户。账号中心使用 `publish_accounts / account_feature_bindings` 分配用途；内容域使用 `content_assets / video_jobs / video_job_assets / video_outputs / publish_tasks / publish_task_assets`，发布引用具体 `output_id`，重试不会改变已创建发布任务的成品。
 
 ## 统一后台任务队列与登录会话
 
@@ -125,7 +128,7 @@ backend\.venv\Scripts\python.exe tools\xiaohongshu_automation\open_login_browser
 
 `backend/app/main.py` 只负责 FastAPI 生命周期、中间件、业务路由装配和前端静态文件托管。共享授权校验及“自家账号”默认参数位于 `api_dependencies.py`；接口按业务域拆到 `backend/app/routers/`：`system.py`、`traffic.py`、`automation.py`、`content.py`、`tasks.py`、`lead_accounts.py`、`libraries.py`、`overview.py`、`data_governance.py`、`message.py`、`ai.py` 和 `runtime.py`。其中采集任务、采集账号动作、业务数据表、业务总览以及墓碑/批量预览分别由独立路由承载，URL 保持不变，避免再次把不同数据域堆进 `tasks.py` 或 `overview.py`。业务计算继续放在 `services/`，路由只负责参数、授权、错误码和任务入队，新增接口时不得重新堆回 `main.py`。
 
-统一账号的记录增删改查、功能绑定、登录状态、Profile 路径和二维码读取由 `backend/app/services/account_center.py` 负责；内容发布服务只消费账号中心，不再反向提供通用账号能力。数据库继续保留历史表名 `publish_accounts`，避免无业务收益的高风险表迁移；表名不再代表服务职责归属。
+统一账号的记录增删改查、功能绑定、登录状态、Profile 路径和二维码读取由 `backend/app/services/account_center.py` 负责；内容发布服务只消费账号中心，不再反向提供通用账号能力。`publish_accounts` 是所有模块执行账号的共同数据表，用途和默认账号由 `account_feature_bindings` 指定。
 
 `backend/app/services/job_queue.py` 只负责持久化队列、资源并发、线程调度、心跳和运行状态，不再导入采集、AI、自动化、私信、引流或内容业务服务。任务类型分派、授权、领域结果判断、取消和恢复规则集中在 `job_handlers.py`，由 FastAPI lifespan 启动层显式注入队列；业务服务可以入队，但队列核心不会反向调用具体业务模块。
 
@@ -428,7 +431,7 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 后端新增 `/api/traffic/*` 接口和 `traffic_*` 数据表，覆盖计划、批次、视频项、用户可读动作日志、操作记录、文案库、图片库和防重复账本。`traffic_plans` 和 `traffic_runs` 支持 `archived` 归档字段，默认列表隐藏已归档数据；计划和批次都提供归档、恢复和硬删除操作。硬删除计划或批次会级联删除关联批次、日志、视频明细、操作记录，并主动清理对应防重复账本，避免记录删除后仍被隐藏判重。引流设置里的“清除引流记录”是完整重置引流工作台运行数据：会删除计划列表、批次列表、日志、视频明细、操作记录、防重复账本和旧原型 campaign 数据，清空最近抖音视频运行态，并把素材使用次数归零；配置项、产品授权、文案内容和图片内容保留。引流工作台与其它工作台共用一个授权码和一个设备码，启动引流批次时校验授权中的 `traffic` 权益。
 
-如果本地库曾运行过早期引流原型，`init_db()` 会为旧 `traffic_runs` 表补齐 `plan_id`、统计列和停机原因列，避免执行监控页因为旧表缺列返回 500。旧原型表还可能保留 `campaign_id NOT NULL` 和 `traffic_campaigns` 外键，新版创建批次会自动写入内部桥接 campaign，满足旧约束但不参与新版业务。当前引流列表、编辑表单与详情抽屉不依赖 SplitPane 分栏。
+引流运行创建时在 `traffic_runs.plan_snapshot` 固定计划名称、来源、动作、数量及实际账号，排队后编辑计划不改变已提交运行。执行时仍重新检查账号可用性、授权、额度和当前安全规则。引流列表、编辑表单与详情抽屉不依赖 SplitPane 分栏；数据库直接使用当前结构，不补齐旧列或创建 campaign 桥接。
 
 引流设置页的图片库支持上传预览：前端用原始二进制把图片 POST 到 `/api/traffic/material-images?filename=...`，后端保存到 `data/traffic_images/`，返回本地文件路径和 `/api/traffic/material-images/{name}` 预览地址。数据库仍保存图片路径，执行器继续用本地路径发图；手动填写的任意本地路径不会暴露给浏览器预览。操作记录页会把点赞、收藏、关注、评论渲染为不同颜色的标签；评论内容为图片时，如果图片来自素材库，会直接显示同一个预览地址的缩略图。操作记录表包含平台列，并提供抖音、小红书、快手平台筛选；当前抖音和快手会产生真实执行记录，小红书先保留筛选入口。
 
@@ -477,7 +480,7 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 - `data/video_generation/tasks/<job-id>/attempt-N`：单次生成脚本、音频、字幕、中间视频和最终视频。
 - `runtime/models/VoxCPM2`：便携交付中的VoxCPM2模型；来自环境 ZIP，不随程序更新删除。源码开发环境仍使用 `data/voice_models/VoxCPM2`。
 - `runtime/components/voxcpm2`：便携交付中的音色克隆推理组件、后续断点下载文件和当前组件指针；来自环境 ZIP，不进入业务数据备份。源码开发环境直接使用当前虚拟环境中的 `voxcpm` 和 `packaging/voxcpm_runtime.py`，不要求额外安装独立组件。
-- `data/social_publish/accounts`：平台登录状态文件，数据库和API只保存/返回账号业务信息，不返回Cookie内容或路径。
+- `data/platform_accounts/<平台>/<账号ID>/user-profile` 与 `creator-profile`：分别保存用户端及创作者端登录会话；数据库和API只返回账号业务信息，不返回Cookie内容或本机路径。
 - `data/social_publish/qrcode`：扫码登录二维码；`data/social_publish/tasks/<task-id>` 保存当次失败截图和诊断文件。
 
 国内发布引擎基于 `dreammis/social-auto-upload` 固定提交 `0d3f93e8ac6ad9089b4a356bd2ede717c6248aca` 移植，仅引入抖音、快手、小红书视频和多图图文发布器，不启动上游Web、CLI、数据库或额外服务。代码位于 `backend/app/publish_engine/`，保留MIT许可说明和固定来源提交。登录与发布共用 `browser` 资源，并发始终为1，优先级为登录 > 发布 > 普通浏览器任务。一次多平台操作按“每个账号一条任务”拆分，单平台失败不影响其他平台。只有捕获明确成功提示才记为 `succeeded`；点击发布后无法确认结果则记为 `review_required`，不自动重试，避免重复发布。定时发布使用平台自身能力，时间已过期时明确失败，不降级为立即发布。
@@ -539,11 +542,23 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 正式 Ed25519 公钥保存在 `packaging/update_signing_public.pem`，SHA-256 指纹为 `187b00ee49f5ba2666b4722a3a569ec119bd3f6731300a2abb8e536abc0499f3`；对应私钥仅保存在本机 `%USERPROFILE%/.ssh/sealos/ai_customer_update_signing_private.pem`，已限制为当前 Windows 用户访问。发布脚本会在上传前用仓库公钥复验签名，防止误用其它私钥。私钥丢失或更换意味着需要发布包含新公钥的客户端信任根更新，不能临时重新生成后继续推送。
 
+## 草稿、提交与凭据
+
+`GET /api/drafts/{kind}/{key}`、`PUT` 和 `DELETE` 管理 `crawl / video / publish / traffic / automation` 非敏感草稿；不存在的草稿返回 `exists=false`。草稿可以不完整，后台只接收该类型允许的字段。手动创建可传 `draft_key`，后台在业务创建事务中写入 `submitted` 和返回对象上下文；已提交草稿再次创建返回 409，旧的自动保存不能覆盖提交标记。页面清理失败时只重试清理，不再重放生成、发布等操作。
+
+生成成品每份都有独立 `output_id` 和尝试目录；发布按具体成品与账号的组合创建任务，允许各账号调整文案。标题、正文、话题和图片数量在提交前与后端校验，不静默截断。人工打开主页、复制话术仅表示准备；确认真实发送后才在同一事务记录发送尝试与跟进事件。发布结果不明保留 `review_required`，用户核查前不自动重试。
+
+共享模型连接作为获客与内容的默认设置，内容仍可显式配置其它供应商。`ai_api_key` 和 `content_video_config` 使用 DPAPI（Data Protection API，Windows 数据保护接口）当前用户范围加密保存。公开配置只返回已配置标记，密钥空白表示保留；删除密钥必须显式传 `clear_secrets`。模型服务地址不能夹带凭据，密钥不进入草稿、公开任务参数或错误摘要。加密备份只允许能解密的原 Windows 用户恢复，解密检查在覆盖当前数据之前完成。
+
 ## 数据库结构与数据保护
 
-当前项目按用户确认不保留旧测试数据：业务数据库直接使用 `backend/app/database.py` 中的完整当前结构建库，结构基线为 14，以 SQLite `PRAGMA user_version` 校验版本。已删除 13 轮历史增量迁移、字段回填、旧表重建与 `schema_migrations` 账本。首次建库的表、索引和版本号在同一事务中建立，失败会回滚；已有版本 14 库只校验版本，不重复建表。不支持读取旧版本或无版本但已有表的数据库，版本不一致时明确停止，不自动转换或覆盖数据。
+当前项目按用户确认不保留旧测试数据：业务数据库直接使用 `backend/app/database.py` 的结构基线 15，以 SQLite `PRAGMA user_version` 校验版本。首次建库的表、索引和版本号在同一事务中建立，失败会回滚；已有当前版本库只校验版本，不重复建表。不支持旧版本或无版本但已有表的数据库，不实现迁移、字段回填或旧路由兼容；版本不一致时明确停止，测试库由本轮验收重新创建。
 
-业务库连接默认启用 SQLite WAL、`busy_timeout=30s`、外键检查和 `synchronous=NORMAL`，用于降低页面轮询、AI任务、采集导入、自动私信和引流记录并发读写时的锁冲突。手动备份、清空前备份和恢复前安全备份统一保存在 `data/backups/<时间戳>/`，使用 SQLite Online Backup API 同时保存项目数据库 `ai_customer.sqlite3` 和 MyCrawler 原始库 `media_crawler.sqlite3`，不会把运行中的 WAL 裸文件直接复制；清单记录两个数据库的大小与 SHA-256，以及引流图片、内容资产、视频任务目录和社交发布目录的文件数、总大小和目录树 SHA-256。恢复前会先校验全部数据库和业务文件，恢复两个数据库，并把四个业务目录精确同步到备份时状态；备份后新增的孤立文件不会继续残留。不备份可重新下载的模型、在线素材缓存和浏览器 Profile。备份、恢复和清空业务记录共用维护窗口：先暂停自动化调度，拒绝其它并发页面请求，并检查统一运行队列以及采集、AI、私信、引流、视频和发布业务状态；AI 排队状态以统一运行队列为准，只有实际运行中的 `analysis_jobs` 会单独阻止维护，未入队的 `pending` 记录不会再造成永久阻塞。采集导入阶段只负责落库，自动 AI 分析统一在采集成功后的任务编排中按当前任务范围创建并入队。退出维护窗口后只恢复原本就在运行的调度器。“系统设置 → 数据保护”可以手动创建备份，并按每页五条查看、恢复或确认删除全部历史备份；删除末页最后一条后会自动校正到有效页码。恢复会先自动备份当前数据，校验目标备份后恢复并重新校验当前结构版本，删除只允许处理通过清单校验的单个备份目录。
+业务库连接启用 SQLite WAL（Write-Ahead Logging，预写式日志）、`busy_timeout=30s`、外键检查和 `synchronous=NORMAL`，支持页面读取与后台写入。业务创建、草稿提交确认和对应运行入队复用同一数据库事务，入队失败会整体回滚，不留下没有运行记录的排队业务对象。
+
+手动备份、清空前备份和恢复前安全备份保存在 `data/backups/<时间戳>/`。SQLite 在线备份接口保存业务库与存在的 MyCrawler 原始库；同时备份 `traffic_images / content_assets / video_tasks / platform_accounts` 四个用户数据目录，包含当前账号登录会话、草稿与成品关联文件，不备份可重新下载的模型和在线素材缓存。清单记录数据库及文件的大小和 SHA-256，敏感配置保留加密形式并标注当前用户保护范围。恢复前完整校验结构、文件、哈希及凭据可解密性，再恢复数据库与对应文件目录。
+
+备份、恢复和清空共用维护窗口：暂停自动化调度、拒绝并发业务请求，检查队列及实际运行中的业务状态，结束后只恢复原本启用的调度器。系统设置按页查看备份，恢复前先保存当前安全备份；采集导入只负责落库，自动分析由采集成功后的编排创建并入队。
 
 “清空业务记录”会清理拓客、AI、私信、引流、自动化、内容资产登记、视频生成、发布任务、日志和当前配置指向的 MyCrawler 原始表数据；设置、授权、数据库结构版本、账号中心账号、功能绑定、登录状态和本地素材文件保留。正式页面调用默认先创建完整备份。清空后数据库不再引用保留的业务素材文件，避免危险的批量文件删除。
 
@@ -554,7 +569,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 - `POST /api/system/backups/{backup_id}/restore`：输入“恢复备份”后执行安全恢复。
 - `POST /api/settings/clear-data`：支持 `create_backup` 和 `include_crawler`，正式页面默认都为 `true`。
 
-当前结构为 37 张业务表、464 列和 43 个显式索引，包含统一运行队列、账号中心、自动化、内容、发布和拓客数据。账号标识组合索引直接包含在新建库结构中，不再靠迁移补建；退役的 `video_jobs.publish_results` 列已删除，真实平台发布结果统一由 `publish_tasks` 保存。与原版本 13 的正常空库结构逐项对照，除该退役列和历史迁移账本外，业务字段、约束、外键和索引一致。
+当前结构为 39 张业务表、482 列和 46 个显式索引，包含 `drafts`、稳定 `video_outputs`、统一运行队列、账号中心、自动化、内容、发布和获客数据。身份、来源及自动化到期运行的唯一性由数据库约束保证；发布结果由 `publish_tasks` 保存，成品引用独立于视频重试次数。
 
 ## 后续优化清单
 

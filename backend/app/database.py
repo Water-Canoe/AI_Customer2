@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from app import migrations
+from app import migrations, protected_settings
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -46,9 +46,9 @@ def get_video_generation_root() -> Path:
     return get_data_root() / "video_generation"
 
 
-def get_social_publish_root() -> Path:
-    """Return the persistent social publishing workspace."""
-    return get_data_root() / "social_publish"
+def get_account_profiles_root() -> Path:
+    """账号中心的用户端与创作者端登录会话目录。"""
+    return get_data_root() / "platform_accounts"
 
 
 def get_voice_models_root() -> Path:
@@ -74,7 +74,7 @@ def get_backup_data_roots() -> dict[str, Path]:
         "traffic_images": root / "traffic_images",
         "content_assets": get_content_assets_root(),
         "video_tasks": get_video_generation_root() / "tasks",
-        "social_publish": get_social_publish_root(),
+        "platform_accounts": get_account_profiles_root(),
     }
 
 
@@ -119,6 +119,15 @@ CREATE TABLE settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE drafts (
+    kind TEXT NOT NULL CHECK(kind IN ('crawl', 'video', 'publish', 'traffic', 'automation')),
+    key TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    submitted INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    PRIMARY KEY(kind, key)
 );
 
 CREATE TABLE crawl_jobs (
@@ -240,6 +249,10 @@ CREATE TABLE account_sources (
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE SET NULL
 );
 
+CREATE UNIQUE INDEX idx_account_sources_identity ON account_sources(
+    account_id, COALESCE(content_id, 0), keyword, COALESCE(task_id, ''), source_kind
+);
+
 CREATE TABLE lead_user_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id INTEGER NOT NULL UNIQUE,
@@ -274,6 +287,11 @@ CREATE TABLE lead_sources (
     FOREIGN KEY(content_id) REFERENCES contents(id) ON DELETE CASCADE,
     FOREIGN KEY(comment_id) REFERENCES comments(id) ON DELETE CASCADE,
     FOREIGN KEY(task_id) REFERENCES crawl_jobs(id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX idx_lead_sources_identity ON lead_sources(
+    lead_account_id, COALESCE(source_account_id, 0), COALESCE(content_id, 0),
+    COALESCE(comment_id, 0), keyword, source_type
 );
 
 CREATE TABLE lead_status_events (
@@ -457,6 +475,7 @@ CREATE TABLE traffic_plans (
 CREATE TABLE traffic_runs (
     id TEXT PRIMARY KEY,
     plan_id TEXT NOT NULL,
+    plan_snapshot TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'queued',
     total_videos INTEGER NOT NULL DEFAULT 0,
     browsed_count INTEGER NOT NULL DEFAULT 0,
@@ -613,6 +632,7 @@ CHECK(purpose IN ('', 'background_music', 'voice_reference')));
 
 CREATE TABLE video_jobs (
     id TEXT PRIMARY KEY,
+    draft_key TEXT NOT NULL DEFAULT '',
     runtime_job_id TEXT NOT NULL DEFAULT '',
     subject TEXT NOT NULL,
     script TEXT NOT NULL DEFAULT '',
@@ -622,13 +642,30 @@ CREATE TABLE video_jobs (
     current_stage TEXT NOT NULL DEFAULT 'queued',
     attempt INTEGER NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT '',
-    outputs TEXT NOT NULL DEFAULT '[]',
     archived INTEGER NOT NULL DEFAULT 0,
     started_at TEXT,
     finished_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+CREATE TABLE video_outputs (
+    id TEXT PRIMARY KEY,
+    video_job_id TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    output_index INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    relative_path TEXT NOT NULL UNIQUE,
+    subject TEXT NOT NULL,
+    script TEXT NOT NULL DEFAULT '',
+    file_size INTEGER NOT NULL DEFAULT 0,
+    upload_status TEXT NOT NULL DEFAULT 'not_uploaded' CHECK(upload_status IN ('not_uploaded', 'uploaded')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(video_job_id, attempt, output_index),
+    FOREIGN KEY(video_job_id) REFERENCES video_jobs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_video_outputs_job_attempt ON video_outputs(video_job_id, attempt, output_index);
 
 CREATE TABLE video_job_assets (
     video_job_id TEXT NOT NULL,
@@ -702,6 +739,7 @@ CREATE TABLE publish_tasks (
     source_type TEXT NOT NULL CHECK(source_type IN ('video_output', 'asset_video', 'asset_images')),
     content_type TEXT NOT NULL CHECK(content_type IN ('video', 'note')),
     video_job_id TEXT,
+    output_id TEXT,
     output_index INTEGER NOT NULL DEFAULT 0,
     output_name TEXT NOT NULL DEFAULT '',
     title TEXT NOT NULL,
@@ -724,14 +762,15 @@ CREATE TABLE publish_tasks (
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     FOREIGN KEY(account_id) REFERENCES publish_accounts(id) ON DELETE RESTRICT,
-    FOREIGN KEY(video_job_id) REFERENCES video_jobs(id) ON DELETE RESTRICT
+    FOREIGN KEY(video_job_id) REFERENCES video_jobs(id) ON DELETE RESTRICT,
+    FOREIGN KEY(output_id) REFERENCES video_outputs(id) ON DELETE RESTRICT
 );
 
 CREATE INDEX idx_publish_tasks_status_created
 ON publish_tasks(status, created_at DESC);
 
-CREATE INDEX idx_publish_tasks_video_output
-ON publish_tasks(video_job_id, output_name, created_at DESC);
+CREATE INDEX idx_publish_tasks_output
+ON publish_tasks(output_id, created_at DESC);
 
 CREATE TABLE publish_task_assets (
     task_id TEXT NOT NULL,
@@ -928,6 +967,8 @@ def init_db() -> None:
     with connect() as conn:
         migrations.initialize(conn, SCHEMA_SQL)
         for key, value in DEFAULT_SETTINGS.items():
+            if key in protected_settings.PROTECTED_KEYS:
+                value = protected_settings.protect(value)
             conn.execute(
                 "INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)",
                 (key, value),
@@ -948,10 +989,14 @@ def schema_version() -> dict[str, int]:
 
 def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return str(row["value"]) if row else default
+    if row is None:
+        return default
+    value = str(row['value'])
+    return protected_settings.unprotect(value) if key in protected_settings.PROTECTED_KEYS else value
 
 
 def set_setting(conn: sqlite3.Connection, key: str, value: Any) -> None:
+    value = protected_settings.protect(str(value)) if key in protected_settings.PROTECTED_KEYS else str(value)
     conn.execute(
         """
         INSERT INTO settings(key, value, updated_at)
@@ -960,5 +1005,5 @@ def set_setting(conn: sqlite3.Connection, key: str, value: Any) -> None:
             value = excluded.value,
             updated_at = excluded.updated_at
         """,
-        (key, str(value)),
+        (key, value),
     )
