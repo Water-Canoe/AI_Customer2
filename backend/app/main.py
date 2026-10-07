@@ -43,8 +43,8 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         automation_workbench.stop_scheduler()
-        inbox_service.shutdown()
         job_queue.shutdown()
+        inbox_service.shutdown()
         profile_manager.shutdown()
 
 

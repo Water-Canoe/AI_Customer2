@@ -194,9 +194,10 @@ export default defineComponent({
           messages.value = mergeMessages(messages.value, [data])
           if (data.status === 'uncertain') ElMessage.warning('发送结果待确认，请核实后再决定是否重发')
           else if (data.status === 'failed') ElMessage.error(data.error || '发送失败')
-          await refresh.trigger('visible')
+          // 后台刷新不延长发送状态，避免已提交的消息仍显示发送中。
+          void refresh.trigger('visible')
         }
-      } catch (cause: any) { if (current(token)) { ElMessage.error(apiError(cause, '发送失败，请查看消息记录')); await refresh.trigger('visible') } }
+      } catch (cause: any) { if (current(token)) { ElMessage.error(apiError(cause, '发送失败，请查看消息记录')); void refresh.trigger('visible') } }
       finally { sending.value = false }
     }
 

@@ -16,6 +16,28 @@ from app.vendor.douyin_spider.dy_apis.douyin_api import DouyinAPI, MessageSendUn
 from app.vendor.douyin_spider.static import Live_pb2, Response_pb2
 
 
+_send_auths: dict[str, tuple[str, DouyinAuth]] = {}
+
+
+def close_send_auth(account_id: str) -> None:
+    """释放账号发送会话；调用方须持有该账号的发送锁，避免关闭在途请求。"""
+    cached = _send_auths.pop(account_id, None)
+    if cached:
+        cached[1].close()
+
+
+def _send_auth(account_id: str, credentials: dict[str, Any]) -> DouyinAuth:
+    """按账号及原始认证快照复用会话，令牌有效期由现有协议实现管理。"""
+    fingerprint = hashlib.sha256(json.dumps(credentials, sort_keys=True).encode()).hexdigest()
+    cached = _send_auths.get(account_id)
+    if cached and cached[0] == fingerprint:
+        return cached[1]
+    close_send_auth(account_id)
+    auth = _load_auth(credentials, sending=True)
+    _send_auths[account_id] = (fingerprint, auth)
+    return auth
+
+
 class TransportSendUncertain(RuntimeError):
     """发送已开始但结果未知，result 用于记录待确认消息，不可自动重发。"""
 
@@ -237,15 +259,15 @@ def receive_forever(credentials: dict[str, Any], on_message: Callable[[dict], No
 
 def send_text(credentials: dict[str, Any], peer_user_id: str, text: str,
               conversation_id: str = '', conversation_short_id: int = 0,
-              ticket: str = '') -> dict[str, Any]:
-    """直接发送一条文本；返回平台接受状态，网络结果未知时抛待确认异常。"""
+              ticket: str = '', *, account_id: str) -> dict[str, Any]:
+    """在账号发送锁内调用；复用独立认证，结果未知时抛异常且不重发。"""
     peer_user_id = _numeric_uid(peer_user_id)
     text = str(text).strip()
     if not text:
         raise ValueError('私信内容不能为空')
     if len(text) > 2000:
         raise ValueError('私信文本不能超过2000字')
-    auth = _load_auth(credentials, sending=True)
+    auth = _send_auth(account_id, credentials)
     try:
         own_uid = _numeric_uid(auth.get_uid())
         if own_uid == peer_user_id:
@@ -278,5 +300,3 @@ def send_text(credentials: dict[str, Any], peer_user_id: str, text: str,
         raise
     except Exception:
         raise ValueError('私信认证或会话请求失败，请检查并同步当前账号认证') from None
-    finally:
-        auth.close()

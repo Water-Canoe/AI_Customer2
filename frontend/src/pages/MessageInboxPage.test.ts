@@ -76,6 +76,32 @@ describe('私信收件箱', () => {
     await vi.advanceTimersByTimeAsync(6000)
     expect(mocks.post.mock.calls.filter(([url]) => url.endsWith('/messages'))).toHaveLength(1)
   })
+  it.each([false, true])('releases the send button while refresh is pending after a send (failure: %s)', async failure => {
+    await open()
+    let finishSend!: (value: any) => void
+    let rejectSend!: (cause: any) => void
+    let finishRefresh!: (value: any) => void
+    mocks.post.mockImplementationOnce(() => new Promise((resolve, reject) => { finishSend = resolve; rejectSend = reject }))
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => url.endsWith('/status')
+      ? new Promise(resolve => { finishRefresh = resolve }) : normal(url, options))
+    await wrapper!.get('textarea').setValue('本次发送内容')
+    await wrapper!.get('.inbox-composer').trigger('submit')
+    expect(wrapper!.get('.inbox-composer button').text()).toBe('发送中…')
+    // 等待期间编辑下一条；发送结束后即使刷新未返回，也应能继续操作。
+    await wrapper!.get('textarea').setValue('下一条草稿')
+    if (failure) rejectSend({ response: { data: { detail: '平台拒绝发送' } } })
+    else finishSend({ data: message(20, '本次发送内容', 'accepted') })
+    await flushPromises()
+    expect(finishRefresh).toBeTypeOf('function')
+    expect(wrapper!.get('.inbox-composer button').text()).toBe('发送')
+    expect((wrapper!.get('.inbox-composer button').element as HTMLButtonElement).disabled).toBe(false)
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('下一条草稿')
+    if (failure) expect(mocks.error).toHaveBeenCalledWith('平台拒绝发送')
+    else expect(wrapper!.text()).toContain('本次发送内容')
+    finishRefresh({ data: status })
+    await flushPromises()
+  })
   it('shows the same real nickname and avatar in the conversation list and chat header', async () => {
     const normal = mocks.get.getMockImplementation()!
     mocks.get.mockImplementation((url: string, options: any) => url === '/message-inbox/conversations'

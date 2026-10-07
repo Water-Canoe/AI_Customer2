@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import threading
 from types import ModuleType
@@ -22,6 +23,7 @@ def inbox(tmp_path, monkeypatch):
     session.load_credentials = lambda account_id: {'cookie_str': 'private-test-credential'}
     transport = ModuleType('app.services.douyin_im_transport')
     transport.send_text = lambda *args, **kwargs: {'status': 'accepted'}
+    transport.close_send_auth = lambda account_id: None
     transport.TransportSendUncertain = type('TransportSendUncertain', (RuntimeError,), {})
     for name, module in [('douyin_im_session', session), ('douyin_im_transport', transport)]:
         monkeypatch.setitem(sys.modules, f'app.services.{name}', module)
@@ -163,6 +165,8 @@ def test_listener_reuses_connection_and_shutdown_preserves_messages(inbox):
     account_id = account('客服')
     started = threading.Event()
     calls = []
+    released = []
+    transport.close_send_auth = released.append
 
     def receive(credentials, on_message, on_state, stop_event):
         calls.append(credentials)
@@ -178,8 +182,58 @@ def test_listener_reuses_connection_and_shutdown_preserves_messages(inbox):
     assert len(calls) == 1
     assert 'private-test-credential' not in str(message_inbox.status(account_id))
     message_inbox.disconnect_account(account_id)
+    assert released == [account_id]
     assert message_inbox.status(account_id)['state'] == 'disconnected'
     assert message_inbox.list_conversations(account_id)[0]['unread_count'] == 1
+
+
+def test_send_credentials_and_shutdown_use_same_account_lock(inbox, monkeypatch):
+    from app.services import douyin_im_session
+
+    account, transport = inbox
+    account_id = account('客服')
+    conversation = message_inbox.create_conversation(account_id, peer_user_id='123456')
+    def credentials(selected_account):
+        assert selected_account == account_id
+        assert message_inbox._send_locks[account_id].locked()
+        return {'cookie_str': 'private-test-credential'}
+    monkeypatch.setattr(douyin_im_session, 'load_credentials', credentials)
+    def send(material, peer, text, **kwargs):
+        assert kwargs['account_id'] == account_id
+        assert message_inbox._send_locks[account_id].locked()
+        return {'status': 'accepted'}
+    transport.send_text = send
+    assert message_inbox.send_message(account_id, conversation['id'], '测试')['status'] == 'accepted'
+    released = []
+    def close(selected_account):
+        assert message_inbox._send_locks[selected_account].locked()
+        released.append(selected_account)
+    transport.close_send_auth = close
+    message_inbox.shutdown()
+    assert released == [account_id]
+
+
+def test_sync_auth_releases_sender_off_event_loop(inbox, monkeypatch):
+    from app.routers import message_inbox as router
+
+    account, transport = inbox
+    account_id = account('客服')
+    released = []
+    event_loop_thread = threading.get_ident()
+    async def sync(selected_account):
+        assert selected_account == account_id
+        return {'send_ready': True}
+    def close(selected_account):
+        # 等待发送锁的操作不能阻塞异步接口所在的线程。
+        assert threading.get_ident() != event_loop_thread
+        assert message_inbox._send_locks[selected_account].locked()
+        released.append(selected_account)
+    monkeypatch.setattr(router, 'require_license', lambda: None)
+    monkeypatch.setattr(router.douyin_im_session, 'sync_account', sync, raising=False)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(transport, 'close_send_auth', close)
+        assert asyncio.run(router.sync_auth(account_id)) == {'send_ready': True}
+    assert released == [account_id]
 
 
 def test_disabled_binding_cannot_send_and_restart_keeps_uncertain_result(inbox):

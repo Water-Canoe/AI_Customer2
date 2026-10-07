@@ -104,18 +104,32 @@ def disconnect_account(account_id: str) -> dict[str, Any]:
             listener.state = 'disconnecting'
     if listener and listener.thread:
         listener.thread.join(timeout=3)
+    release_send_session(account_id)
     return status(account_id)
 
 
+def release_send_session(account_id: str) -> None:
+    """等待当前发送结束再释放认证；断开、认证同步和账号维护共用。"""
+    from app.services import douyin_im_transport
+
+    with _runtime_lock:
+        lock = _send_locks.setdefault(account_id, threading.Lock())
+    with lock:
+        douyin_im_transport.close_send_auth(account_id)
+
+
 def shutdown() -> None:
-    """应用退出时关闭监听；历史记录已经逐条写入数据库。"""
+    """应用退出时关闭监听和发送认证；历史记录已经逐条写入数据库。"""
     with _runtime_lock:
         listeners = list(_listeners.values())
         for listener in listeners:
             listener.stop.set()
+        send_accounts = list(_send_locks)
     for listener in listeners:
         if listener.thread:
             listener.thread.join(timeout=3)
+    for account_id in send_accounts:
+        release_send_session(account_id)
 
 
 def active_accounts() -> list[str]:
@@ -291,18 +305,19 @@ def send_message(account_id: str, conversation_id: int, text: str, *, reserve_at
     """人工和自动任务复用发送入口；不确定结果保存下来，不自动重发。"""
     from app.services import douyin_im_session, douyin_im_transport
 
-    _account(account_id, ready=True)
     text = text.strip()
     if not text or len(text) > 2000:
         raise ValueError('私信内容不能为空，且不能超过2000字')
-    session = douyin_im_session.session_status(account_id)
-    if not session.get('send_ready'):
-        raise ValueError(session.get('error') or '私信发送认证未就绪，请到账号中心同步认证')
-    credentials = douyin_im_session.load_credentials(account_id)
     with _runtime_lock:
         lock = _send_locks.setdefault(account_id, threading.Lock())
     # 同一账号的协议会话认证与发送按顺序执行，不占用浏览器队列。
     with lock:
+        # 排队后重新检查账号并读取认证，不能沿用等待前的登录材料。
+        _account(account_id, ready=True)
+        session = douyin_im_session.session_status(account_id)
+        if not session.get('send_ready'):
+            raise ValueError(session.get('error') or '私信发送认证未就绪，请到账号中心同步认证')
+        credentials = douyin_im_session.load_credentials(account_id)
         with database.connect() as conn:
             conversation = _conversation(conn, account_id, conversation_id)
         attempt_id = message_attempts.reserve_message_attempt(conversation['lead_id'], 'inbox', str(conversation_id), allow_repeat=True) if reserve_attempt else None
@@ -312,7 +327,7 @@ def send_message(account_id: str, conversation_id: int, text: str, *, reserve_at
             local_id = int(cursor.lastrowid)
             conn.execute('UPDATE im_conversations SET last_message=?,last_message_at=?,last_message_id=? WHERE id=?', (text[:500], sent_at, local_id, conversation_id))
         try:
-            result = douyin_im_transport.send_text(credentials, conversation['peer_user_id'], text, conversation_id=conversation['platform_conversation_id'], conversation_short_id=conversation['conversation_short_id'], ticket=protected_settings.unprotect(conversation['ticket']))
+            result = douyin_im_transport.send_text(credentials, conversation['peer_user_id'], text, conversation_id=conversation['platform_conversation_id'], conversation_short_id=conversation['conversation_short_id'], ticket=protected_settings.unprotect(conversation['ticket']), account_id=account_id)
         except douyin_im_transport.TransportSendUncertain as exc:
             result = exc.result
         except ValueError:

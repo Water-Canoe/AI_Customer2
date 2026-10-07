@@ -9,6 +9,14 @@ from app.services import douyin_im_transport as transport
 from app.vendor.douyin_spider.static import Live_pb2, Response_pb2
 
 
+@pytest.fixture(autouse=True)
+def clear_send_sessions():
+    # 离线测试之间不能共享认证缓存。
+    yield
+    for account_id in list(transport._send_auths):
+        transport.close_send_auth(account_id)
+
+
 def test_user_profile_requires_matching_uid_and_keeps_real_avatar(monkeypatch):
     monkeypatch.setattr(transport.DouyinAPI, 'get_user_profile', lambda *args: {
         'status_code': 0, 'user': {'uid': '22', 'nickname': '真实昵称', 'avatar_thumb': {'url_list': ['https://example.com/avatar.jpg']}},
@@ -74,9 +82,9 @@ def test_decode_preserves_real_id_and_account_direction():
 
 def test_sending_requires_session_material_and_numeric_peer():
     with pytest.raises(ValueError, match='数字用户'):
-        transport.send_text({}, 'MS4wLjAB', '测试')
+        transport.send_text({}, 'MS4wLjAB', '测试', account_id='account-1')
     with pytest.raises(ValueError, match='认证材料不完整'):
-        transport.send_text({'cookie_str': 'sessionid=offline-test', 'user_id': '11'}, '22', '测试')
+        transport.send_text({'cookie_str': 'sessionid=offline-test', 'user_id': '11'}, '22', '测试', account_id='account-1')
 
 
 def test_server_close_reconnects_and_stop_finishes(monkeypatch):
@@ -177,7 +185,7 @@ def test_unknown_send_result_is_not_retried(monkeypatch):
     credentials = {'cookie_str': 'sessionid=offline-test', 'user_id': '11',
                    'ticket': 'test-ticket', 'ts_sign': 'test-sign', 'private_key': 'test-key'}
     with pytest.raises(transport.TransportSendUncertain) as result:
-        transport.send_text(credentials, '22', '测试', '0:1:11:22', 44, 'test-ticket')
+        transport.send_text(credentials, '22', '测试', '0:1:11:22', 44, 'test-ticket', account_id='account-1')
     assert len(calls) == 1
     assert result.value.result['status'] == 'uncertain'
     assert result.value.result['conversation_id'] == '0:1:11:22'
@@ -192,6 +200,67 @@ def test_only_explicit_platform_acceptance_is_accepted(monkeypatch, response, st
     monkeypatch.setattr(transport.DouyinAPI, '_send_message_raw', lambda *args, **kwargs: response)
     credentials = {'cookie_str': 'sessionid=offline-test', 'user_id': '11',
                    'ticket': 'test-ticket', 'ts_sign': 'test-sign', 'private_key': 'test-key'}
-    result = transport.send_text(credentials, '22', '测试', '0:1:11:22', 44, 'test-ticket')
+    result = transport.send_text(credentials, '22', '测试', '0:1:11:22', 44, 'test-ticket', account_id='account-1')
     assert result['status'] == status
     assert result['platform_message_id'] == ''
+
+
+def test_sends_reuse_auth_isolate_accounts_and_replace_changed_credentials(monkeypatch):
+    used = []
+    closed = []
+    monkeypatch.setattr(transport.DouyinAuth, 'close', lambda auth: closed.append(auth))
+    def send(auth, *args, **kwargs):
+        used.append(auth)
+        # 运行中的 Cookie 更新不应被误判为原始认证文件变化。
+        auth.cookie['runtime-cookie'] = 'response-value'
+        return {'message': 'OK', 'http_status': 200}
+    monkeypatch.setattr(transport.DouyinAPI, '_send_message_raw', send)
+    credentials = {'cookie_str': 'sessionid=offline-test', 'user_id': '11',
+                   'ticket': 'test-ticket', 'ts_sign': 'test-sign', 'private_key': 'test-key'}
+    def submit(account_id, material):
+        return transport.send_text(material, '22', '测试', '0:1:11:22', 44, 'test-ticket', account_id=account_id)
+
+    submit('first', credentials)
+    submit('first', dict(credentials))
+    submit('second', credentials)
+    assert used[0] is used[1] and used[0] is not used[2] and not closed
+    submit('first', {**credentials, 'ticket': 'new-ticket'})
+    assert used[3] is not used[0] and closed == [used[0]]
+    transport.close_send_auth('first')
+    assert closed == [used[0], used[3]] and 'second' in transport._send_auths
+    submit('first', credentials)
+    assert used[4] is not used[3]
+
+
+def test_reused_auth_keeps_token_cache_and_renews_expired_tokens(monkeypatch):
+    from app.vendor.douyin_spider.builder.header import Header
+    from app.vendor.douyin_spider.dy_apis.douyin_api import DouyinAPI
+    from app.vendor.douyin_spider.utils import mstoken
+
+    token_calls, identity_calls = [], []
+    def sdk_token(*args, **kwargs):
+        token_calls.append(True)
+        return SimpleNamespace(headers={'x-ms-token': f'sdk-{len(token_calls)}'})
+    def identity_token(*args, **kwargs):
+        identity_calls.append(True)
+        return SimpleNamespace(text='{}', headers={}, json=lambda: {
+            'message': 'success', 'data': {'identity_security_token': f'identity-{len(identity_calls)}', 'device_id': '33'},
+        })
+    monkeypatch.setattr(mstoken.requests, 'post', sdk_token)
+    monkeypatch.setattr(mstoken.requests, 'get', identity_token)
+    monkeypatch.setattr(Header, 'with_bd', lambda self, *args, **kwargs: self)
+    def send(auth, *args, **kwargs):
+        # 仍使用协议层的有效期判断，只替换最终真实发送。
+        _ = auth.msToken
+        DouyinAPI.get_identity_security_token(auth)
+        return {'message': 'OK', 'http_status': 200}
+    monkeypatch.setattr(DouyinAPI, '_send_message_raw', send)
+    credentials = {'cookie_str': 'sessionid=offline-test', 'user_id': '11',
+                   'ticket': 'test-ticket', 'ts_sign': 'test-sign', 'private_key': 'test-key'}
+    for _ in range(2):
+        transport.send_text(credentials, '22', '测试', '0:1:11:22', 44, 'test-ticket', account_id='first')
+    assert len(token_calls) == len(identity_calls) == 1
+    auth = transport._send_auths['first'][1]
+    auth._ms_ts = auth.identity_security_token_ts = 0
+    transport.send_text(credentials, '22', '测试', '0:1:11:22', 44, 'test-ticket', account_id='first')
+    assert len(token_calls) == len(identity_calls) == 2

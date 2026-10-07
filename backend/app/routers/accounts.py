@@ -17,6 +17,7 @@ def _ensure_im_idle(account_id: str) -> None:
     # 账号维护不能替换仍在收发私信的会话认证。
     if account_id in message_inbox.active_accounts():
         raise HTTPException(status_code=409, detail="请先断开该账号的私信连接并等待发送结束，再操作账号")
+    message_inbox.release_send_session(account_id)
 
 
 @router.get("", response_model=list[PlatformAccountResponse])
