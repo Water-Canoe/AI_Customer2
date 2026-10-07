@@ -1,9 +1,10 @@
 import { computed, defineComponent, h, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElDrawer, ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../shared/api'
 import type { Dict, PlatformAccount } from '../shared/types'
 import { createAutoSyncController } from '../composables/autoSync'
+import { renderCustomerDetail } from '../components/CustomerDetail'
 import '../styles/operations.css'
 import '../styles/message-inbox.css'
 
@@ -27,7 +28,12 @@ export default defineComponent({
     const conversations = ref<Conversation[]>([])
     const messages = ref<Message[]>([])
     const status = ref<ConnectionStatus>(emptyStatus())
-    const customer = ref<Dict | null>(null)
+    const customerDetail = ref<Dict | null>(null)
+    const customer = computed(() => customerDetail.value?.customer || null)
+    const showCustomerDetail = ref(false)
+    const detailTab = ref('sources')
+    const sourcePage = ref(1)
+    const eventPage = ref(1)
     const search = ref('')
     const appliedSearch = ref('')
     const error = ref('')
@@ -101,7 +107,10 @@ export default defineComponent({
       conversationId.value = conversation
       messages.value = []
       hasMore.value = false
-      customer.value = null
+      customerDetail.value = null
+      showCustomerDetail.value = false
+      detailTab.value = 'sources'
+      sourcePage.value = eventPage.value = 1
       customerKey = ''
       error.value = ''
     }
@@ -138,13 +147,18 @@ export default defineComponent({
       }
     }
     async function loadCustomer(token: number) {
+      if (!current(token)) return
       const lead = selected.value?.lead_id
       const key = `${accountId.value}:${lead || ''}`
       if (key === customerKey) return
-      customer.value = null
+      customerDetail.value = null
+      showCustomerDetail.value = false
+      detailTab.value = 'sources'
+      sourcePage.value = eventPage.value = 1
       if (!lead) { customerKey = key; return }
       const { data } = await api.get(`/message-workbench/customers/${lead}`)
-      if (current(token)) { customer.value = data.customer; customerKey = key }
+      // 只保存当前会话仍关联的客户，迟到响应不能覆盖其它客户。
+      if (current(token) && selected.value?.lead_id === lead) { customerDetail.value = data; customerKey = key }
     }
     async function earlier() {
       if (loadingEarlier.value || !messages.value.length) return
@@ -276,10 +290,19 @@ export default defineComponent({
         h('aside', { class: 'inbox-customer', 'aria-label': '关联客户' }, [h('h3', '关联客户'),
           customer.value ? [h('strong', customer.value.nickname || selected.value?.nickname), h('p', `意向：${customer.value.intention || customer.value.intention_level || '未评估'}`), h('p', `跟进：${customer.value.follow_status || '未私信'}`),
             customer.value.keyword_text ? h('p', { class: 'note' }, customer.value.keyword_text) : null,
-            h('button', { onClick: () => router.push({ path: '/message-workbench', query: { customer: String(selected.value?.lead_id), status: '全部' } }) }, '查看客户详情'),
+            h('button', { type: 'button', onClick: () => showCustomerDetail.value = true }, '查看客户详情'),
           ] : h('p', { class: 'note' }, selected.value ? '当前会话尚无客户关联。' : '选择会话后查看客户信息。'),
         ]),
       ]),
+      h(ElDrawer, {
+        modelValue: route.name === 'message-inbox' && showCustomerDetail.value && Boolean(customer.value),
+        title: '客户详情', size: '820px', class: 'operations-detail',
+        'onUpdate:modelValue': (value: boolean) => showCustomerDetail.value = value,
+      }, () => renderCustomerDetail(customerDetail.value || {}, (name: string) => { if (name === 'close-detail') showCustomerDetail.value = false }, {
+        detailTab: detailTab.value, setDetailTab: (value: string) => detailTab.value = value,
+        sourcePage: sourcePage.value, setSourcePage: (value: number) => sourcePage.value = value,
+        eventPage: eventPage.value, setEventPage: (value: number) => eventPage.value = value,
+      })),
     ])
   },
 })

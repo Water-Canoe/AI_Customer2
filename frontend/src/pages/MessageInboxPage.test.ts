@@ -3,10 +3,18 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MessageInboxPage from './MessageInboxPage'
+import { ListPagination } from '../components/ui/ListPagination'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), warning: vi.fn(), error: vi.fn() }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post } }))
-vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), warning: mocks.warning, error: mocks.error } }))
+vi.mock('element-plus', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    ElMessage: { success: vi.fn(), warning: mocks.warning, error: mocks.error },
+    ElPagination: { render: () => null },
+    ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('div', slots.default?.()) : null }),
+  }
+})
 
 const account = (id: string) => ({ id, name: id, enabled: true, features: ['message'], default_features: [], feature_status: {} })
 const conversation = (id: number, account_id = 'account-a') => ({ id, account_id, peer_user_id: 'peer-' + id, nickname: '会话' + id, avatar: '', last_message: '', unread_count: 0, lead_id: null })
@@ -137,6 +145,103 @@ describe('私信收件箱', () => {
     await router.push('/message-inbox?account_id=account-a&conversation=1')
     await flushPromises()
     expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('用户修改后的话术')
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('opens linked customer detail locally and keeps evidence and history pages without changing the chat or draft', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => {
+      if (url === '/message-inbox/conversations') return Promise.resolve({ data: [{ ...conversation(1), lead_id: 7 }] })
+      if (url === '/message-workbench/customers/7') return Promise.resolve({ data: {
+        customer: { lead_id: 7, nickname: '关联客户七', platform: 'dy', script: '客户专属话术', reason: '明确表达采购需求' },
+        sources: Array.from({ length: 11 }, (_, i) => ({ keyword: '采购', comment_text: `来源证据${i + 1}` })),
+        events: Array.from({ length: 11 }, (_, i) => ({ from_status: '未私信', to_status: '已回复', note: `跟进记录${i + 1}` })),
+      } })
+      return normal(url, options)
+    })
+    const router = await open()
+    const path = router.currentRoute.value.fullPath
+    await wrapper!.get('textarea').setValue('保留当前聊天草稿')
+    const requests = mocks.get.mock.calls.length
+    await wrapper!.findAll('button').find(item => item.text() === '查看客户详情')!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe(path)
+    expect(wrapper!.get('.inbox-chat-header').text()).toContain('会话1')
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('保留当前聊天草稿')
+    expect(mocks.get.mock.calls).toHaveLength(requests)
+    expect(mocks.post).not.toHaveBeenCalled()
+    let drawer = wrapper!.get('.message-detail-drawer')
+    expect(drawer.text()).toContain('客户专属话术')
+    expect(drawer.text()).toContain('明确表达采购需求')
+    expect(drawer.text()).toContain('来源证据1')
+    expect(drawer.findAll('button').some(item => item.text() === '打开私信会话')).toBe(false)
+    drawer.findComponent(ListPagination).vm.$emit('change', { page: 2, page_size: 10 })
+    await flushPromises()
+    expect(drawer.findAll('.source-card')).toHaveLength(1)
+    expect(drawer.text()).toContain('来源证据11')
+    await drawer.findAll('button').find(item => item.text().startsWith('跟进历史'))!.trigger('click')
+    drawer.findComponent(ListPagination).vm.$emit('change', { page: 2, page_size: 10 })
+    await flushPromises()
+    expect(drawer.get('.event-timeline').text()).toContain('跟进记录11')
+    await drawer.findAll('button').find(item => item.text().startsWith('来源证据'))!.trigger('click')
+    expect(drawer.findAll('.source-card')).toHaveLength(1)
+    expect(drawer.text()).toContain('来源证据11')
+    await drawer.get('[aria-label="关闭详情"]').trigger('click')
+    expect(wrapper!.find('.message-detail-drawer').exists()).toBe(false)
+    expect(router.currentRoute.value.fullPath).toBe(path)
+    await wrapper!.findAll('button').find(item => item.text() === '查看客户详情')!.trigger('click')
+    drawer = wrapper!.get('.message-detail-drawer')
+    expect(drawer.text()).toContain('来源证据11')
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('保留当前聊天草稿')
+    // 缓存页的抽屉只属于收件箱；换会话后必须关闭并重置其分页。
+    await router.push('/other')
+    await flushPromises()
+    expect(wrapper!.find('.message-detail-drawer').exists()).toBe(false)
+    await router.push(path)
+    await flushPromises()
+    expect(wrapper!.get('.message-detail-drawer').text()).toContain('来源证据11')
+    await router.replace('/message-inbox?account_id=account-a&conversation=3')
+    await flushPromises()
+    expect(wrapper!.find('.message-detail-drawer').exists()).toBe(false)
+    await router.replace(path)
+    await flushPromises()
+    expect(wrapper!.find('.message-detail-drawer').exists()).toBe(false)
+    await wrapper!.findAll('button').find(item => item.text() === '查看客户详情')!.trigger('click')
+    expect(wrapper!.get('.message-detail-drawer').findAll('.source-card')).toHaveLength(10)
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('保留当前聊天草稿')
+  })
+
+  it.each([
+    ['/message-inbox?account_id=account-b&conversation=2', '关联客户八'],
+    ['/message-inbox?account_id=account-a&conversation=3', '关联客户九'],
+    ['/other', ''],
+  ])('ignores a late linked customer response after switching to %s', async (path, currentCustomer) => {
+    let finish!: (value: any) => void
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => {
+      if (url === '/message-inbox/conversations') return Promise.resolve({ data: options.params.account_id === 'account-b'
+        ? [{ ...conversation(2, 'account-b'), lead_id: 8 }]
+        : [{ ...conversation(1), lead_id: 7 }, { ...conversation(3), lead_id: 9 }] })
+      if (url === '/message-workbench/customers/7') return new Promise(resolve => { finish = resolve })
+      if (url === '/message-workbench/customers/8' || url === '/message-workbench/customers/9') return Promise.resolve({ data: {
+        customer: { lead_id: Number(url.split('/').pop()), nickname: currentCustomer, platform: 'dy' }, sources: [], events: [],
+      } })
+      return normal(url, options)
+    })
+    const router = await open()
+    expect(finish).toBeTypeOf('function')
+    await router.replace(path)
+    finish({ data: { customer: { lead_id: 7, nickname: '迟到的旧客户', platform: 'dy' }, sources: [{ comment_text: '旧客户证据' }], events: [] } })
+    await flushPromises()
+    expect(wrapper!.text()).not.toContain('迟到的旧客户')
+    expect(wrapper!.find('.message-detail-drawer').exists()).toBe(false)
+    expect(router.currentRoute.value.fullPath).toBe(path)
+    if (currentCustomer) {
+      expect(wrapper!.get('.inbox-customer').text()).toContain(currentCustomer)
+      await wrapper!.findAll('button').find(item => item.text() === '查看客户详情')!.trigger('click')
+      expect(wrapper!.get('.message-detail-drawer').text()).toContain(currentCustomer)
+      expect(wrapper!.get('.message-detail-drawer').text()).not.toContain('旧客户证据')
+    }
     expect(mocks.post).not.toHaveBeenCalled()
   })
 
