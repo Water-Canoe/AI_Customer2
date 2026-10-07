@@ -48,7 +48,7 @@ describe('统一业务工作区', () => {
       if (url === '/overview/tree') return { data: [{ id: 'platform:dy', kind: 'platform', label: '抖音', has_children: true, child_count: 11, metrics: {} }] }
       if (url === '/overview/children') return { data: { items: [], total: 11, total_pages: 2, page_size: 10, page: options.params.page } }
       if (url === '/settings') return { data: { ai_base_url: 'https://example.test', icp_profile: {}, dm_script_mode: 'fixed', fixed_dm_script: '已保存话术' } }
-      if (url === '/accounts') return { data: ['account-1', 'account-2'].map(id => ({ id, name: id, enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } })) }
+      if (url === '/accounts') return { data: ['account-1', 'account-2'].map(id => ({ id, platform: 'dy', name: id, enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } })) }
       if (url === '/message-inbox/conversations') return { data: [{ id: 12, account_id: options.params.account_id, nickname: '聊天客户', peer_user_id: 'peer', unread_count: 0, lead_id: null }] }
       if (url.startsWith('/message-inbox/accounts/')) return { data: { state: 'disconnected', receive_ready: true, send_ready: true, error: '', history_scope: 'local' } }
       if (url === '/message-inbox/conversations/12/messages') return { data: { messages: [], has_more: false } }

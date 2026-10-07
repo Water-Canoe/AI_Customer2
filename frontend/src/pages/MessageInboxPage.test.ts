@@ -16,7 +16,7 @@ vi.mock('element-plus', async () => {
   }
 })
 
-const account = (id: string) => ({ id, name: id, enabled: true, features: ['message'], default_features: [], feature_status: {} })
+const account = (id: string, platform = 'dy') => ({ id, platform, name: id, enabled: true, features: ['message'], default_features: [], feature_status: {} })
 const conversation = (id: number, account_id = 'account-a') => ({ id, account_id, peer_user_id: 'peer-' + id, nickname: '会话' + id, avatar: '', last_message: '', unread_count: 0, lead_id: null })
 const message = (id: number, content: string, status = 'received') => ({ id, direction: status === 'received' ? 'incoming' : 'outgoing', content, message_type: 'text', status, created_at: '2026-10-07 12:00' })
 const status = { state: 'disconnected', receive_ready: true, send_ready: true, error: '', history_scope: 'local' }
@@ -35,6 +35,53 @@ async function open(path = '/message-inbox?account_id=account-a&conversation=1')
 }
 
 describe('私信收件箱', () => {
+  it('filters accounts by platform and keeps chat drafts separate when switching', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url === '/accounts'
+      ? { data: [account('account-a'), account('account-b'), account('xhs-account', 'xhs')] }
+      : url === '/message-inbox/conversations' && options.params.account_id === 'xhs-account'
+        ? { data: [conversation(2, 'xhs-account')] } : normal(url, options))
+    const router = await open()
+    await wrapper!.get('textarea').setValue('抖音草稿')
+    await wrapper!.get('[aria-label="私信平台"]').setValue('xhs')
+    await flushPromises()
+    expect(router.currentRoute.value.query.platform).toBe('xhs')
+    expect(mocks.get).toHaveBeenCalledWith('/accounts', { params: { feature: 'message', platform: 'xhs' } })
+    const picker = wrapper!.get('[aria-label="私信账号"]')
+    expect(picker.findAll('option').map(item => item.attributes('value'))).toEqual(['xhs-account'])
+    expect(wrapper!.find('textarea').exists()).toBe(false)
+    await wrapper!.get('.inbox-conversation').trigger('click')
+    await flushPromises()
+    expect(wrapper!.get('.inbox-chat-header').text()).toContain('小红书私信')
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('')
+    await wrapper!.get('textarea').setValue('小红书草稿')
+    await router.replace('/message-inbox?platform=dy&account_id=account-a&conversation=1')
+    await flushPromises()
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('抖音草稿')
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('discards an old platform response after a switch and does not reuse its account', async () => {
+    const router = await open()
+    const normal = mocks.get.getMockImplementation()!
+    let finishOld!: (value: any) => void
+    mocks.get.mockImplementation((url: string, options: any) => {
+      if (url.endsWith('/status') && url.includes('account-a')) return new Promise(resolve => { finishOld = resolve })
+      if (url === '/accounts' && options.params.platform === 'xhs') return Promise.resolve({ data: [account('xhs-account', 'xhs')] })
+      return normal(url, options)
+    })
+    await vi.advanceTimersByTimeAsync(3000)
+    await wrapper!.get('[aria-label="私信平台"]').setValue('xhs')
+    await flushPromises()
+    expect(wrapper!.find('textarea').exists()).toBe(false)
+    finishOld({ data: { ...status, state: 'connected' } })
+    await flushPromises()
+    expect(wrapper!.text()).not.toContain('接收已连接')
+    expect(router.currentRoute.value.query.platform).toBe('xhs')
+    expect((wrapper!.get('[aria-label="私信账号"]').element as HTMLSelectElement).value).toBe('xhs-account')
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
   beforeEach(() => {
     vi.useFakeTimers()
     vi.clearAllMocks()

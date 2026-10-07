@@ -78,7 +78,7 @@ describe('useMessageWorkbench follow status', () => {
     else await workbench.autoMessageCustomer(customer)
     expect(mocks.post).toHaveBeenCalledTimes(1)
     expect(mocks.post).toHaveBeenCalledWith('/message-inbox/conversations', { account_id: 'brand', lead_id: 7 })
-    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { account_id: 'brand', conversation: '12', draft: '预填话术' } })
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { platform: 'dy', account_id: 'brand', conversation: '12', draft: '预填话术' } })
     expect(window.open).not.toHaveBeenCalled()
     expect(mocks.patch).not.toHaveBeenCalled()
   })

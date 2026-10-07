@@ -13,9 +13,24 @@ vi.mock('element-plus', async () => {
 })
 
 describe('客户跟进交互', () => {
+  it('opens XHS customers with an XHS account and keeps automatic batches limited to Douyin', async () => {
+    mocks.get.mockResolvedValue({ data: ['dy', 'xhs'].map(platform => ({ id: platform + '-brand', platform, enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } })) })
+    mocks.post.mockResolvedValue({ data: { id: 22 } })
+    const customer = { lead_id: 8, nickname: '小红书客户', platform: 'xhs', script: '小红书话术' }
+    const wrapper = mount(MessageWorkbenchPage, { props: { detail: { customer }, customers: { rows: [customer], total: 1 } } })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '打开私信会话')!.trigger('click')
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalledWith('/message-inbox/conversations', { account_id: 'xhs-brand', lead_id: 8 })
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { platform: 'xhs', account_id: 'xhs-brand', conversation: '22' } })
+    await wrapper.findAll('button').find(button => button.text() === '准备私信')!.trigger('click')
+    expect(wrapper.emitted('message-customer')?.[0][0]).toEqual({ ...customer, account_id: 'xhs-brand' })
+    expect(wrapper.get('.auto-message-batch-panel').findAll('option').some(item => item.attributes('value') === 'xhs-brand')).toBe(false)
+    wrapper.unmount()
+  })
   beforeEach(() => { vi.clearAllMocks(); mocks.route.query = { customer: '7', status: '全部' }; mocks.get.mockResolvedValue({ data: [] }) })
   it('locates the customer, separates preparation from confirmation and keeps source and history views', async () => {
-    mocks.get.mockResolvedValue({ data: [{ id: 'brand', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } }] })
+    mocks.get.mockResolvedValue({ data: [{ id: 'brand', platform: 'dy', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } }] })
     const customer = { lead_id: 7, nickname: '客户A', platform: 'dy', follow_status: '未私信', script: '问候语', profile_url: 'https://example.com/customer' }
     const wrapper = mount(MessageWorkbenchPage, { props: { customers: { rows: [customer], page: 1, total: 1 } } })
     await flushPromises()
@@ -54,7 +69,7 @@ describe('客户跟进交互', () => {
   it('explains the full source batch scope independently of the filtered customer list', async () => {
     mocks.route.query = {}
     localStorage.removeItem('message-workbench-auto-batch-config')
-    mocks.get.mockResolvedValue({ data: [{ id: 'account-1', name: '私信账号', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } }] })
+    mocks.get.mockResolvedValue({ data: [{ id: 'account-1', platform: 'dy', name: '私信账号', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } }] })
     const wrapper = mount(MessageWorkbenchPage, { props: {
       filters: { platform: 'dy', keyword: '来源A', intention: '高', query: '文字搜索', status: '已回复', page: 3, page_size: 10 },
       customers: { rows: [], total: 0, page: 3, page_size: 10 }
@@ -74,7 +89,7 @@ describe('客户跟进交互', () => {
     localStorage.removeItem('message-workbench-auto-batch-config')
   })
   it('opens a local conversation from customer detail without executing a send', async () => {
-    mocks.get.mockResolvedValue({ data: [{ id: 'brand', name: '品牌号', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } }] })
+    mocks.get.mockResolvedValue({ data: [{ id: 'brand', platform: 'dy', name: '品牌号', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } }] })
     mocks.post.mockResolvedValue({ data: { id: 12 } })
     const wrapper = mount(MessageWorkbenchPage, { props: { detail: { customer: { lead_id: 7, nickname: '客户A', platform: 'dy' } } } })
     await flushPromises()
@@ -82,7 +97,7 @@ describe('客户跟进交互', () => {
     await flushPromises()
     expect(mocks.post).toHaveBeenCalledTimes(1)
     expect(mocks.post).toHaveBeenCalledWith('/message-inbox/conversations', { account_id: 'brand', lead_id: 7 })
-    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { account_id: 'brand', conversation: '12' } })
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { account_id: 'brand', platform: 'dy', conversation: '12' } })
     wrapper.unmount()
   })
 })

@@ -198,6 +198,10 @@ try {
         --include-data-files="$BackendDir\app\vendor\douyin_spider\utils\mstoken_common_profile.json=app/vendor/douyin_spider/utils/mstoken_common_profile.json" `
         --include-data-files="$BackendDir\app\vendor\douyin_spider\SOURCE.md=app/vendor/douyin_spider/SOURCE.md" `
         --include-data-files="$BackendDir\app\vendor\douyin_spider\UPSTREAM_README.md=app/vendor/douyin_spider/UPSTREAM_README.md" `
+        --include-data-dir="$BackendDir\app\vendor\spider_xhs\xhs_utils\xhs_core\js=app/vendor/spider_xhs/xhs_utils/xhs_core/js" `
+        --include-data-files="$BackendDir\app\vendor\spider_xhs\xhs_utils\xhs_pc\js\reference_profile.json=app/vendor/spider_xhs/xhs_utils/xhs_pc/js/reference_profile.json" `
+        --include-data-files="$BackendDir\app\vendor\spider_xhs\SOURCE.md=app/vendor/spider_xhs/SOURCE.md" `
+        --include-data-files="$BackendDir\app\vendor\spider_xhs\UPSTREAM_README.md=app/vendor/spider_xhs/UPSTREAM_README.md" `
         --include-package-data=curl_cffi `
         --include-package-data=cloakbrowser `
         --include-package-data=moviepy `

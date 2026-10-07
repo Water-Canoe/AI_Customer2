@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from '../shared/api'
 import type { Dict, PlatformAccount } from '../shared/types'
 import { createAutoSyncController } from '../composables/autoSync'
+import { MessageInboxControls, type InboxPlatform, type ConnectionStatus } from '../components/MessageInboxControls'
+import { platformName } from '../shared/format'
 import { renderCustomerDetail } from '../components/CustomerDetail'
 import '../styles/operations.css'
 import '../styles/message-inbox.css'
@@ -13,7 +15,6 @@ type Conversation = {
   last_message_at: string | null; unread_count: number; lead_id: number | null;
 }
 type Message = { id: number; direction: 'incoming' | 'outgoing'; content: string; message_type: string | number; status: string; error?: string; created_at: string }
-type ConnectionStatus = { state: string; receive_ready: boolean; send_ready: boolean; error: string; profile_error?: string; history_scope: 'local' }
 const emptyStatus = (): ConnectionStatus => ({ state: 'disconnected', receive_ready: false, send_ready: false, error: '', history_scope: 'local' })
 
 export default defineComponent({
@@ -23,6 +24,7 @@ export default defineComponent({
     const route = useRoute()
     const router = useRouter()
     const accounts = ref<PlatformAccount[]>([])
+    const platform = ref<InboxPlatform>(route.query.platform === 'xhs' ? 'xhs' : 'dy')
     const accountId = ref('')
     const conversationId = ref(0)
     const conversations = ref<Conversation[]>([])
@@ -59,9 +61,9 @@ export default defineComponent({
       let token = revision
       try {
         if (reason === 'route' || !accounts.value.length) {
-          const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'message', platform: 'dy' } })
+          const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'message', platform: platform.value } })
           if (!current(token)) return
-          accounts.value = data.filter(item => item.enabled && item.features?.includes('message'))
+          accounts.value = data.filter(item => item.platform === platform.value && item.enabled && item.features?.includes('message'))
           if (!accounts.value.some(item => String(item.id) === accountId.value)) {
             const preferred = accounts.value.find(item => item.default_features?.includes('message')) || accounts.value[0]
             setSelection(String(preferred?.id || ''), 0)
@@ -115,7 +117,16 @@ export default defineComponent({
       error.value = ''
     }
     function navigate(account: string, conversation = 0) {
-      void router.replace({ path: '/message-inbox', query: { ...(account ? { account_id: account } : {}), ...(conversation ? { conversation: String(conversation) } : {}) } })
+      void router.replace({ path: '/message-inbox', query: { platform: platform.value, ...(account ? { account_id: account } : {}), ...(conversation ? { conversation: String(conversation) } : {}) } })
+    }
+    function changePlatform(value: InboxPlatform) {
+      if (value === platform.value) return
+      // 立刻作废旧平台在途响应；新的账号列表返回前不展示旧聊天。
+      platform.value = value
+      accounts.value = []
+      revision += 1
+      setSelection('', 0)
+      search.value = appliedSearch.value = ''
     }
     function restoreRouteDraft() {
       const text = route.query.draft
@@ -235,8 +246,9 @@ export default defineComponent({
       finally { sending.value = false }
     }
 
-    watch(() => [route.name, route.query.account_id, route.query.conversation, route.query.draft] as const, ([name, account, conversation]) => {
+    watch(() => [route.name, route.query.account_id, route.query.conversation, route.query.draft, route.query.platform] as const, ([name, account, conversation, _draft, nextPlatform]) => {
       if (name !== 'message-inbox') return
+      changePlatform(nextPlatform === 'xhs' ? 'xhs' : 'dy')
       setSelection(String(account || accountId.value), Number(conversation || 0))
       restoreRouteDraft()
       if (active) void refresh.trigger('route')
@@ -244,6 +256,7 @@ export default defineComponent({
     watch(() => props.refreshSeq, () => { if (active) void refresh.trigger('route') })
     function start() {
       active = true
+      changePlatform(route.query.platform === 'xhs' ? 'xhs' : 'dy')
       setSelection(String(route.query.account_id || accountId.value), Number(route.query.conversation || 0))
       restoreRouteDraft()
       refresh.start()
@@ -256,24 +269,13 @@ export default defineComponent({
     onUnmounted(stop)
 
     return () => h('div', { class: 'workspace-page operations-page message-inbox-page' }, [
-      h('section', { class: 'panel inbox-account-bar' }, [
-        h('div', { class: 'inbox-account-heading' }, [h('h2', '私信收件箱'), h('p', { class: 'note' }, '查看本系统保存的消息，接收新私信并手动回复。')]),
-        h('div', { class: 'toolbar' }, [
-          h('label', { class: 'inbox-account-picker' }, [h('span', '私信账号'), h('select', { value: accountId.value, 'aria-label': '私信账号', onChange: (event: Event) => navigate((event.target as HTMLSelectElement).value) }, [
-            !accounts.value.length ? h('option', { value: '' }, '暂无可用账号') : null,
-            ...accounts.value.map(item => h('option', { value: item.id }, item.name)),
-          ])]),
-          h('span', { class: ['inbox-connection-status', `is-${status.value.state}`], role: 'status' }, connectionLabel(status.value.state)),
-          h('button', { disabled: !accountId.value || actionBusy.value, title: '从现有用户登录会话更新认证材料，可能打开认证浏览器', onClick: () => accountAction('sync-auth') }, actionBusy.value ? '处理中…' : '同步登录认证'),
-          ['connected', 'connecting', 'reconnecting'].includes(status.value.state)
-            ? h('button', { disabled: actionBusy.value, onClick: () => accountAction('disconnect') }, '断开接收')
-            : h('button', { class: 'primary-action', disabled: !status.value.receive_ready || actionBusy.value, onClick: () => accountAction('connect') }, '连接接收'),
-          h('button', { onClick: () => router.push({ path: '/accounts', query: { feature: 'message', platform: 'dy', return_to: route.fullPath } }) }, '账号管理'),
-        ]),
-        error.value || status.value.error ? h('p', { class: 'operations-error', role: 'alert' }, error.value || status.value.error) : null,
-        status.value.profile_error ? h('p', { class: 'operations-error', role: 'alert' }, status.value.profile_error) : null,
-        h('p', { class: 'inbox-scope note' }, '当前展示本地消息记录；尚未同步接入前的全部历史或离线期间遗漏的消息。'),
-      ]),
+      h(MessageInboxControls, {
+        platform: platform.value, accountId: accountId.value, accounts: accounts.value,
+        status: status.value, error: error.value, busy: actionBusy.value,
+        onPlatformChange: (value: InboxPlatform) => { changePlatform(value); navigate('') },
+        onAccountChange: (value: string) => navigate(value), onAction: accountAction,
+        onManage: () => router.push({ path: '/accounts', query: { feature: 'message', platform: platform.value, return_to: route.fullPath } }),
+      }),
       h('section', { class: 'panel inbox-layout' }, [
         h('aside', { class: 'inbox-conversations', 'aria-label': '私信会话' }, [
           h('form', { class: 'inbox-search', onSubmit: (event: Event) => { event.preventDefault(); appliedSearch.value = search.value.trim(); revision += 1; void refresh.trigger('route') } }, [
@@ -291,10 +293,10 @@ export default defineComponent({
           ]), h('button', {
             type: 'button', class: 'inbox-conversation-delete', 'aria-label': `删除会话：${item.nickname || item.peer_user_id}`,
             title: '从会话列表删除，保留聊天记录', disabled: deletingConversations.value.has(item.id), onClick: () => deleteConversation(item),
-          }, deletingConversations.value.has(item.id) ? '删除中' : '删除')])) : h('p', { class: 'inbox-empty' }, accountId.value ? '暂无本地会话，可从客户详情打开会话。' : '请先配置抖音私信账号。')),
+          }, deletingConversations.value.has(item.id) ? '删除中' : '删除')])) : h('p', { class: 'inbox-empty' }, accountId.value ? '暂无本地会话，可从客户详情打开会话。' : `请先配置${platformName(platform.value)}私信账号。`)),
         ]),
         h('div', { class: 'inbox-chat' }, selected.value ? [
-          h('header', { class: 'inbox-chat-header' }, [avatar(selected.value), h('strong', { title: selected.value.nickname || selected.value.peer_user_id }, selected.value.nickname || selected.value.peer_user_id), h('span', { class: 'note' }, '抖音私信')]),
+          h('header', { class: 'inbox-chat-header' }, [avatar(selected.value), h('strong', { title: selected.value.nickname || selected.value.peer_user_id }, selected.value.nickname || selected.value.peer_user_id), h('span', { class: 'note' }, `${platformName(platform.value)}私信`)]),
           h('div', { class: 'inbox-transcript', ref: transcript, role: 'log', 'aria-label': '聊天记录' }, [
             hasMore.value ? h('button', { class: 'inbox-earlier secondary-action', disabled: loadingEarlier.value, onClick: earlier }, loadingEarlier.value ? '加载中…' : '加载更早记录') : null,
             ...messages.value.map(item => h('article', { key: item.id, class: ['inbox-message', `is-${item.direction}`] }, [
@@ -334,5 +336,4 @@ export default defineComponent({
 
 function apiError(error: any, fallback: string) { return typeof error?.response?.data?.detail === 'string' ? error.response.data.detail : fallback }
 function mergeMessages(previous: Message[], incoming: Message[]) { return [...new Map([...previous, ...incoming].map(item => [item.id, item])).values()].sort((left, right) => left.id - right.id) }
-function connectionLabel(state: string) { return ({ connected: '接收已连接', connecting: '正在连接', reconnecting: '正在自动重连', disconnecting: '正在断开', disconnected: '接收未连接', expired: '接收认证已失效', error: '接收已停止' } as Record<string, string>)[state] || '接收未连接' }
 function deliveryLabel(status: string) { return ({ sending: '发送中', accepted: '已提交', failed: '发送失败', uncertain: '结果待确认', received: '已接收' } as Record<string, string>)[status] || '结果待确认' }

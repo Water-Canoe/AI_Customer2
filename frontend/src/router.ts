@@ -81,7 +81,7 @@ export const routes = [
     path: '/message-inbox',
     name: 'message-inbox',
     component: MessageInboxPage,
-    meta: { title: '私信收件箱', subtitle: '选择抖音账号，接收新消息并在工作台回复。', module: '客户' },
+    meta: { title: '私信收件箱', subtitle: '选择平台与私信账号，接收新消息并在工作台回复。', module: '客户' },
   },
   {
     path: '/message-batches',

@@ -22,9 +22,9 @@ export function renderCustomerDetail(detail: Dict, emit: any, pagination: Dict) 
       ]),
       h('button', { type: 'button', class: 'icon-button', title: '关闭详情', 'aria-label': '关闭详情', onClick: () => emit('close-detail') }, [h(Close)])
     ]),
-    customer.platform === 'dy' && pagination.openConversation ? h('div', { class: 'toolbar operations-next-actions' }, [h('button', {
+    ['dy', 'xhs'].includes(customer.platform) && pagination.openConversation ? h('div', { class: 'toolbar operations-next-actions' }, [h('button', {
       class: 'secondary-action', disabled: !pagination.accountId || pagination.openingConversation,
-      title: pagination.accountId ? '使用当前私信账号打开聊天窗口' : '请先配置可用的抖音私信账号',
+      title: pagination.accountId ? '使用当前私信账号打开聊天窗口' : '请先配置客户平台对应的私信账号',
       onClick: () => pagination.openConversation(customer),
     }, pagination.openingConversation ? '打开中…' : '打开私信会话')]) : null,
     h('div', {

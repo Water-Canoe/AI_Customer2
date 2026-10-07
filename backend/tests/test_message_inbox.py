@@ -18,19 +18,21 @@ def inbox(tmp_path, monkeypatch):
     database.init_db()
     from app import services
 
-    session = ModuleType('app.services.douyin_im_session')
+    session = ModuleType('app.services.im_session')
     session.session_status = lambda account_id: {'receive_ready': True, 'send_ready': True, 'error': '', 'synced_at': ''}
     session.load_credentials = lambda account_id: {'cookie_str': 'private-test-credential'}
     transport = ModuleType('app.services.douyin_im_transport')
     transport.send_text = lambda *args, **kwargs: {'status': 'accepted'}
     transport.close_send_auth = lambda account_id: None
     transport.TransportSendUncertain = type('TransportSendUncertain', (RuntimeError,), {})
-    for name, module in [('douyin_im_session', session), ('douyin_im_transport', transport)]:
+    for name, module in [('im_session', session), ('douyin_im_transport', transport)]:
         monkeypatch.setitem(sys.modules, f'app.services.{name}', module)
         monkeypatch.setattr(services, name, module, raising=False)
 
-    def account(name):
-        result = account_center.create_account('dy', name, 'service', ['message'])
+    monkeypatch.setattr(message_inbox, 'im_session', session)
+
+    def account(name, platform='dy'):
+        result = account_center.create_account(platform, name, 'service', ['message'])
         account_center.set_login_status(result['id'], 'user', 'ready')
         return result['id']
 
@@ -46,6 +48,36 @@ def inbox(tmp_path, monkeypatch):
 
 def _event(message_id, content='你好'):
     return {'platform_message_id': message_id, 'peer_user_id': '123456', 'conversation_id': '0:1:123456:987654', 'conversation_short_id': 22, 'content': content, 'raw_content': {'text': content}, 'direction': 'incoming'}
+
+
+def test_xhs_uses_same_inbox_storage_status_and_platform_ownership(inbox, monkeypatch):
+    account, transport = inbox
+    from app.services import im_transport
+    monkeypatch.setattr(message_inbox, '_transport_for_platform', lambda platform: transport)
+    xhs_account, dy_account = account('小红书客服', 'xhs'), account('抖音客服')
+    peer = '65abcdef1234567890abcdef'
+    with database.connect() as conn:
+        user = conn.execute("INSERT INTO user_accounts(platform,platform_user_id,nickname) VALUES('xhs',?,'小红书客户')", (peer,)).lastrowid
+        lead = conn.execute("INSERT INTO lead_user_accounts(account_id,screening_status,follow_status) VALUES(?,'目标客户','未私信')", (user,)).lastrowid
+    conversation = message_inbox.create_conversation(xhs_account, lead_id=lead)
+    with pytest.raises(ValueError, match='平台'):
+        message_inbox.create_conversation(dy_account, lead_id=lead)
+    with pytest.raises(ValueError, match='小红书'):
+        message_inbox.create_conversation(xhs_account, peer_user_id='123456')
+    assert message_inbox.send_message(xhs_account, conversation['id'], '首次私信')['status'] == 'accepted'
+    with database.connect() as conn:
+        assert conn.execute('SELECT follow_status FROM lead_user_accounts WHERE id=?', (lead,)).fetchone()[0] == '已私信'
+    message_inbox.hide_conversation(xhs_account, conversation['id'])
+    event = {'platform_message_id': 'xhs-message', 'peer_user_id': peer, 'conversation_id': peer,
+             'direction': 'incoming', 'content': '客户回复', 'avatar': 'https://example.com/avatar.jpg'}
+    message_inbox.record_received(xhs_account, event)
+    message_inbox.record_received(xhs_account, event)
+    saved = message_inbox.list_conversations(xhs_account)
+    assert len(saved) == 1 and saved[0]['unread_count'] == 1 and saved[0]['lead_id'] == lead
+    assert message_inbox.list_conversations(dy_account) == []
+    assert len(message_inbox.list_messages(xhs_account, conversation['id'])['messages']) == 2
+    with database.connect() as conn:
+        assert conn.execute('SELECT follow_status FROM lead_user_accounts WHERE id=?', (lead,)).fetchone()[0] == '已回复'
 
 
 def test_received_deduplication_pagination_and_account_isolation(inbox):
@@ -271,7 +303,7 @@ def test_listener_preserves_safe_failure_and_manual_disconnect(inbox, reported_s
 
 
 def test_send_credentials_and_shutdown_use_same_account_lock(inbox, monkeypatch):
-    from app.services import douyin_im_session
+    from app.services import im_session
 
     account, transport = inbox
     account_id = account('客服')
@@ -280,7 +312,7 @@ def test_send_credentials_and_shutdown_use_same_account_lock(inbox, monkeypatch)
         assert selected_account == account_id
         assert message_inbox._send_locks[account_id].locked()
         return {'cookie_str': 'private-test-credential'}
-    monkeypatch.setattr(douyin_im_session, 'load_credentials', credentials)
+    monkeypatch.setattr(im_session, 'load_credentials', credentials)
     def send(material, peer, text, **kwargs):
         assert kwargs['account_id'] == account_id
         assert message_inbox._send_locks[account_id].locked()
@@ -312,7 +344,7 @@ def test_sync_auth_releases_sender_off_event_loop(inbox, monkeypatch):
         assert message_inbox._send_locks[selected_account].locked()
         released.append(selected_account)
     monkeypatch.setattr(router, 'require_license', lambda: None)
-    monkeypatch.setattr(router.douyin_im_session, 'sync_account', sync, raising=False)
+    monkeypatch.setattr(router.message_inbox, 'sync_account', sync, raising=False)
     with monkeypatch.context() as scoped:
         scoped.setattr(transport, 'close_send_auth', close)
         assert asyncio.run(router.sync_auth(account_id)) == {'send_ready': True}

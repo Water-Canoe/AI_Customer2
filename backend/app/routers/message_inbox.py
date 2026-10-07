@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.api_dependencies import require_license
-from app.services import message_inbox, douyin_im_session
+from app.services import message_inbox
 
 
 router = APIRouter(prefix='/api/message-inbox', tags=['message-inbox'])
@@ -54,7 +54,7 @@ async def sync_auth(account_id: str):
     if account_id in message_inbox.active_accounts():
         raise HTTPException(status_code=400, detail='请先断开该账号的私信连接，再同步认证')
     try:
-        result = await douyin_im_session.sync_account(account_id)
+        result = await message_inbox.sync_account(account_id)
         # 若同步期间有发送开始，在线程中等待，避免阻塞其它异步接口。
         await asyncio.to_thread(message_inbox.release_send_session, account_id)
         return result

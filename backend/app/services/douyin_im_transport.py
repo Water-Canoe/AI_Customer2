@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 import websocket
 from curl_cffi import CurlError
+from app.services.im_transport import AuthCache, TransportSendUncertain, validate_peer
 from app.vendor.douyin_spider.builder.auth import DouyinAuth
 from app.vendor.douyin_spider.builder.header import HeaderBuilder
 from app.vendor.douyin_spider.builder.params import Params
@@ -18,44 +19,25 @@ from app.vendor.douyin_spider.dy_apis.douyin_api import DouyinAPI, MessageSendUn
 from app.vendor.douyin_spider.static import Live_pb2, Response_pb2
 
 
-_send_auths: dict[str, tuple[str, DouyinAuth]] = {}
+_send_cache = AuthCache()
+_send_auths = _send_cache.values
 # 项目仅此服务使用 websocket-client；握手不能无限等待网络恢复。
 websocket.setdefaulttimeout(15)
 
 
 def close_send_auth(account_id: str) -> None:
-    """释放账号发送会话；调用方须持有该账号的发送锁，避免关闭在途请求。"""
-    cached = _send_auths.pop(account_id, None)
-    if cached:
-        cached[1].close()
+    """释放账号发送认证；调用方持有账号发送锁。"""
+    _send_cache.close(account_id)
 
 
 def _send_auth(account_id: str, credentials: dict[str, Any]) -> DouyinAuth:
-    """按账号及原始认证快照复用会话，令牌有效期由现有协议实现管理。"""
-    fingerprint = hashlib.sha256(json.dumps(credentials, sort_keys=True).encode()).hexdigest()
-    cached = _send_auths.get(account_id)
-    if cached and cached[0] == fingerprint:
-        return cached[1]
-    close_send_auth(account_id)
-    auth = _load_auth(credentials, sending=True)
-    _send_auths[account_id] = (fingerprint, auth)
-    return auth
-
-
-class TransportSendUncertain(RuntimeError):
-    """发送已开始但结果未知，result 用于记录待确认消息，不可自动重发。"""
-
-    def __init__(self, result: dict[str, Any]):
-        super().__init__('发送结果待确认，请先确认对方是否收到，避免重复发送')
-        self.result = result
+    """复用两个平台共同的账号认证缓存，令牌续期仍由抖音协议管理。"""
+    return _send_cache.get(account_id, credentials, lambda value: _load_auth(value, sending=True))
 
 
 def _numeric_uid(value: Any) -> str:
     """协议需要数字 UID，不能把 sec_uid 当作收件人。"""
-    value = str(value or '').strip()
-    if not value.isascii() or not value.isdigit() or int(value) <= 0:
-        raise ValueError('私信需要平台数字用户 ID，当前用户标识不能用于发送')
-    return value
+    return validate_peer('dy', value)
 
 
 def _load_auth(credentials: dict[str, Any], *, sending: bool = False) -> DouyinAuth:

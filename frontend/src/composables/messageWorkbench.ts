@@ -104,7 +104,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     const profileUrl = String(row.profile_url || '').trim()
     if (!leadId) return ElMessage.error('当前客户缺少线索ID，无法标记私信')
     if (!script.text) return ElMessage.error(script.emptyMessage)
-    if (row.platform === 'dy') {
+    if (['dy', 'xhs'].includes(row.platform)) {
       try { await openMessageDraft(row, script.text) }
       catch (error: any) { ElMessage.error(error?.response?.data?.detail || '私信草稿打开失败') }
       return
@@ -168,7 +168,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
   async function openMessageDraft(row: Dict, text: string) {
     const account = String(row.account_id || '')
     const { data } = await api.post('/message-inbox/conversations', { account_id: account, lead_id: row.lead_id || row.id })
-    await options.router.push({ path: '/message-inbox', query: { account_id: account, conversation: String(data.id), draft: text } })
+    await options.router.push({ path: '/message-inbox', query: { platform: row.platform, account_id: account, conversation: String(data.id), draft: text } })
   }
 
   async function startBatch(payload: Dict) {

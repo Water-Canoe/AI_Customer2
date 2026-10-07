@@ -62,10 +62,11 @@ export default defineComponent({
     const eventPage = ref(1)
     async function loadAccounts() {
       try {
-        const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'message', platform: 'dy' } })
-        accounts.value = data.filter(account => isAccountFeatureReady(account, 'message'))
-        const preferred = accounts.value.find(account => account.default_features?.includes('message')) || accounts.value[0]
-        if (!accounts.value.some(account => String(account.id) === accountId.value)) accountId.value = String(preferred?.id || '')
+        const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'message' } })
+        accounts.value = data.filter(account => ['dy', 'xhs'].includes(account.platform) && isAccountFeatureReady(account, 'message'))
+        const dyAccounts = accounts.value.filter(account => account.platform === 'dy')
+        const preferred = dyAccounts.find(account => account.default_features?.includes('message')) || dyAccounts[0]
+        if (!dyAccounts.some(account => String(account.id) === accountId.value)) accountId.value = String(preferred?.id || '')
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '私信账号加载失败')
       }
@@ -117,14 +118,20 @@ export default defineComponent({
       changeFilter({ query: queryDraft.value.trim(), page: 1 })
     }
 
+    function accountForPlatform(platform: string) {
+      const matching = accounts.value.filter(account => account.platform === platform)
+      return String(matching.find(account => account.id === accountId.value)?.id
+        || matching.find(account => account.default_features?.includes('message'))?.id || matching[0]?.id || '')
+    }
+
     // 只创建本地会话并打开收件箱，不在此处发送消息或启动监听。
     async function openConversation(customer: Dict) {
-      if (!accountId.value || openingConversation.value || customer.platform !== 'dy') return
-      const account = accountId.value
+      const account = accountForPlatform(String(customer.platform))
+      if (!account || openingConversation.value || !['dy', 'xhs'].includes(customer.platform)) return
       openingConversation.value = true
       try {
         const { data } = await api.post('/message-inbox/conversations', { account_id: account, lead_id: customer.lead_id })
-        await router.push({ path: '/message-inbox', query: { account_id: account, conversation: String(data.id) } })
+        await router.push({ path: '/message-inbox', query: { platform: customer.platform, account_id: account, conversation: String(data.id) } })
       } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '会话打开失败') }
       finally { openingConversation.value = false }
     }
@@ -134,7 +141,7 @@ export default defineComponent({
         sectionTitle({ title: '客户跟进', subtitle: (props.filters as Dict).keyword ? `${platformName((props.filters as Dict).platform)} / ${(props.filters as Dict).keyword}` : '全部来源 · 准备话术，实际发送后确认，再推进回复与成交状态。', icon: Collection }),
         h('div', { class: 'toolbar' }, [
           String(route.query.return_to || '').startsWith('/message-batches?') ? h('button', { onClick: () => router.push(String(route.query.return_to)) }, '返回原批次') : null,
-          h('button', { onClick: () => router.push({ path: '/accounts', query: { feature: 'message', platform: 'dy', return_to: route.fullPath } }) }, '配置私信账号'),
+          h('button', { onClick: () => router.push({ path: '/accounts', query: { feature: 'message', platform: props.filters.platform === 'xhs' ? 'xhs' : 'dy', return_to: route.fullPath } }) }, '配置私信账号'),
         ]),
         h('details', [h('summary', '按平台与来源关键词筛选'), h('div', { class: 'message-keyword-list' }, [
           allKeyword.value ? renderKeywordButton(allKeyword.value, props.filters as Dict, changeFilter) : null,
@@ -150,7 +157,7 @@ export default defineComponent({
           setMin: (value: number) => intervalMin.value = boundedNumber(value, autoBatchDefaults.min, 0, 3600),
           setMax: (value: number) => intervalMax.value = boundedNumber(value, autoBatchDefaults.max, 0, 3600),
           accountId: accountId.value,
-          accounts: accounts.value,
+          accounts: accounts.value.filter(account => account.platform === 'dy'),
           setAccountId: (value: string) => { accountId.value = value },
           start: () => emit('start-auto-message-batch', {
             platform: (props.filters as Dict).platform || '',
@@ -181,7 +188,7 @@ export default defineComponent({
             h('button', { type: 'button', onClick: runSearch }, [h(Search), h('span', '搜索')])
           ])
         ]),
-        renderCustomerTable(rows.value, props.loading, handleEvent, props.settings as Dict, accountId.value),
+        renderCustomerTable(rows.value, props.loading, handleEvent, props.settings as Dict, accountForPlatform),
         h(ListPagination, {
           page: page.value,
           pageSize: pageSize.value,
@@ -194,7 +201,7 @@ export default defineComponent({
           eventPage: eventPage.value,
           setSourcePage: (value: number) => { sourcePage.value = value },
           setEventPage: (value: number) => { eventPage.value = value },
-          accountId: accountId.value,
+          accountId: accountForPlatform(String((props.detail as Dict)?.customer?.platform || 'dy')),
           openingConversation: openingConversation.value,
           openConversation,
         }))
@@ -313,11 +320,11 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
   ])
 }
 
-function renderCustomerTable(rows: Dict[], loading: boolean, emit: any, settings: Dict, accountId: string) {
+function renderCustomerTable(rows: Dict[], loading: boolean, emit: any, settings: Dict, accountForPlatform: (platform: string) => string) {
   const body = loading
     ? [h('tr', [h('td', { colspan: 6, class: 'message-empty' }, '加载中...')])]
     : rows.length
-      ? rows.map(row => renderCustomerRow(row, emit, settings, accountId))
+      ? rows.map(row => renderCustomerRow(row, emit, settings, accountForPlatform(String(row.platform))))
       : [h('tr', [h('td', { colspan: 6, class: 'message-empty' }, '当前筛选下暂无客户')])]
 
   return h('div', { class: 'message-table-wrap' }, [
@@ -386,9 +393,9 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict, accountId: stri
           h('button', {
             type: 'button',
             class: 'text-icon-button',
-            disabled: !sendScript || (row.platform === 'dy' ? !accountId : !row.profile_url),
-            title: !sendScript ? missingScriptTip : row.platform === 'dy' ? '在私信收件箱预填话术，不发送消息' : '复制话术并打开主页，不修改跟进状态',
-            onClick: () => emit('message-customer', row.platform === 'dy' ? { ...row, account_id: accountId } : row)
+            disabled: !sendScript || (['dy', 'xhs'].includes(row.platform) ? !accountId : !row.profile_url),
+            title: !sendScript ? missingScriptTip : ['dy', 'xhs'].includes(row.platform) ? '在私信收件箱预填话术，不发送消息' : '复制话术并打开主页，不修改跟进状态',
+            onClick: () => emit('message-customer', ['dy', 'xhs'].includes(row.platform) ? { ...row, account_id: accountId } : row)
           }, [h(CopyDocument), h('span', '准备私信')]),
           ['待筛选', '未私信'].includes(String(row.follow_status)) ? h('button', { type: 'button', class: 'text-icon-button', onClick: () => emit('confirm-message-customer', row) }, '确认已发送') : null
         ]),
