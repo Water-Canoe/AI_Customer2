@@ -9,6 +9,17 @@ from app.services import douyin_im_transport as transport
 from app.vendor.douyin_spider.static import Live_pb2, Response_pb2
 
 
+def test_user_profile_requires_matching_uid_and_keeps_real_avatar(monkeypatch):
+    monkeypatch.setattr(transport.DouyinAPI, 'get_user_profile', lambda *args: {
+        'status_code': 0, 'user': {'uid': '22', 'nickname': '真实昵称', 'avatar_thumb': {'url_list': ['https://example.com/avatar.jpg']}},
+    })
+    assert transport.get_user_profile({'cookie_str': 'sessionid=test'}, '22') == {
+        'peer_user_id': '22', 'nickname': '真实昵称', 'avatar': 'https://example.com/avatar.jpg',
+    }
+    with pytest.raises(ValueError, match='资料查询失败'):
+        transport.get_user_profile({'cookie_str': 'sessionid=test'}, '33')
+
+
 def test_sdk_tokens_are_account_scoped_and_failure_does_not_use_random_token(monkeypatch):
     from app.vendor.douyin_spider.utils import mstoken
 

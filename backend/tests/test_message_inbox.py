@@ -37,6 +37,9 @@ def inbox(tmp_path, monkeypatch):
     with message_inbox._runtime_lock:
         message_inbox._listeners.clear()
         message_inbox._send_locks.clear()
+        message_inbox._profile_locks.clear()
+        message_inbox._profile_checked.clear()
+        message_inbox._profile_errors.clear()
 
 
 def _event(message_id, content='你好'):
@@ -68,6 +71,63 @@ def test_received_deduplication_pagination_and_account_isolation(inbox):
     message_inbox.record_received(first, _event('m3', '阅读后到达'))
     message_inbox.mark_read(first, conversation['id'], newest['messages'][0]['id'])
     assert message_inbox.list_conversations(first)[0]['unread_count'] == 1
+
+
+def test_missing_profiles_are_saved_once_and_failures_preserve_conversations(inbox):
+    account, transport = inbox
+    account_id = account('客服')
+    message_inbox.record_received(account_id, _event('profile-message'))
+    calls = []
+    def profile(credentials, peer):
+        calls.append(peer)
+        return {'peer_user_id': peer, 'nickname': '对方昵称', 'avatar': 'https://example.com/avatar.jpg'}
+    transport.get_user_profile = profile
+    message_inbox.refresh_conversation_profiles(account_id)
+    message_inbox.refresh_conversation_profiles(account_id)
+    saved = message_inbox.list_conversations(account_id)[0]
+    assert (saved['nickname'], saved['avatar']) == ('对方昵称', 'https://example.com/avatar.jpg')
+    assert calls == ['123456'] and saved['unread_count'] == 1
+    # 其它会话查询失败后保留聊天，后续轮询不反复请求失效认证。
+    message_inbox.create_conversation(account_id, peer_user_id='999')
+    def fail(*args):
+        calls.append('failed')
+        raise ValueError('资料查询失败')
+    transport.get_user_profile = fail
+    message_inbox.refresh_conversation_profiles(account_id)
+    message_inbox.refresh_conversation_profiles(account_id)
+    assert calls == ['123456', 'failed']
+    assert message_inbox.status(account_id)['profile_error'] == '资料查询失败'
+    assert len(message_inbox.list_conversations(account_id)) == 2
+
+
+def test_new_local_customer_profile_updates_existing_conversation(inbox):
+    account, _ = inbox
+    account_id = account('客服')
+    message_inbox.record_received(account_id, _event('before-local-profile'))
+    with database.connect() as conn:
+        user_id = conn.execute("INSERT INTO user_accounts(platform,platform_user_id,nickname,avatar) VALUES('dy','123456','已采集客户','https://example.com/local.jpg')").lastrowid
+        conn.execute('INSERT INTO lead_user_accounts(account_id) VALUES(?)', (user_id,))
+    message_inbox.record_received(account_id, _event('after-local-profile'))
+    saved = message_inbox.list_conversations(account_id)[0]
+    assert saved['nickname'] == '已采集客户' and saved['avatar'] == 'https://example.com/local.jpg'
+    assert saved['lead_id'] is not None
+
+
+def test_list_response_schedules_profile_lookup_without_returning_credentials(inbox):
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    account, transport = inbox
+    account_id = account('客服')
+    message_inbox.record_received(account_id, _event('background-profile'))
+    transport.get_user_profile = lambda *args: {'nickname': '真实联系人', 'avatar': 'https://example.com/person.jpg'}
+    client = TestClient(app)
+    first = client.get('/api/message-inbox/conversations', params={'account_id': account_id})
+    assert first.status_code == 200 and first.json()[0]['nickname'] == ''
+    second = client.get('/api/message-inbox/conversations', params={'account_id': account_id})
+    assert second.json()[0]['nickname'] == '真实联系人'
+    assert second.json()[0]['avatar'] == 'https://example.com/person.jpg'
+    assert 'private-test-credential' not in second.text
 
 
 def test_uncertain_send_is_persisted_without_automatic_retry_and_replies_share_quota(inbox):

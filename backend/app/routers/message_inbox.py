@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.api_dependencies import require_license
@@ -58,8 +58,11 @@ async def sync_auth(account_id: str):
 
 
 @router.get('/conversations')
-def conversations(account_id: str = Query(min_length=1), query: str = ''):
-    return _call(message_inbox.list_conversations, account_id, query)
+def conversations(background_tasks: BackgroundTasks, account_id: str = Query(min_length=1), query: str = ''):
+    rows = _call(message_inbox.list_conversations, account_id, query)
+    if any(not row['nickname'] or not row['avatar'] for row in rows):
+        background_tasks.add_task(message_inbox.refresh_conversation_profiles, account_id)
+    return rows
 
 
 @router.post('/conversations')

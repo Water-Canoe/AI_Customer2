@@ -9,7 +9,7 @@ vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post } }))
 vi.mock('element-plus', () => ({ ElMessage: { success: vi.fn(), warning: mocks.warning, error: mocks.error } }))
 
 const account = (id: string) => ({ id, name: id, enabled: true, features: ['message'], default_features: [], feature_status: {} })
-const conversation = (id: number, account_id = 'account-a') => ({ id, account_id, peer_user_id: 'peer-' + id, nickname: '会话' + id, last_message: '', unread_count: 0, lead_id: null })
+const conversation = (id: number, account_id = 'account-a') => ({ id, account_id, peer_user_id: 'peer-' + id, nickname: '会话' + id, avatar: '', last_message: '', unread_count: 0, lead_id: null })
 const message = (id: number, content: string, status = 'received') => ({ id, direction: status === 'received' ? 'incoming' : 'outgoing', content, message_type: 'text', status, created_at: '2026-10-07 12:00' })
 const status = { state: 'disconnected', receive_ready: true, send_ready: true, error: '', history_scope: 'local' }
 let wrapper: VueWrapper | undefined
@@ -75,6 +75,31 @@ describe('私信收件箱', () => {
     expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('')
     await vi.advanceTimersByTimeAsync(6000)
     expect(mocks.post.mock.calls.filter(([url]) => url.endsWith('/messages'))).toHaveLength(1)
+  })
+  it('shows the same real nickname and avatar in the conversation list and chat header', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => url === '/message-inbox/conversations'
+      ? Promise.resolve({ data: [{ ...conversation(1), nickname: '真实用户名', avatar: 'https://example.com/avatar.jpg' }, conversation(3)] })
+      : normal(url, options))
+    await open()
+    expect(wrapper!.get('.inbox-conversation-title strong').text()).toBe('真实用户名')
+    expect(wrapper!.get('.inbox-chat-header strong').text()).toBe('真实用户名')
+    expect(wrapper!.get('.inbox-conversation img').attributes('src')).toBe('https://example.com/avatar.jpg')
+    expect(wrapper!.get('.inbox-chat-header img').attributes('src')).toBe('https://example.com/avatar.jpg')
+    expect(wrapper!.findAll('img')).toHaveLength(2)
+    // 图片失效时两处统一退回占位，保留平台返回的用户名。
+    await wrapper!.get('.inbox-conversation img').trigger('error')
+    expect(wrapper!.findAll('img')).toHaveLength(0)
+    expect(wrapper!.get('.inbox-chat-header').text()).toContain('真实用户名')
+  })
+  it('shows a profile lookup error alongside the account error without hiding local messages', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => url.endsWith('/status')
+      ? Promise.resolve({ data: { ...status, error: '账号认证异常', profile_error: '用户资料获取失败，请重新连接后重试' } })
+      : normal(url, options))
+    await open()
+    expect(wrapper!.findAll('[role="alert"]').map(item => item.text())).toEqual(['账号认证异常', '用户资料获取失败，请重新连接后重试'])
+    expect(wrapper!.text()).toContain('当前消息')
   })
   it('imports a prepared draft once and keeps subsequent edits through refresh and tab restoration', async () => {
     const router = await open('/message-inbox?account_id=account-a&conversation=1&draft=初始话术')

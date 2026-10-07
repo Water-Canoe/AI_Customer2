@@ -84,6 +84,27 @@ class DouyinAPI:
 
 
     @staticmethod
+    def get_user_profile(auth, user_id: str) -> dict:
+        """沿用上游用户资料接口，以私信的数字 UID 查询对方资料。"""
+        refer = 'https://www.douyin.com/'
+        headers = HeaderBuilder().build(HeaderType.GET)
+        headers.set_referer(refer)
+        headers.with_uifid(auth)
+        params = Params()
+        params.add_param('device_platform', 'webapp').add_param('aid', '6383').add_param('channel', 'channel_pc_web')
+        params.add_param('publish_video_strategy_type', '2').add_param('source', 'channel_pc_web')
+        params.add_param('user_id', user_id).add_param('sec_user_id', '').add_param('personal_center_strategy', '1')
+        params.add_param('profile_other_record_enable', '1').add_param('land_to', '1')
+        params.with_platform(round_trip_time='0').with_web_id(auth, refer).with_uifid(auth)
+        params.add_param('msToken', auth.msToken).with_a_bogus().with_verify_fp(auth)
+        response = requests.get(f'{DouyinAPI.douyin_url}/aweme/v1/web/user/profile/other/',
+                                headers=headers.get(), params=params.get(), cookies=auth.cookie,
+                                verify=True, timeout=15)
+        check_risk_response(response)
+        return response.json()
+
+
+    @staticmethod
     def get_my_uid(auth, **kwargs) -> int:
         """
         获取自己的用户ID.

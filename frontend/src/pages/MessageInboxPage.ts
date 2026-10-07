@@ -8,11 +8,11 @@ import '../styles/operations.css'
 import '../styles/message-inbox.css'
 
 type Conversation = {
-  id: number; account_id: string; peer_user_id: string; nickname: string; last_message: string;
+  id: number; account_id: string; peer_user_id: string; nickname: string; avatar: string; last_message: string;
   last_message_at: string | null; unread_count: number; lead_id: number | null;
 }
 type Message = { id: number; direction: 'incoming' | 'outgoing'; content: string; message_type: string | number; status: string; error?: string; created_at: string }
-type ConnectionStatus = { state: string; receive_ready: boolean; send_ready: boolean; error: string; history_scope: 'local' }
+type ConnectionStatus = { state: string; receive_ready: boolean; send_ready: boolean; error: string; profile_error?: string; history_scope: 'local' }
 const emptyStatus = (): ConnectionStatus => ({ state: 'disconnected', receive_ready: false, send_ready: false, error: '', history_scope: 'local' })
 
 export default defineComponent({
@@ -36,6 +36,7 @@ export default defineComponent({
     const loadingEarlier = ref(false)
     const hasMore = ref(false)
     const transcript = ref<HTMLElement | null>(null)
+    const unavailableAvatars = ref(new Set<string>())
     // 按账号和会话保留未发送文字，切换聊天或页签不会串用草稿。
     const drafts = ref<Record<string, string>>({})
     const draftKey = computed(() => `${accountId.value}:${conversationId.value}`)
@@ -81,6 +82,13 @@ export default defineComponent({
     } })
 
     function current(token: number) { return active && token === revision }
+    // 会话列表和聊天标题共用头像；未获取或加载失败时仅显示占位。
+    function avatar(item: Conversation) {
+      const available = item.avatar && !unavailableAvatars.value.has(item.avatar)
+      return h('span', { class: 'inbox-avatar', 'aria-hidden': 'true', title: available ? undefined : '头像暂不可用' }, available
+        ? h('img', { src: item.avatar, alt: '', loading: 'lazy', onError: () => unavailableAvatars.value.add(item.avatar) })
+        : h('span', { class: 'inbox-avatar-placeholder' }, '头像'))
+    }
     function accountPath(id = accountId.value) { return '/message-inbox/accounts/' + encodeURIComponent(id) }
     function setSelection(account: string, conversation: number) {
       if (account === accountId.value && conversation === conversationId.value) return
@@ -228,6 +236,7 @@ export default defineComponent({
           h('button', { onClick: () => router.push({ path: '/accounts', query: { feature: 'message', platform: 'dy', return_to: route.fullPath } }) }, '账号管理'),
         ]),
         error.value || status.value.error ? h('p', { class: 'operations-error', role: 'alert' }, error.value || status.value.error) : null,
+        status.value.profile_error ? h('p', { class: 'operations-error', role: 'alert' }, status.value.profile_error) : null,
         h('p', { class: 'inbox-scope note' }, '当前展示本地消息记录；尚未同步接入前的全部历史或离线期间遗漏的消息。'),
       ]),
       h('section', { class: 'panel inbox-layout' }, [
@@ -239,12 +248,13 @@ export default defineComponent({
           h('div', { class: 'inbox-conversation-list' }, conversations.value.length ? conversations.value.map(item => h('button', {
             type: 'button', class: ['inbox-conversation', item.id === conversationId.value ? 'is-active' : ''], 'aria-pressed': item.id === conversationId.value,
             onClick: () => navigate(accountId.value, item.id),
-          }, [h('div', { class: 'inbox-conversation-title' }, [h('strong', item.nickname || item.peer_user_id), item.unread_count ? h('span', { class: 'inbox-unread', 'aria-label': `${item.unread_count} 条未读` }, String(item.unread_count)) : null]),
+          }, [avatar(item), h('div', { class: 'inbox-conversation-summary' }, [h('div', { class: 'inbox-conversation-title' }, [h('strong', { title: item.nickname || item.peer_user_id }, item.nickname || item.peer_user_id), item.unread_count ? h('span', { class: 'inbox-unread', 'aria-label': `${item.unread_count} 条未读` }, String(item.unread_count)) : null]),
             h('p', item.last_message || '暂无消息'), h('time', item.last_message_at || ''),
+          ]),
           ])) : h('p', { class: 'inbox-empty' }, accountId.value ? '暂无本地会话，可从客户详情打开会话。' : '请先配置抖音私信账号。')),
         ]),
         h('div', { class: 'inbox-chat' }, selected.value ? [
-          h('header', { class: 'inbox-chat-header' }, [h('strong', selected.value.nickname || selected.value.peer_user_id), h('span', { class: 'note' }, '抖音私信')]),
+          h('header', { class: 'inbox-chat-header' }, [avatar(selected.value), h('strong', { title: selected.value.nickname || selected.value.peer_user_id }, selected.value.nickname || selected.value.peer_user_id), h('span', { class: 'note' }, '抖音私信')]),
           h('div', { class: 'inbox-transcript', ref: transcript, role: 'log', 'aria-label': '聊天记录' }, [
             hasMore.value ? h('button', { class: 'inbox-earlier secondary-action', disabled: loadingEarlier.value, onClick: earlier }, loadingEarlier.value ? '加载中…' : '加载更早记录') : null,
             ...messages.value.map(item => h('article', { key: item.id, class: ['inbox-message', `is-${item.direction}`] }, [

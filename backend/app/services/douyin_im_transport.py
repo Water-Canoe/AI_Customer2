@@ -67,6 +67,24 @@ def _conversation_peer(conversation_id: str, own_user_id: str) -> str:
     return participants[1] if participants[0] == own_user_id else participants[0]
 
 
+def get_user_profile(credentials: dict[str, Any], peer_user_id: str) -> dict[str, str]:
+    """只读查询昵称和头像；返回身份必须与目标 UID 一致才可保存。"""
+    peer_user_id = _numeric_uid(peer_user_id)
+    auth = _load_auth(credentials)
+    try:
+        payload = DouyinAPI.get_user_profile(auth, peer_user_id)
+        user = payload.get('user') or {}
+        if payload.get('status_code') != 0 or str(user.get('uid') or '') != peer_user_id:
+            raise ValueError('平台未返回与会话一致的用户资料')
+        urls = (user.get('avatar_thumb') or {}).get('url_list') or []
+        avatar = next((url for url in urls if isinstance(url, str) and url.startswith(('https://', 'http://'))), '')
+        return {'peer_user_id': peer_user_id, 'nickname': str(user.get('nickname') or ''), 'avatar': avatar}
+    except Exception:
+        raise ValueError('用户资料查询失败，请检查账号认证后重新连接接收') from None
+    finally:
+        auth.close()
+
+
 def _decode_message(frame_bytes: bytes, own_user_id: str) -> dict[str, Any] | None:
     """解码上游已知通知；保留真实消息 ID，不伪造平台时间或缺失字段。"""
     frame = Live_pb2.PushFrame()

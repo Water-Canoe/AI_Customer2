@@ -20,6 +20,9 @@ class _Listener:
 
 _listeners: dict[str, _Listener] = {}
 _send_locks: dict[str, threading.Lock] = {}
+_profile_locks: dict[str, threading.Lock] = {}
+_profile_checked: set[tuple[str, str]] = set()
+_profile_errors: dict[str, str] = {}
 _runtime_lock = threading.RLock()
 _CONVERSATION_FIELDS = 'id,account_id,peer_user_id,nickname,avatar,lead_id,platform_conversation_id,last_message,last_message_at,unread_count'
 
@@ -45,6 +48,7 @@ def status(account_id: str) -> dict[str, Any]:
             **session,
             'state': listener.state if listener else 'disconnected',
             'error': (listener.error if listener else '') or session.get('error', ''),
+            'profile_error': _profile_errors.get(account_id, ''),
             'history_scope': 'local',
         }
 
@@ -61,6 +65,9 @@ def connect_account(account_id: str) -> dict[str, Any]:
             return status(account_id)
         listener = _Listener()
         _listeners[account_id] = listener
+        # 显式重新连接时允许重试上次失败的资料查询。
+        _profile_errors.pop(account_id, None)
+        _profile_checked.difference_update({key for key in _profile_checked if key[0] == account_id})
 
         def on_state(state: str, error: str = '') -> None:
             with _runtime_lock:
@@ -114,7 +121,7 @@ def shutdown() -> None:
 def active_accounts() -> list[str]:
     """维护操作可检查活跃连接，避免覆盖正在使用的认证材料。"""
     with _runtime_lock:
-        return sorted({account_id for account_id, listener in _listeners.items() if listener.thread and listener.thread.is_alive()} | {account_id for account_id, lock in _send_locks.items() if lock.locked()})
+        return sorted({account_id for account_id, listener in _listeners.items() if listener.thread and listener.thread.is_alive()} | {account_id for locks in (_send_locks, _profile_locks) for account_id, lock in locks.items() if lock.locked()})
 
 
 def recover_pending_sends() -> None:
@@ -177,6 +184,39 @@ def list_conversations(account_id: str, query: str = '') -> list[dict[str, Any]]
         ).fetchall())
 
 
+def refresh_conversation_profiles(account_id: str) -> None:
+    """响应返回后补查缺失资料，不阻塞列表或私信监听，不随轮询重复查询。"""
+    from app.services import douyin_im_session, douyin_im_transport
+
+    with _runtime_lock:
+        lock = _profile_locks.setdefault(account_id, threading.Lock())
+        if _profile_errors.get(account_id) or not lock.acquire(blocking=False):
+            return
+    try:
+        if not status(account_id)['receive_ready']:
+            return
+        with database.connect() as conn:
+            peers = [row['peer_user_id'] for row in conn.execute("SELECT peer_user_id FROM im_conversations WHERE account_id=? AND (nickname='' OR avatar='')", (account_id,))]
+        with _runtime_lock:
+            peers = [peer for peer in peers if (account_id, peer) not in _profile_checked]
+        if not peers:
+            return
+        credentials = douyin_im_session.load_credentials(account_id)
+        for peer in peers:
+            with _runtime_lock:
+                if (account_id, peer) in _profile_checked:
+                    continue
+                _profile_checked.add((account_id, peer))
+            profile = douyin_im_transport.get_user_profile(credentials, peer)
+            with database.connect() as conn:
+                conn.execute('UPDATE im_conversations SET nickname=?,avatar=? WHERE account_id=? AND peer_user_id=?', (profile['nickname'], profile['avatar'], account_id, peer))
+    except ValueError as exc:
+        with _runtime_lock:
+            _profile_errors[account_id] = str(exc)
+    finally:
+        lock.release()
+
+
 def list_messages(account_id: str, conversation_id: int, *, before_id: int = 0, limit: int = 50) -> dict[str, Any]:
     _account(account_id)
     if not 1 <= limit <= 100 or before_id < 0:
@@ -220,6 +260,8 @@ def record_received(account_id: str, event: dict[str, Any]) -> None:
             '''INSERT INTO im_conversations(account_id,peer_user_id,nickname,avatar,lead_id,platform_conversation_id,conversation_short_id)
                VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,peer_user_id) DO UPDATE SET
                platform_conversation_id=excluded.platform_conversation_id,conversation_short_id=excluded.conversation_short_id,
+               nickname=CASE WHEN excluded.nickname<>'' THEN excluded.nickname ELSE im_conversations.nickname END,
+               avatar=CASE WHEN excluded.avatar<>'' THEN excluded.avatar ELSE im_conversations.avatar END,
                lead_id=COALESCE(im_conversations.lead_id,excluded.lead_id)''',
             (account_id, peer, lead['nickname'] if lead else str(event.get('nickname') or ''), lead['avatar'] if lead else '', lead['id'] if lead else None, str(event['conversation_id']), int(event.get('conversation_short_id') or 0)),
         )
