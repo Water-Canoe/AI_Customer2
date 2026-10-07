@@ -180,7 +180,6 @@ try {
         --assume-yes-for-downloads `
         --python-flag=no_docstrings `
         --include-package=app `
-        --include-package=tools `
         --nofollow-import-to=patchright `
         --nofollow-import-to=torch `
         --nofollow-import-to=torchaudio `
@@ -195,6 +194,11 @@ try {
         --include-data-files="$BackendDir\app\video_engine\LICENSE=app/video_engine/LICENSE" `
         --include-data-files="$BackendDir\app\publish_engine\utils\stealth.min.js=app/publish_engine/utils/stealth.min.js" `
         --include-data-files="$BackendDir\app\publish_engine\LICENSE=app/publish_engine/LICENSE" `
+        --include-data-files="$BackendDir\app\vendor\douyin_spider\utils\mstoken_profile.json=app/vendor/douyin_spider/utils/mstoken_profile.json" `
+        --include-data-files="$BackendDir\app\vendor\douyin_spider\utils\mstoken_common_profile.json=app/vendor/douyin_spider/utils/mstoken_common_profile.json" `
+        --include-data-files="$BackendDir\app\vendor\douyin_spider\SOURCE.md=app/vendor/douyin_spider/SOURCE.md" `
+        --include-data-files="$BackendDir\app\vendor\douyin_spider\UPSTREAM_README.md=app/vendor/douyin_spider/UPSTREAM_README.md" `
+        --include-package-data=curl_cffi `
         --include-package-data=cloakbrowser `
         --include-package-data=moviepy `
         --include-package-data=imageio_ffmpeg `

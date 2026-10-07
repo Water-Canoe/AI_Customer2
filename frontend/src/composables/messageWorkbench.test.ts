@@ -3,8 +3,8 @@ import { ref } from 'vue'
 
 import { selectDmScript, useMessageWorkbench } from './messageWorkbench'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), writeText: vi.fn(), confirm: vi.fn() }))
-vi.mock('../shared/api', () => ({ api: { get: mocks.get, patch: mocks.patch } }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), push: vi.fn(), patch: vi.fn(), writeText: vi.fn(), confirm: vi.fn() }))
+vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post, patch: mocks.patch } }))
 vi.mock('element-plus', () => ({
   ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
   ElMessageBox: { confirm: mocks.confirm },
@@ -30,6 +30,7 @@ describe('useMessageWorkbench follow status', () => {
     vi.clearAllMocks()
     mocks.get.mockResolvedValue({ data: [] })
     mocks.patch.mockResolvedValue({ data: {} })
+    mocks.post.mockResolvedValue({ data: { id: 12 } })
     mocks.writeText.mockResolvedValue(undefined)
     mocks.confirm.mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText: mocks.writeText } })
@@ -38,7 +39,7 @@ describe('useMessageWorkbench follow status', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it.each(['待筛选', '未私信', '已回复', '已移出'])('copies the script and preserves the %s workflow', async (followStatus) => {
-    const workbench = useMessageWorkbench({ settings: ref({}), refreshRelated: vi.fn() })
+    const workbench = useMessageWorkbench({ router: { push: mocks.push }, settings: ref({}), refreshRelated: vi.fn() })
     await workbench.messageCustomer({
       lead_id: 7, script: '当前话术', profile_url: 'https://example.com/customer',
       follow_status: followStatus, screening_status: followStatus === '待筛选' ? '待筛选' : '目标客户',
@@ -50,7 +51,7 @@ describe('useMessageWorkbench follow status', () => {
     expect(mocks.patch).not.toHaveBeenCalled()
   })
   it('records actual sending only after the user confirms', async () => {
-    const workbench = useMessageWorkbench({ settings: ref({}), refreshRelated: vi.fn() })
+    const workbench = useMessageWorkbench({ router: { push: mocks.push }, settings: ref({}), refreshRelated: vi.fn() })
     await workbench.confirmMessageCustomer({ lead_id: 7, follow_status: '未私信' })
     expect(mocks.confirm).toHaveBeenCalledOnce()
     expect(mocks.patch).toHaveBeenCalledWith('/overview/customers/7/follow-status', {
@@ -59,15 +60,26 @@ describe('useMessageWorkbench follow status', () => {
   })
   it('does not record sending when confirmation is cancelled, including the status dropdown', async () => {
     mocks.confirm.mockRejectedValue('cancel')
-    const workbench = useMessageWorkbench({ settings: ref({}), refreshRelated: vi.fn() })
+    const workbench = useMessageWorkbench({ router: { push: mocks.push }, settings: ref({}), refreshRelated: vi.fn() })
     await workbench.updateFollowStatus({ lead_id: 7, follow_status: '未私信' }, '已私信')
     expect(mocks.patch).not.toHaveBeenCalled()
   })
   it('selects the requested customer detail by its persistent lead identity', async () => {
     mocks.get.mockResolvedValue({ data: { customer: { lead_id: 7 }, sources: [], events: [] } })
-    const workbench = useMessageWorkbench({ settings: ref({}), refreshRelated: vi.fn() })
+    const workbench = useMessageWorkbench({ router: { push: mocks.push }, settings: ref({}), refreshRelated: vi.fn() })
     await workbench.selectCustomer('7')
     expect(mocks.get).toHaveBeenCalledWith('/message-workbench/customers/7')
     expect(workbench.detail.value.customer.lead_id).toBe(7)
+  })
+  it.each(['prepare', 'fill-only'])('opens a Douyin draft through %s without sending or changing follow status', async mode => {
+    const workbench = useMessageWorkbench({ router: { push: mocks.push }, settings: ref({ auto_dm_fill_only: true }), refreshRelated: vi.fn() })
+    const customer = { lead_id: 7, platform: 'dy', account_id: 'brand', script: '预填话术' }
+    if (mode === 'prepare') await workbench.messageCustomer(customer)
+    else await workbench.autoMessageCustomer(customer)
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+    expect(mocks.post).toHaveBeenCalledWith('/message-inbox/conversations', { account_id: 'brand', lead_id: 7 })
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { account_id: 'brand', conversation: '12', draft: '预填话术' } })
+    expect(window.open).not.toHaveBeenCalled()
+    expect(mocks.patch).not.toHaveBeenCalled()
   })
 })

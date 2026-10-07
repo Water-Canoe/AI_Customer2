@@ -33,7 +33,7 @@
           </nav>
           <RouterView v-slot="{ Component }">
             <!-- 保留详情和来源树的位置；创建表单、设置页仍正常卸载并执行离页保护。 -->
-            <KeepAlive :include="['AiPage', 'OverviewPage', 'MessageWorkbenchPage']" :max="3"><component :is="Component" v-bind="routeProps" v-on="routeListeners" /></KeepAlive>
+            <KeepAlive :include="['AiPage', 'OverviewPage', 'MessageWorkbenchPage', 'MessageInboxPage']" :max="4"><component :is="Component" v-bind="routeProps" v-on="routeListeners" /></KeepAlive>
           </RouterView>
         </div>
       </el-main>
@@ -93,6 +93,7 @@ const trafficRefreshSeq = ref(0)
 const automationRefreshSeq = ref(0)
 const runtimeRefreshSeq = ref(0)
 const messageSettingsRefreshSeq = ref(0)
+const messageInboxRefreshSeq = ref(0)
 const globalSettingsRefreshSeq = ref(0)
 const workspaceRefreshSeq = ref(0)
 const contentEnv = ref<Dict>({})
@@ -217,13 +218,14 @@ const {
   retryBatch: retryMessageAutoBatch,
   deleteBatch: deleteMessageAutoBatch,
 } = useMessageWorkbench({
+  router,
   settings,
   refreshRelated: () => Promise.allSettled([loadOverview(), loadAiJobs(), loadTable(activeLibrary.value, true)]),
 })
 
 const activeView = computed(() => String(route.name || 'workspace'))
 const acquisitionTabs = [['acquisition', '采集与结果'], ['ai', 'AI筛选'], ['overview', '来源与证据'], ['settings', '采集与筛选规则']]
-const messageTabs = [['message-workbench', '客户跟进'], ['message-batches', '触达记录'], ['message-settings', '私信设置']]
+const messageTabs = [['message-workbench', '客户跟进'], ['message-inbox', '私信收件箱'], ['message-batches', '触达记录'], ['message-settings', '私信设置']]
 const isAcquisitionView = computed(() => acquisitionTabs.some(([name]) => name === activeView.value) || activeView.value === 'tables')
 const isAutomationView = computed(() => activeView.value === 'automation-plans')
 const isRuntimeView = computed(() => activeView.value === 'runtime-center')
@@ -237,7 +239,7 @@ const activeMenuItem = computed(() => isAcquisitionView.value ? 'acquisition' : 
 const activeMenuGroup = computed(() => isContentView.value ? 'content-workbench' : '')
 const topbarKicker = computed(() => activeView.value === 'workspace' ? '日常工作' : activeView.value === 'accounts' ? '配置' : isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isMessageView.value ? '私信工作台' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))))
 const viewTitle = computed(() => isAcquisitionView.value ? '获客工作台' : isMessageView.value ? '客户工作台' : String(route.meta.title || '工作台'))
-const viewSubtitle = computed(() => isAcquisitionView.value ? '从采集、筛选到来源证据，在同一工作区推进获客。' : isMessageView.value ? '跟进客户、查看触达结果和调整私信规则。' : String(route.meta.subtitle || ''))
+const viewSubtitle = computed(() => isAcquisitionView.value ? '从采集、筛选到来源证据，在同一工作区推进获客。' : isMessageView.value ? '跟进客户、收发私信、查看触达结果和调整私信规则。' : String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
 const showEnvironmentStatus = computed(() => ['acquisition', 'settings', 'content-create', 'content-settings', 'traffic-plans', 'traffic-settings'].includes(activeView.value))
 const topbarEnvOk = computed(() => isContentView.value ? Boolean(contentEnv.value?.ok) : isTrafficView.value ? Boolean(trafficEnv.value?.ok) : envReady.value)
@@ -288,6 +290,7 @@ const routeProps = computed(() => {
     }
   }
   if (activeView.value === 'message-batches') return { batches: messageBatches.value }
+  if (activeView.value === 'message-inbox') return { refreshSeq: messageInboxRefreshSeq.value }
   if (activeView.value === 'message-settings') {
     return {
       settings: settings.value,
@@ -667,6 +670,9 @@ function currentViewLoaders(includeStatic: boolean, refreshChild: boolean) {
   } else if (activeView.value === 'message-batches') {
     // 初次打开和自动刷新均服从地址中的批次及分页，避免覆盖页签恢复的位置。
     loaders.push(() => loadMessageBatches(String(route.query.batch || ''), { page: Number(route.query.page || 1), page_size: Number(route.query.page_size || 10), item_page: Number(route.query.item_page || 1), item_page_size: Number(route.query.item_page_size || 20) }))
+  } else if (activeView.value === 'message-inbox') {
+    // 收件箱自己刷新消息，应用壳只传递首次进入和手动刷新。
+    if (includeStatic) loaders.push(async () => { messageInboxRefreshSeq.value += 1 })
   } else if (activeView.value === 'message-settings') {
     if (!settingsDraftDirty.value) loaders.push(loadSettings)
     if (includeStatic || refreshChild) loaders.push(async () => { messageSettingsRefreshSeq.value += 1 })

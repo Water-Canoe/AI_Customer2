@@ -48,7 +48,7 @@ def update_message_limits(daily_limit: int, hourly_limit: int) -> dict[str, Any]
     return get_message_limits()
 
 
-def reserve_message_attempt(lead_id: int, source: str, source_id: str) -> int:
+def reserve_message_attempt(lead_id: int | None, source: str, source_id: str, *, allow_repeat: bool = False) -> int:
     with database.connect() as conn:
         # 额度判断和尝试写入放在同一写事务内，避免并发发送突破限额。
         conn.execute("BEGIN IMMEDIATE")
@@ -61,7 +61,8 @@ def reserve_message_attempt(lead_id: int, source: str, source_id: str) -> int:
             "SELECT 1 FROM message_send_attempts WHERE lead_account_id = ? AND date(attempted_at) = date('now', 'localtime') LIMIT 1",
             (lead_id,),
         ).fetchone()
-        if attempted:
+        # 收件箱允许正常连续回复，主动获客仍保持每日一次尝试。
+        if attempted and not allow_repeat:
             raise MessageQuotaReached("该客户今天已尝试私信，不再自动重试")
         cursor = conn.execute(
             "INSERT INTO message_send_attempts(lead_account_id, source, source_id) VALUES(?, ?, ?)",

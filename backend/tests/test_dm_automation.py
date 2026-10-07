@@ -141,13 +141,13 @@ def test_send_page_starts_work_after_navigation_commit(monkeypatch: pytest.Monke
     assert page.goto_options == {"wait_until": "commit", "timeout": 60000}
 
 
-def test_message_workbench_loads_dm_module_from_backend_cwd() -> None:
+def test_im_transport_imports_from_backend_cwd() -> None:
     backend_root = WORKSPACE_ROOT / "backend"
     completed = subprocess.run(
         [
             sys.executable,
             "-c",
-            "from app.services.message_workbench import _load_douyin_dm_module; print(_load_douyin_dm_module().__name__)",
+            "from app.services import douyin_im_transport; print(douyin_im_transport.__name__)",
         ],
         cwd=backend_root,
         capture_output=True,
@@ -158,4 +158,4 @@ def test_message_workbench_loads_dm_module_from_backend_cwd() -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == "tools.douyin_dm_automation.automation"
+    assert completed.stdout.strip() == "app.services.douyin_im_transport"

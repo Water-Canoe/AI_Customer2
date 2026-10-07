@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 def current_version(conn: sqlite3.Connection) -> int:

@@ -92,7 +92,7 @@ function renderBatchHistoryCard(batch: Dict, selected: boolean, select: () => vo
     h('div', { class: 'message-batch-card-metrics' }, [
       h('span', `目标 ${batch.total_count || 0}`),
       h('span', `成功 ${batch.success_count || 0}`),
-      h('span', `失败 ${batch.failed_count || 0}`),
+      h('span', `失败/待确认 ${batch.failed_count || 0}`),
       h('span', `跳过 ${batch.skipped_count || 0}`),
     ]),
     h('small', batch.created_at || '-'),
@@ -119,7 +119,7 @@ function renderBatchDetail(batch: Dict, items: Dict[], pagination: Dict, actions
       renderBatchMetric('状态', batchStatusLabel(String(batch.status || ''))),
       renderBatchMetric('目标客户', batch.total_count || 0),
       renderBatchMetric('发送成功', batch.success_count || 0),
-      renderBatchMetric('发送失败', batch.failed_count || 0),
+      renderBatchMetric('失败/待确认', batch.failed_count || 0),
       renderBatchMetric('已跳过', batch.skipped_count || 0),
     ]),
     h('section', { class: 'message-batch-meta-panel' }, [
@@ -191,6 +191,7 @@ export function batchStatusLabel(status: string) {
     running: '执行中',
     succeeded: '成功',
     failed: '失败',
+    uncertain: '结果待确认',
     skipped: '跳过',
     cancelled: '已取消',
     quota_reached: '额度已用完',

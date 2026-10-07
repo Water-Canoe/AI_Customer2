@@ -20,19 +20,21 @@ from app.routers import (
     lead_accounts,
     libraries,
     message,
+    message_inbox,
     overview,
     runtime,
     system,
     tasks,
     traffic,
 )
-from app.services import automation_workbench, data_management, job_handlers, job_queue, license_service, profile_manager
+from app.services import automation_workbench, data_management, job_handlers, job_queue, license_service, profile_manager, message_inbox as inbox_service
 from app.version import APP_VERSION
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     database.init_db()
+    inbox_service.recover_pending_sends()
     license_service.check_license()
     job_queue.configure_handlers(job_handlers)
     job_queue.start()
@@ -41,6 +43,7 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         automation_workbench.stop_scheduler()
+        inbox_service.shutdown()
         job_queue.shutdown()
         profile_manager.shutdown()
 
@@ -74,6 +77,7 @@ for api_router in (
     data_governance.router,
     drafts.router,
     message.router,
+    message_inbox.router,
     ai.router,
     content.router,
     runtime.router,

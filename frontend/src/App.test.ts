@@ -49,6 +49,9 @@ describe('统一业务工作区', () => {
       if (url === '/overview/children') return { data: { items: [], total: 11, total_pages: 2, page_size: 10, page: options.params.page } }
       if (url === '/settings') return { data: { ai_base_url: 'https://example.test', icp_profile: {}, dm_script_mode: 'fixed', fixed_dm_script: '已保存话术' } }
       if (url === '/accounts') return { data: ['account-1', 'account-2'].map(id => ({ id, name: id, enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } })) }
+      if (url === '/message-inbox/conversations') return { data: [{ id: 12, account_id: options.params.account_id, nickname: '聊天客户', peer_user_id: 'peer', unread_count: 0, lead_id: null }] }
+      if (url.startsWith('/message-inbox/accounts/')) return { data: { state: 'disconnected', receive_ready: true, send_ready: true, error: '', history_scope: 'local' } }
+      if (url === '/message-inbox/conversations/12/messages') return { data: { messages: [], has_more: false } }
       if (url === '/message-workbench/keywords') return { data: [{ platform: 'dy', keyword: '设备', label: '设备' }] }
       if (url === '/message-workbench/customers') return { data: { rows: [{ lead_id: 77, nickname: '客户七十七', platform: 'dy', follow_status: '未私信' }], total: 60, ...options.params } }
       if (url.startsWith('/message-workbench/customers/')) return { data: {
@@ -127,7 +130,7 @@ describe('统一业务工作区', () => {
     const navigation = view.get('nav[aria-label="客户工作区"]').element
     expect(view.get('h1').text()).toBe('客户工作台')
     expect(view.get('.nav').attributes('default-active')).toBe('message-workbench')
-    expect(view.findAll('nav button').map(button => button.text())).toEqual(['客户跟进', '触达记录', '私信设置'])
+    expect(view.findAll('nav button').map(button => button.text())).toEqual(['客户跟进', '私信收件箱', '触达记录', '私信设置'])
     await view.get('.auto-message-account select').setValue('account-2')
     await view.findAll('button').find(button => button.text().startsWith('跟进历史'))!.trigger('click')
     view.get('.message-detail-drawer').findComponent(ListPagination).vm.$emit('change', { page: 2, page_size: 10 })
@@ -201,5 +204,16 @@ describe('统一业务工作区', () => {
     await tab('私信设置')
     expect((view.get('textarea').element as HTMLTextAreaElement).value).toBe('已保存话术')
     expect(mocks.put).not.toHaveBeenCalled()
+  })
+  it('keeps the inbox selection and unsent text when switching customer tabs without connecting', async () => {
+    const { router, view } = await open('/message-inbox?account_id=account-2&conversation=12')
+    const navigation = view.get('nav[aria-label="客户工作区"]').element
+    await view.get('.inbox-composer textarea').setValue('未发送的聊天草稿')
+    await tab('客户跟进')
+    await tab('私信收件箱')
+    expect(view.get('nav[aria-label="客户工作区"]').element).toBe(navigation)
+    expect(router.currentRoute.value.query).toEqual({ account_id: 'account-2', conversation: '12' })
+    expect((view.get('.inbox-composer textarea').element as HTMLTextAreaElement).value).toBe('未发送的聊天草稿')
+    expect(mocks.post).not.toHaveBeenCalled()
   })
 })

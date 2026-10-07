@@ -230,14 +230,13 @@ def enqueue_traffic_run(run_id: str, *, conn: Any | None = None) -> dict[str, An
 
 
 def enqueue_message_batch(batch_id: str, *, conn: Any | None = None) -> dict[str, Any]:
-    return enqueue("message_batch", entity_id=batch_id, payload={"batch_id": batch_id}, resource="browser", conn=conn)
+    return enqueue("message_batch", entity_id=batch_id, payload={"batch_id": batch_id}, resource="default", conn=conn)
 
 
 def enqueue_single_message(
     lead_id: int,
     *,
     dry_run: bool,
-    timeout_seconds: int,
     message_script: str,
     script_label: str,
     account_id: str,
@@ -248,12 +247,11 @@ def enqueue_single_message(
         payload={
             "lead_id": int(lead_id),
             "dry_run": bool(dry_run),
-            "timeout_seconds": int(timeout_seconds),
             "message_script": message_script,
             "script_label": script_label,
             "account_id": account_id,
         },
-        resource="browser",
+        resource="default",
     )
 
 
@@ -524,7 +522,7 @@ def recover_interrupted_jobs() -> dict[str, int]:
         conn.execute(
             """
             UPDATE message_batch_items
-            SET status = 'failed', error = ?, finished_at = datetime('now', 'localtime'),
+            SET status = 'uncertain', error = ?, finished_at = datetime('now', 'localtime'),
                 updated_at = datetime('now', 'localtime')
             WHERE status = 'running'
             """,

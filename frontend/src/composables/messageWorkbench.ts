@@ -1,11 +1,13 @@
 import { ref, type Ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { Router } from 'vue-router'
 
 import { api } from '../shared/api'
 import type { Dict } from '../shared/types'
 
 
 type MessageWorkbenchOptions = {
+  router: Pick<Router, 'push'>
   settings: Ref<Dict>
   refreshRelated: () => Promise<unknown>
 }
@@ -102,6 +104,11 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     const profileUrl = String(row.profile_url || '').trim()
     if (!leadId) return ElMessage.error('当前客户缺少线索ID，无法标记私信')
     if (!script.text) return ElMessage.error(script.emptyMessage)
+    if (row.platform === 'dy') {
+      try { await openMessageDraft(row, script.text) }
+      catch (error: any) { ElMessage.error(error?.response?.data?.detail || '私信草稿打开失败') }
+      return
+    }
     if (!profileUrl) return ElMessage.error('当前客户缺少主页链接，无法打开主页')
     try {
       const homepage = window.open(profileUrl, '_blank')
@@ -140,9 +147,12 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     if (row.platform !== 'dy') return ElMessage.error('自动私信当前只支持抖音客户')
     if (!script.text) return ElMessage.error(script.emptyMessage)
     try {
+      if (options.settings.value.auto_dm_fill_only) {
+        await openMessageDraft(row, script.text)
+        return
+      }
       const { data } = await api.post(`/message-workbench/customers/${leadId}/auto-message`, {
-        dry_run: Boolean(options.settings.value.auto_dm_fill_only),
-        timeout_seconds: Number(options.settings.value.auto_dm_timeout_seconds || 0),
+        dry_run: false,
         message_script: script.text,
         script_label: script.label,
         account_id: String(row.account_id || ''),
@@ -152,6 +162,13 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     } catch (error: any) {
       ElMessage.error(error?.response?.data?.detail || '自动私信失败')
     }
+  }
+
+  // 草稿入口只创建本地会话；不请求发送、不占用额度、不推进跟进状态。
+  async function openMessageDraft(row: Dict, text: string) {
+    const account = String(row.account_id || '')
+    const { data } = await api.post('/message-inbox/conversations', { account_id: account, lead_id: row.lead_id || row.id })
+    await options.router.push({ path: '/message-inbox', query: { account_id: account, conversation: String(data.id), draft: text } })
   }
 
   async function startBatch(payload: Dict) {

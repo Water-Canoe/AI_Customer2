@@ -20,6 +20,10 @@ azure-cognitiveservices-speech==1.41.1
 python-multipart==0.0.27
 pyyaml==6.0.3
 requests==2.33.1
+curl_cffi==0.16.3
+ecdsa==0.19.2
+protobuf==5.29.6
+websocket-client==1.9.0
 socksio==1.0.0
 pydub==0.25.1
 litellm==1.86.2

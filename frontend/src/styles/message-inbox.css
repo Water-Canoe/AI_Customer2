@@ -1,0 +1,44 @@
+/* 桌面聊天工作区：会话与记录各自滚动，输入框始终保留在当前会话内。 */
+.message-inbox-page .inbox-account-bar { display: flex; flex-direction: column; gap: 14px; }
+.inbox-account-heading h2 { margin: 0 0 6px; font-size: 19px; }
+.inbox-account-heading p, .inbox-scope { margin: 0; font-size: 13px; }
+.inbox-account-picker { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.inbox-account-picker select { width: 190px; min-height: 38px; padding: 8px 10px; }
+.inbox-connection-status { padding: 6px 10px; border-radius: 6px; background: #f2f4f7; color: var(--app-muted); font-size: 12px; }
+.inbox-connection-status.is-connected { background: #edf5f2; color: var(--app-accent); }
+.inbox-connection-status.is-error { background: #fff1f2; color: #b42318; }
+.message-inbox-page .inbox-layout { display: grid; grid-template-columns: 250px minmax(320px, 1fr) 190px; gap: 0; padding: 0; min-height: 550px; height: calc(100vh - 390px); overflow: hidden; }
+.inbox-conversations { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--app-border); }
+.inbox-search { display: flex; align-items: center; gap: 6px; padding: 16px 12px; border-bottom: 1px solid var(--app-border); }
+.inbox-search input { width: 100%; min-width: 0; padding: 9px 10px; }
+.inbox-search button { flex-shrink: 0; padding: 8px 10px !important; }
+.inbox-conversation-list { flex: 1; min-height: 0; overflow-y: auto; }
+.inbox-conversation { width: 100%; display: block; padding: 16px; border: 0; border-bottom: 1px solid var(--app-border); border-radius: 0; background: transparent; text-align: left; color: var(--app-text); }
+.inbox-conversation:hover, .inbox-conversation.is-active { background: #edf5f2; }
+.inbox-conversation-title { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.inbox-conversation-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-conversation p { margin: 8px 0 5px; color: var(--app-muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-conversation time { color: var(--app-muted); font-size: 11px; }
+.inbox-unread { padding: 2px 6px; border-radius: 10px; color: #fff; background: var(--app-accent); font-size: 11px; flex-shrink: 0; }
+.inbox-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.inbox-chat-header { display: flex; align-items: center; gap: 12px; padding: 20px; border-bottom: 1px solid var(--app-border); }
+.inbox-chat-header .note { font-size: 12px; }
+.inbox-transcript { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; background: #fafcfb; }
+.inbox-message { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; margin-bottom: 18px; }
+.inbox-message.is-outgoing { align-items: flex-end; }
+.inbox-message-content { max-width: 85%; padding: 11px 14px; border: 1px solid var(--app-border); border-radius: 10px; background: #fff; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; }
+.inbox-message.is-outgoing .inbox-message-content { border-color: #d2e7df; background: #edf5f2; }
+.inbox-message-meta { display: flex; gap: 10px; color: var(--app-muted); font-size: 11px; }
+.inbox-delivery.is-failed { color: #b42318; }
+.inbox-delivery.is-uncertain { color: #a15c00; }
+.inbox-earlier { display: block; margin: 0 auto 18px; }
+.inbox-composer { padding: 14px 18px; border-top: 1px solid var(--app-border); }
+.inbox-composer textarea { display: block; width: 100%; resize: vertical; min-height: 70px; max-height: 200px; padding: 10px; }
+.inbox-composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.inbox-composer-actions .note { font-size: 11px; }
+.inbox-customer { padding: 20px 16px; border-left: 1px solid var(--app-border); overflow-y: auto; font-size: 13px; overflow-wrap: anywhere; }
+.inbox-customer h3 { margin: 0 0 20px; font-size: 15px; }
+.inbox-customer p { line-height: 1.7; }
+.inbox-customer button { margin-top: 12px; }
+.inbox-empty { padding: 24px 16px; text-align: center; color: var(--app-muted); font-size: 13px; line-height: 1.7; }
+.inbox-select-hint { margin: auto; }

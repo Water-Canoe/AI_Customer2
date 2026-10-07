@@ -7,10 +7,16 @@ from fastapi.responses import FileResponse
 
 from app.api_dependencies import require_license
 from app.schemas import PlatformAccountCreate, PlatformAccountResponse, PlatformAccountUpdate, RuntimeJobResponse
-from app.services import account_center, job_queue
+from app.services import account_center, job_queue, message_inbox
 
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+
+
+def _ensure_im_idle(account_id: str) -> None:
+    # 账号维护不能替换仍在收发私信的会话认证。
+    if account_id in message_inbox.active_accounts():
+        raise HTTPException(status_code=409, detail="请先断开该账号的私信连接并等待发送结束，再操作账号")
 
 
 @router.get("", response_model=list[PlatformAccountResponse])
@@ -39,6 +45,7 @@ def create_account(payload: PlatformAccountCreate) -> dict[str, object]:
 @router.patch("/{account_id}", response_model=PlatformAccountResponse)
 def update_account(account_id: str, payload: PlatformAccountUpdate) -> dict[str, object]:
     require_license()
+    _ensure_im_idle(account_id)
     try:
         return account_center.update_account(account_id, payload.model_dump(exclude_none=True))
     except ValueError as exc:
@@ -48,6 +55,7 @@ def update_account(account_id: str, payload: PlatformAccountUpdate) -> dict[str,
 @router.delete("/{account_id}")
 def delete_account(account_id: str) -> dict[str, object]:
     require_license()
+    _ensure_im_idle(account_id)
     try:
         return account_center.delete_account(account_id)
     except RuntimeError as exc:
@@ -59,6 +67,7 @@ def delete_account(account_id: str) -> dict[str, object]:
 @router.post("/{account_id}/login", response_model=RuntimeJobResponse)
 def login_account(account_id: str, login_kind: Literal["user", "creator"] = "user") -> dict[str, object]:
     require_license()
+    _ensure_im_idle(account_id)
     try:
         account_center.set_login_status(account_id, login_kind, "checking")
         return job_queue.enqueue_account_job(account_id, "login", login_kind)
@@ -69,6 +78,7 @@ def login_account(account_id: str, login_kind: Literal["user", "creator"] = "use
 @router.post("/{account_id}/check", response_model=RuntimeJobResponse)
 def check_account(account_id: str, login_kind: Literal["user", "creator"] = "user") -> dict[str, object]:
     require_license()
+    _ensure_im_idle(account_id)
     try:
         account_center.set_login_status(account_id, login_kind, "checking")
         return job_queue.enqueue_account_job(account_id, "check", login_kind)

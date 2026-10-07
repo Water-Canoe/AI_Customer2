@@ -126,7 +126,7 @@ def test_restore_rejects_old_schema_before_overwriting_current_data(
 
     with database.connect() as conn:
         assert database.get_setting(conn, "ai_model") == "保留当前配置"
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
 
 
 def test_active_jobs_covers_runtime_content_and_pending_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

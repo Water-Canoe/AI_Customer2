@@ -56,6 +56,7 @@ export default defineComponent({
     const intervalMax = ref(savedBatchConfig.max)
     const accounts = ref<PlatformAccount[]>([])
     const accountId = ref('')
+    const openingConversation = ref(false)
     const sourcePage = ref(1)
     const eventPage = ref(1)
     async function loadAccounts() {
@@ -113,6 +114,18 @@ export default defineComponent({
 
     function runSearch() {
       changeFilter({ query: queryDraft.value.trim(), page: 1 })
+    }
+
+    // 只创建本地会话并打开收件箱，不在此处发送消息或启动监听。
+    async function openConversation(customer: Dict) {
+      if (!accountId.value || openingConversation.value || customer.platform !== 'dy') return
+      const account = accountId.value
+      openingConversation.value = true
+      try {
+        const { data } = await api.post('/message-inbox/conversations', { account_id: account, lead_id: customer.lead_id })
+        await router.push({ path: '/message-inbox', query: { account_id: account, conversation: String(data.id) } })
+      } catch (error: any) { ElMessage.error(error?.response?.data?.detail || '会话打开失败') }
+      finally { openingConversation.value = false }
     }
 
     return () => h('div', { class: 'workspace-page operations-page' }, [
@@ -180,6 +193,9 @@ export default defineComponent({
           eventPage: eventPage.value,
           setSourcePage: (value: number) => { sourcePage.value = value },
           setEventPage: (value: number) => { eventPage.value = value },
+          accountId: accountId.value,
+          openingConversation: openingConversation.value,
+          openConversation,
         }))
       ])
     ])
@@ -362,16 +378,16 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict, accountId: stri
           h('button', {
             type: 'button',
             class: ['text-icon-button', autoDmUnsupported ? 'is-platform-disabled' : ''],
-            disabled: autoDmUnsupported || !sendScript || !row.profile_url || !accountId,
-            title: autoDmUnsupported ? '自动私信当前只支持抖音客户' : !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : !accountId ? '请先在账号中心配置私信账号' : '自动打开抖音主页并处理话术',
+            disabled: autoDmUnsupported || !sendScript || !accountId,
+            title: autoDmUnsupported ? '自动私信当前只支持抖音客户' : !sendScript ? missingScriptTip : !accountId ? '请先在账号中心配置私信账号' : settings.auto_dm_fill_only ? '在收件箱生成草稿，由你手动发送' : '通过私信接口发送话术',
             onClick: () => emit('auto-message-customer', { ...row, account_id: accountId })
           }, [h(Promotion), h('span', '自动私信')]),
           h('button', {
             type: 'button',
             class: 'text-icon-button',
-            disabled: !sendScript || !row.profile_url,
-            title: !sendScript ? missingScriptTip : !row.profile_url ? '缺少客户主页' : '复制话术并打开主页，不修改跟进状态',
-            onClick: () => emit('message-customer', row)
+            disabled: !sendScript || (row.platform === 'dy' ? !accountId : !row.profile_url),
+            title: !sendScript ? missingScriptTip : row.platform === 'dy' ? '在私信收件箱预填话术，不发送消息' : '复制话术并打开主页，不修改跟进状态',
+            onClick: () => emit('message-customer', row.platform === 'dy' ? { ...row, account_id: accountId } : row)
           }, [h(CopyDocument), h('span', '准备私信')]),
           ['待筛选', '未私信'].includes(String(row.follow_status)) ? h('button', { type: 'button', class: 'text-icon-button', onClick: () => emit('confirm-message-customer', row) }, '确认已发送') : null
         ]),
@@ -443,6 +459,11 @@ function renderDetailDrawer(detail: Dict, emit: any, pagination: Dict) {
       ]),
       h('button', { type: 'button', class: 'icon-button', title: '关闭详情', 'aria-label': '关闭详情', onClick: () => emit('close-detail') }, [h(Close)])
     ]),
+    customer.platform === 'dy' ? h('div', { class: 'toolbar operations-next-actions' }, [h('button', {
+      class: 'secondary-action', disabled: !pagination.accountId || pagination.openingConversation,
+      title: pagination.accountId ? '使用当前私信账号打开聊天窗口' : '请先配置可用的抖音私信账号',
+      onClick: () => pagination.openConversation(customer),
+    }, pagination.openingConversation ? '打开中…' : '打开私信会话')]) : null,
     h('div', {
       class: ['drawer-section', 'drawer-script-section', rawScript ? 'copyable-script' : 'empty-script'],
       title: rawScript ? `${rawScript}\n点击复制AI话术` : script,

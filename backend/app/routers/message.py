@@ -58,7 +58,6 @@ def message_workbench_customer_auto_message(
         return job_queue.enqueue_single_message(
             lead_id,
             dry_run=payload.dry_run,
-            timeout_seconds=payload.timeout_seconds,
             message_script=payload.message_script,
             script_label=payload.script_label,
             account_id=payload.account_id,

@@ -88,11 +88,13 @@ def active_jobs() -> list[dict[str, Any]]:
 
 
 def ensure_idle(action: str) -> None:
-    from app.services import profile_manager
+    from app.services import profile_manager, message_inbox
 
     browser = profile_manager.status()
     if browser.get('interactive_active') or browser.get('runtime_active'):
         raise ValueError(f'浏览器登录或执行会话仍在使用账号目录，不能{action}，请先结束会话')
+    if message_inbox.active_accounts():
+        raise ValueError(f'私信连接或发送仍在运行，不能{action}，请先断开连接并等待发送结束')
     active = active_jobs()
     if not active:
         return

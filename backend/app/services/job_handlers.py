@@ -72,7 +72,6 @@ def execute_job(job: dict[str, Any]) -> Any:
             message_workbench.auto_message_customer(
                 int(payload["lead_id"]),
                 dry_run=bool(payload.get("dry_run")),
-                timeout_seconds=int(payload.get("timeout_seconds") or 0),
                 message_script=str(payload.get("message_script") or ""),
                 script_label=str(payload.get("script_label") or "AI话术"),
                 account_id=str(payload.get("account_id") or ""),
@@ -400,7 +399,7 @@ def normalize_interrupted_domain(conn: Any, job: dict[str, Any], reason: str) ->
             (reason, batch_id),
         )
         conn.execute(
-            "UPDATE message_batch_items SET status = 'failed', error = ?, finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime') WHERE batch_id = ? AND status = 'running'",
+            "UPDATE message_batch_items SET status = 'uncertain', error = ?, finished_at = datetime('now', 'localtime'), updated_at = datetime('now', 'localtime') WHERE batch_id = ? AND status = 'running'",
             (reason, batch_id),
         )
     if kind == "video_generation":

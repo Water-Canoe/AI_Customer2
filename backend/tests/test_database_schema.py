@@ -15,10 +15,10 @@ def test_current_schema_initializes_directly_and_keeps_existing_data() -> None:
     conn.set_trace_callback(statements.append)
     migrations.initialize(conn, database.SCHEMA_SQL)
 
-    assert migrations.current_version(conn) == migrations.latest_version() == 15
+    assert migrations.current_version(conn) == migrations.latest_version() == 16
     tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert not tables.intersection({"schema_migrations", "traffic_campaigns", "agent_runs", "agent_run_events"})
-    assert {"automation_plans", "content_assets", "runtime_jobs", "account_feature_bindings", "drafts", "video_outputs"} <= tables
+    assert {"automation_plans", "content_assets", "runtime_jobs", "account_feature_bindings", "drafts", "video_outputs", "im_conversations", "im_messages"} <= tables
     assert not {'publish_results', 'outputs'} & {row["name"] for row in conn.execute("PRAGMA table_info(video_jobs)")}
     assert not any(statement.lstrip().startswith(("ALTER ", "DROP ", "UPDATE ")) for statement in statements)
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -32,7 +32,7 @@ def test_current_schema_initializes_directly_and_keeps_existing_data() -> None:
     conn.close()
 
 
-@pytest.mark.parametrize("version", [0, 13, 14, 16])
+@pytest.mark.parametrize("version", [0, 14, 15, 17])
 def test_initialization_rejects_incompatible_databases_without_modifying_them(version: int) -> None:
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE existing_data(value TEXT)")

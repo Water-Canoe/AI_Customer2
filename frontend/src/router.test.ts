@@ -34,11 +34,14 @@ describe('工作台路由', () => {
   it('私信工作台拆分客户跟进、批次记录和设置页', () => {
     const workbenchRoute = routes.find(route => route.name === 'message-workbench')
     const batchesRoute = routes.find(route => route.name === 'message-batches')
+    const inboxRoute = routes.find(route => route.name === 'message-inbox')
     const settingsRoute = routes.find(route => route.name === 'message-settings')
 
     expect(workbenchRoute?.meta?.title).toBe('客户跟进')
     expect(batchesRoute?.path).toBe('/message-batches')
     expect(batchesRoute?.meta?.title).toBe('触达记录')
+    expect(inboxRoute?.path).toBe('/message-inbox')
+    expect(inboxRoute?.meta?.title).toBe('私信收件箱')
     expect(settingsRoute?.path).toBe('/message-settings')
     expect(settingsRoute?.meta?.title).toBe('私信设置')
   })
@@ -49,6 +52,7 @@ describe('工作台路由', () => {
     expect(resolveSelectedMessageBatch({ batches, selected_batch_id: 'old' })?.id).toBe('old')
     expect(resolveSelectedMessageBatch({ batches, selected_batch_id: '' })?.id).toBe('new')
     expect(batchStatusLabel('quota_reached')).toBe('额度已用完')
+    expect(batchStatusLabel('uncertain')).toBe('结果待确认')
   })
 
   it('账号中心独立可达，系统设置保留授权与数据保护', () => {

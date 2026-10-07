@@ -736,14 +736,7 @@ def test_message_batch_rechecks_current_safety_switch_without_send_fact_or_quota
         batch = dict(conn.execute("SELECT * FROM message_batches WHERE id='safety-batch'").fetchone())
         # 模拟任务排队后设置改变；保存的业务话术仍使用原快照。
         database.set_setting(conn, 'auto_dm_fill_only', 'true' if current_fill_only else 'false')
-    sent = []
-
-    class Sender:
-        async def send_douyin_dm_on_page(self, _page, _url, script, **kwargs):
-            sent.append((script, kwargs['dry_run']))
-
-    asyncio.run(message_workbench._run_batch_item(object(), item, batch, Sender()))
-    assert sent == [('提交时话术', True)]
+    asyncio.run(message_workbench._run_batch_item(item, batch))
     with database.connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM message_send_attempts').fetchone()[0] == 0
         assert conn.execute('SELECT COUNT(*) FROM lead_status_events').fetchone()[0] == 0

@@ -10,6 +10,7 @@ const RuntimeCenterPage = () => import('./pages/RuntimeCenterPage')
 const AcquisitionWorkbenchPage = () => import('./pages/AcquisitionWorkbenchPage')
 const WorkspacePage = () => import('./pages/WorkspacePage')
 const MessageWorkbenchPage = () => import('./pages/MessageWorkbenchPage')
+const MessageInboxPage = () => import('./pages/MessageInboxPage')
 const MessageBatchPage = () => import('./pages/MessageBatchPage')
 const MessageSettingsPage = () => import('./pages/MessageSettingsPage')
 const OverviewPage = () => import('./pages/OverviewPage')
@@ -75,6 +76,12 @@ export const routes = [
     name: 'message-workbench',
     component: MessageWorkbenchPage,
     meta: { title: '客户跟进', subtitle: '按关键词推进客户私信、回访和成交状态。', hint: '把客户变成可执行跟进队列' },
+  },
+  {
+    path: '/message-inbox',
+    name: 'message-inbox',
+    component: MessageInboxPage,
+    meta: { title: '私信收件箱', subtitle: '选择抖音账号，接收新消息并在工作台回复。', module: '客户' },
   },
   {
     path: '/message-batches',

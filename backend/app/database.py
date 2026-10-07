@@ -312,7 +312,6 @@ CREATE TABLE message_batches (
     interval_min_seconds INTEGER NOT NULL DEFAULT 0,
     interval_max_seconds INTEGER NOT NULL DEFAULT 0,
     fill_only INTEGER NOT NULL DEFAULT 0,
-    timeout_seconds INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'pending',
     total_count INTEGER NOT NULL DEFAULT 0,
     success_count INTEGER NOT NULL DEFAULT 0,
@@ -731,6 +730,53 @@ ON publish_accounts(platform, name) WHERE deleted_at IS NULL;
 CREATE INDEX idx_publish_accounts_status
 ON publish_accounts(enabled, status, platform, created_at DESC);
 
+CREATE TABLE im_conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    peer_user_id TEXT NOT NULL,
+    nickname TEXT NOT NULL DEFAULT '',
+    avatar TEXT NOT NULL DEFAULT '',
+    lead_id INTEGER,
+    platform_conversation_id TEXT NOT NULL DEFAULT '',
+    conversation_short_id INTEGER NOT NULL DEFAULT 0,
+    ticket TEXT NOT NULL DEFAULT '',
+    last_message TEXT NOT NULL DEFAULT '',
+    last_message_at TEXT NOT NULL DEFAULT '',
+    last_message_id INTEGER NOT NULL DEFAULT 0,
+    unread_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(account_id, peer_user_id),
+    UNIQUE(id, account_id),
+    FOREIGN KEY(account_id) REFERENCES publish_accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY(lead_id) REFERENCES lead_user_accounts(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_im_conversations_account_recent
+ON im_conversations(account_id, last_message_id DESC);
+
+CREATE TABLE im_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    conversation_id INTEGER NOT NULL,
+    platform_message_id TEXT NOT NULL DEFAULT '',
+    client_message_id TEXT NOT NULL DEFAULT '',
+    direction TEXT NOT NULL CHECK(direction IN ('incoming', 'outgoing')),
+    content TEXT NOT NULL,
+    message_type TEXT NOT NULL DEFAULT 'text',
+    raw_content TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL CHECK(status IN ('received', 'sending', 'accepted', 'failed', 'uncertain')),
+    error TEXT NOT NULL DEFAULT '',
+    sent_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY(conversation_id, account_id) REFERENCES im_conversations(id, account_id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX idx_im_messages_platform_identity
+ON im_messages(account_id, platform_message_id) WHERE platform_message_id <> '';
+
+CREATE INDEX idx_im_messages_conversation_page
+ON im_messages(conversation_id, id DESC);
+
 CREATE TABLE publish_tasks (
     id TEXT PRIMARY KEY,
     batch_id TEXT NOT NULL,
@@ -803,7 +849,7 @@ CREATE TABLE automation_run_items (
 
 CREATE TABLE message_send_attempts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    lead_account_id INTEGER NOT NULL,
+    lead_account_id INTEGER,
     source TEXT NOT NULL,
     source_id TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'reserved',
@@ -915,7 +961,6 @@ DEFAULT_SETTINGS = {
     "dm_script_mode": "ai",
     "fixed_dm_script": "",
     "auto_dm_fill_only": "false",
-    "auto_dm_timeout_seconds": "300",
     "message_daily_limit": "",
     "message_hourly_limit": "",
     "douyin_detail_sleep_seconds": "2",

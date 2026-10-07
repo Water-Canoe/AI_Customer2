@@ -15,7 +15,6 @@ const MESSAGE_SETTING_KEYS = [
   'dm_script_mode',
   'fixed_dm_script',
   'auto_dm_fill_only',
-  'auto_dm_timeout_seconds',
 ]
 
 
@@ -110,7 +109,6 @@ export default defineComponent({
         }),
         h('div', { class: 'form-grid' }, [
           numberField(local, 'unreplied_reminder_days', '未回复提醒天数', '默认 3 天；填 0 表示不提醒', markDirty),
-          numberField(local, 'auto_dm_timeout_seconds', '只填内容等待秒数', '等待人工确认的窗口保留时间', markDirty),
           h('label', [
             '私信话术来源',
             h('select', {
@@ -141,7 +139,7 @@ export default defineComponent({
               onFocus: markDirty,
               onChange: (event: Event) => { local.auto_dm_fill_only = (event.target as HTMLInputElement).checked; markDirty() },
             }),
-            '自动私信只填内容，不点击发送',
+            '单客户自动私信只生成草稿，由我手动发送',
           ]),
         ]),
         h('div', { class: 'action-row' }, [
@@ -165,7 +163,7 @@ export default defineComponent({
         h(ElAlert, {
           title: limits.value.notice || '这里只统计本软件产生的私信，无法感知平台 App 内手动发送数量。',
           type: limits.value.fill_only ? 'error' : 'warning',
-          description: limits.value.fill_only ? '当前已开启“只填内容不发送”，自动私信计划不能启用或运行。' : '',
+          description: limits.value.fill_only ? '当前使用手动发送草稿，批量与定时自动私信不能运行。' : '',
           showIcon: true,
           closable: false,
         }),
