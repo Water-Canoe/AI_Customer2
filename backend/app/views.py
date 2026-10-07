@@ -7,6 +7,7 @@ from typing import Any
 
 from app import database
 from app.services.importer import COMMENT_TABLES, CONTENT_TABLES, CREATOR_TABLES
+from app.services.message_inbox import HIDDEN_CONVERSATION_PREFIX
 
 
 LIBRARY_LABELS = {
@@ -80,7 +81,8 @@ INTERNAL_SETTING_KEYS = {"media_crawler_path", "media_crawler_db_path", "license
 def get_settings() -> dict[str, Any]:
     with database.connect() as conn:
         rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
-    result = {row["key"]: row["value"] for row in rows}
+    # 会话隐藏标记属于业务记录，不作为用户设置返回。
+    result = {row["key"]: row["value"] for row in rows if not row["key"].startswith(HIDDEN_CONVERSATION_PREFIX)}
     api_key_configured = bool(str(result.get("ai_api_key") or "").strip())
     for key in INTERNAL_SETTING_KEYS:
         result.pop(key, None)

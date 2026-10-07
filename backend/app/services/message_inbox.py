@@ -25,6 +25,7 @@ _profile_checked: set[tuple[str, str]] = set()
 _profile_errors: dict[str, str] = {}
 _runtime_lock = threading.RLock()
 _CONVERSATION_FIELDS = 'id,account_id,peer_user_id,nickname,avatar,lead_id,platform_conversation_id,last_message,last_message_at,unread_count'
+HIDDEN_CONVERSATION_PREFIX = 'message_inbox_hidden:'
 
 
 def _account(account_id: str, *, ready: bool = False) -> dict[str, Any]:
@@ -184,6 +185,8 @@ def create_conversation(account_id: str, *, lead_id: int | None = None, peer_use
             (account_id, peer['peer_user_id'], peer['nickname'], peer['avatar'], lead_id),
         )
         row = conn.execute('SELECT id FROM im_conversations WHERE account_id=? AND peer_user_id=?', (account_id, peer['peer_user_id'])).fetchone()
+        # 主动打开仍使用原会话；只恢复列表显示，不重建聊天记录。
+        conn.execute('DELETE FROM settings WHERE key=?', (f'{HIDDEN_CONVERSATION_PREFIX}{account_id}:{row["id"]}',))
         return _public_conversation(conn, account_id, int(row['id']))
 
 
@@ -192,10 +195,20 @@ def list_conversations(account_id: str, query: str = '') -> list[dict[str, Any]]
     with database.connect() as conn:
         return database.rows_to_dicts(conn.execute(
             f'''SELECT {_CONVERSATION_FIELDS} FROM im_conversations WHERE account_id=?
+                AND NOT EXISTS(SELECT 1 FROM settings WHERE key=? || im_conversations.id)
                 AND (?='' OR instr(nickname,?)>0 OR instr(last_message,?)>0 OR instr(peer_user_id,?)>0)
                 ORDER BY last_message_id DESC,id DESC''',
-            (account_id, query, query, query, query),
+            (account_id, f'{HIDDEN_CONVERSATION_PREFIX}{account_id}:', query, query, query, query),
         ).fetchall())
+
+
+def hide_conversation(account_id: str, conversation_id: int) -> dict[str, Any]:
+    """仅从当前账号的会话列表移除，保留会话和全部消息。"""
+    _account(account_id)
+    with database.connect() as conn:
+        _conversation(conn, account_id, conversation_id)
+        database.set_setting(conn, f'{HIDDEN_CONVERSATION_PREFIX}{account_id}:{conversation_id}', '1')
+    return {'ok': True}
 
 
 def refresh_conversation_profiles(account_id: str) -> None:
@@ -280,6 +293,8 @@ def record_received(account_id: str, event: dict[str, Any]) -> None:
             (account_id, peer, lead['nickname'] if lead else str(event.get('nickname') or ''), lead['avatar'] if lead else '', lead['id'] if lead else None, str(event['conversation_id']), int(event.get('conversation_short_id') or 0)),
         )
         conversation_id = int(conn.execute('SELECT id FROM im_conversations WHERE account_id=? AND peer_user_id=?', (account_id, peer)).fetchone()['id'])
+        # 仅去重后真实新增的消息恢复列表，重放旧推送不会打扰用户。
+        conn.execute('DELETE FROM settings WHERE key=?', (f'{HIDDEN_CONVERSATION_PREFIX}{account_id}:{conversation_id}',))
         content = str(event.get('content') or '')
         sent_at = str(event.get('sent_at') or datetime.now().astimezone().isoformat(timespec='seconds'))
         cursor = conn.execute(

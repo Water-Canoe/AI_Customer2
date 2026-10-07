@@ -80,6 +80,11 @@ def messages(conversation_id: int, account_id: str = Query(min_length=1), before
     return _call(message_inbox.list_messages, account_id, conversation_id, before_id=before_id, limit=limit)
 
 
+@router.delete('/conversations/{conversation_id}')
+def hide_conversation(conversation_id: int, account_id: str = Query(min_length=1)):
+    return _call(message_inbox.hide_conversation, account_id, conversation_id)
+
+
 @router.post('/conversations/{conversation_id}/read')
 def mark_read(conversation_id: int, account_id: str = Query(min_length=1), up_to_id: int = Query(gt=0)):
     return _call(message_inbox.mark_read, account_id, conversation_id, up_to_id)

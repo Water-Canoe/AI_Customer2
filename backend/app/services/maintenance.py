@@ -6,6 +6,7 @@ from typing import Any
 
 from app import database
 from app.services import data_management
+from app.services.message_inbox import HIDDEN_CONVERSATION_PREFIX
 
 
 CONFIRM_TEXT = "清空业务记录"
@@ -75,6 +76,8 @@ def _clear_project_database(conn: sqlite3.Connection) -> dict[str, Any]:
         for table in cleared_tables:
             deleted[table] = _table_count(conn, table)
             conn.execute(f"DELETE FROM {database.quote_identifier(table)}")
+        # 会话列表隐藏标记随业务记录清空，保留其它用户配置。
+        conn.execute('DELETE FROM settings WHERE key GLOB ?', (f'{HIDDEN_CONVERSATION_PREFIX}*',))
         _reset_sequences(conn, cleared_tables)
         database.set_setting(conn, "next_task_number", "1")
     finally:

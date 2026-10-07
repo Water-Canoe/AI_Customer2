@@ -102,6 +102,58 @@ def test_missing_profiles_are_saved_once_and_failures_preserve_conversations(inb
     assert len(message_inbox.list_conversations(account_id)) == 2
 
 
+def test_hidden_conversation_keeps_history_and_returns_only_for_new_message_or_explicit_open(inbox):
+    account, _ = inbox
+    account_id = account('客服')
+    message_inbox.record_received(account_id, _event('before-hide'))
+    conversation = message_inbox.list_conversations(account_id)[0]
+    assert message_inbox.hide_conversation(account_id, conversation['id']) == {'ok': True}
+    from app import views
+    hidden_key = f'{message_inbox.HIDDEN_CONVERSATION_PREFIX}{account_id}:{conversation["id"]}'
+    assert hidden_key not in views.get_settings()
+    views.update_settings({hidden_key: '0'})
+    # 每次读取都重新连接数据库，验证隐藏标记持久化且搜索也不能恢复。
+    assert message_inbox.list_conversations(account_id) == []
+    assert message_inbox.list_conversations(account_id, '123456') == []
+    assert len(message_inbox.list_messages(account_id, conversation['id'])['messages']) == 1
+    message_inbox.record_received(account_id, _event('before-hide'))
+    assert message_inbox.list_conversations(account_id) == []
+    message_inbox.record_received(account_id, _event('after-hide'))
+    assert message_inbox.list_conversations(account_id)[0]['id'] == conversation['id']
+    assert len(message_inbox.list_messages(account_id, conversation['id'])['messages']) == 2
+    message_inbox.hide_conversation(account_id, conversation['id'])
+    reopened = message_inbox.create_conversation(account_id, peer_user_id='123456')
+    assert reopened['id'] == conversation['id']
+    assert message_inbox.list_conversations(account_id)[0]['id'] == conversation['id']
+    assert len(message_inbox.list_messages(account_id, conversation['id'])['messages']) == 2
+    message_inbox.hide_conversation(account_id, conversation['id'])
+    from app.services import maintenance
+    with database.connect() as conn:
+        maintenance._clear_project_database(conn)
+        assert conn.execute('SELECT 1 FROM settings WHERE key=?', (hidden_key,)).fetchone() is None
+        assert database.get_setting(conn, 'unreplied_reminder_days') == '3'
+
+
+def test_hide_route_is_account_scoped_and_does_not_remove_messages(inbox):
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    account, _ = inbox
+    first, second = account('客服一'), account('客服二')
+    message_inbox.record_received(first, _event('private-first'))
+    message_inbox.record_received(second, _event('private-second'))
+    conversation = message_inbox.list_conversations(first)[0]
+    client = TestClient(app)
+    path = f'/api/message-inbox/conversations/{conversation["id"]}'
+    assert client.delete(path, params={'account_id': second}).status_code == 400
+    assert message_inbox.list_conversations(first)
+    assert client.delete(path, params={'account_id': first}).json() == {'ok': True}
+    assert client.delete(path, params={'account_id': first}).json() == {'ok': True}
+    assert message_inbox.list_conversations(first) == []
+    assert len(message_inbox.list_conversations(second)) == 1
+    assert len(message_inbox.list_messages(first, conversation['id'])['messages']) == 1
+
+
 def test_new_local_customer_profile_updates_existing_conversation(inbox):
     account, _ = inbox
     account_id = account('客服')

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MessageInboxPage from './MessageInboxPage'
 import { ListPagination } from '../components/ui/ListPagination'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), warning: vi.fn(), error: vi.fn() }))
-vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post } }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn(), warning: vi.fn(), error: vi.fn() }))
+vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post, delete: mocks.delete } }))
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   return {
@@ -47,6 +47,7 @@ describe('私信收件箱', () => {
       return { data: {} }
     })
     mocks.post.mockResolvedValue({ data: status })
+    mocks.delete.mockResolvedValue({ data: { ok: true } })
   })
   afterEach(() => { wrapper?.unmount(); wrapper = undefined; vi.useRealTimers() })
 
@@ -209,6 +210,125 @@ describe('私信收件箱', () => {
     await wrapper!.findAll('button').find(item => item.text() === '查看客户详情')!.trigger('click')
     expect(wrapper!.get('.message-detail-drawer').findAll('.source-card')).toHaveLength(10)
     expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('保留当前聊天草稿')
+  })
+
+  it('refreshes sent and replied states for the same customer without closing detail or losing pages and drafts', async () => {
+    let followStatus = '未私信'
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => {
+      if (url === '/message-inbox/conversations') return Promise.resolve({ data: [{ ...conversation(1), lead_id: 7 }] })
+      if (url === '/message-workbench/customers/7') return Promise.resolve({ data: {
+        customer: { lead_id: 7, nickname: '关联客户七', platform: 'dy', follow_status: followStatus },
+        sources: Array.from({ length: 11 }, (_, i) => ({ comment_text: `来源证据${i + 1}` })),
+        events: followStatus === '已回复' ? [{ from_status: '已私信', to_status: '已回复', note: '收到客户回复' }] : [],
+      } })
+      return normal(url, options)
+    })
+    await open()
+    await wrapper!.findAll('button').find(item => item.text() === '查看客户详情')!.trigger('click')
+    wrapper!.get('.message-detail-drawer').findComponent(ListPagination).vm.$emit('change', { page: 2, page_size: 10 })
+    await wrapper!.get('textarea').setValue('首次发送内容')
+    followStatus = '已私信'
+    mocks.post.mockResolvedValueOnce({ data: message(20, '首次发送内容', 'accepted') })
+    await wrapper!.get('.inbox-composer').trigger('submit')
+    await flushPromises()
+    expect(wrapper!.get('.inbox-customer').text()).toContain('跟进：已私信')
+    expect(wrapper!.get('.message-detail-drawer').text()).toContain('来源证据11')
+    await wrapper!.get('textarea').setValue('保留草稿')
+    followStatus = '已回复'
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(wrapper!.get('.inbox-customer').text()).toContain('跟进：已回复')
+    expect(wrapper!.get('.message-detail-drawer').text()).toContain('跟进历史 (1)')
+    expect(wrapper!.get('.message-detail-drawer').findAll('.source-card')).toHaveLength(1)
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('保留草稿')
+  })
+
+  it('removes the selected conversation from the list and restores its draft when it becomes visible again', async () => {
+    let hidden = false
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => url === '/message-inbox/conversations'
+      ? Promise.resolve({ data: hidden ? [conversation(3)] : [conversation(1), conversation(3)] }) : normal(url, options))
+    mocks.delete.mockImplementation(async () => { hidden = true; return { data: { ok: true } } })
+    const router = await open()
+    await wrapper!.get('textarea').setValue('删除会话仍保留草稿')
+    expect(wrapper!.find('.inbox-conversation button').exists()).toBe(false)
+    await wrapper!.get('[aria-label="删除会话：会话1"]').trigger('click')
+    await flushPromises()
+    expect(mocks.delete).toHaveBeenCalledWith('/message-inbox/conversations/1', { params: { account_id: 'account-a' } })
+    expect(router.currentRoute.value.query).not.toHaveProperty('conversation')
+    expect(wrapper!.find('textarea').exists()).toBe(false)
+    expect(wrapper!.findAll('.inbox-conversation-title strong').map(item => item.text())).toEqual(['会话3'])
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(wrapper!.findAll('.inbox-conversation')).toHaveLength(1)
+    // 新消息使原会话重新可见，选择后仍能查看原记录、继续编辑原草稿。
+    hidden = false
+    await vi.advanceTimersByTimeAsync(4000)
+    await wrapper!.findAll('.inbox-conversation').find(item => item.text().includes('会话1'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper!.text()).toContain('当前消息')
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('删除会话仍保留草稿')
+  })
+
+  it('clears the linked customer and drawer when search removes the selected conversation', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => {
+      if (url === '/message-inbox/conversations') return Promise.resolve({ data: options.params.query ? [] : [{ ...conversation(1), lead_id: 7 }] })
+      if (url === '/message-workbench/customers/7') return Promise.resolve({ data: {
+        customer: { lead_id: 7, nickname: '当前关联客户', platform: 'dy' }, sources: [], events: [],
+      } })
+      return normal(url, options)
+    })
+    await open()
+    await wrapper!.get('textarea').setValue('保留聊天草稿')
+    await wrapper!.findAll('button').find(item => item.text() === '查看客户详情')!.trigger('click')
+    expect(wrapper!.find('.message-detail-drawer').exists()).toBe(true)
+    await wrapper!.get('[aria-label="搜索会话"]').setValue('不匹配的会话')
+    await wrapper!.get('.inbox-search').trigger('submit')
+    await flushPromises()
+    expect(wrapper!.get('.inbox-customer').text()).toContain('选择会话后查看客户信息')
+    expect(wrapper!.find('.message-detail-drawer').exists()).toBe(false)
+    await wrapper!.get('[aria-label="搜索会话"]').setValue('')
+    await wrapper!.get('.inbox-search').trigger('submit')
+    await flushPromises()
+    expect(wrapper!.get('.inbox-customer').text()).toContain('当前关联客户')
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('保留聊天草稿')
+  })
+
+  it('keeps the current chat when another conversation is removed and rejects a stale list response', async () => {
+    let finish!: (value: any) => void
+    const router = await open()
+    await wrapper!.get('textarea').setValue('当前会话草稿')
+    const normal = mocks.get.getMockImplementation()!
+    let oldPoll = true
+    mocks.get.mockImplementation((url: string, options: any) => {
+      if (url === '/message-inbox/conversations') {
+        if (oldPoll) { oldPoll = false; return new Promise(resolve => { finish = resolve }) }
+        return Promise.resolve({ data: [conversation(1)] })
+      }
+      return normal(url, options)
+    })
+    await vi.advanceTimersByTimeAsync(4000)
+    await wrapper!.get('[aria-label="删除会话：会话3"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.conversation).toBe('1')
+    expect(wrapper!.get('.inbox-chat-header').text()).toContain('会话1')
+    finish({ data: [conversation(1), conversation(3)] })
+    await flushPromises()
+    expect(wrapper!.findAll('.inbox-conversation-title strong').map(item => item.text())).toEqual(['会话1'])
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('当前会话草稿')
+  })
+
+  it('keeps the conversation and draft after a failed deletion', async () => {
+    const router = await open()
+    await wrapper!.get('textarea').setValue('未发送内容')
+    mocks.delete.mockRejectedValueOnce({ response: { data: { detail: '删除会话被拒绝' } } })
+    await wrapper!.get('[aria-label="删除会话：会话1"]').trigger('click')
+    await flushPromises()
+    expect(mocks.error).toHaveBeenCalledWith('删除会话被拒绝')
+    expect(wrapper!.findAll('.inbox-conversation')).toHaveLength(2)
+    expect(router.currentRoute.value.query.conversation).toBe('1')
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('未发送内容')
+    expect((wrapper!.get('[aria-label="删除会话：会话1"]').element as HTMLButtonElement).disabled).toBe(false)
   })
 
   it.each([

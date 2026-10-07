@@ -39,6 +39,7 @@ export default defineComponent({
     const error = ref('')
     const actionBusy = ref(false)
     const sending = ref(false)
+    const deletingConversations = ref(new Set<number>())
     const loadingEarlier = ref(false)
     const hasMore = ref(false)
     const transcript = ref<HTMLElement | null>(null)
@@ -79,9 +80,8 @@ export default defineComponent({
         conversations.value = results[1].data
         error.value = ''
         if (selected.value) {
-          await loadMessages(token)
-          await loadCustomer(token)
-        }
+          await Promise.all([loadMessages(token), loadCustomer(token)])
+        } else await loadCustomer(token)
       } catch (cause: any) {
         if (current(token)) error.value = apiError(cause, '私信收件箱加载失败')
       }
@@ -150,15 +150,35 @@ export default defineComponent({
       if (!current(token)) return
       const lead = selected.value?.lead_id
       const key = `${accountId.value}:${lead || ''}`
-      if (key === customerKey) return
-      customerDetail.value = null
-      showCustomerDetail.value = false
-      detailTab.value = 'sources'
-      sourcePage.value = eventPage.value = 1
+      // 同一客户也刷新状态；只有关联对象改变时才关闭详情并重置分页。
+      if (key !== customerKey) {
+        customerDetail.value = null
+        showCustomerDetail.value = false
+        detailTab.value = 'sources'
+        sourcePage.value = eventPage.value = 1
+      }
       if (!lead) { customerKey = key; return }
       const { data } = await api.get(`/message-workbench/customers/${lead}`)
       // 只保存当前会话仍关联的客户，迟到响应不能覆盖其它客户。
       if (current(token) && selected.value?.lead_id === lead) { customerDetail.value = data; customerKey = key }
+    }
+    async function deleteConversation(item: Conversation) {
+      if (deletingConversations.value.has(item.id)) return
+      const account = accountId.value
+      deletingConversations.value.add(item.id)
+      try {
+        await api.delete(`/message-inbox/conversations/${item.id}`, { params: { account_id: account } })
+        if (active && account === accountId.value) {
+          // 作废删除前的列表响应，防止迟到的轮询把已隐藏会话放回列表。
+          revision += 1
+          conversations.value = conversations.value.filter(row => row.id !== item.id)
+          if (conversationId.value === item.id) { setSelection(account, 0); navigate(account) }
+          void refresh.trigger('route')
+          ElMessage.success('会话已从列表删除，聊天记录已保留')
+        }
+      } catch (cause: any) {
+        if (active && account === accountId.value) ElMessage.error(apiError(cause, '删除会话失败'))
+      } finally { deletingConversations.value.delete(item.id) }
     }
     async function earlier() {
       if (loadingEarlier.value || !messages.value.length) return
@@ -260,13 +280,18 @@ export default defineComponent({
             h('input', { value: search.value, placeholder: '搜索会话', 'aria-label': '搜索会话', onInput: (event: Event) => search.value = (event.target as HTMLInputElement).value }),
             h('button', { type: 'submit' }, '搜索'),
           ]),
-          h('div', { class: 'inbox-conversation-list' }, conversations.value.length ? conversations.value.map(item => h('button', {
+          h('div', { class: 'inbox-conversation-list' }, conversations.value.length ? conversations.value.map(item => h('div', {
+            key: item.id, class: ['inbox-conversation-row', item.id === conversationId.value ? 'is-active' : ''],
+          }, [h('button', {
             type: 'button', class: ['inbox-conversation', item.id === conversationId.value ? 'is-active' : ''], 'aria-pressed': item.id === conversationId.value,
             onClick: () => navigate(accountId.value, item.id),
           }, [avatar(item), h('div', { class: 'inbox-conversation-summary' }, [h('div', { class: 'inbox-conversation-title' }, [h('strong', { title: item.nickname || item.peer_user_id }, item.nickname || item.peer_user_id), item.unread_count ? h('span', { class: 'inbox-unread', 'aria-label': `${item.unread_count} 条未读` }, String(item.unread_count)) : null]),
             h('p', item.last_message || '暂无消息'), h('time', item.last_message_at || ''),
           ]),
-          ])) : h('p', { class: 'inbox-empty' }, accountId.value ? '暂无本地会话，可从客户详情打开会话。' : '请先配置抖音私信账号。')),
+          ]), h('button', {
+            type: 'button', class: 'inbox-conversation-delete', 'aria-label': `删除会话：${item.nickname || item.peer_user_id}`,
+            title: '从会话列表删除，保留聊天记录', disabled: deletingConversations.value.has(item.id), onClick: () => deleteConversation(item),
+          }, deletingConversations.value.has(item.id) ? '删除中' : '删除')])) : h('p', { class: 'inbox-empty' }, accountId.value ? '暂无本地会话，可从客户详情打开会话。' : '请先配置抖音私信账号。')),
         ]),
         h('div', { class: 'inbox-chat' }, selected.value ? [
           h('header', { class: 'inbox-chat-header' }, [avatar(selected.value), h('strong', { title: selected.value.nickname || selected.value.peer_user_id }, selected.value.nickname || selected.value.peer_user_id), h('span', { class: 'note' }, '抖音私信')]),
