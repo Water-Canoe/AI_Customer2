@@ -4,11 +4,13 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 import websocket
+from curl_cffi import CurlError
 from app.vendor.douyin_spider.builder.auth import DouyinAuth
 from app.vendor.douyin_spider.builder.header import HeaderBuilder
 from app.vendor.douyin_spider.builder.params import Params
@@ -17,6 +19,8 @@ from app.vendor.douyin_spider.static import Live_pb2, Response_pb2
 
 
 _send_auths: dict[str, tuple[str, DouyinAuth]] = {}
+# 项目仅此服务使用 websocket-client；握手不能无限等待网络恢复。
+websocket.setdefaulttimeout(15)
 
 
 def close_send_auth(account_id: str) -> None:
@@ -177,38 +181,72 @@ def receive_forever(credentials: dict[str, Any], on_message: Callable[[dict], No
     current: list[Any] = [None]
     watcher_done = threading.Event()
     fatal: list[Exception] = []
+    last_activity = time.monotonic()
+    opened_at = 0.0
+    timed_out_socket: Any = None
 
     def stop_watcher() -> None:
-        # 外部停止时及时关闭阻塞的run_forever，而不是等待下一条消息。
+        nonlocal last_activity, timed_out_socket
+        # 复用停止监视线程；收到消息或 Pong 都算活跃，无聊天也不会误判断线。
         while not watcher_done.wait(0.1):
+            ws = current[0]
+            if ws is None:
+                continue
             if stop_event.is_set():
-                if current[0] is not None:
-                    current[0].close()
+                ws.close()
+            elif not fatal and time.monotonic() - last_activity >= 75:
+                # 状态由主接收循环更新，不能覆盖同时发生的解析/保存/认证错误。
+                timed_out_socket = ws
+                last_activity = time.monotonic()
+                ws.close()
 
     def opened(ws: Any) -> None:
+        nonlocal last_activity, opened_at
         if stop_event.is_set():
             ws.close()
             return
         try:
+            opened_at = last_activity = time.monotonic()
             on_state('connected', '')
         except Exception as exc:
             fatal.append(exc)
             ws.close()
 
     def received(ws: Any, raw: bytes) -> None:
+        nonlocal last_activity
+        last_activity = time.monotonic()
         try:
             event = _decode_message(raw, own_uid)
-            if event is not None:
-                on_message(event)
         except Exception as exc:
+            on_state('error', f'私信消息解析失败（{type(exc).__name__}），接收已停止')
             fatal.append(exc)
             ws.close()
+            return
+        if event is None:
+            return
+        try:
+            on_message(event)
+        except Exception as exc:
+            on_state('error', f'私信消息保存失败（{type(exc).__name__}），接收已停止，请检查本地存储')
+            fatal.append(exc)
+            ws.close()
+
+    def pong(ws: Any, data: Any) -> None:
+        nonlocal last_activity
+        last_activity = time.monotonic()
 
     def failed(ws: Any, error: Exception) -> None:
         # websocket错误可能携带含token的URL，不向界面/日志原样输出。
         if isinstance(error, websocket.WebSocketBadStatusException) and error.status_code in (401, 403):
+            on_state('expired', '私信登录已失效或被平台拒绝，请同步账号认证后重新连接')
             fatal.append(ValueError('私信登录已失效或被平台拒绝，请同步账号认证'))
             ws.close()
+        elif isinstance(error, websocket.WebSocketBadStatusException) and 400 <= error.status_code < 500 and error.status_code != 429:
+            on_state('error', f'私信连接被平台拒绝（HTTP {error.status_code}），接收已停止')
+            fatal.append(ValueError('私信连接参数被平台拒绝'))
+            ws.close()
+        elif not stop_event.is_set() and not fatal:
+            on_state('reconnecting', '接收连接中断，正在自动重连')
 
     def closed(ws: Any, code: Any, reason: Any) -> None:
         return  # 正常关闭与异常关闭统一交给外层循环决定重连。
@@ -219,13 +257,21 @@ def receive_forever(credentials: dict[str, Any], on_message: Callable[[dict], No
         on_state('connecting', '')
         if stop_event.is_set():
             return
-        try:
-            own_uid = _numeric_uid(auth.get_uid())
-            url = _websocket_url(auth)
-        except Exception:
-            raise ValueError('无法确认私信登录账号与设备，请重新同步登录材料') from None
         backoff = 1.0
         while not stop_event.is_set():
+            try:
+                own_uid = _numeric_uid(auth.get_uid())
+                # 每次握手重建参数，使用该认证对象的当前 Cookie 与设备标识。
+                url = _websocket_url(auth)
+            except (CurlError, OSError, websocket.WebSocketException):
+                on_state('reconnecting', '暂时无法连接私信服务，正在自动重连')
+                if stop_event.wait(backoff):
+                    break
+                backoff = min(backoff * 2, 30.0)
+                continue
+            except Exception:
+                on_state('error', '无法确认私信登录账号与设备，请重新同步登录材料')
+                raise ValueError('无法确认私信登录账号与设备，请重新同步登录材料') from None
             ws = websocket.WebSocketApp(
                 url=url,
                 header={'Pragma': 'no-cache',
@@ -234,18 +280,29 @@ def receive_forever(credentials: dict[str, Any], on_message: Callable[[dict], No
                         'Sec-WebSocket-Protocol': 'binary, base64, pbbp2',
                         'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits'},
                 cookie=auth.cookie_str,
-                on_open=opened, on_message=received, on_error=failed, on_close=closed,
+                on_open=opened, on_message=received, on_error=failed, on_close=closed, on_pong=pong,
             )
+            opened_at = 0.0
+            last_activity = time.monotonic()
             current[0] = ws
             if stop_event.is_set():
                 break
-            ws.run_forever(origin='https://www.douyin.com', ping_interval=25, ping_timeout=10)
-            current[0] = None
+            try:
+                ws.run_forever(origin='https://www.douyin.com', ping_interval=25, ping_timeout=10)
+            except (OSError, websocket.WebSocketException) as exc:
+                failed(ws, exc)
+            finally:
+                current[0] = None
+                ws.close()
             if fatal:
                 raise fatal[0]
             if stop_event.is_set():
                 break
-            on_state('reconnecting', '连接断开，正在重新连接；断线期间消息暂不支持补拉')
+            # 稳定连接后从 1 秒重试；连续建立即断开则继续退避，避免频繁握手。
+            if opened_at and time.monotonic() - opened_at >= 60:
+                backoff = 1.0
+            on_state('reconnecting', '接收连接心跳超时，正在自动重连' if timed_out_socket is ws
+                     else '连接断开，正在自动重连；断线期间消息暂不支持补拉')
             if stop_event.wait(backoff):
                 break
             backoff = min(backoff * 2, 30.0)
@@ -254,7 +311,8 @@ def receive_forever(credentials: dict[str, Any], on_message: Callable[[dict], No
         if current[0] is not None:
             current[0].close()
         auth.close()
-        on_state('stopped', '')
+        if stop_event.is_set():
+            on_state('stopped', '')
 
 
 def send_text(credentials: dict[str, Any], peer_user_id: str, text: str,

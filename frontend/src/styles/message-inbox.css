@@ -6,7 +6,7 @@
 .inbox-account-picker select { width: 190px; min-height: 38px; padding: 8px 10px; }
 .inbox-connection-status { padding: 6px 10px; border-radius: 6px; background: #f2f4f7; color: var(--app-muted); font-size: 12px; }
 .inbox-connection-status.is-connected { background: #edf5f2; color: var(--app-accent); }
-.inbox-connection-status.is-error { background: #fff1f2; color: #b42318; }
+.inbox-connection-status.is-error, .inbox-connection-status.is-expired { background: #fff1f2; color: #b42318; }
 .message-inbox-page .inbox-layout { display: grid; grid-template-columns: 250px minmax(320px, 1fr) 190px; gap: 0; padding: 0; min-height: 550px; height: calc(100vh - 390px); overflow: hidden; }
 .inbox-conversations { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--app-border); }
 .inbox-search { display: flex; align-items: center; gap: 6px; padding: 16px 12px; border-bottom: 1px solid var(--app-border); }

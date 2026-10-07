@@ -136,6 +136,21 @@ describe('私信收件箱', () => {
     expect(wrapper!.findAll('[role="alert"]').map(item => item.text())).toEqual(['账号认证异常', '用户资料获取失败，请重新连接后重试'])
     expect(wrapper!.text()).toContain('当前消息')
   })
+  it.each([
+    ['reconnecting', '正在自动重连', true],
+    ['expired', '接收认证已失效', false],
+    ['error', '接收已停止', false],
+  ])('shows %s without silently starting another connection', async (state, label, reconnecting) => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation((url: string, options: any) => url.endsWith('/status')
+      ? Promise.resolve({ data: { ...status, state, error: '连接状态提示' } }) : normal(url, options))
+    await open()
+    expect(wrapper!.get('[role="status"]').text()).toBe(label)
+    expect(wrapper!.findAll('button').some(item => item.text() === '断开接收')).toBe(reconnecting)
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(wrapper!.text()).toContain('当前消息')
+  })
   it('imports a prepared draft once and keeps subsequent edits through refresh and tab restoration', async () => {
     const router = await open('/message-inbox?account_id=account-a&conversation=1&draft=初始话术')
     expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('初始话术')

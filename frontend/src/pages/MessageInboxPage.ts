@@ -334,5 +334,5 @@ export default defineComponent({
 
 function apiError(error: any, fallback: string) { return typeof error?.response?.data?.detail === 'string' ? error.response.data.detail : fallback }
 function mergeMessages(previous: Message[], incoming: Message[]) { return [...new Map([...previous, ...incoming].map(item => [item.id, item])).values()].sort((left, right) => left.id - right.id) }
-function connectionLabel(state: string) { return ({ connected: '接收已连接', connecting: '正在连接', reconnecting: '正在重连', disconnected: '接收未连接', error: '连接异常' } as Record<string, string>)[state] || '接收未连接' }
+function connectionLabel(state: string) { return ({ connected: '接收已连接', connecting: '正在连接', reconnecting: '正在自动重连', disconnecting: '正在断开', disconnected: '接收未连接', expired: '接收认证已失效', error: '接收已停止' } as Record<string, string>)[state] || '接收未连接' }
 function deliveryLabel(status: string) { return ({ sending: '发送中', accepted: '已提交', failed: '发送失败', uncertain: '结果待确认', received: '已接收' } as Record<string, string>)[status] || '结果待确认' }

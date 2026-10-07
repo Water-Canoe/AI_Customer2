@@ -137,6 +137,185 @@ def test_message_save_failure_stops_listener(monkeypatch):
             save_failed, lambda state, error='': None, stop)
 
 
+def test_transient_preparation_and_socket_errors_retry_with_current_auth(monkeypatch):
+    stop = threading.Event()
+    waits, sockets, states = [], [], []
+    monkeypatch.setattr(stop, 'wait', lambda delay: waits.append(delay) or stop.is_set())
+    original_url = transport._websocket_url
+    attempts = []
+
+    def prepare(auth):
+        attempts.append(auth)
+        if len(attempts) == 1:
+            raise OSError('offline')
+        return original_url(auth)
+
+    class FakeSocket:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            sockets.append(self)
+
+        def run_forever(self, **kwargs):
+            self.kwargs['on_open'](self)
+            if len(sockets) == 1:
+                attempts[-1].cookie['sessionid'] = 'updated-test-session'
+                raise transport.websocket.WebSocketTimeoutException('network timeout')
+            stop.set()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(transport, '_websocket_url', prepare)
+    monkeypatch.setattr(transport.websocket, 'WebSocketApp', FakeSocket)
+    transport.receive_forever({'cookie_str': 'sessionid=offline-test', 'user_id': '11', 'device_id': '33'},
+                             lambda event: None, lambda state, error='': states.append(state), stop)
+    assert len(sockets) == 2 and len(attempts) == 3
+    assert waits == [1, 2]
+    assert 'token=updated-test-session' in sockets[1].kwargs['url']
+    assert 'sessionid=updated-test-session' in sockets[1].kwargs['cookie']
+    assert states[-2:] == ['connected', 'stopped']
+
+
+def test_heartbeat_detects_silent_connection_but_pongs_keep_idle_chat_alive(monkeypatch):
+    stop = threading.Event()
+    clock = [1.0]
+    checked, closed = threading.Event(), threading.Event()
+    sockets, states = [], []
+
+    def now():
+        if threading.current_thread().name == 'douyin-im-stop':
+            checked.set()
+        return clock[0]
+
+    monkeypatch.setattr(transport, 'time', SimpleNamespace(monotonic=now))
+    monkeypatch.setattr(stop, 'wait', lambda delay: stop.is_set())
+
+    class FakeSocket:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            sockets.append(self)
+
+        def run_forever(self, **kwargs):
+            assert kwargs['ping_interval'] == 25 and kwargs['ping_timeout'] == 10
+            self.kwargs['on_open'](self)
+            if len(sockets) == 2:
+                stop.set()
+                return
+            # 无客户消息，服务器心跳回复仍维持连接；模拟时钟避免真实等待 75 秒。
+            clock[0] += 70
+            self.kwargs['on_pong'](self, b'')
+            checked.clear()
+            assert checked.wait(2)
+            assert not closed.is_set()
+            clock[0] += 76
+            assert closed.wait(2), '静默连接没有被健康检测关闭'
+
+        def close(self):
+            closed.set()
+
+    monkeypatch.setattr(transport.websocket, 'WebSocketApp', FakeSocket)
+    transport.receive_forever({'cookie_str': 'sessionid=offline-test', 'user_id': '11', 'device_id': '33'},
+                             lambda event: None, lambda state, error='': states.append((state, error)), stop)
+    assert len(sockets) == 2
+    assert any(state == 'reconnecting' and '心跳超时' in error for state, error in states)
+
+
+@pytest.mark.parametrize(('code', 'state'), [(401, 'expired'), (403, 'expired'), (400, 'error')])
+def test_rejected_auth_or_connection_does_not_retry_or_expose_credentials(monkeypatch, code, state):
+    stop = threading.Event()
+    states, sockets = [], []
+
+    class FakeSocket:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            sockets.append(self)
+
+        def run_forever(self, **kwargs):
+            self.kwargs['on_error'](self, transport.websocket.WebSocketBadStatusException('token=private-secret', status_code=code))
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(transport.websocket, 'WebSocketApp', FakeSocket)
+    with pytest.raises(ValueError):
+        transport.receive_forever({'cookie_str': 'sessionid=offline-test', 'user_id': '11', 'device_id': '33'},
+                                 lambda event: None, lambda value, error='': states.append((value, error)), stop)
+    assert len(sockets) == 1 and states[-1][0] == state
+    assert 'private-secret' not in str(states)
+
+
+def test_heartbeat_race_does_not_overwrite_auth_failure(monkeypatch):
+    stop = threading.Event()
+    clock = [1.0]
+    checking, release, watcher_closed = threading.Event(), threading.Event(), threading.Event()
+    states = []
+
+    def now():
+        if threading.current_thread().name == 'douyin-im-stop' and clock[0] > 75 and not checking.is_set():
+            checking.set()
+            assert release.wait(2)
+        return clock[0]
+
+    class FakeSocket:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def run_forever(self, **kwargs):
+            self.kwargs['on_open'](self)
+            clock[0] += 76
+            assert checking.wait(2)
+            # 超时判断与认证失败同时发生时，停止原因不能被“正在重连”覆盖。
+            self.kwargs['on_error'](self, transport.websocket.WebSocketBadStatusException('rejected', status_code=403))
+            release.set()
+            assert watcher_closed.wait(2)
+
+        def close(self):
+            if threading.current_thread().name == 'douyin-im-stop':
+                watcher_closed.set()
+
+    monkeypatch.setattr(transport, 'time', SimpleNamespace(monotonic=now))
+    monkeypatch.setattr(transport.websocket, 'WebSocketApp', FakeSocket)
+    with pytest.raises(ValueError):
+        transport.receive_forever({'cookie_str': 'sessionid=offline-test', 'user_id': '11', 'device_id': '33'},
+                                 lambda event: None, lambda state, error='': states.append((state, error)), stop)
+    assert states[-1][0] == 'expired' and '登录已失效' in states[-1][1]
+
+
+def test_stable_connection_resets_backoff_and_stop_interrupts_retry_wait(monkeypatch):
+    stop = threading.Event()
+    clock = [1.0]
+    waits, sockets = [], []
+    monkeypatch.setattr(transport, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def wait(delay):
+        waits.append(delay)
+        if len(waits) == 3:
+            stop.set()
+        return stop.is_set()
+
+    monkeypatch.setattr(stop, 'wait', wait)
+
+    class FakeSocket:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            sockets.append(self)
+
+        def run_forever(self, **kwargs):
+            self.kwargs['on_open'](self)
+            if len(sockets) == 3:
+                clock[0] += 61
+                self.kwargs['on_pong'](self, b'')
+            self.kwargs['on_close'](self, 1000, '')
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(transport.websocket, 'WebSocketApp', FakeSocket)
+    transport.receive_forever({'cookie_str': 'sessionid=offline-test', 'user_id': '11', 'device_id': '33'},
+                             lambda event: None, lambda state, error='': None, stop)
+    assert waits == [1, 2, 1] and len(sockets) == 3
+
+
 def test_external_stop_closes_blocking_socket(monkeypatch):
     # 持续联网无新消息时，停止仍能打断阻塞监听。
     stop = threading.Event()

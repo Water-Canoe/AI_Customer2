@@ -236,7 +236,38 @@ def test_listener_reuses_connection_and_shutdown_preserves_messages(inbox):
     message_inbox.disconnect_account(account_id)
     assert released == [account_id]
     assert message_inbox.status(account_id)['state'] == 'disconnected'
+    assert account_id not in message_inbox.active_accounts()
+    assert len(calls) == 1
     assert message_inbox.list_conversations(account_id)[0]['unread_count'] == 1
+
+
+@pytest.mark.parametrize(('reported_state', 'safe_error', 'expected_error'), [
+    ('expired', '私信登录已失效，请同步账号认证', '私信登录已失效，请同步账号认证'),
+    ('error', '私信消息保存失败，监听已停止', '私信消息保存失败，监听已停止'),
+    ('connecting', '', '私信监听已停止（RuntimeError），请检查连接后重新连接'),
+])
+def test_listener_preserves_safe_failure_and_manual_disconnect(inbox, reported_state, safe_error, expected_error):
+    account, transport = inbox
+    account_id = account('客服')
+    calls = []
+
+    def receive(credentials, on_message, on_state, stop_event):
+        calls.append(credentials)
+        on_state(reported_state, safe_error)
+        raise RuntimeError('wss://private.invalid/?token=private-test-credential')
+
+    transport.receive_forever = receive
+    message_inbox.connect_account(account_id)
+    listener = message_inbox._listeners[account_id]
+    listener.thread.join(timeout=2)
+    assert not listener.thread.is_alive()
+    result = message_inbox.status(account_id)
+    assert result['state'] == ('expired' if reported_state == 'expired' else 'error')
+    assert result['error'] == expected_error
+    assert 'private-test-credential' not in str(result)
+    assert message_inbox.disconnect_account(account_id)['state'] == 'disconnected'
+    assert account_id not in message_inbox.active_accounts()
+    assert len(calls) == 1
 
 
 def test_send_credentials_and_shutdown_use_same_account_lock(inbox, monkeypatch):

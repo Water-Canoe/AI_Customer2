@@ -82,9 +82,10 @@ def connect_account(account_id: str) -> dict[str, Any]:
                     on_state,
                     listener.stop,
                 )
-            except Exception:
-                # 不把协议异常中的认证请求或凭据透传给浏览器。
-                on_state('error', '私信监听中断，请检查账号认证并重新连接')
+            except Exception as exc:
+                # 保留协议层的安全提示，未知异常只显示类别，避免泄露请求凭据。
+                if listener.state not in {'error', 'expired'} or not listener.error:
+                    on_state('error', f'私信监听已停止（{type(exc).__name__}），请检查连接后重新连接')
             finally:
                 if listener.stop.is_set():
                     on_state('disconnected')
@@ -105,6 +106,10 @@ def disconnect_account(account_id: str) -> dict[str, Any]:
             listener.state = 'disconnecting'
     if listener and listener.thread:
         listener.thread.join(timeout=3)
+    with _runtime_lock:
+        # 故障后线程已经退出，也应立即完成用户的主动断开。
+        if listener and (not listener.thread or not listener.thread.is_alive()):
+            listener.state, listener.error = 'disconnected', ''
     release_send_session(account_id)
     return status(account_id)
 
