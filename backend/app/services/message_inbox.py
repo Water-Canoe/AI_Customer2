@@ -18,6 +18,7 @@ class _Listener:
     thread: threading.Thread | None = None
     state: str = 'connecting'
     error: str = ''
+    authorization_error: str = ''
 
 
 _listeners: dict[str, _Listener] = {}
@@ -26,6 +27,9 @@ _profile_locks: dict[str, threading.Lock] = {}
 _profile_checked: set[tuple[str, str]] = set()
 _profile_errors: dict[str, str] = {}
 _runtime_lock = threading.RLock()
+_license_watchdog: threading.Thread | None = None
+_license_watchdog_stop = threading.Event()
+LICENSE_CHECK_INTERVAL = 30.0
 _CONVERSATION_FIELDS = 'id,account_id,peer_user_id,nickname,avatar,lead_id,platform_conversation_id,last_message,last_message_at,unread_count'
 HIDDEN_CONVERSATION_PREFIX = 'message_inbox_hidden:'
 
@@ -125,8 +129,45 @@ def status(account_id: str) -> dict[str, Any]:
         }
 
 
+def _check_receiver_authorization() -> None:
+    """所有账号共用一次验权；失效后用已有停止事件关闭接收及重连。"""
+    with _runtime_lock:
+        active = [listener for listener in _listeners.values()
+                  if listener.thread and listener.thread.is_alive() and not listener.stop.is_set()]
+    if not active:
+        return
+    try:
+        license_service.ensure_authorized()
+    except Exception as exc:
+        error = str(exc) if isinstance(exc, ValueError) else '授权检查失败，请重新校验授权'
+        with _runtime_lock:
+            for listener in active:
+                if not listener.stop.is_set():
+                    listener.authorization_error = f'授权不可用，私信接收已停止：{error}'
+                    listener.state, listener.error = 'error', listener.authorization_error
+                    listener.stop.set()
+
+
+def _start_license_watchdog() -> None:
+    global _license_watchdog, _license_watchdog_stop
+    with _runtime_lock:
+        if _license_watchdog and _license_watchdog.is_alive() and not _license_watchdog_stop.is_set():
+            return
+        stop = threading.Event()
+        _license_watchdog_stop = stop
+
+        def watch() -> None:
+            # 接收静默时也检查；不为每个账号创建一套授权轮询。
+            while not stop.wait(LICENSE_CHECK_INTERVAL):
+                _check_receiver_authorization()
+
+        _license_watchdog = threading.Thread(target=watch, name='im-license-watchdog', daemon=True)
+        _license_watchdog.start()
+
+
 def connect_account(account_id: str) -> dict[str, Any]:
     """一个账号保持一个监听线程；页面切换不会重新建立连接。"""
+    license_service.ensure_authorized()
     account = _account(account_id, ready=True)
     transport = _transport_for_platform(account['platform'])
     with _runtime_lock:
@@ -144,13 +185,20 @@ def connect_account(account_id: str) -> dict[str, Any]:
 
         def on_state(state: str, error: str = '') -> None:
             with _runtime_lock:
-                listener.state, listener.error = state, error
+                if listener.authorization_error:
+                    listener.state, listener.error = 'error', listener.authorization_error
+                else:
+                    listener.state, listener.error = state, error
+
+        def on_message(event: dict[str, Any]) -> None:
+            if not listener.stop.is_set():
+                record_received(account_id, event)
 
         def run() -> None:
             try:
                 transport.receive_forever(
                     credentials,
-                    lambda event: record_received(account_id, event),
+                    on_message,
                     on_state,
                     listener.stop,
                 )
@@ -159,13 +207,16 @@ def connect_account(account_id: str) -> dict[str, Any]:
                 if listener.state not in {'error', 'expired'} or not listener.error:
                     on_state('error', f'私信监听已停止（{type(exc).__name__}），请检查连接后重新连接')
             finally:
-                if listener.stop.is_set():
+                if listener.authorization_error:
+                    on_state('error', listener.authorization_error)
+                elif listener.stop.is_set():
                     on_state('disconnected')
                 elif listener.state not in {'error', 'expired'}:
                     on_state('disconnected', '私信连接已关闭，请重新连接')
 
         listener.thread = threading.Thread(target=run, name=f'im-receive-{account_id}', daemon=True)
         listener.thread.start()
+        _start_license_watchdog()
     return status(account_id)
 
 
@@ -176,6 +227,7 @@ def disconnect_account(account_id: str) -> dict[str, Any]:
         if listener and listener.state == 'syncing':
             raise ValueError('正在同步该账号的私信认证，请等待完成后断开')
         if listener:
+            listener.authorization_error = ''
             listener.stop.set()
             listener.state = 'disconnecting'
     if listener and listener.thread:
@@ -202,6 +254,8 @@ def release_send_session(account_id: str) -> None:
 def shutdown() -> None:
     """应用退出时关闭监听和发送认证；历史记录已经逐条写入数据库。"""
     with _runtime_lock:
+        _license_watchdog_stop.set()
+        watchdog = _license_watchdog
         listeners = list(_listeners.values())
         for listener in listeners:
             listener.stop.set()
@@ -209,6 +263,8 @@ def shutdown() -> None:
     for listener in listeners:
         if listener.thread:
             listener.thread.join(timeout=3)
+    if watchdog:
+        watchdog.join(timeout=3)
     for account_id in send_accounts:
         release_send_session(account_id)
 

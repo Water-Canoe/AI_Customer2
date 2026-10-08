@@ -12,7 +12,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from app import database, device_identity
+from app import database, device_identity, license_clock
 from app.services import license_service
 
 
@@ -101,6 +101,7 @@ def test_offline_lease_only_applies_to_current_machine(tmp_path: Path, monkeypat
     current_code = [first_code]
     monkeypatch.setattr(device_identity, "get_device_code", lambda: current_code[0])
     lease_text, signature = _signed_lease(first_code, monkeypatch)
+    license_clock.record_online(first_code, datetime.now(timezone.utc))
     with database.connect() as conn:
         database.set_setting(conn, "license_code", "LIC-OFFLINE")
         database.set_setting(conn, "device_code", first_code)
@@ -137,6 +138,7 @@ def test_expired_lease_is_rejected_while_offline(tmp_path: Path, monkeypatch: py
         "expiresAt": (now - timedelta(hours=1)).isoformat(),
     }, separators=(",", ":"))
     signature = base64.b64encode(private_key.sign(lease_text.encode("utf-8"))).decode("ascii")
+    license_clock.record_online(device_code, now)
     with database.connect() as conn:
         database.set_setting(conn, "license_code", "LIC-EXPIRED")
         database.set_setting(conn, "device_code", device_code)

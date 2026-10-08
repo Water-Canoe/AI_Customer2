@@ -12,7 +12,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from app import database, device_identity, product_config
+from app import database, device_identity, license_clock, product_config
 from app.version import APP_VERSION
 
 
@@ -47,6 +47,8 @@ def _license_overview(entitlement: str | None) -> dict[str, Any]:
     elif authorized:
         status, reason = "authorized", "LEASE_VALID"
         message = "授权有效"
+    elif status == "authorized":
+        status, reason, message = "failed", "LEASE_INVALID", "授权租约已过期或无效，请联网重新校验授权"
     return {
         "scope": entitlement or "product",
         "license_code": license_code,
@@ -107,11 +109,15 @@ def _check_license(entitlement: str | None, license_code: str | None = None) -> 
         cached = _license_overview(entitlement)
         if cached.get("authorized"):
             return cached
+        if cached.get("reason") == "CLOCK_UNTRUSTED":
+            return _save_failure(entitlement, "failed", "CLOCK_UNTRUSTED", cached["message"], clear_lease=False)
         return _save_failure(entitlement, "failed", "LICENSE_SERVER_UNREACHABLE", "授权服务暂时不可用，请检查网络后重试")
     except ValueError:
         return _save_failure(entitlement, "failed", "LICENSE_RESPONSE_INVALID", "授权服务返回了无效数据")
     try:
         return _accept_remote(entitlement, remote, device_code)
+    except license_clock.ClockError as exc:
+        return _save_failure(entitlement, "failed", "CLOCK_UNTRUSTED", str(exc), clear_lease=False)
     except (ValueError, json.JSONDecodeError):
         return _save_failure(entitlement, "failed", "LICENSE_SIGNATURE_INVALID", "授权签名校验失败")
 
@@ -126,15 +132,23 @@ def ensure_authorized_for(entitlement: str) -> dict[str, Any]:
         device_code = _ensure_device_code(conn)
         license_code = database.get_setting(conn, "license_code").strip()
         cached = _cached_lease(conn, device_code)
+        clock_error = database.get_setting(conn, "license_last_message") if database.get_setting(conn, "license_last_reason") == "CLOCK_UNTRUSTED" else ""
 
     if cached and entitlement in cached["entitlements"]:
         issued_at = _parse_time(cached["issuedAt"])
-        if datetime.now(timezone.utc) - issued_at < LEASE_RENEW_AFTER:
-            return license_overview_for(entitlement)
+        if license_clock.now(device_code) - issued_at < LEASE_RENEW_AFTER:
+            result = license_overview_for(entitlement)
+            if not result.get("authorized"):
+                raise ValueError(str(result.get("message") or "授权已失效"))
+            return result
         try:
             remote = _request_license("renew", license_code, device_code)
-        except httpx.RequestError:
-            return license_overview_for(entitlement)
+        except httpx.RequestError as exc:
+            result = license_overview_for(entitlement)
+            # 请求期间租约也可能到期，不能只因请求前有缓存就放行。
+            if not result.get("authorized"):
+                raise ValueError(str(result.get("message") or "授权已失效")) from exc
+            return result
         except ValueError as exc:
             raise ValueError("授权服务返回了无效数据") from exc
         result = _accept_remote(entitlement, remote, device_code)
@@ -150,7 +164,7 @@ def ensure_authorized_for(entitlement: str) -> dict[str, Any]:
     try:
         remote = _request_license("renew", license_code, device_code)
     except httpx.RequestError as exc:
-        raise ValueError("授权已过期且暂时无法连接授权服务") from exc
+        raise ValueError(clock_error or "授权已过期且暂时无法连接授权服务") from exc
     except ValueError as exc:
         raise ValueError("授权服务返回了无效数据") from exc
     result = _accept_remote(entitlement, remote, device_code)
@@ -188,7 +202,8 @@ def _accept_remote(entitlement: str | None, remote: dict[str, Any], device_code:
 
     lease_text = payload.get("leaseText")
     signature = payload.get("signature")
-    lease = _verify_lease(lease_text, signature, device_code)
+    lease = _verify_lease(lease_text, signature, device_code, online=True)
+    license_clock.record_online(device_code, _parse_time(lease["issuedAt"]))
     with database.connect() as conn:
         database.set_setting(conn, "license_lease_text", str(lease_text))
         database.set_setting(conn, "license_lease_signature", str(signature))
@@ -204,7 +219,7 @@ def _accept_remote(entitlement: str | None, remote: dict[str, Any], device_code:
     return _license_overview(entitlement)
 
 
-def _verify_lease(lease_text: Any, signature_text: Any, device_code: str) -> dict[str, Any]:
+def _verify_lease(lease_text: Any, signature_text: Any, device_code: str, *, online: bool = False) -> dict[str, Any]:
     if not isinstance(lease_text, str) or not isinstance(signature_text, str):
         raise ValueError("授权租约不完整")
     try:
@@ -228,7 +243,9 @@ def _verify_lease(lease_text: Any, signature_text: Any, device_code: str) -> dic
         raise ValueError("授权租约权益无效")
     issued_at = _parse_time(payload.get("issuedAt"))
     expires_at = _parse_time(payload.get("expiresAt"))
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc) if online else license_clock.now(device_code)
+    if online and issued_at > now + license_clock.CLOCK_TOLERANCE:
+        raise license_clock.ClockError("系统时间落后于授权服务，请校准时间后重新校验授权")
     if issued_at > now + timedelta(minutes=5) or expires_at <= issued_at or expires_at <= now:
         raise ValueError("授权租约已过期或时间无效")
     if expires_at - issued_at > timedelta(hours=73):
@@ -243,6 +260,11 @@ def _cached_lease(conn, device_code: str) -> dict[str, Any] | None:
         return None
     try:
         return _verify_lease(lease_text, signature, device_code)
+    except license_clock.ClockError as exc:
+        database.set_setting(conn, "license_last_status", "failed")
+        database.set_setting(conn, "license_last_reason", "CLOCK_UNTRUSTED")
+        database.set_setting(conn, "license_last_message", str(exc))
+        return None
     except (ValueError, json.JSONDecodeError):
         return None
 

@@ -30,6 +30,7 @@ def inbox(tmp_path, monkeypatch):
         monkeypatch.setattr(services, name, module, raising=False)
 
     monkeypatch.setattr(message_inbox, 'im_session', session)
+    monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', lambda: {'authorized': True})
 
     def account(name, platform='dy'):
         result = account_center.create_account(platform, name, 'service', ['message'])
@@ -574,3 +575,93 @@ def test_manual_send_preserves_analysis_and_uncertain_batch_cannot_be_retried(in
         conn.execute("UPDATE message_batches SET status='succeeded' WHERE id='uncertain-batch'")
     with pytest.raises(ValueError, match='没有可重试'):
         message_workbench.retry_auto_message_batch('uncertain-batch')
+
+
+def test_license_watchdog_stops_silent_receivers_on_both_platforms(inbox, monkeypatch):
+    account, transport = inbox
+    ids = [account('抖音客服'), account('小红书客服', 'xhs')]
+    started = [threading.Event(), threading.Event()]
+    revoked = threading.Event()
+    receivers = []
+    failures = []
+    monkeypatch.setattr(message_inbox, 'LICENSE_CHECK_INTERVAL', 0.01)
+    monkeypatch.setattr(message_inbox, '_transport_for_platform', lambda _: transport)
+
+    def authorize():
+        if revoked.is_set():
+            failures.append(True)
+            raise ValueError('授权租约已过期')
+        return {'authorized': True}
+
+    def receive(credentials, on_message, on_state, stop):
+        index = len(receivers)
+        receivers.append(stop)
+        on_state('connected')
+        started[index].set()
+        stop.wait(2)
+        # 平台迟到的状态和消息不能覆盖授权错误或继续入库。
+        on_state('reconnecting')
+        on_message(_event(f'late-{index}'))
+
+    monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', authorize)
+    transport.receive_forever = receive
+    message_inbox.connect_account(ids[0])
+    watchdog = message_inbox._license_watchdog
+    message_inbox.connect_account(ids[1])
+    assert message_inbox._license_watchdog is watchdog
+    assert all(event.wait(1) for event in started)
+    revoked.set()
+    for account_id in ids:
+        listener = message_inbox._listeners[account_id]
+        listener.thread.join(timeout=2)
+        assert not listener.thread.is_alive()
+        result = message_inbox.status(account_id)
+        assert result['state'] == 'error' and '授权租约已过期' in result['error']
+        assert message_inbox.list_conversations(account_id) == []
+    assert len(failures) == 1
+    message_inbox.shutdown()
+    assert not watchdog.is_alive()
+
+
+def test_disconnect_one_account_keeps_authorization_watchdog_for_others(inbox, monkeypatch):
+    account, transport = inbox
+    first, second = account('客服一'), account('客服二')
+    started = threading.Event()
+
+    def receive(credentials, on_message, on_state, stop):
+        on_state('connected')
+        started.set()
+        stop.wait(2)
+
+    transport.receive_forever = receive
+    message_inbox.connect_account(first)
+    assert started.wait(1)
+    message_inbox.connect_account(second)
+    message_inbox.disconnect_account(first)
+    assert message_inbox._license_watchdog.is_alive()
+    assert not message_inbox._license_watchdog_stop.is_set()
+
+    def reject():
+        raise ValueError('授权已撤销')
+
+    monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', reject)
+    message_inbox._check_receiver_authorization()
+    message_inbox._listeners[second].thread.join(timeout=2)
+    assert message_inbox.status(first)['state'] == 'disconnected'
+    assert '授权已撤销' in message_inbox.status(second)['error']
+    assert second not in message_inbox.active_accounts()
+
+
+def test_unlicensed_connection_does_not_start_receiver(inbox, monkeypatch):
+    account, transport = inbox
+    account_id = account('不可连接')
+    calls = []
+    transport.receive_forever = lambda *args: calls.append(args)
+
+    def reject():
+        raise ValueError('授权已失效')
+
+    monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', reject)
+    with pytest.raises(ValueError, match='授权已失效'):
+        message_inbox.connect_account(account_id)
+    assert calls == [] and account_id not in message_inbox._listeners
