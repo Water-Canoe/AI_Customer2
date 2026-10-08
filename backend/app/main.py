@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -39,13 +40,20 @@ async def lifespan(_: FastAPI):
     job_queue.configure_handlers(job_handlers)
     job_queue.start()
     automation_workbench.start_scheduler()
+    # 浏览器同步可能排队，后台执行以免延迟健康检查和工作台打开。
+    inbox_startup = asyncio.create_task(inbox_service.auto_connect_accounts())
     try:
         yield
     finally:
-        automation_workbench.stop_scheduler()
-        job_queue.shutdown()
-        inbox_service.shutdown()
-        profile_manager.shutdown()
+        try:
+            inbox_startup.cancel()
+            with suppress(asyncio.CancelledError):
+                await inbox_startup
+        finally:
+            automation_workbench.stop_scheduler()
+            job_queue.shutdown()
+            inbox_service.shutdown()
+            profile_manager.shutdown()
 
 
 app = FastAPI(title="AI拓客工具", version=APP_VERSION, lifespan=lifespan)

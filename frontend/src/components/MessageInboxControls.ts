@@ -28,7 +28,7 @@ export const MessageInboxControls = defineComponent({
           ...props.accounts.map(item => h('option', { value: item.id }, item.name)),
         ])]),
         h('span', { class: ['inbox-connection-status', `is-${props.status.state}`], role: 'status' }, connectionLabel(props.status.state)),
-        h('button', { disabled: !props.accountId || props.busy, title: '从现有用户登录会话更新认证材料，可能打开认证浏览器', onClick: () => emit('action', 'sync-auth') }, props.busy ? '处理中…' : '同步登录认证'),
+        h('button', { disabled: !props.accountId || props.busy || props.status.state === 'syncing', title: '从现有用户登录会话更新认证材料，可能打开认证浏览器', onClick: () => emit('action', 'sync-auth') }, props.busy ? '处理中…' : '同步登录认证'),
         ['connected', 'connecting', 'reconnecting'].includes(props.status.state)
           ? h('button', { disabled: props.busy, onClick: () => emit('action', 'disconnect') }, '断开接收')
           : h('button', { class: 'primary-action', disabled: !props.status.receive_ready || props.busy, onClick: () => emit('action', 'connect') }, '连接接收'),
@@ -41,4 +41,4 @@ export const MessageInboxControls = defineComponent({
   },
 })
 
-function connectionLabel(state: string) { return ({ connected: '接收已连接', connecting: '正在连接', reconnecting: '正在自动重连', disconnecting: '正在断开', disconnected: '接收未连接', expired: '接收认证已失效', error: '接收已停止' } as Record<string, string>)[state] || '接收未连接' }
+function connectionLabel(state: string) { return ({ syncing: '正在同步认证', connected: '接收已连接', connecting: '正在连接', reconnecting: '正在自动重连', disconnecting: '正在断开', disconnected: '接收未连接', expired: '接收认证已失效', error: '接收已停止' } as Record<string, string>)[state] || '接收未连接' }

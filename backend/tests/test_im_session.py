@@ -46,6 +46,41 @@ def test_xhs_sync_reuses_account_profile_and_protects_http_only_cookie(tmp_path,
         im_session.load_credentials(other['id'])
 
 
+def test_cancelled_sync_closes_browser_and_releases_queue(tmp_path, monkeypatch):
+    from app.publish_engine import browser
+    from app.services import browser_queue
+
+    monkeypatch.setenv('AI_CUSTOMER_DB', str(tmp_path / 'cancel.sqlite3'))
+    monkeypatch.setenv('AI_CUSTOMER_DATA_DIR', str(tmp_path))
+    database.init_db()
+    account = account_center.create_account('xhs', '取消同步', 'service', ['message'])
+    account_center.set_login_status(account['id'], 'user', 'ready')
+    closed = []
+
+    async def run():
+        entered = asyncio.Event()
+
+        async def goto(*args, **kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+        async def close():
+            closed.append(True)
+
+        async def launch(**kwargs):
+            return SimpleNamespace(pages=[SimpleNamespace(goto=goto)], close=close)
+
+        monkeypatch.setattr(browser, 'launch_publish_context', launch)
+        task = asyncio.create_task(im_session.sync_account(account['id'], im_session.capture_xhs_context))
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert closed == [True] and not browser_queue._BROWSER_LOCK.locked()
+
+
 def test_signed_xhs_runtime_uses_bundled_node_without_extra_dependencies(monkeypatch):
     from app.vendor.spider_xhs.im import XHSLiveAPI
     from app.vendor.spider_xhs.xhs_utils.xhs_pc import XHSPcAuth

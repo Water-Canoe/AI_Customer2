@@ -65,6 +65,7 @@ EDITABLE_SETTING_KEYS = {
     "dm_script_mode",
     "fixed_dm_script",
     "auto_dm_fill_only",
+    "message_inbox_auto_connect",
     "douyin_detail_sleep_seconds",
     "max_concurrency",
     "headless",
@@ -94,6 +95,7 @@ def get_settings() -> dict[str, Any]:
         "auto_analyze_leads",
         "auto_delete_non_customers",
         "auto_dm_fill_only",
+        "message_inbox_auto_connect",
         "headless",
     ):
         result[key] = result.get(key, "false") == "true"

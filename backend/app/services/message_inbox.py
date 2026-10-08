@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from app import database, protected_settings
-from app.services import account_center, message_attempts, im_session, im_transport
+from app.services import account_center, message_attempts, im_session, im_transport, license_service
 
 
 @dataclass
@@ -46,11 +48,63 @@ def _transport_for_platform(platform: str):
 
 
 async def sync_account(account_id: str) -> dict[str, Any]:
-    """平台只提供认证提取函数，共用同步组件管理 Profile 和浏览器队列。"""
+    """手动与启动同步共用账号互斥状态、Profile 导出和发送缓存释放。"""
     account = _account(account_id, ready=True)
-    from app.services import douyin_im_session
-    capture = douyin_im_session.capture_context if account['platform'] == 'dy' else im_session.capture_xhs_context
-    return await im_session.sync_account(account_id, capture)
+    with _runtime_lock:
+        if account_id in active_accounts():
+            raise ValueError('该账号正在同步认证或收发私信，请等待同步完成或先断开连接')
+        listener = _Listener(state='syncing')
+        _listeners[account_id] = listener
+    try:
+        if account['platform'] == 'dy':
+            from app.services import douyin_im_session
+            capture = douyin_im_session.capture_context
+        else:
+            capture = im_session.capture_xhs_context
+        result = await im_session.sync_account(account_id, capture)
+        # 等待当前发送认证释放期间仍保持同步状态，不阻塞事件循环。
+        await asyncio.to_thread(release_send_session, account_id)
+        return result
+    except Exception as exc:
+        with _runtime_lock:
+            listener.state = 'error'
+            listener.error = str(exc) if isinstance(exc, ValueError) else f'私信认证同步失败（{type(exc).__name__}），请检查账号后重试'
+        raise
+    finally:
+        with _runtime_lock:
+            if listener.state == 'syncing':
+                listener.state = 'disconnected'
+
+
+async def auto_connect_accounts() -> None:
+    """仅在启动时执行一轮：依次同步可用私信账号，各账号独立接收。"""
+    with database.connect() as conn:
+        if database.get_setting(conn, 'message_inbox_auto_connect', 'false') != 'true':
+            return
+    for account in account_center.list_accounts(feature='message'):
+        if account['platform'] not in {'dy', 'xhs'} or not account['enabled'] or account['feature_status']['message']['status'] != 'ready':
+            continue
+        account_id = str(account['id'])
+        try:
+            await asyncio.to_thread(license_service.ensure_authorized)
+            with _runtime_lock:
+                existing = _listeners.get(account_id)
+                if existing and (existing.state == 'syncing' or (existing.thread and existing.thread.is_alive())):
+                    continue
+            result = await sync_account(account_id)
+            if not result.get('receive_ready'):
+                raise ValueError(result.get('error') or '私信接收认证不完整，请重新登录后同步')
+            connect_account(account_id)
+        except Exception as exc:
+            error = str(exc) if isinstance(exc, ValueError) else f'启动私信连接失败（{type(exc).__name__}），请检查账号后手动重试'
+            with _runtime_lock:
+                existing = _listeners.get(account_id)
+                if existing and (existing.state == 'syncing' or (existing.thread and existing.thread.is_alive())):
+                    continue
+                listener = _listeners.setdefault(account_id, _Listener())
+                listener.state, listener.error = 'error', error
+            # 不记录原始异常、Cookie 或票据，单账号失败不影响下一账号。
+            logging.getLogger(__name__).warning('账号 %s 自动连接失败：%s', account_id, error)
 
 
 def status(account_id: str) -> dict[str, Any]:
@@ -60,6 +114,8 @@ def status(account_id: str) -> dict[str, Any]:
         session = {**session, 'receive_ready': False, 'send_ready': False, 'error': '账号未登录或已停用，请到账号中心检查'}
     with _runtime_lock:
         listener = _listeners.get(account_id)
+        if listener and listener.state == 'syncing':
+            session = {**session, 'receive_ready': False, 'send_ready': False, 'error': ''}
         return {
             **session,
             'state': listener.state if listener else 'disconnected',
@@ -73,11 +129,13 @@ def connect_account(account_id: str) -> dict[str, Any]:
     """一个账号保持一个监听线程；页面切换不会重新建立连接。"""
     account = _account(account_id, ready=True)
     transport = _transport_for_platform(account['platform'])
-    credentials = im_session.load_credentials(account_id)
     with _runtime_lock:
         existing = _listeners.get(account_id)
+        if existing and existing.state == 'syncing':
+            raise ValueError('正在同步该账号的私信认证，请等待完成后连接')
         if existing and existing.thread and existing.thread.is_alive():
             return status(account_id)
+        credentials = im_session.load_credentials(account_id)
         listener = _Listener()
         _listeners[account_id] = listener
         # 显式重新连接时允许重试上次失败的资料查询。
@@ -115,6 +173,8 @@ def disconnect_account(account_id: str) -> dict[str, Any]:
     _account(account_id)
     with _runtime_lock:
         listener = _listeners.get(account_id)
+        if listener and listener.state == 'syncing':
+            raise ValueError('正在同步该账号的私信认证，请等待完成后断开')
         if listener:
             listener.stop.set()
             listener.state = 'disconnecting'
@@ -156,7 +216,7 @@ def shutdown() -> None:
 def active_accounts() -> list[str]:
     """维护操作可检查活跃连接，避免覆盖正在使用的认证材料。"""
     with _runtime_lock:
-        return sorted({account_id for account_id, listener in _listeners.items() if listener.thread and listener.thread.is_alive()} | {account_id for locks in (_send_locks, _profile_locks) for account_id, lock in locks.items() if lock.locked()})
+        return sorted({account_id for account_id, listener in _listeners.items() if listener.state == 'syncing' or (listener.thread and listener.thread.is_alive())} | {account_id for locks in (_send_locks, _profile_locks) for account_id, lock in locks.items() if lock.locked()})
 
 
 def recover_pending_sends() -> None:
@@ -343,6 +403,10 @@ def send_message(account_id: str, conversation_id: int, text: str, *, reserve_at
         lock = _send_locks.setdefault(account_id, threading.Lock())
     # 同一账号的协议会话认证与发送按顺序执行，不占用浏览器队列。
     with lock:
+        with _runtime_lock:
+            listener = _listeners.get(account_id)
+            if listener and listener.state == 'syncing':
+                raise ValueError('正在同步该账号的私信认证，请等待完成后发送')
         # 排队后重新检查账号并读取认证，不能沿用等待前的登录材料。
         account = _account(account_id, ready=True)
         transport = _transport_for_platform(account['platform'])

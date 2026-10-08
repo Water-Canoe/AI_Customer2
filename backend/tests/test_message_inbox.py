@@ -332,10 +332,10 @@ def test_sync_auth_releases_sender_off_event_loop(inbox, monkeypatch):
     from app.routers import message_inbox as router
 
     account, transport = inbox
-    account_id = account('客服')
+    account_id = account('客服', 'xhs')
     released = []
     event_loop_thread = threading.get_ident()
-    async def sync(selected_account):
+    async def sync(selected_account, capture):
         assert selected_account == account_id
         return {'send_ready': True}
     def close(selected_account):
@@ -344,11 +344,158 @@ def test_sync_auth_releases_sender_off_event_loop(inbox, monkeypatch):
         assert message_inbox._send_locks[selected_account].locked()
         released.append(selected_account)
     monkeypatch.setattr(router, 'require_license', lambda: None)
-    monkeypatch.setattr(router.message_inbox, 'sync_account', sync, raising=False)
+    monkeypatch.setattr(message_inbox.im_session, 'capture_xhs_context', object(), raising=False)
+    monkeypatch.setattr(message_inbox.im_session, 'sync_account', sync, raising=False)
     with monkeypatch.context() as scoped:
         scoped.setattr(transport, 'close_send_auth', close)
         assert asyncio.run(router.sync_auth(account_id)) == {'send_ready': True}
     assert released == [account_id]
+
+
+def test_startup_switch_connects_all_ready_supported_accounts(inbox, monkeypatch):
+    from app import views
+    from app import services
+
+    account, transport = inbox
+    first, second = account('抖音客服'), account('小红书客服', 'xhs')
+    disabled, expired = account('停用账号'), account('登录失效')
+    account('快手账号', 'ks')
+    account_center.update_account(disabled, {'enabled': False})
+    account_center.set_login_status(expired, 'user', 'expired')
+    account_center.create_account('dy', '只采集', 'operations', ['acquisition'])
+    calls = []
+    released = []
+    monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', lambda: {})
+    monkeypatch.setattr(message_inbox, '_transport_for_platform', lambda platform: transport)
+    dy_capture, xhs_capture = object(), object()
+    dy_session = ModuleType('app.services.douyin_im_session')
+    dy_session.capture_context = dy_capture
+    monkeypatch.setitem(sys.modules, 'app.services.douyin_im_session', dy_session)
+    monkeypatch.setattr(services, 'douyin_im_session', dy_session)
+    monkeypatch.setattr(message_inbox.im_session, 'capture_xhs_context', xhs_capture, raising=False)
+
+    async def sync(account_id, capture):
+        assert capture is (dy_capture if account_id == first else xhs_capture)
+        calls.append(account_id)
+        return {'receive_ready': True}
+
+    transport.receive_forever = lambda credentials, on_message, on_state, stop: (on_state('connected'), stop.wait(5))
+    transport.close_send_auth = released.append
+    monkeypatch.setattr(message_inbox.im_session, 'sync_account', sync, raising=False)
+    assert views.get_settings()['message_inbox_auto_connect'] is False
+    asyncio.run(message_inbox.auto_connect_accounts())
+    assert calls == [] and message_inbox.active_accounts() == []
+    assert views.update_settings({'message_inbox_auto_connect': True})['message_inbox_auto_connect'] is True
+    asyncio.run(message_inbox.auto_connect_accounts())
+    assert set(calls) == {first, second}
+    assert set(released) == {first, second}
+    assert message_inbox.active_accounts() == sorted([first, second])
+    # 再执行也不能覆盖已有连接或重新同步正在使用的账号。
+    asyncio.run(message_inbox.auto_connect_accounts())
+    assert len(calls) == 2
+
+
+def test_startup_failure_is_visible_without_blocking_other_accounts(inbox, monkeypatch):
+    account, transport = inbox
+    failed, incomplete, valid = account('同步失败'), account('材料不足'), account('正常账号', 'xhs')
+    with database.connect() as conn:
+        database.set_setting(conn, 'message_inbox_auto_connect', 'true')
+    monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', lambda: {})
+    monkeypatch.setattr(message_inbox, '_transport_for_platform', lambda platform: transport)
+
+    async def sync(account_id):
+        if account_id == failed:
+            raise RuntimeError('private-cookie-secret')
+        return {'receive_ready': account_id != incomplete, 'error': '认证材料不完整'}
+
+    transport.receive_forever = lambda credentials, on_message, on_state, stop: (on_state('connected'), stop.wait(5))
+    monkeypatch.setattr(message_inbox, 'sync_account', sync)
+    asyncio.run(message_inbox.auto_connect_accounts())
+    assert message_inbox.status(failed)['state'] == 'error'
+    assert 'private-cookie-secret' not in str(message_inbox.status(failed))
+    assert message_inbox.status(incomplete)['error'] == '认证材料不完整'
+    assert message_inbox.active_accounts() == [valid]
+
+
+def test_sync_blocks_same_account_operations_and_cancellation_releases_state(inbox, monkeypatch):
+    account, _ = inbox
+    account_id = account('待同步账号', 'xhs')
+    conversation = message_inbox.create_conversation(account_id, peer_user_id='65abcdef1234567890abcdef')
+    monkeypatch.setattr(message_inbox.im_session, 'capture_xhs_context', object(), raising=False)
+
+    async def run():
+        entered = asyncio.Event()
+
+        async def capture(selected_account, callback):
+            entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(message_inbox.im_session, 'sync_account', capture, raising=False)
+        task = asyncio.create_task(message_inbox.sync_account(account_id))
+        await asyncio.wait_for(entered.wait(), 1)
+        assert message_inbox.status(account_id)['state'] == 'syncing'
+        assert not message_inbox.status(account_id)['send_ready']
+        assert account_id in message_inbox.active_accounts()
+        from app.services import data_management
+        with pytest.raises(ValueError, match='私信'):
+            data_management.ensure_idle('备份')
+        for operation in (lambda: message_inbox.connect_account(account_id), lambda: message_inbox.disconnect_account(account_id), lambda: message_inbox.send_message(account_id, conversation['id'], '不得发送')):
+            with pytest.raises(ValueError, match='同步'):
+                operation()
+        with pytest.raises(ValueError, match='同步'):
+            await message_inbox.sync_account(account_id)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert message_inbox.status(account_id)['state'] == 'disconnected'
+        assert account_id not in message_inbox.active_accounts()
+        assert message_inbox.list_messages(account_id, conversation['id'])['messages'] == []
+
+    asyncio.run(run())
+
+
+def test_startup_requires_license_before_sync(inbox, monkeypatch):
+    account, _ = inbox
+    account_id = account('未授权账号')
+    with database.connect() as conn:
+        database.set_setting(conn, 'message_inbox_auto_connect', 'true')
+    monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', lambda: (_ for _ in ()).throw(ValueError('请先配置授权')))
+
+    async def forbidden_sync(selected_account):
+        pytest.fail('未授权时不得启动认证浏览器')
+
+    monkeypatch.setattr(message_inbox, 'sync_account', forbidden_sync)
+    asyncio.run(message_inbox.auto_connect_accounts())
+    assert message_inbox.status(account_id)['error'] == '请先配置授权'
+    assert not message_inbox.active_accounts()
+
+
+def test_lifespan_does_not_wait_for_sync_and_cancels_it_before_shutdown(inbox, monkeypatch):
+    from app import main
+
+    events = []
+    for module, name in [(main.database, 'init_db'), (main.license_service, 'check_license'), (main.job_queue, 'start'), (main.automation_workbench, 'start_scheduler')]:
+        monkeypatch.setattr(module, name, lambda: None)
+    for module, name in [(main.automation_workbench, 'stop_scheduler'), (main.job_queue, 'shutdown'), (main.inbox_service, 'shutdown'), (main.profile_manager, 'shutdown')]:
+        monkeypatch.setattr(module, name, lambda label=name: events.append(label))
+
+    async def run():
+        entered = asyncio.Event()
+
+        async def startup():
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                events.append('sync:cancelled')
+
+        monkeypatch.setattr(main.inbox_service, 'auto_connect_accounts', startup)
+        async with main.lifespan(main.app):
+            await asyncio.wait_for(entered.wait(), 1)
+            assert not events
+
+    asyncio.run(run())
+    assert events == ['sync:cancelled', 'stop_scheduler', 'shutdown', 'shutdown', 'shutdown']
 
 
 def test_disabled_binding_cannot_send_and_restart_keeps_uncertain_result(inbox):

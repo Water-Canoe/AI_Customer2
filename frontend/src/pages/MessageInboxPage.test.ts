@@ -112,6 +112,24 @@ describe('私信收件箱', () => {
     expect(mocks.post).toHaveBeenCalledWith('/message-inbox/accounts/account-a/sync-auth')
   })
 
+  it('shows startup authentication sync and blocks conflicting actions until it finishes', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, state: 'syncing', receive_ready: false, send_ready: false } }
+      : normal(url, options))
+    await open()
+    expect(wrapper!.text()).toContain('正在同步认证')
+    for (const label of ['同步登录认证', '连接接收', '发送']) {
+      expect(wrapper!.findAll('button').find(button => button.text() === label)!.attributes()).toHaveProperty('disabled')
+    }
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, state: 'connected' } } : normal(url, options))
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(wrapper!.text()).toContain('接收已连接')
+    expect(wrapper!.findAll('button').find(button => button.text() === '断开接收')!.attributes()).not.toHaveProperty('disabled')
+  })
+
   it('preserves separate chat drafts and displays uncertain submission without automatically retrying', async () => {
     const router = await open()
     await wrapper!.get('textarea').setValue('第一段未发送内容')

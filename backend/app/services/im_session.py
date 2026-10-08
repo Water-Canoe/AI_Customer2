@@ -66,7 +66,7 @@ def session_status(account_id: str) -> dict[str, Any]:
 
 
 async def sync_account(account_id: str, capture_context: Callable[[str, Any], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
-    """显式同步时复用账号 Profile；日常协议收发不打开浏览器。"""
+    """手动或启动同步时复用账号 Profile；日常协议收发不打开浏览器。"""
     from app.publish_engine.browser import launch_publish_context
     from app.services import browser_queue
 

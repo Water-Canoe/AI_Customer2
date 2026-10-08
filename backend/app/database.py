@@ -961,6 +961,7 @@ DEFAULT_SETTINGS = {
     "dm_script_mode": "ai",
     "fixed_dm_script": "",
     "auto_dm_fill_only": "false",
+    "message_inbox_auto_connect": "false",
     "message_daily_limit": "",
     "message_hourly_limit": "",
     "douyin_detail_sleep_seconds": "2",

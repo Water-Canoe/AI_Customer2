@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -51,13 +49,8 @@ def disconnect_account(account_id: str):
 @router.post('/accounts/{account_id}/sync-auth')
 async def sync_auth(account_id: str):
     require_license()
-    if account_id in message_inbox.active_accounts():
-        raise HTTPException(status_code=400, detail='请先断开该账号的私信连接，再同步认证')
     try:
-        result = await message_inbox.sync_account(account_id)
-        # 若同步期间有发送开始，在线程中等待，避免阻塞其它异步接口。
-        await asyncio.to_thread(message_inbox.release_send_session, account_id)
-        return result
+        return await message_inbox.sync_account(account_id)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

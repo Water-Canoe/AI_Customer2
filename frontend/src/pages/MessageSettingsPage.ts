@@ -15,6 +15,7 @@ const MESSAGE_SETTING_KEYS = [
   'dm_script_mode',
   'fixed_dm_script',
   'auto_dm_fill_only',
+  'message_inbox_auto_connect',
 ]
 
 
@@ -135,6 +136,14 @@ export default defineComponent({
           h('label', [
             h('input', {
               type: 'checkbox',
+              checked: Boolean(local.message_inbox_auto_connect),
+              onChange: (event: Event) => { local.message_inbox_auto_connect = (event.target as HTMLInputElement).checked; markDirty() },
+            }),
+            '启动后自动同步认证并连接私信接收',
+          ]),
+          h('label', [
+            h('input', {
+              type: 'checkbox',
               checked: Boolean(local.auto_dm_fill_only),
               onFocus: markDirty,
               onChange: (event: Event) => { local.auto_dm_fill_only = (event.target as HTMLInputElement).checked; markDirty() },
@@ -142,6 +151,7 @@ export default defineComponent({
             '单客户自动私信只生成草稿，由我手动发送',
           ]),
         ]),
+        h('p', { class: 'note' }, '自动连接设置保存后，在下次后端启动时生效；对所有已登录且启用私信功能的抖音、小红书账号依次同步认证，再分别保持接收连接。登录失效仍需在账号中心重新登录。'),
         h('div', { class: 'action-row' }, [
           h('button', { class: 'primary-action', onClick: saveSettings }, [h(Check, { class: 'inline-icon' }), '保存私信设置']),
         ]),
