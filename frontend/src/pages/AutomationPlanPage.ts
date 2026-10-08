@@ -771,7 +771,7 @@ export default defineComponent({
     return () => h('div', { class: 'workspace-page operations-page automation-page' }, [
       h('section', { class: 'panel' }, [
         h('div', { class: 'toolbar' }, [h('div', [h('h2', '自动化计划'), h('p', { class: 'note' }, '定时安排获客、私信和引流。软件关闭期间错过的计划不补跑。')]), h(ElButton, { type: 'primary', onClick: () => typePickerOpen.value = true }, () => '新建自动化计划'), h(ElButton, { onClick: () => router.push('/runtime') }, () => '任务中心')]),
-        h('nav', { class: 'tabs toolbar' }, [['plans', '计划'], ['runs', '执行记录']].map(([key, label]) => h('button', { class: activeSection.value === key ? 'active' : '', onClick: async () => { activeSection.value = key; runDetailOpen.value = false; const { run, plan, ...query } = route.query; await router.replace({ query: { ...query, ...listQuery() } }); if (!plan) await loadAll() } }, label))),
+        h('nav', { class: 'workspace-tabs tabs toolbar', 'aria-label': '自动化工作区' }, [['plans', '计划'], ['runs', '执行记录']].map(([key, label]) => h('button', { class: activeSection.value === key ? 'active' : '', onClick: async () => { activeSection.value = key; runDetailOpen.value = false; const { run, plan, ...query } = route.query; await router.replace({ query: { ...query, ...listQuery() } }); if (!plan) await loadAll() } }, label))),
         activeSection.value === 'plans' ? h('nav', { class: 'tabs toolbar', 'aria-label': '计划类型' }, [['all', '全部'], ...automationPlanTypes].map(([type, label]) => h('button', { class: typeFilter.value === type ? 'active' : '', onClick: () => { typeFilter.value = type; persistListQuery() } }, label))) : route.query.plan ? h('p', { class: 'note' }, '当前显示所选计划的执行记录；点击执行记录页签查看全部。') : null,
       ]),
       activeSection.value === 'plans' ? renderPlans() : renderRuns(),

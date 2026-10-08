@@ -1,12 +1,10 @@
 .content-product { min-width: 900px; display: grid; gap: 20px; color: var(--app-text); padding-bottom: 30px; }
 .content-product .workspace-panel { background: var(--app-surface); border: 1px solid var(--app-border); border-radius: var(--app-radius); padding: 24px; }
-.content-product .workspace-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 20px; }
-.content-product .workspace-heading h2 { margin: 0 0 8px; font-size: 21px; }
+.content-product .workspace-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 12px; }
+.content-product .workspace-heading h2 { margin: 0 0 4px; font-size: 16px; }
 .content-product .workspace-note { margin: 6px 0; color: var(--app-muted); font-size: 13px; line-height: 1.6; }
 .content-product .workspace-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.content-product .workspace-tabs { display: flex; gap: 8px; padding-bottom: 18px; }
-.content-product .workspace-tabs button { border: 1px solid var(--app-border); border-radius: 9px; padding: 10px 18px; background: white; cursor: pointer; }
-.content-product .workspace-tabs .is-active { border-color: var(--app-accent); background: #eaf4f1; color: var(--app-accent); }
+.content-product .workspace-tabs { margin-bottom: 16px; }
 .content-product input:not([type=checkbox]):not([type=file]):not([type=color]), .content-product select, .content-product textarea { border: 1px solid var(--app-border); border-radius: 9px; padding: 10px 12px; background: white; color: var(--app-text); font: inherit; box-sizing: border-box; }
 .content-product input:focus, .content-product select:focus, .content-product textarea:focus { outline: 2px solid #d5e9e4; border-color: var(--app-accent); }
 .content-product .form-field { display: grid; gap: 8px; min-width: 0; }

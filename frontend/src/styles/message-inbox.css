@@ -1,7 +1,8 @@
 /* 桌面聊天工作区：会话与记录各自滚动，输入框始终保留在当前会话内。 */
-.message-inbox-page .inbox-account-bar { display: flex; flex-direction: column; gap: 14px; }
-.inbox-account-heading h2 { margin: 0 0 6px; font-size: 19px; }
-.inbox-account-heading p, .inbox-scope { margin: 0; font-size: 13px; }
+.message-inbox-page .inbox-account-bar { display: flex; flex-direction: column; gap: 12px; padding: 16px 20px; }
+.inbox-account-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.inbox-account-heading h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.inbox-account-heading p, .inbox-scope { margin: 0; font-size: 12px; line-height: 1.6; }
 .inbox-account-picker { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .inbox-account-picker select { width: 190px; min-height: 38px; padding: 8px 10px; }
 .inbox-platform-picker select { width: 120px; }

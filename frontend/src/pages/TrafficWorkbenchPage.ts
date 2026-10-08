@@ -1321,7 +1321,7 @@ export default defineComponent({
     }
 
     return () => h('div', { class: 'workspace-page operations-page' }, [
-      h('nav', { class: 'tabs toolbar', 'aria-label': '引流工作区' }, [['traffic-plans', '计划'], ['traffic-monitor', '执行记录'], ['traffic-records', '操作记录'], ['traffic-settings', '引流规则']].map(([name, label]) => h('button', { class: view.value === name ? 'active' : '', onClick: () => emit('navigate-view', name) }, label))),
+      h('nav', { class: 'workspace-tabs tabs toolbar', 'aria-label': '引流工作区' }, [['traffic-plans', '计划'], ['traffic-monitor', '执行记录'], ['traffic-records', '操作记录'], ['traffic-settings', '引流规则']].map(([name, label]) => h('button', { class: view.value === name ? 'active' : '', onClick: () => emit('navigate-view', name) }, label))),
       view.value === 'traffic-plans' ? renderPlanPage() : view.value === 'traffic-monitor' ? renderMonitorPage() : view.value === 'traffic-records' ? renderRecordsPage() : renderSettingsPage(),
     ])
   },
