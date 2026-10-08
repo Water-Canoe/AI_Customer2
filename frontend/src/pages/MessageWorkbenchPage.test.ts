@@ -13,11 +13,11 @@ vi.mock('element-plus', async () => {
 })
 
 describe('客户跟进交互', () => {
-  it('opens XHS customers with an XHS account and keeps automatic batches limited to Douyin', async () => {
+  it('opens and automatically messages XHS customers using an XHS account', async () => {
     mocks.get.mockResolvedValue({ data: ['dy', 'xhs'].map(platform => ({ id: platform + '-brand', platform, enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } })) })
     mocks.post.mockResolvedValue({ data: { id: 22 } })
     const customer = { lead_id: 8, nickname: '小红书客户', platform: 'xhs', script: '小红书话术' }
-    const wrapper = mount(MessageWorkbenchPage, { props: { detail: { customer }, customers: { rows: [customer], total: 1 } } })
+    const wrapper = mount(MessageWorkbenchPage, { props: { filters: { platform: 'xhs', keyword: '来源A' }, detail: { customer }, customers: { rows: [customer], total: 1 } } })
     await flushPromises()
     await wrapper.findAll('button').find(button => button.text() === '打开私信会话')!.trigger('click')
     await flushPromises()
@@ -25,10 +25,28 @@ describe('客户跟进交互', () => {
     expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { platform: 'xhs', account_id: 'xhs-brand', conversation: '22' } })
     await wrapper.findAll('button').find(button => button.text() === '准备私信')!.trigger('click')
     expect(wrapper.emitted('message-customer')?.[0][0]).toEqual({ ...customer, account_id: 'xhs-brand' })
-    expect(wrapper.get('.auto-message-batch-panel').findAll('option').some(item => item.attributes('value') === 'xhs-brand')).toBe(false)
+    await wrapper.findAll('button').find(button => button.text() === '自动私信')!.trigger('click')
+    expect(wrapper.emitted('auto-message-customer')?.[0][0]).toEqual({ ...customer, account_id: 'xhs-brand' })
+    expect(wrapper.get('.auto-message-batch-panel').findAll('option').some(item => item.attributes('value') === 'xhs-brand')).toBe(true)
     wrapper.unmount()
   })
   beforeEach(() => { vi.clearAllMocks(); mocks.route.query = { customer: '7', status: '全部' }; mocks.get.mockResolvedValue({ data: [] }) })
+  it('changes batch accounts with the source platform and keeps Kuaishou disabled', async () => {
+    mocks.get.mockResolvedValue({ data: ['dy', 'xhs'].map(platform => ({ id: platform + '-brand', platform, name: platform + '账号', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } })) })
+    const wrapper = mount(MessageWorkbenchPage, { props: { filters: { platform: 'dy', keyword: '来源A' } } })
+    await flushPromises()
+    const batchPanel = wrapper.get('.auto-message-batch-panel')
+    expect((batchPanel.get('select').element as HTMLSelectElement).value).toBe('dy-brand')
+    await wrapper.setProps({ filters: { platform: 'xhs', keyword: '来源B' } })
+    expect((batchPanel.get('select').element as HTMLSelectElement).value).toBe('xhs-brand')
+    expect(batchPanel.findAll('option').some(option => option.attributes('value') === 'dy-brand')).toBe(false)
+    await batchPanel.findAll('button').find(button => button.text() === 'AI一键私信')!.trigger('click')
+    expect(wrapper.emitted('start-auto-message-batch')?.[0][0]).toMatchObject({ platform: 'xhs', keyword: '来源B', account_id: 'xhs-brand' })
+    await wrapper.setProps({ filters: { platform: 'ks', keyword: '来源C' } })
+    expect(batchPanel.findAll('button').find(button => button.text() === 'AI一键私信')!.attributes('disabled')).toBeDefined()
+    expect((batchPanel.get('select').element as HTMLSelectElement).value).toBe('')
+    wrapper.unmount()
+  })
   it('locates the customer, separates preparation from confirmation and keeps source and history views', async () => {
     mocks.get.mockResolvedValue({ data: [{ id: 'brand', platform: 'dy', enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } }] })
     const customer = { lead_id: 7, nickname: '客户A', platform: 'dy', follow_status: '未私信', script: '问候语', profile_url: 'https://example.com/customer' }

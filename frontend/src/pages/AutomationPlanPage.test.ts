@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AutomationPlanPage from './AutomationPlanPage'
 import { ListPagination } from '../components/ui/ListPagination'
+import { ElFormItem, ElSelect } from 'element-plus'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), remove: vi.fn(), push: vi.fn(), replace: vi.fn(), route: { query: {} as Record<string, string> } }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post, put: mocks.put, delete: mocks.remove } }))
@@ -19,6 +20,23 @@ describe('自动化详情与草稿', () => {
     mocks.route.query = {}
     mocks.put.mockResolvedValue({ data: { updated_at: 'now' } })
     mocks.remove.mockResolvedValue({ data: {} })
+  })
+  it('switches scheduled messages to XHS and saves only an XHS account', async () => {
+    mocks.route.query = { create: '1', type: 'message' }
+    mocks.get.mockImplementation(async (url: string) => ({ data: url === '/automation/plans' ? { items: [], summary: {} } : url === '/automation/runs' ? { items: [], total: 0 } : url === '/accounts' ? ['dy', 'xhs'].map(platform => ({ id: platform + '-brand', name: platform + '账号', platform, enabled: true, features: ['message'], feature_status: { message: { status: 'ready' } } })) : { exists: false, payload: {} } }))
+    mocks.post.mockResolvedValue({ data: { id: 'xhs-plan' } })
+    const wrapper = mount(AutomationPlanPage)
+    await flushPromises()
+    const platformField = wrapper.findAllComponents(ElFormItem).find(field => field.props('label') === '平台')!
+    platformField.getComponent(ElSelect).vm.$emit('update:modelValue', 'xhs')
+    await flushPromises()
+    const accountField = wrapper.findAllComponents(ElFormItem).find(field => field.props('label') === '执行账号')!
+    expect(accountField.getComponent(ElSelect).props('modelValue')).toBe('xhs-brand')
+    expect(accountField.text()).not.toContain('dy账号')
+    await wrapper.findAll('button').find(button => button.text() === '保存计划')!.trigger('click')
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalledWith('/automation/plans', expect.objectContaining({ config: expect.objectContaining({ platform: 'xhs', account_id: 'xhs-brand' }) }))
+    wrapper.unmount()
   })
   it('restores the message plan draft, then clears it after saving without starting execution', async () => {
     mocks.route.query = { create: '1', type: 'message' }

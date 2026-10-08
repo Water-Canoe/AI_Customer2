@@ -107,8 +107,8 @@ def create_auto_message_batch(
 ) -> dict[str, Any]:
     platform = str(platform or "").strip()
     keyword = _normalize_keyword_filter(keyword)
-    if platform != "dy":
-        raise ValueError("AI一键私信当前只支持抖音")
+    if platform not in {"dy", "xhs"}:
+        raise ValueError("自动私信支持抖音和小红书")
     if not keyword:
         raise ValueError("请先选择一个具体关键词，不能对“全部”一键私信")
     count = _bounded_int(count, 10, 1, 200)
@@ -178,11 +178,12 @@ def create_scheduled_message_batch(run_id: str, config: MessagePlanConfig, *, co
                 id, platform, keyword, requested_count, interval_min_seconds,
                 interval_max_seconds, fill_only, status, total_count,
                 source, automation_run_id, error, finished_at, account_id
-            ) VALUES(?, 'dy', ?, ?, ?, ?, 0, ?, ?, 'scheduled', ?, ?,
+            ) VALUES(?, ?, ?, ?, ?, ?, 0, ?, ?, 'scheduled', ?, ?,
                      CASE WHEN ? = 'quota_reached' THEN datetime('now', 'localtime') ELSE NULL END, ?)
             """,
             (
                 batch_id,
+                config.platform,
                 "全部关键词" if config.keyword_scope == "all" else " / ".join(config.keywords),
                 config.count,
                 config.interval_min_seconds,
@@ -412,9 +413,10 @@ async def auto_message_customer(
 ) -> dict[str, Any]:
     detail = customer_detail(lead_id)
     customer = detail["customer"]
-    if customer["platform"] != "dy":
-        raise ValueError("自动私信当前只支持抖音客户")
-    account_id = account_center.resolve_account_id("dy", "message", account_id)
+    if customer["platform"] not in {"dy", "xhs"}:
+        raise ValueError("自动私信支持抖音和小红书客户")
+    # 使用客户所在平台的私信账号，后续统一由收件箱分派协议。
+    account_id = account_center.resolve_account_id(customer["platform"], "message", account_id)
     from app.services import message_inbox
     with database.connect() as conn:
         fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
@@ -618,7 +620,7 @@ def _scheduled_candidates(conn: Any, config: MessagePlanConfig) -> list[dict[str
     candidates = [
         customer
         for customer in customers
-        if customer["platform"] == "dy"
+        if customer["platform"] == config.platform
         and customer["follow_status"] == "未私信"
         and int(customer["lead_id"]) not in attempted_today
         and (config.keyword_scope == "all" or selected_keywords.intersection(customer["keywords"]))

@@ -52,21 +52,27 @@ def _event(message_id, content='你好'):
 
 def test_xhs_uses_same_inbox_storage_status_and_platform_ownership(inbox, monkeypatch):
     account, transport = inbox
-    from app.services import im_transport
+    from app.services import message_workbench
     monkeypatch.setattr(message_inbox, '_transport_for_platform', lambda platform: transport)
     xhs_account, dy_account = account('小红书客服', 'xhs'), account('抖音客服')
     peer = '65abcdef1234567890abcdef'
     with database.connect() as conn:
         user = conn.execute("INSERT INTO user_accounts(platform,platform_user_id,nickname) VALUES('xhs',?,'小红书客户')", (peer,)).lastrowid
-        lead = conn.execute("INSERT INTO lead_user_accounts(account_id,screening_status,follow_status) VALUES(?,'目标客户','未私信')", (user,)).lastrowid
+        lead = conn.execute("INSERT INTO lead_user_accounts(account_id,screening_status,follow_status,script) VALUES(?,'目标客户','未私信','首次私信')", (user,)).lastrowid
+        conn.execute("INSERT INTO lead_sources(lead_account_id,source_type,keyword) VALUES(?,'comment','小红书获客')", (lead,))
     conversation = message_inbox.create_conversation(xhs_account, lead_id=lead)
     with pytest.raises(ValueError, match='平台'):
         message_inbox.create_conversation(dy_account, lead_id=lead)
     with pytest.raises(ValueError, match='小红书'):
         message_inbox.create_conversation(xhs_account, peer_user_id='123456')
-    assert message_inbox.send_message(xhs_account, conversation['id'], '首次私信')['status'] == 'accepted'
+    # 自动私信沿用真实收件箱存储及状态逻辑，只模拟外部协议请求。
+    with pytest.raises(ValueError, match='平台'):
+        asyncio.run(message_workbench.auto_message_customer(lead, account_id=dy_account))
+    result = asyncio.run(message_workbench.auto_message_customer(lead, account_id=xhs_account))
+    assert result['dm']['status'] == 'accepted'
     with database.connect() as conn:
         assert conn.execute('SELECT follow_status FROM lead_user_accounts WHERE id=?', (lead,)).fetchone()[0] == '已私信'
+        assert conn.execute('SELECT COUNT(*) FROM message_send_attempts').fetchone()[0] == 1
     message_inbox.hide_conversation(xhs_account, conversation['id'])
     event = {'platform_message_id': 'xhs-message', 'peer_user_id': peer, 'conversation_id': peer,
              'direction': 'incoming', 'content': '客户回复', 'avatar': 'https://example.com/avatar.jpg'}
@@ -371,7 +377,7 @@ def test_startup_switch_connects_all_ready_supported_accounts(inbox, monkeypatch
     dy_session = ModuleType('app.services.douyin_im_session')
     dy_session.capture_context = dy_capture
     monkeypatch.setitem(sys.modules, 'app.services.douyin_im_session', dy_session)
-    monkeypatch.setattr(services, 'douyin_im_session', dy_session)
+    monkeypatch.setattr(services, 'douyin_im_session', dy_session, raising=False)
     monkeypatch.setattr(message_inbox.im_session, 'capture_xhs_context', xhs_capture, raising=False)
 
     async def sync(account_id, capture):

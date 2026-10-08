@@ -144,7 +144,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
     const leadId = row.lead_id || row.id
     const script = selectDmScript(options.settings.value, row.script)
     if (!leadId) return ElMessage.error('当前客户缺少线索ID，无法自动私信')
-    if (row.platform !== 'dy') return ElMessage.error('自动私信当前只支持抖音客户')
+    if (!['dy', 'xhs'].includes(row.platform)) return ElMessage.error('自动私信支持抖音和小红书客户')
     if (!script.text) return ElMessage.error(script.emptyMessage)
     try {
       if (options.settings.value.auto_dm_fill_only) {
@@ -172,7 +172,7 @@ export function useMessageWorkbench(options: MessageWorkbenchOptions) {
   }
 
   async function startBatch(payload: Dict) {
-    if (String(payload.platform || '') !== 'dy') return ElMessage.info('AI一键私信已跳过快手/小红书平台，请选择抖音关键词')
+    if (!['dy', 'xhs'].includes(String(payload.platform || ''))) return ElMessage.info('请选择抖音或小红书来源关键词')
     try {
       const { data } = await api.post('/message-workbench/auto-message-batches', payload)
       ElMessage.success(`自动私信批次 ${data.id} 已加入队列`)

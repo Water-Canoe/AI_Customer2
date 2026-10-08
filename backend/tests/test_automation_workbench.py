@@ -478,17 +478,19 @@ def test_keyword_failure_continues_and_finishes_partial(tmp_path: Path, monkeypa
     assert [item["status"] for item in result["items"]] == ["failed", "succeeded"]
 
 
-def test_message_candidates_sort_intention_then_oldest_and_deduplicate(tmp_path: Path) -> None:
+@pytest.mark.parametrize("platform", ["dy", "xhs"])
+def test_message_candidates_sort_intention_then_oldest_and_deduplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str) -> None:
+    monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
     prepare_project(tmp_path)
     from app import database
     from app.schemas import MessagePlanConfig
-    from app.services import message_workbench
+    from app.services import account_center, message_workbench
 
     with database.connect() as conn:
         for index, intention in enumerate(["中", "高", "高", "低"]):
             account_id = conn.execute(
-                "INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url) VALUES('dy', ?, ?, ?)",
-                (f"candidate-{index}", f"客户{index}", f"https://www.douyin.com/user/{index}"),
+                "INSERT INTO user_accounts(platform, platform_user_id, nickname) VALUES(?, ?, ?)",
+                (platform, f"candidate-{index}", f"客户{index}"),
             ).lastrowid
             lead_id = conn.execute(
                 "INSERT INTO lead_user_accounts(account_id, screening_status, follow_status, intention, script, created_at) VALUES(?, '目标客户', '未私信', ?, 'AI话术', ?)",
@@ -497,11 +499,31 @@ def test_message_candidates_sort_intention_then_oldest_and_deduplicate(tmp_path:
             conn.execute("INSERT INTO lead_sources(lead_account_id, keyword, source_type) VALUES(?, '获客', 'competitor_comment')", (lead_id,))
             if index == 1:
                 conn.execute("INSERT INTO lead_sources(lead_account_id, keyword, source_type) VALUES(?, '另一个词', 'competitor_comment')", (lead_id,))
-        config = MessagePlanConfig(keyword_scope="all", count=10, script_mode="ai")
+        # 相同关键词的另一平台客户不能混入本计划。
+        other_user = conn.execute("INSERT INTO user_accounts(platform,platform_user_id) VALUES(?,'other-platform')", ('xhs' if platform == 'dy' else 'dy',)).lastrowid
+        other_lead = conn.execute("INSERT INTO lead_user_accounts(account_id,screening_status,follow_status,script) VALUES(?,'目标客户','未私信','另一平台话术')", (other_user,)).lastrowid
+        conn.execute("INSERT INTO lead_sources(lead_account_id,keyword,source_type) VALUES(?,'获客','competitor_comment')", (other_lead,))
+        config = MessagePlanConfig(platform=platform, keyword_scope="selected", keywords=["获客"], count=10, script_mode="ai")
         candidates = message_workbench._scheduled_candidates(conn, config)
 
     assert [item["nickname"] for item in candidates] == ["客户1", "客户2", "客户0", "客户3"]
     assert len({item["lead_id"] for item in candidates}) == 4
+    sender = account_center.create_account(platform, "计划私信账号", "service", ["message"], ["message"])
+    account_center.set_login_status(sender["id"], "user", "ready")
+    message_workbench.update_message_limits(100, 40)
+    batch = message_workbench.create_scheduled_message_batch("scheduled-test", config)
+    assert batch["platform"] == platform and batch["account_id"] == sender["id"]
+    assert batch["source"] == "scheduled" and batch["automation_run_id"] == "scheduled-test"
+    assert [item["lead_account_id"] for item in batch["items"]] == [item["lead_id"] for item in candidates]
+
+
+@pytest.mark.parametrize("schema_name", ["MessageAutoBatchCreate", "MessagePlanConfig"])
+def test_auto_message_schemas_reject_unsupported_kuaishou(schema_name: str) -> None:
+    from app import schemas
+
+    # 请求边界仅开放已有协议的两个平台，不接收快手私信计划。
+    with pytest.raises(ValueError):
+        getattr(schemas, schema_name).model_validate({"platform": "ks", "keyword": "获客"})
 
 
 def test_message_quota_counts_failures_and_prevents_same_day_retry(tmp_path: Path) -> None:

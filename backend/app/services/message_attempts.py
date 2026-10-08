@@ -37,7 +37,7 @@ def get_message_limits() -> dict[str, Any]:
     return {
         **summary,
         "fill_only": fill_only,
-        "notice": "仅统计本软件产生的私信，无法感知抖音 App 或其他工具中的手动发送数量。",
+        "notice": "抖音与小红书共用此额度，仅统计本软件产生的私信，无法感知平台 App 或其他工具中的手动发送数量。",
     }
 
 

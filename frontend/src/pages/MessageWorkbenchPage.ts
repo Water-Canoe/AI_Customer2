@@ -64,14 +64,14 @@ export default defineComponent({
       try {
         const { data } = await api.get<PlatformAccount[]>('/accounts', { params: { feature: 'message' } })
         accounts.value = data.filter(account => ['dy', 'xhs'].includes(account.platform) && isAccountFeatureReady(account, 'message'))
-        const dyAccounts = accounts.value.filter(account => account.platform === 'dy')
-        const preferred = dyAccounts.find(account => account.default_features?.includes('message')) || dyAccounts[0]
-        if (!dyAccounts.some(account => String(account.id) === accountId.value)) accountId.value = String(preferred?.id || '')
+        selectBatchAccount()
       } catch (error: any) {
         ElMessage.error(error?.response?.data?.detail || '私信账号加载失败')
       }
     }
     onMounted(loadAccounts)
+    // 来源平台切换时，只保留或选择同平台的私信账号。
+    watch(() => String((props.filters as Dict).platform || ''), selectBatchAccount)
     // 返回缓存页时更新账号可用状态，同时保留用户已选账号。
     let activatedOnce = false
     onActivated(() => { if (activatedOnce) void loadAccounts(); activatedOnce = true })
@@ -124,6 +124,10 @@ export default defineComponent({
         || matching.find(account => account.default_features?.includes('message'))?.id || matching[0]?.id || '')
     }
 
+    function selectBatchAccount() {
+      accountId.value = accountForPlatform(String((props.filters as Dict).platform || ''))
+    }
+
     // 只创建本地会话并打开收件箱，不在此处发送消息或启动监听。
     async function openConversation(customer: Dict) {
       const account = accountForPlatform(String(customer.platform))
@@ -157,7 +161,7 @@ export default defineComponent({
           setMin: (value: number) => intervalMin.value = boundedNumber(value, autoBatchDefaults.min, 0, 3600),
           setMax: (value: number) => intervalMax.value = boundedNumber(value, autoBatchDefaults.max, 0, 3600),
           accountId: accountId.value,
-          accounts: accounts.value.filter(account => account.platform === 'dy'),
+          accounts: accounts.value.filter(account => account.platform === (props.filters as Dict).platform),
           setAccountId: (value: string) => { accountId.value = value },
           start: () => emit('start-auto-message-batch', {
             platform: (props.filters as Dict).platform || '',
@@ -264,13 +268,13 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
   const keyword = String(filters.keyword || '')
   const platform = String(filters.platform || '')
   const active = batches.active
-  const unsupportedPlatform = Boolean(platform) && platform !== 'dy'
+  const unsupportedPlatform = !['dy', 'xhs'].includes(platform)
   const disabled = Boolean(active) || unsupportedPlatform || !keyword || !String(actions.accountId || '')
   return h('section', { class: 'auto-message-batch-panel' }, [
     h('div', { class: 'auto-message-batch-title' }, [
       h('div', { class: 'auto-message-batch-heading' }, [
         h('strong', 'AI一键私信'),
-        h('span', keyword ? `${platformName(platform)} / ${keyword}` : '先选择一个抖音来源关键词'),
+        h('span', keyword ? `${platformName(platform)} / ${keyword}` : '先选择一个抖音或小红书来源关键词'),
       ]),
       h('label', { class: 'auto-message-account' }, [
         h('span', '执行账号'),
@@ -278,7 +282,7 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
           value: actions.accountId,
           onChange: (event: Event) => actions.setAccountId((event.target as HTMLSelectElement).value),
         }, [
-          h('option', { value: '' }, actions.accounts.length ? '请选择账号' : '账号中心暂无可用抖音账号'),
+          h('option', { value: '' }, actions.accounts.length ? '请选择账号' : '账号中心暂无当前平台可用账号'),
           ...actions.accounts.map((account: PlatformAccount) => h('option', { value: account.id }, account.name)),
         ]),
       ]),
@@ -309,14 +313,14 @@ function renderAutoBatchControls(filters: Dict, batches: Dict, count: number, mi
         type: 'button',
         class: 'primary-action compact-action',
         disabled,
-        title: active ? '已有自动私信批次正在执行' : unsupportedPlatform ? 'AI一键私信会跳过快手/小红书平台' : !keyword ? '请先选择具体关键词' : '启动批量自动私信',
+        title: active ? '已有自动私信批次正在执行' : unsupportedPlatform ? '请选择抖音或小红书来源关键词' : !keyword ? '请先选择具体关键词' : '启动批量自动私信',
         onClick: actions.start
       }, [h(Promotion), h('span', active ? '运行中' : 'AI一键私信')]),
       active ? h('button', { type: 'button', class: 'secondary-action compact-action', onClick: () => actions.cancel(active) }, '取消批次') : null,
-      h('p', { class: 'auto-message-platform-note' }, '当前批量自动私信仅支持抖音。')
+      h('p', { class: 'auto-message-platform-note' }, '支持抖音、小红书，使用来源平台对应的私信账号。')
     ]),
     // 批次按来源选人，列表筛选和分页不会缩小自动发送范围。
-    h('p', { class: 'note' }, `批量范围：所选抖音来源关键词下全部未私信、话术可用的目标客户，按评论/来源时间倒序选取最多 ${count} 人；当前列表的意向、文字搜索、状态和分页不参与批次筛选。`)
+    h('p', { class: 'note' }, `批量范围：所选来源关键词下全部未私信、话术可用的目标客户，按评论/来源时间倒序选取最多 ${count} 人；当前列表的意向、文字搜索、状态和分页不参与批次筛选。`)
   ])
 }
 
@@ -349,7 +353,7 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict, accountId: stri
   const script = rawScript || '暂无AI话术'
   const sendScript = selectedMessageScript(row, settings)
   const missingScriptTip = scriptMode(settings) === 'fixed' ? '固定话术为空，请先到“私信设置”填写' : '暂无AI话术'
-  const autoDmUnsupported = row.platform !== 'dy'
+  const autoDmUnsupported = !['dy', 'xhs'].includes(row.platform)
   return h('tr', { class: row.overdue ? 'is-overdue' : '', onClick: () => emit('select-customer', row.lead_id) }, [
     h('td', { class: 'message-customer-cell' }, [
       row.profile_url
@@ -387,7 +391,7 @@ function renderCustomerRow(row: Dict, emit: any, settings: Dict, accountId: stri
             type: 'button',
             class: ['text-icon-button', autoDmUnsupported ? 'is-platform-disabled' : ''],
             disabled: autoDmUnsupported || !sendScript || !accountId,
-            title: autoDmUnsupported ? '自动私信当前只支持抖音客户' : !sendScript ? missingScriptTip : !accountId ? '请先在账号中心配置私信账号' : settings.auto_dm_fill_only ? '在收件箱生成草稿，由你手动发送' : '通过私信接口发送话术',
+            title: autoDmUnsupported ? '自动私信支持抖音和小红书客户' : !sendScript ? missingScriptTip : !accountId ? '请先在账号中心配置私信账号' : settings.auto_dm_fill_only ? '在收件箱生成草稿，由你手动发送' : '通过私信接口发送话术',
             onClick: () => emit('auto-message-customer', { ...row, account_id: accountId })
           }, [h(Promotion), h('span', '自动私信')]),
           h('button', {

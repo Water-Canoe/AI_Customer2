@@ -4826,8 +4826,11 @@ def test_message_workbench_creator_keyword_and_soft_hide_restore(tmp_path: Path)
     assert message_workbench.list_customers(keyword="AI客服")["total"] == 1
 
 
-def test_message_workbench_auto_message_uses_protocol_and_marks_sent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("platform", ["dy", "xhs"])
+def test_message_workbench_auto_message_uses_protocol_and_marks_sent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str) -> None:
     prepare_project(tmp_path)
+    if platform == "xhs":
+        create_ready_test_account(platform)
     from app import database
     from app.services import message_workbench
 
@@ -4835,8 +4838,9 @@ def test_message_workbench_auto_message_uses_protocol_and_marks_sent(tmp_path: P
         account_id = conn.execute(
             """
             INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
-            VALUES('dy', 'lead-dm', '可私信客户', 'https://www.douyin.com/user/test-lead')
-            """
+            VALUES(?, 'lead-dm', '可私信客户', '')
+            """,
+            (platform,),
         ).lastrowid
         lead_id = conn.execute(
             """
@@ -4869,7 +4873,7 @@ def test_message_workbench_auto_message_uses_protocol_and_marks_sent(tmp_path: P
     assert calls[0]["message"] == "你好，方便沟通需求吗？"
     from app.services import account_center
 
-    account_id = account_center.resolve_account_id("dy", "message")
+    account_id = account_center.resolve_account_id(platform, "message")
     assert calls[0]["account_id"] == account_id
     assert calls[0]["reserve_attempt"] is False
     with database.connect() as conn:
@@ -4877,8 +4881,11 @@ def test_message_workbench_auto_message_uses_protocol_and_marks_sent(tmp_path: P
         assert row["follow_status"] == "已私信"
 
 
-def test_message_workbench_auto_message_fill_only_keeps_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("platform", ["dy", "xhs"])
+def test_message_workbench_auto_message_fill_only_keeps_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str) -> None:
     prepare_project(tmp_path)
+    if platform == "xhs":
+        create_ready_test_account(platform)
     from app import database
     from app.services import message_workbench
 
@@ -4887,8 +4894,9 @@ def test_message_workbench_auto_message_fill_only_keeps_status(tmp_path: Path, m
         account_id = conn.execute(
             """
             INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
-            VALUES('dy', '123456789', '只填客户', 'https://www.douyin.com/user/test-fill')
-            """
+            VALUES(?, ?, '只填客户', '')
+            """,
+            (platform, '123456789' if platform == 'dy' else '65abcdef1234567890abcdef'),
         ).lastrowid
         lead_id = conn.execute(
             """
@@ -4918,6 +4926,11 @@ def test_message_workbench_auto_message_fill_only_keeps_status(tmp_path: Path, m
     assert result["dm"]["dry_run"] is True
     assert result["dm"]["draft"] == "你好，先填入话术。"
     with database.connect() as conn:
+        # 只生成同平台会话草稿，不占发送额度。
+        conversation = conn.execute("SELECT account_id FROM im_conversations WHERE id=?", (result["dm"]["conversation_id"],)).fetchone()
+        from app.services import account_center
+        assert conversation["account_id"] == account_center.resolve_account_id(platform, "message")
+        assert conn.execute("SELECT COUNT(*) FROM message_send_attempts").fetchone()[0] == 0
         row = conn.execute("SELECT follow_status FROM lead_user_accounts WHERE id = ?", (lead_id,)).fetchone()
         assert row["follow_status"] == "未私信"
 
@@ -5064,8 +5077,11 @@ def test_message_workbench_auto_message_batch_list_is_paginated(tmp_path: Path) 
     assert [batch["id"] for batch in result["batches"]] == ["batch-06", "batch-05", "batch-04", "batch-03", "batch-02"]
 
 
-def test_message_workbench_auto_message_batch_reuses_protocol_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("platform", ["dy", "xhs"])
+def test_message_workbench_auto_message_batch_reuses_protocol_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str) -> None:
     prepare_project(tmp_path)
+    if platform == "xhs":
+        create_ready_test_account(platform)
     from app import database
     from app.services import message_workbench
 
@@ -5075,9 +5091,9 @@ def test_message_workbench_auto_message_batch_reuses_protocol_account(tmp_path: 
             account_id = conn.execute(
                 """
                 INSERT INTO user_accounts(platform, platform_user_id, nickname, profile_url)
-                VALUES('dy', ?, ?, ?)
+                VALUES(?, ?, ?, ?)
                 """,
-                (f"batch-lead-{index}", f"批量客户{index}", f"https://www.douyin.com/user/batch-{index}"),
+                (platform, f"batch-lead-{index}", f"批量客户{index}", ""),
             ).lastrowid
             lead_id = conn.execute(
                 """
@@ -5101,11 +5117,12 @@ def test_message_workbench_auto_message_batch_reuses_protocol_account(tmp_path: 
     from app.services import message_inbox
     monkeypatch.setattr(message_inbox, "send_to_customer", fake_sender)
 
-    batch = message_workbench.create_auto_message_batch("dy", "电动车", 2, 0, 0, run_now=False)
+    batch = message_workbench.create_auto_message_batch(platform, "电动车", 2, 0, 0, run_now=False)
     asyncio.run(message_workbench.run_auto_message_batch(str(batch["id"])))
     result = message_workbench.get_auto_message_batch(str(batch["id"]))
 
     assert len(calls) == 2
+    assert result["platform"] == platform
     assert {call["account_id"] for call in calls} == {batch["account_id"]}
     assert {call["lead_id"] for call in calls} == set(lead_ids)
     assert result["success_count"] == 2

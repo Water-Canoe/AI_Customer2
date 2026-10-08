@@ -655,6 +655,14 @@ export default defineComponent({
     function renderMessageFields() {
       const config = draft.config as Dict
       return [
+        h(ElFormItem, { label: '平台', required: true }, () => h(ElSelect, {
+          modelValue: config.platform,
+          'onUpdate:modelValue': (platform: string) => {
+            config.platform = platform
+            // 切换平台后复用现有默认账号选择，避免跨平台发送。
+            selectDefaultAccount()
+          },
+        }, () => [h(ElOption, { label: '抖音', value: 'dy' }), h(ElOption, { label: '小红书', value: 'xhs' })])),
         accountField(config, 'account_id', 'message'),
         h(ElRow, { gutter: 16 }, () => [
           h(ElCol, { span: 12 }, () => h(ElFormItem, { label: '关键词范围' }, () => h(ElSelect, { modelValue: config.keyword_scope, 'onUpdate:modelValue': (value: string) => config.keyword_scope = value }, () => [h(ElOption, { label: '全部关键词', value: 'all' }), h(ElOption, { label: '指定关键词', value: 'selected' })]))),
@@ -664,7 +672,7 @@ export default defineComponent({
         h(ElFormItem, { label: '私信话术' }, () => h(ElSelect, { modelValue: config.script_mode, 'onUpdate:modelValue': (value: string) => config.script_mode = value }, () => [h(ElOption, { label: '使用客户已有 AI 话术', value: 'ai' }), h(ElOption, { label: '使用本计划固定话术', value: 'fixed' })])),
         config.script_mode === 'fixed' ? h(ElFormItem, { label: '固定话术', required: true }, () => h(ElInput, { type: 'textarea', rows: 4, maxlength: 2000, showWordLimit: true, modelValue: config.fixed_script, 'onUpdate:modelValue': (value: string) => config.fixed_script = value })) : null,
         h(ElRow, { gutter: 16 }, () => [numberField('最小随机间隔（秒）', config, 'interval_min_seconds', 0, 3600, 12), numberField('最大随机间隔（秒）', config, 'interval_max_seconds', 0, 3600, 12)]),
-        h(ElAlert, { title: '候选客户必须是抖音目标客户、未私信、未隐藏、主页可用且今天未尝试。AI话术模式还要求客户已有AI话术。', type: 'info', showIcon: true, closable: false }),
+        h(ElAlert, { title: '候选客户必须是所选平台的目标客户、未私信、未隐藏、用户标识可用且今天未尝试。AI话术模式还要求客户已有AI话术。', type: 'info', showIcon: true, closable: false }),
       ]
     }
 

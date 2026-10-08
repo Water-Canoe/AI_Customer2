@@ -372,7 +372,7 @@ class CustomerAutoMessageRequest(BaseModel):
 
 
 class MessageAutoBatchCreate(BaseModel):
-    platform: Platform = "dy"
+    platform: Literal["dy", "xhs"] = "dy"
     keyword: str
     count: int = Field(default=10, ge=1, le=200)
     interval_min_seconds: int = Field(default=30, ge=0, le=3600)
@@ -407,7 +407,7 @@ class KeywordLeadPlanConfig(BaseModel):
 
 
 class MessagePlanConfig(BaseModel):
-    platform: Literal["dy"] = "dy"
+    platform: Literal["dy", "xhs"] = "dy"
     keyword_scope: Literal["all", "selected"] = "all"
     keywords: list[str] = Field(default_factory=list, max_length=100)
     count: int = Field(default=10, ge=1, le=100)

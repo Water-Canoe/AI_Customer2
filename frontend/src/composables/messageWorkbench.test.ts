@@ -6,7 +6,7 @@ import { selectDmScript, useMessageWorkbench } from './messageWorkbench'
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), push: vi.fn(), patch: vi.fn(), writeText: vi.fn(), confirm: vi.fn() }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post, patch: mocks.patch } }))
 vi.mock('element-plus', () => ({
-  ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+  ElMessage: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
   ElMessageBox: { confirm: mocks.confirm },
 }))
 
@@ -71,15 +71,29 @@ describe('useMessageWorkbench follow status', () => {
     expect(mocks.get).toHaveBeenCalledWith('/message-workbench/customers/7')
     expect(workbench.detail.value.customer.lead_id).toBe(7)
   })
-  it.each(['prepare', 'fill-only'])('opens a Douyin draft through %s without sending or changing follow status', async mode => {
+  it.each([['dy', 'prepare'], ['dy', 'fill-only'], ['xhs', 'prepare'], ['xhs', 'fill-only']])('opens a %s draft through %s without sending or changing follow status', async (platform, mode) => {
     const workbench = useMessageWorkbench({ router: { push: mocks.push }, settings: ref({ auto_dm_fill_only: true }), refreshRelated: vi.fn() })
-    const customer = { lead_id: 7, platform: 'dy', account_id: 'brand', script: '预填话术' }
+    const customer = { lead_id: 7, platform, account_id: 'brand', script: '预填话术' }
     if (mode === 'prepare') await workbench.messageCustomer(customer)
     else await workbench.autoMessageCustomer(customer)
     expect(mocks.post).toHaveBeenCalledTimes(1)
     expect(mocks.post).toHaveBeenCalledWith('/message-inbox/conversations', { account_id: 'brand', lead_id: 7 })
-    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { platform: 'dy', account_id: 'brand', conversation: '12', draft: '预填话术' } })
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/message-inbox', query: { platform, account_id: 'brand', conversation: '12', draft: '预填话术' } })
     expect(window.open).not.toHaveBeenCalled()
     expect(mocks.patch).not.toHaveBeenCalled()
+  })
+  it('submits XHS single and batch messages through the existing endpoints and rejects Kuaishou', async () => {
+    const workbench = useMessageWorkbench({ router: { push: mocks.push }, settings: ref({}), refreshRelated: vi.fn() })
+    await workbench.autoMessageCustomer({ lead_id: 8, platform: 'xhs', account_id: 'xhs-brand', script: '小红书话术' })
+    expect(mocks.post).toHaveBeenCalledWith('/message-workbench/customers/8/auto-message', {
+      dry_run: false, message_script: '小红书话术', script_label: 'AI话术', account_id: 'xhs-brand',
+    })
+    const batch = { platform: 'xhs', keyword: '设备', count: 2, account_id: 'xhs-brand' }
+    await workbench.startBatch(batch)
+    expect(mocks.post).toHaveBeenCalledWith('/message-workbench/auto-message-batches', batch)
+    mocks.post.mockClear()
+    await workbench.autoMessageCustomer({ lead_id: 9, platform: 'ks', script: '快手话术' })
+    await workbench.startBatch({ platform: 'ks', keyword: '设备' })
+    expect(mocks.post).not.toHaveBeenCalled()
   })
 })
