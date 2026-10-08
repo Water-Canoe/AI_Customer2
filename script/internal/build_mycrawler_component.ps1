@@ -1,9 +1,9 @@
-param(
+﻿param(
     [string]$Version = "1.0.0"
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $CrawlerRoot = Join-Path $ProjectRoot "MyCrawler"
 $BackendDir = Join-Path $ProjectRoot "backend"
 $Python = Join-Path $CrawlerRoot ".venv\Scripts\python.exe"
@@ -22,11 +22,12 @@ foreach ($RequiredFile in @($Python, $VerifierPython, $Entrypoint, (Join-Path $C
 if ($LASTEXITCODE -ne 0) {
     throw "Nuitka is missing from MyCrawler/.venv"
 }
-$SourceRevision = (& git -C $CrawlerRoot rev-parse HEAD).Trim()
+$SourceRevision = ([string](& git -C $CrawlerRoot rev-parse HEAD)).Trim()
 if ($LASTEXITCODE -ne 0 -or $SourceRevision -notmatch '^[0-9a-f]{40,64}$') {
     throw "MyCrawler source revision cannot be determined"
 }
 $SourceDirty = @(& git -C $CrawlerRoot status --short).Count -gt 0
+if ($LASTEXITCODE -ne 0) { throw "Cannot inspect the MyCrawler working-tree state." }
 
 $PreviousPythonPath = $env:PYTHONPATH
 $PreviousVerifyOnly = $env:AI_CUSTOMER_SHIM_VERIFY_ONLY

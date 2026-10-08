@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 
 # 独立脚本与客户端安装器使用同一套Windows路径规则。
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 from app.release_paths import safe_release_path
 
 

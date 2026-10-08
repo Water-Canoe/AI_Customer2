@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Version = "",
     [string]$EnvironmentVersion = "1.1.0",
     [string]$MyCrawlerComponentPath = "",
@@ -18,7 +18,7 @@ $FrontendDir = Join-Path $ProjectRoot "frontend"
 $AppLauncher = Join-Path $ProjectRoot "packaging\ai_customer_launcher.py"
 $StableLauncher = Join-Path $ProjectRoot "packaging\ai_customer_bootstrap.py"
 $AppIcon = Join-Path $ProjectRoot "packaging\ai-customer-icon.ico"
-$DeliveryAssembler = Join-Path $ProjectRoot "script\assemble_delivery.py"
+$DeliveryAssembler = Join-Path $ProjectRoot "script\internal\assemble_delivery.py"
 $Readme = Join-Path $ProjectRoot "packaging\PACKAGE_README.txt"
 $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
 if ($ProgramOnly -and $IncludeVoice) { throw "ProgramOnly and IncludeVoice cannot be combined." }
@@ -33,9 +33,12 @@ foreach ($RequiredFile in @($Python, $AppLauncher, $StableLauncher, $AppIcon, $D
 if ($LASTEXITCODE -ne 0) {
     throw "Nuitka is missing from backend/.venv. Install backend/requirements-dev.txt first."
 }
+$Npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 
 # Keep one version source so the EXE and release manifest cannot disagree.
-$SourceVersion = (& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.version import APP_VERSION; print(APP_VERSION)").Trim()
+$SourceVersionOutput = & $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from app.version import APP_VERSION; print(APP_VERSION)" $BackendDir
+if ($LASTEXITCODE -ne 0) { throw "Cannot read backend/app/version.py." }
+$SourceVersion = ([string]$SourceVersionOutput).Trim()
 if (-not $Version) {
     $Version = $SourceVersion
 }
@@ -80,7 +83,7 @@ if (-not $ProgramOnly) {
         [string]$MyCrawlerInfo.entrypoint_sha256 -notmatch '^[0-9a-f]{64}$' -or
         -not (Test-Path -LiteralPath (Join-Path $MyCrawlerComponentPath "MyCrawler.exe") -PathType Leaf)
     ) {
-        throw "A completed Nuitka MyCrawler component is required. Run script/build_mycrawler_component.ps1 first."
+        throw "A completed Nuitka MyCrawler component is required. Run script/internal/build_mycrawler_component.ps1 first."
     }
     # 只定位已有浏览器，禁止在打包检查中隐式下载或触发后台更新。
     $CloakBrowserPath = (& $Python -c "import os, cloakbrowser; print(os.getenv('CLOAKBROWSER_BINARY_PATH', '').strip() or cloakbrowser.binary_info()['binary_path'])").Trim()
@@ -139,7 +142,7 @@ if ($IncludeVoice) {
         -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath $VoxNativeModule) -PathType Leaf) -or
         -not (Test-Path -LiteralPath (Join-Path $VoxComponentPath "VoxCPM_Runtime.exe") -PathType Leaf)
     ) {
-        throw "A completed Nuitka-entry VoxCPM2 component is required. Run script/build_voxcpm_component.ps1 first."
+        throw "A completed Nuitka-entry VoxCPM2 component is required. Run script/internal/build_voxcpm_component.ps1 first."
     }
 }
 
@@ -157,14 +160,15 @@ New-Item -ItemType Directory -Path $BuildDist | Out-Null
 # Run the existing frontend and backend checks before packaging verified source.
 Push-Location $FrontendDir
 try {
-    & npm test
+    & $Npm test
     if ($LASTEXITCODE -ne 0) { throw "Frontend tests failed" }
-    & npm run build
+    & $Npm run build
     if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" }
 }
 finally {
     Pop-Location
 }
+$PreviousTestPythonPath = $env:PYTHONPATH
 Push-Location $ProjectRoot
 try {
     $env:PYTHONPATH = $BackendDir
@@ -173,10 +177,12 @@ try {
 }
 finally {
     Pop-Location
+    # 打包脚本结束后恢复调用者环境，避免影响后续开发命令。
+    $env:PYTHONPATH = $PreviousTestPythonPath
 }
 
 # Compile the complete Python application to native code; data files stay beside the standalone binary.
-$SourceRevision = (& git -C $ProjectRoot rev-parse HEAD).Trim()
+$SourceRevision = ([string](& git -C $ProjectRoot rev-parse HEAD)).Trim()
 if ($LASTEXITCODE -ne 0 -or $SourceRevision -notmatch '^[0-9a-f]{40,64}$') {
     throw "Cannot record the Git source revision. Build from the project Git checkout."
 }
@@ -274,7 +280,9 @@ finally {
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher Nuitka compilation failed" }
 
 # 组装单包首装 Core 与日常更新 Program；语音环境仅在明确选择后单独交付。
-$SchemaVersion = [int](& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.migrations import latest_version; print(latest_version())")
+$SchemaOutput = & $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from app.migrations import latest_version; print(latest_version())" $BackendDir
+if ($LASTEXITCODE -ne 0) { throw "Cannot read the current database schema version." }
+$SchemaVersion = [int]$SchemaOutput
 $AssemblyArguments = @(
     $DeliveryAssembler,
     "--packaged-app", $PackagedApp,

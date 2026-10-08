@@ -21,14 +21,15 @@ pytestmark = pytest.mark.skipif(not POWERSHELL, reason="Windows PowerShell is re
 def prepare_publisher(tmp_path: Path) -> dict[str, Path]:
     project = tmp_path / "project"
     script = project / "script"
-    script.mkdir(parents=True)
-    publisher = (ROOT / "script" / "publish_release.ps1").read_text(encoding="utf-8")
+    internal = script / "internal"
+    internal.mkdir(parents=True)
+    publisher = (ROOT / "script" / "publish_release.ps1").read_text(encoding="utf-8-sig")
     publisher = publisher.replace(
         'Join-Path $ProjectRoot "backend\\.venv\\Scripts\\python.exe"',
         "'" + sys.executable.replace("'", "''") + "'",
     )
-    (script / "publish_release.ps1").write_text(publisher, encoding="utf-8")
-    shutil.copyfile(ROOT / "script" / "release_signing.py", script / "release_signing.py")
+    (script / "publish_release.ps1").write_text(publisher, encoding="utf-8-sig")
+    shutil.copyfile(ROOT / "script" / "internal" / "release_signing.py", internal / "release_signing.py")
     archive = project / "program.zip"
     archive.write_bytes(b"verified program fixture")
     metadata = {
@@ -38,7 +39,7 @@ def prepare_publisher(tmp_path: Path) -> dict[str, Path]:
         "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
     }
     # ZIP content is covered by assembler tests; here the real publisher consumes its verified output.
-    (script / "verify_program_zip.py").write_text(
+    (internal / "verify_program_zip.py").write_text(
         "import json\nprint(json.dumps(" + repr(metadata) + "))\n", encoding="utf-8",
     )
     key = Ed25519PrivateKey.generate()
@@ -57,7 +58,7 @@ def prepare_publisher(tmp_path: Path) -> dict[str, Path]:
     return {"project": project, "archive": archive, "private": private_key, "public": public_key, "state": state}
 
 
-def run_publish(env: dict[str, Path], args: dict[str, object], *, failure: str = "") -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
+def run_publish(env: dict[str, Path], args: dict[str, object], *, failure: str = "", admin_token: str = "offline-token-" + "x" * 32) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
     tmp_path = env["project"].parent
     arguments = tmp_path / "arguments.json"
     arguments.write_text(json.dumps(args), encoding="utf-8")
@@ -67,8 +68,8 @@ $ErrorActionPreference = "Stop"
 $global:MockCalls = New-Object System.Collections.Generic.List[object]
 $global:MockRelease = Get-Content -LiteralPath $env:MOCK_STATE -Raw | ConvertFrom-Json
 function Invoke-RestMethod {
-    param($Uri, $Method, $Headers, $ContentType, $Body)
-    $global:MockCalls.Add(@{ method = $Method; path = ([Uri]$Uri).AbsolutePath; body = $Body })
+    param($Uri, $Method, $Headers, $ContentType, $Body, $TimeoutSec)
+    $global:MockCalls.Add(@{ method = $Method; path = ([Uri]$Uri).AbsolutePath; body = $Body; timeout = $TimeoutSec })
     if ($Method -eq "GET") { return [pscustomobject]@{ code = 200; data = @($global:MockRelease | Where-Object { $null -ne $_ }) } }
     $Payload = $Body | ConvertFrom-Json
     if ($Uri.EndsWith("/upload-url")) {
@@ -107,7 +108,7 @@ if ($Failed) { exit 1 }
     result = subprocess.run(
         [str(POWERSHELL), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-        env={**os.environ, "PYTHONUTF8": "1", "AI_CUSTOMER_ADMIN_TOKEN": "offline-token-" + "x" * 32,
+        env={**os.environ, "PYTHONUTF8": "1", "AI_CUSTOMER_ADMIN_TOKEN": admin_token,
              "MOCK_STATE": str(env["state"]), "MOCK_ARGS": str(arguments), "MOCK_CALLS": str(calls_path),
              "MOCK_PUBLISHER": str(env["project"] / "script" / "publish_release.ps1"), "MOCK_FAILURE": failure},
     )
@@ -158,6 +159,7 @@ def test_existing_release_can_change_distribution_without_upload(tmp_path: Path,
     result, calls = run_publish(env, {"ZipPath": str(env["archive"]), "PublicKeyPath": str(env["public"]), "Enable": True, "Mandatory": False, "Notes": "updated"})
     assert result.returncode == 0, result.stdout + result.stderr
     assert [call["method"] for call in calls] == ["GET", "PUT", "GET"]
+    assert all(call["timeout"] == 30 for call in calls)
     state = json.loads(env["state"].read_text(encoding="utf-8-sig"))
     assert state["enabled"] is True and state["mandatory"] is False
     assert state["rolloutPercent"] == 100 and state["notes"] == "updated"
@@ -176,6 +178,18 @@ def test_status_can_disable_without_package_or_key_and_checks_readback(tmp_path:
     assert [call["method"] for call in calls] == ["GET"]
     result, _ = run_publish(env, {"Action": "set-state", "Version": "1.2.99", "Notes": "changed"}, failure="readback")
     assert result.returncode != 0 and "read-back differs" in result.stdout
+
+
+def test_invalid_archive_fails_before_ssh_or_remote_request(tmp_path: Path) -> None:
+    env = prepare_publisher(tmp_path)
+    (env["project"] / "script" / "internal" / "verify_program_zip.py").write_text("raise SystemExit(1)\n")
+    result, calls = run_publish(
+        env, {"ZipPath": str(env["archive"]), "PublicKeyPath": str(env["public"]), "Upload": True,
+              "SshKeyPath": str(tmp_path / "missing-ssh-key")}, admin_token="",
+    )
+    assert result.returncode != 0
+    assert "Program ZIP verification failed" in result.stdout
+    assert not calls
 
 
 def test_failed_registration_resumes_exact_signature_without_reupload(tmp_path: Path) -> None:

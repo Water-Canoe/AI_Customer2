@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SIGNING_TOOL = ROOT / "script" / "release_signing.py"
+SIGNING_TOOL = ROOT / "script" / "internal" / "release_signing.py"
 TRUSTED_PUBLIC_KEY = ROOT / "packaging" / "update_signing_public.pem"
 
 

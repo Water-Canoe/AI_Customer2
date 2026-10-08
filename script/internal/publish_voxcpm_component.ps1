@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Version = "",
     [string]$ComponentPath = "",
@@ -15,9 +15,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $SemVerPattern = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$'
-$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Python = Join-Path $ProjectRoot "backend\.venv\Scripts\python.exe"
-$SigningTool = Join-Path $ProjectRoot "script\release_signing.py"
+$SigningTool = Join-Path $ProjectRoot "script\internal\release_signing.py"
 if (-not $PublicKeyPath) { $PublicKeyPath = Join-Path $ProjectRoot "packaging\update_signing_public.pem" }
 
 # Publishing uses existing local tools and never installs dependencies.
@@ -56,7 +56,7 @@ function Get-SealosAdminToken([string]$KeyPath) {
         return [string]$env:AI_CUSTOMER_ADMIN_TOKEN
     }
     if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) { throw "Sealos SSH key not found: $KeyPath" }
-    $Lines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_ADMIN_TOKEN=//p' /home/devbox/project/.env")
+    $Lines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_ADMIN_TOKEN=//p' /home/devbox/project/.env")
     if ($LASTEXITCODE -ne 0) { throw "Failed to read the Sealos update management token" }
     $Token = ($Lines -join "").Trim()
     if ($Token.Length -lt 32) { throw "The Sealos update management token is missing or too short" }
@@ -69,6 +69,7 @@ function Invoke-UpdateApi([string]$Method, [string]$Path, [object]$Body, [string
         Method = $Method
         Headers = @{ Authorization = "Bearer $AdminToken" }
         ContentType = "application/json; charset=utf-8"
+        TimeoutSec = 30
     }
     if ($null -ne $Body) { $Arguments.Body = $Body | ConvertTo-Json -Depth 12 -Compress }
     try { return Invoke-RestMethod @Arguments }
@@ -216,7 +217,7 @@ if ($IsPrepareOnly) {
 }
 if (-not $SkipUpload) {
     Write-Host "Uploading immutable component package..."
-    & curl.exe --fail-with-body --silent --show-error --connect-timeout 30 --request PUT --upload-file $ArchivePath $UploadUrl
+    & curl.exe --fail-with-body --silent --show-error --connect-timeout 30 --max-time 1800 --request PUT --upload-file $ArchivePath $UploadUrl
     if ($LASTEXITCODE -ne 0) { throw "Object storage upload failed; component metadata was not registered" }
 }
 if ($ExistingComponent) {

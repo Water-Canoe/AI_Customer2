@@ -12,7 +12,7 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _module():
-    module_path = WORKSPACE_ROOT / "script" / "assemble_delivery.py"
+    module_path = WORKSPACE_ROOT / "script" / "internal" / "assemble_delivery.py"
     spec = importlib.util.spec_from_file_location("assemble_delivery", module_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -21,7 +21,7 @@ def _module():
 
 
 def _verifier_module():
-    module_path = WORKSPACE_ROOT / "script" / "verify_program_zip.py"
+    module_path = WORKSPACE_ROOT / "script" / "internal" / "verify_program_zip.py"
     spec = importlib.util.spec_from_file_location("verify_program_zip", module_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

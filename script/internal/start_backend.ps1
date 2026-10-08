@@ -1,13 +1,15 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 # Load shared paths and process helpers.
 . "$PSScriptRoot\_common.ps1"
 
-# Prepare the log folder used by Start-Process redirection.
+# 已有健康服务直接复用，不因重复点击启动而中断私信。
+$existing = Get-ProjectListener -Port $BackendPort -ServiceName "backend"
+if ($existing) {
+    Wait-HttpOk -Url "http://127.0.0.1:$BackendPort/api/health" -ServiceName "backend" -Port $BackendPort
+    return
+}
 Initialize-LogDir
-
-# Close an old backend service on port 8000 before starting a new one.
-Stop-ProjectProcessesOnPort -Port $BackendPort -ServiceName "backend"
 
 # Use the project virtual environment so dependencies stay local to this repo.
 $pythonPath = Join-Path $BackendDir ".venv\Scripts\python.exe"
@@ -30,4 +32,11 @@ $backendProcess = Start-Process `
 Write-Host "Backend started. PID=$($backendProcess.Id), URL=http://127.0.0.1:$BackendPort"
 
 # Confirm the backend health endpoint is reachable.
-Wait-HttpOk -Url "http://127.0.0.1:$BackendPort/api/health" -ServiceName "backend" -TimeoutSeconds 30
+try {
+    Wait-HttpOk -Url "http://127.0.0.1:$BackendPort/api/health" -ServiceName "backend" -Port $BackendPort -LaunchProcessId $backendProcess.Id
+}
+catch {
+    # 清理本次启动失败的新进程，避免留下无人管理的后台。
+    Stop-ProcessTree -ProcessId $backendProcess.Id
+    throw
+}

@@ -169,21 +169,21 @@ Token 不允许放在 URL，不应写入浏览器 `localStorage` 或日志。
 日常发布使用：
 
 ```powershell
-# 只在本地校验、压缩、签名和验签，不访问 Sealos。
-.\script\publish_release.ps1
+# 明确指定已完成的新版本，仅本地验证和签名，不访问 Sealos。
+.\script\publish_release.ps1 -Version 1.3.0
 
-# 上传并登记最新版本，但暂不向客户下发。
-.\script\publish_release.ps1 -Upload
+# 上传并登记该版本，暂不向客户下发。
+.\script\publish_release.ps1 -Version 1.3.0 -Upload
 
-# 上传、登记，并按默认10%灰度启用。
-.\script\publish_release.ps1 -Enable
+# 上传、登记并启用该版本；显式选择 10% 灰度，默认值为 100%。
+.\script\publish_release.ps1 -Version 1.3.0 -Enable -RolloutPercent 10
 ```
 
 发布顺序：
 
-1. 获取限时 PUT 地址。
-2. 向私有对象存储上传 ZIP。
-3. 发布机生成精简清单并使用独立 Ed25519 私钥签名。
+1. 验证本地 Program ZIP，再获取管理令牌和限时 PUT 地址。
+2. 发布机生成精简清单并使用独立 Ed25519 私钥签名、验签。
+3. 向私有对象存储上传同一已验证 ZIP；网络失败时保留签名产物。
 4. 登记 `manifestText` 和 Base64 签名，新记录默认禁用。
 5. 修改 `enabled` 与 `rolloutPercent` 后开始下发。
 
@@ -220,16 +220,16 @@ Token 不允许放在 URL，不应写入浏览器 `localStorage` 或日志。
 
 ```powershell
 # 生成独立VoxCPM2/PyTorch运行组件，不生成模型权重。
-.\script\build_voxcpm_component.ps1 -Version 1.0.0
+.\script\internal\build_voxcpm_component.ps1 -Version 1.0.0
 
 # 只在本地压缩、签名和验签。
-.\script\publish_voxcpm_component.ps1
+.\script\internal\publish_voxcpm_component.ps1
 
 # 上传并登记，但暂不允许客户安装。
-.\script\publish_voxcpm_component.ps1 -Upload
+.\script\internal\publish_voxcpm_component.ps1 -Upload
 
 # 上传、登记并允许客户安装。
-.\script\publish_voxcpm_component.ps1 -Enable
+.\script\internal\publish_voxcpm_component.ps1 -Enable
 ```
 
 组件使用独立版本号和 `AI_Customer-ComponentRelease` 集合。同一组件版本不可覆盖；组件包只包含推理程序和依赖，模型权重仍由首次合成下载到稳定数据目录。

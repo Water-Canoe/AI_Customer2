@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet("publish", "status", "set-state")]
     [string]$Action = "publish",
@@ -48,7 +48,7 @@ function Get-SealosAdminToken([string]$KeyPath) {
     if ($Existing.Length -ge 32) { return $Existing }
     if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) { throw "Sealos SSH key not found: $KeyPath" }
     if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) { throw "ssh.exe is required to read the Sealos management token" }
-    $TokenLines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_ADMIN_TOKEN=//p' /home/devbox/project/.env")
+    $TokenLines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_ADMIN_TOKEN=//p' /home/devbox/project/.env")
     if ($LASTEXITCODE -ne 0) { throw "Failed to read the management token through Sealos SSH" }
     $Token = ($TokenLines -join "").Trim()
     if ($Token.Length -lt 32) { throw "The management token is missing or too short" }
@@ -61,6 +61,7 @@ function Invoke-UpdateApi([string]$Method, [string]$Path, [object]$Body, [string
         Method = $Method
         Headers = @{ Authorization = "Bearer $AdminToken" }
         ContentType = "application/json; charset=utf-8"
+        TimeoutSec = 30
     }
     if ($null -ne $Body) { $Arguments.Body = $Body | ConvertTo-Json -Depth 12 -Compress }
     try { return Invoke-RestMethod @Arguments }
@@ -152,10 +153,10 @@ $IsPrepareOnly = $Action -eq "publish" -and ([bool]$PrepareOnly -or (-not $Uploa
 if (-not $IsPrepareOnly) {
     if (([Uri]$ServerBaseUrl).Scheme -ne "https") { throw "ServerBaseUrl must use HTTPS" }
     if (-not $SshKeyPath) { $SshKeyPath = Join-Path $HOME ".ssh\sealos\bja.sealos.run_ns-0lgzvp7r_medician-ai-back" }
-    $AdminToken = Get-SealosAdminToken $SshKeyPath
 }
 if ($Action -ne "publish") {
     Assert-SemVer $Version "Version"
+    $AdminToken = Get-SealosAdminToken $SshKeyPath
     $Registered = Find-Release @(Get-Releases)
     if (-not $Registered) { throw "No registered release matches the requested identity" }
     if ($Action -eq "set-state") {
@@ -167,8 +168,8 @@ if ($Action -ne "publish") {
 }
 
 $Python = Join-Path $ProjectRoot "backend\.venv\Scripts\python.exe"
-$SigningTool = Join-Path $ProjectRoot "script\release_signing.py"
-$ProgramZipVerifier = Join-Path $ProjectRoot "script\verify_program_zip.py"
+$SigningTool = Join-Path $ProjectRoot "script\internal\release_signing.py"
+$ProgramZipVerifier = Join-Path $ProjectRoot "script\internal\verify_program_zip.py"
 foreach ($Tool in @($Python, $SigningTool, $ProgramZipVerifier)) {
     if (-not (Test-Path -LiteralPath $Tool -PathType Leaf)) { throw "Required local tool not found: $Tool" }
 }
@@ -231,6 +232,8 @@ else {
 $ResultOutput = Join-Path $PublishDir "publish-result.json"
 
 if (-not $IsPrepareOnly) {
+    # 先完成本地包和清单验证，再接触远端管理服务。
+    $AdminToken = Get-SealosAdminToken $SshKeyPath
     $Releases = @(Get-Releases)
     $ExistingRelease = Find-Release $Releases
     if ($ExistingRelease) {
@@ -290,7 +293,7 @@ if ($IsPrepareOnly) {
 }
 if (-not $SkipUpload) {
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { throw "curl.exe is required for streaming the release upload" }
-    & curl.exe --fail-with-body --silent --show-error --connect-timeout 30 --request PUT --upload-file $ArchivePath $UploadUrl
+    & curl.exe --fail-with-body --silent --show-error --connect-timeout 30 --max-time 1800 --request PUT --upload-file $ArchivePath $UploadUrl
     if ($LASTEXITCODE -ne 0) { throw "Object upload failed; signed manifest preserved at $ManifestOutput" }
 }
 try {

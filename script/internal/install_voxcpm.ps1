@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$TorchIndex = "https://download.pytorch.org/whl/cu128",
     [string]$WheelDir = ""
 )
@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Install only the VoxCPM inference path; its unused Gradio UI conflicts with this app's FastAPI version.
-$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Python = Join-Path $ProjectRoot "backend\.venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
     throw "Backend virtual environment not found: $Python"

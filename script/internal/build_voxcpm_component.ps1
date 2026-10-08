@@ -1,11 +1,11 @@
-param(
+﻿param(
     [string]$Version = "1.0.0"
 )
 
 $ErrorActionPreference = "Stop"
 
 # Resolve every path from the script directory for Windows PowerShell 5.1.
-$ProjectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $BackendDir = Join-Path $ProjectRoot "backend"
 $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
 $NativeEntrypoint = Join-Path $ProjectRoot "packaging\voxcpm_runtime.py"
@@ -21,13 +21,14 @@ foreach ($RequiredFile in @($Python, $NativeEntrypoint, $RuntimeLoader)) {
 }
 & $Python -c "import nuitka, PyInstaller, torch, voxcpm; assert torch.cuda.is_available()"
 if ($LASTEXITCODE -ne 0) {
-    throw "Nuitka or the VoxCPM2 CUDA runtime is incomplete. Install backend/requirements-dev.txt and run script/install_voxcpm.ps1."
+    throw "Nuitka or the VoxCPM2 CUDA runtime is incomplete. Install backend/requirements-dev.txt and run script/internal/install_voxcpm.ps1."
 }
-$SourceRevision = (& git -C $ProjectRoot rev-parse HEAD).Trim()
+$SourceRevision = ([string](& git -C $ProjectRoot rev-parse HEAD)).Trim()
 if ($LASTEXITCODE -ne 0 -or $SourceRevision -notmatch '^[0-9a-f]{40,64}$') {
     throw "Project source revision cannot be determined"
 }
 $SourceDirty = @(& git -C $ProjectRoot status --short).Count -gt 0
+if ($LASTEXITCODE -ne 0) { throw "Cannot inspect the project working-tree state." }
 
 # Keep every component build in a unique directory for comparison and rollback.
 $BuildTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -57,7 +58,7 @@ $CompiledEntrypoint = @(Get-ChildItem -LiteralPath $NativeDist -Filter "ai_custo
 if (-not $CompiledEntrypoint) {
     throw "Nuitka did not create the VoxCPM2 native entry module"
 }
-& $Python -c "import sys; sys.path.insert(0, r'$NativeDist'); import ai_customer_voxcpm_native; assert callable(ai_customer_voxcpm_native.serve)"
+& $Python -c "import sys; sys.path.insert(0, sys.argv[1]); import ai_customer_voxcpm_native; assert callable(ai_customer_voxcpm_native.serve)" $NativeDist
 if ($LASTEXITCODE -ne 0) { throw "VoxCPM2 native entry module cannot be imported" }
 
 & $Python -m PyInstaller `
@@ -120,4 +121,4 @@ $Info | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $Component
 Write-Host "VoxCPM2 component created:"
 Write-Host "  $ComponentDir"
 Write-Host "Prepare or upload it with:"
-Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ProjectRoot\script\publish_voxcpm_component.ps1`" -ComponentPath `"$ComponentDir`""
+Write-Host "  powershell -ExecutionPolicy Bypass -File `"$ProjectRoot\script\internal\publish_voxcpm_component.ps1`" -ComponentPath `"$ComponentDir`""

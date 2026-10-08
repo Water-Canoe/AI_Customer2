@@ -1,5 +1,14 @@
 # AI获客系统
 
+## 脚本入口精简与稳定性修复（2026-10-09）
+
+- script 根目录只保留 start_all.ps1、build_package.ps1、publish_release.ps1 三个日常入口。签名、ZIP 校验、组装、服务辅助和可选组件工具共 11 个文件移入 internal，调用和测试夹具同步调整；删除没有调用者的一次性 douyin_probe.cjs。
+- 启动入口支持 start/restart/stop 与 all/backend/frontend。核对工程路径、服务入口及 Windows venv 父进程；重复启动复用服务，明确重启前先检查依赖。后端安全退出失败时停止操作，不用强杀作为替代。
+- 健康检查限定 HTTP 200，后端匹配产品和监听进程；请求有超时，新进程提前退出立即报错。前端直接使用现有 Node/Vite、正确引用含空格的路径并固定端口；日志集中到 output/logs/。
+- 打包显式调用 npm.cmd，Python 查询路径通过参数传入；测试后恢复原 PYTHONPATH，版本和数据库结构读取失败立即停止。发布先验证本地包，再读取远端管理令牌；程序和语音发布的管理请求、SSH 和上传都有超时。PowerShell 文件使用 UTF-8 BOM，确保 Windows PowerShell 5.1 正确读取中文注释。
+- 保留源码测试、编译产物自检、签名、不可覆盖版本和失败登记恢复。未增加依赖、自动安装、旧入口兼容或自动发版。
+- 验证：启动／组装／签名／发布定向回归 33 项通过；全部 PowerShell 脚本通过 Windows PowerShell 5.1 语法检查。实际重复启动后，8000 与 5173 的服务进程保持不变。未执行真实停止／重启、交付包编译、远端发布或真实私信发送。
+
 ## 打包、更新与发布机制优化（2026-10-08）
 
 - 首装改为一个 Core ZIP；Program 包含完整程序及直接运行依赖，语音运行时和模型通过 `-IncludeVoice` 独立可选。`-ProgramOnly` 不读取浏览器、采集组件或语音来源。清单记录源码提交、脏状态、构建时间、结构和环境要求；编译后在临时空库执行导入／资源／健康函数自检，失败则停止组装。
@@ -393,23 +402,26 @@ ICP 画像里的 `company_name` 是可选字段：填写后 AI 私信话术可�
 
 ## 启动方式
 
-推荐使用根目录 `script` 下的 PowerShell 脚本。启动脚本会先检查对应端口上的旧项目进程；如果存在旧前端或后端任务，会先关闭旧任务，再启动新任务。关闭脚本会停止当前项目的前后端服务。
+日常使用统一入口 `script/start_all.ps1`。默认检查并复用健康服务；只有指定 `restart` 才重启，`stop` 只关闭指定服务。重启前先检查依赖和端口归属；后端通过安全退出接口清理任务、私信和浏览器。启动失败时显示日志路径并清理本次新建的进程。
 
 ```powershell
-# 一键启动后端和前端
+# 一键启动后端和前端；重复执行会复用健康服务。
 .\script\start_all.ps1
 
 # 只启动后端，默认地址为 http://127.0.0.1:8000
-.\script\start_backend.ps1
+.\script\start_all.ps1 -Service backend
 
 # 只启动前端，默认地址为 http://127.0.0.1:5173
-.\script\start_frontend.ps1
+.\script\start_all.ps1 -Service frontend
 
-# 一键关闭前端和后端
-.\script\stop_all.ps1
+# 明确重启前后端，先检查依赖，再安全退出旧后端。
+.\script\start_all.ps1 -Action restart
+
+# 安全关闭前后端；可以加 -Service 只关闭一种服务。
+.\script\start_all.ps1 -Action stop
 ```
 
-脚本日志写入 `script/logs/`。如果端口被非本项目进程占用，脚本会停止并提示对应 PID，不会强行关闭不明进程。
+日志写入 `output/logs/`，旧 `script/logs/` 的历史日志未删除。其它工程占用端口时停止并提示进程编号，不关闭它们。健康检查只接受 HTTP 200，后端还需匹配产品标识和监听进程；前端端口冲突时不自动换端口。参数引用与固定端口依据：[微软 Start-Process 文档](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/start-process?view=powershell-5.1)、[Vite server.strictPort 文档](https://vite.dev/config/server-options#server-strictport)。
 
 手动启动方式如下：
 
@@ -588,7 +600,7 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 
 抖音引流启动和视频跳转不再无条件等待固定 3-4 秒：页面会每 200ms 检查活跃视频、视频链接、登录提示或安全验证，目标信号出现后立即继续；点赞、收藏、关注点击后直接等待真实接口响应，不再固定停顿 1.2 秒，普通动作失败确认上限由 10 秒缩短为 4 秒；精选弹窗流切换视频时只点击当前视口内的真实“下一条”按钮，避开页面预加载但位于视口外的重复按钮，失败后才使用方向键、滚轮和 PageDown，推荐流缓存到底仍无法翻页时会重新进入首页选择新视频，不再直接终止整批任务。评论成功路径只等待真实控件和发布接口，2026-07-12 使用现有登录 Profile 的实测文字评论从开始执行到服务端确认约 1.94 秒，随后切换下一条约 0.64 秒。观看时长仍由引流设置的最小/最大停留秒数控制，属于平台安全节奏。
 
-参考实现和探测依据见 `docs/traffic_workbench_rebuild_research.md`；根目录保留只读探测脚本 `script/douyin_probe.cjs`，用于在不点赞、不关注、不评论的前提下验证抖音页面结构。
+参考实现和探测依据见 `docs/traffic_workbench_rebuild_research.md`；早期一次性页面探测脚本已移除，持续维护的验证工具保留在 `tools/` 对应平台目录。
 
 ## 内容工作台与视频引擎
 
@@ -628,7 +640,7 @@ VoxCPM2组件采用轻量混合构建：`packaging/voxcpm_runtime.py` 在临时�
 
 2026-07-20已完成VoxCPM2组件 `1.0.2` 的真实验证：Nuitka只编译5个C文件，组件中的原生入口为 `r/ai_customer_voxcpm_native.cp311-win_amd64.pyd`（256,512字节），组件不含 `voxcpm_runtime.py`；第三方运行环境约4.94GB。使用现有4.62GB VoxCPM2模型和真实参考录音完成一次GPU克隆推理，生成48kHz、单声道、16位、1.12秒的有效WAV。第一次加载和合成约106.5秒，后续同一工作进程继续复用模型。
 
-开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。`script/build_voxcpm_component.ps1` 单独生成组件，`script/publish_voxcpm_component.ps1` 仍可用于以后更新组件；可选 Voice ZIP 预置已构建组件和模型，Core 首装不包含语音；需要克隆配音时再安装 Voice。
+开发机首次安装VoxCPM2执行 `script/internal/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。`script/internal/build_voxcpm_component.ps1` 单独生成组件，`script/internal/publish_voxcpm_component.ps1` 仍可用于以后更新组件；可选 Voice ZIP 预置已构建组件和模型，Core 首装不包含语音；需要克隆配音时再安装 Voice。
 
 版本 `1.2.0` 的 `dist/releases/AI_Customer_1.2.0_20260711_190154` 仅是旧架构历史产物，不再用于新客户交付或远程更新。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；当前交付把对应组件和模型放入可选 Voice ZIP。
 
@@ -674,7 +686,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 发布方使用 `script/publish_release.ps1` 明确选包、签名、上传及登记；支持独立调整已登记版本的启停、灰度、强制更新和说明，以及上传后登记失败的恢复。操作步骤和分包边界见“本地打包与更新”，不按修改时间自动选择最新文件。
 
 
-音色克隆组件的发布命令与主程序一致：先运行 `script/build_voxcpm_component.ps1 -Version 1.0.0`，再运行 `script/publish_voxcpm_component.ps1`。无参数只准备本地签名产物，`-Upload` 上传登记但保持禁用，`-Enable` 才允许客户端安装。组件版本独立于主程序版本；已存在但内容不同的版本禁止覆盖，必须递增组件版本。
+音色克隆组件的发布命令与主程序一致：先运行 `script/internal/build_voxcpm_component.ps1 -Version 1.0.0`，再运行 `script/internal/publish_voxcpm_component.ps1`。无参数只准备本地签名产物，`-Upload` 上传登记但保持禁用，`-Enable` 才允许客户端安装。组件版本独立于主程序版本；已存在但内容不同的版本禁止覆盖，必须递增组件版本。
 
 正式 Ed25519 公钥保存在 `packaging/update_signing_public.pem`，SHA-256 指纹为 `187b00ee49f5ba2666b4722a3a569ec119bd3f6731300a2abb8e536abc0499f3`；对应私钥仅保存在本机 `%USERPROFILE%/.ssh/sealos/ai_customer_update_signing_private.pem`，已限制为当前 Windows 用户访问。发布脚本会在上传前用仓库公钥复验签名，防止误用其它私钥。私钥丢失或更换意味着需要发布包含新公钥的客户端信任根更新，不能临时重新生成后继续推送。
 
@@ -736,6 +748,8 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 构建脚本先执行完整源码测试和前端构建，再用 Nuitka 编译业务程序与单文件入口。完整 `standalone` 输出随程序交付；两个私信 Spider 的 JSON/JavaScript 资源与 curl_cffi 原生库必须存在。刚编译的业务 EXE 使用 `--smoke-test` 在唯一临时目录导入原生库和两个私信模块、建立空库并检查健康函数，不启动任务调度、登录浏览器、真实私信接收或授权网络请求。自检通过后才组装。
 
 程序清单记录 `source_revision`、`source_dirty`、`built_at`、`schema_version`、`environment_version`、`updater_version`；发布时复验清单、文件白名单和全部大小／SHA-256。提交号和脏状态用于辨认产物，不能把旧 ZIP 当作当前源码版本。MyCrawler 和 VoxCPM2 仍复用独立组件清单及关键文件哈希，多个有效组件候选时必须明确指定路径。缺少本地依赖、组件或资源时停止，不增加替代构建方案。
+
+组件构建、签名、校验和组装工具位于 `script/internal/`。只有采集器源码或语音依赖发生变化时，才分别执行内部的 `build_mycrawler_component.ps1` 或 `build_voxcpm_component.ps1`；程序日常更新继续只使用根目录三个入口。同版本交付目录已存在时构建会拒绝覆盖，须先提高 `backend/app/version.py` 中的产品版本。
 
 以下命令以未来 `1.3.0` 为例，需先把产品版本改为该值；本轮没有执行：
 

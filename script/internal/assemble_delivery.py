@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 # 组装和安装拒绝相同的危险文件名，避免发布后才发现无法解压。
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 from app.release_paths import safe_release_path
 
 
