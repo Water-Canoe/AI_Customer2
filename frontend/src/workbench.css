@@ -5899,21 +5899,7 @@ button.filter-button,
   min-width: 180px;
 }
 
-.topbar-kicker {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid #cde3dc;
-  border-radius: 999px;
-  background: #f5fbf9;
-  color: var(--workbench-primary);
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .topbar h1 {
-  margin-top: 7px;
   color: #0f172a;
   font-size: 20px;
   line-height: 1.2;
@@ -6456,10 +6442,6 @@ button.filter-button:hover,
 }
 
 @media (max-width: 640px) {
-  .topbar-kicker {
-    display: none;
-  }
-
   .message-search {
     grid-template-columns: 1fr;
   }

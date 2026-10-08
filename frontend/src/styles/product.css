@@ -43,7 +43,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 #app .topbar-heading { min-width: 0; }
 #app .topbar h1 { font-size: 23px; line-height: 1.4; letter-spacing: .5px; font-weight: 650; }
 #app .topbar p { margin-top: 6px; font-size: 13px; color: var(--app-muted); }
-#app .topbar-kicker { display: block; margin-bottom: 4px; color: #8a95a5; font-size: 11px; letter-spacing: 1px; }
 #app .topbar-actions { flex-shrink: 0; gap: 12px; }
 #app .topbar-env-tag { background: none; border: 0; font-size: 11px; padding: 0; color: var(--app-muted); }
 #app .main { height: auto; min-height: 0; padding: 12px 36px 40px; display: block; overflow: auto; }

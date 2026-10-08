@@ -23,7 +23,7 @@
     </el-aside>
     <el-container class="workspace-shell-body">
       <el-header class="topbar">
-        <div class="topbar-heading"><span class="topbar-kicker">{{ topbarKicker }}</span><h1>{{ viewTitle }}</h1><p>{{ viewSubtitle }}</p></div>
+        <div class="topbar-heading"><h1>{{ viewTitle }}</h1><p>{{ viewSubtitle }}</p></div>
         <div class="topbar-actions"><button v-if="showEnvironmentStatus" class="topbar-env-tag" :class="topbarEnvClass" @click="goToView(isContentView ? 'content-settings' : isTrafficView ? 'traffic-settings' : 'settings')">{{ topbarEnvLabel }}</button><el-button :icon="Refresh" @click="refreshAll(true)">刷新</el-button></div>
       </el-header>
       <el-main class="main" :class="`view-${activeView}`">
@@ -237,7 +237,6 @@ const activeMenuItem = computed(() => isAcquisitionView.value ? 'acquisition' : 
   'content-settings': 'content-create',
 } as Record<string, string>)[activeView.value] || activeView.value)
 const activeMenuGroup = computed(() => isContentView.value ? 'content-workbench' : '')
-const topbarKicker = computed(() => activeView.value === 'workspace' ? '日常工作' : activeView.value === 'accounts' ? '配置' : isGlobalSettingsView.value ? '系统中心' : (isRuntimeView.value ? '运行中心' : (isAutomationView.value ? '自动化中心' : (isMessageView.value ? '私信工作台' : (isContentView.value ? '内容工作台' : (isTrafficView.value ? '引流工作台' : '拓客工作台'))))))
 const viewTitle = computed(() => isAcquisitionView.value ? '获客工作台' : isMessageView.value ? '客户工作台' : String(route.meta.title || '工作台'))
 const viewSubtitle = computed(() => isAcquisitionView.value ? '从采集、筛选到来源证据，在同一工作区推进获客。' : isMessageView.value ? '跟进客户、收发私信、查看触达结果和调整私信规则。' : String(route.meta.subtitle || ''))
 const envReady = computed(() => Boolean(env.value?.collector_component?.ok && env.value?.collector_storage?.ok))
