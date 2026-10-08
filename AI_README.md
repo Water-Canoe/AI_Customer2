@@ -1,5 +1,10 @@
 # AI获客系统
 
+## 授权机制安全审查（2026-10-09）
+
+- 审查见 [security_best_practices_report.md](security_best_practices_report.md)。确认固定公钥签名、设备和权益校验有效；隔离验证发现离线租约缺少时钟回拨检测，源码检查发现两平台私信长连接缺少运行期授权到期检查。
+- 已有授权相关测试 9 项通过。仅生成审查文档，未修改授权实现、真实数据或远端服务；设备身份克隆与发行版逆向尚未实测，Sealos 部署实现尚未核实。
+
 ## 脚本入口精简与稳定性修复（2026-10-09）
 
 - script 根目录只保留 start_all.ps1、build_package.ps1、publish_release.ps1 三个日常入口。签名、ZIP 校验、组装、服务辅助和可选组件工具共 11 个文件移入 internal，调用和测试夹具同步调整；删除没有调用者的一次性 douyin_probe.cjs。
