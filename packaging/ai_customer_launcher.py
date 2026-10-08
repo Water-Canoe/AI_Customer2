@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import logging
 import os
 import socket
@@ -169,7 +170,38 @@ def another_instance_running() -> bool:
     return False
 
 
+def smoke_test() -> None:
+    """编译产物在独立空库中检查导入、静态资源与健康接口，不启动业务生命周期。"""
+    configured = os.getenv("AI_CUSTOMER_DATA_DIR", "").strip()
+    database_path = os.getenv("AI_CUSTOMER_DB", "").strip()
+    if not configured or not database_path:
+        raise RuntimeError("自检必须显式指定临时数据目录和数据库")
+    data_dir = Path(configured).resolve()
+    db_path = Path(database_path).resolve()
+    if db_path.parent != data_dir or db_path.exists():
+        raise RuntimeError("自检只允许使用临时目录内尚不存在的空库")
+    binary_dir = Path(sys.argv[0]).resolve().parent
+    if is_packaged():
+        for relative in ("playwright/driver/node.exe", "frontend_dist/index.html"):
+            if not (binary_dir / relative).is_file():
+                raise RuntimeError(f"编译产物缺少资源：{relative}")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    # 直接导入两个协议及原生库，避免运行时首次点击发送才发现漏打包。
+    for name in ("curl_cffi._wrapper", "app.services.douyin_im_transport", "app.services.xhs_im_transport"):
+        importlib.import_module(name)
+    from app import database
+    from app.routers.system import health
+
+    database.init_db()
+    schema = database.schema_version()
+    if schema["current"] != schema["latest"] or health()["status"] != "ok":
+        raise RuntimeError("空库或健康接口自检失败")
+
+
 def main() -> None:
+    if "--smoke-test" in sys.argv:
+        smoke_test()
+        return
     base_dir = app_dir()
     if another_instance_running():
         if url := existing_workbench_url():

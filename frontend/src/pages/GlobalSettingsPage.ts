@@ -236,7 +236,7 @@ export default defineComponent({
           h('article', { class: 'global-setting-card' }, [
             h('div', { class: 'global-setting-head' }, [h('div', [h(Refresh), h('strong', '软件更新')])]),
             h('p', props.appVersion ? `当前版本 v${props.appVersion}` : '正在读取当前版本'),
-            h('small', props.appPackaged ? '检查并安装已发布的新版本' : '开发环境仅验证入口，正式包执行更新'),
+            h('small', props.appPackaged ? '检查与下载继续使用应用，安装时才重启' : '软件更新适用于正式打包版'),
             h('button', { class: 'primary-soft', disabled: props.updateChecking, onClick: () => emit('check-update') }, props.updateChecking ? '正在检查...' : '检查更新'),
           ]),
         ]),

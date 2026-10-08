@@ -39,6 +39,7 @@
       </el-main>
     </el-container>
     <LicenseDialog :open="licenseDialogOpen" :loading="licenseLoading" :checking="licenseChecking" :info="licenseInfo" :code="licenseCodeDraft" @update:code="updateLicenseCodeDraft" @close="closeLicenseDialog" @save="saveLicenseCode" @check="checkLicense" @copy-device="copyDeviceCode" />
+    <SoftwareUpdateDialog :open="updateDialogOpen" @close="updateDialogOpen = false" @busy="updateChecking = $event" @installing="autoSync.stop()" />
   </el-container>
 </template>
 
@@ -69,6 +70,7 @@ import { useOverviewWorkbench } from './composables/overviewWorkbench'
 import { useTableWorkbench } from './composables/tableWorkbench'
 import { useTaskWorkbench } from './composables/taskWorkbench'
 import { LicenseDialog } from './components/ui/LicenseDialog'
+import { SoftwareUpdateDialog } from './components/ui/SoftwareUpdateDialog'
 
 const router = useRouter()
 const route = useRoute()
@@ -85,6 +87,7 @@ const licenseChecking = ref(false)
 const licenseCodeDraft = ref('')
 const licenseDraftDirty = ref(false)
 const updateChecking = ref(false)
+const updateDialogOpen = ref(false)
 const exitRequested = ref(false)
 const appVersion = ref('')
 const appPackaged = ref(false)
@@ -519,22 +522,8 @@ function closeLicenseDialog() {
   licenseDraftDirty.value = false
 }
 
-async function checkForUpdates() {
-  // 打包版先正常关闭本地服务，再由稳定启动器执行签名更新流程。
-  try {
-    await ElMessageBox.confirm('检查更新需要关闭并重新启动应用；如果仍有排队或运行中的任务，系统会阻止重启。确认继续？', '检查更新', { type: 'warning' })
-  } catch (error) {
-    if (error === 'cancel' || error === 'close') return
-    throw error
-  }
-  updateChecking.value = true
-  try {
-    const { data } = await api.post('/system/check-update')
-    ElMessage.success(data.message || '应用正在重启并检查更新')
-  } catch (error: any) {
-    updateChecking.value = false
-    ElMessage.error(error?.response?.data?.detail || '无法启动更新检查')
-  }
+function checkForUpdates() {
+  updateDialogOpen.value = true
 }
 
 async function exitApplication() {

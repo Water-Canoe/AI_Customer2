@@ -1,5 +1,15 @@
 # AI获客系统
 
+## 打包、更新与发布机制优化（2026-10-08）
+
+- 首装改为一个 Core ZIP；Program 包含完整程序及直接运行依赖，语音运行时和模型通过 `-IncludeVoice` 独立可选。`-ProgramOnly` 不读取浏览器、采集组件或语音来源。清单记录源码提交、脏状态、构建时间、结构和环境要求；编译后在临时空库执行导入／资源／健康函数自检，失败则停止组装。
+- 修正旧手动更新入口的未导入 sys、错误 Nuitka 判断及错误根目录。检查、后台下载和安装分离；关闭弹窗不取消下载，确认安装前才检查在途业务请求、活动任务、同步／发送和调度线程。接收连接在安全退出时关闭，检查和下载可以继续收件。程序启动不联网等待更新服务。
+- 共用 `desktop_update.py` 签名引擎，替换入口与完整运行依赖；新进程健康检查匹配产品、版本及进程编号后才提交事务。启动失败恢复旧程序；数据库结构或基础环境不匹配在替换前拒绝，不做迁移、数据重置或旧双包兼容。组装、发布和安装共用 Windows 路径规则，临时目录拒绝符号链接／junction 重定向，保留数据与独立组件。
+- 发布必须明确 ZIP 或版本，支持独立启停、灰度、强制更新和说明修改，并回读核对；上传后登记失败可复用保存的签名清单恢复登记，不重新上传、不要求私钥。构建只读取本地 CloakBrowser，缺失即停止，不隐式下载或升级浏览器。
+- 验证：完整后端 **729 项通过、8 项按既有条件跳过**，完整前端 **168 项通过**，类型检查、生产构建及两个 PowerShell 脚本语法检查通过。覆盖在途发送和未结束调度阻止安装、后台下载取消、拒绝旧准备包、签名／原生依赖／大小写路径／实际临时 junction、健康确认及回滚、状态调整与恢复发布。本次未读取正式签名私钥、生成 EXE／ZIP、发布远端或执行浏览器验收。
+- 开发后端在活动任务为空时通过安全退出重载，健康接口 HTTP 200、结构 16、数据库快速完整性检查为 ok，自动连接设置保持关闭。恢复重载前运行中的小红书接收后状态为 connected；抖音重载前已为 error，本轮未同步认证或开展浏览器诊断，重载后需按原收件箱入口连接。没有主动发送测试消息。
+- 产品版本仍为 `1.2.15`，构建／更新器基础环境基线为 `1.1.0`；首次实际交付需提高产品版本并重新生成 Core。真实编译产物的启动、原地升级与失败回滚、真实 Sealos 发布链路仍需在下一次明确打包／发布任务中验证，源码测试不能替代这些证据。当前操作规则见“本地打包与更新”，旧双包交付记录单独保留用于追溯。
+
 ## 小红书单条、批量与定时自动私信（2026-10-08）
 
 - 客户工作台的小红书客户开放“自动私信”和“AI一键私信”，按客户或来源关键词的平台选择可用私信账号；切换来源平台时重新选择同平台账号，快手自动私信继续禁用。单条、批量和定时计划共用 `message_inbox.send_to_customer`，复用已接入的 [Spider_XHS](https://github.com/cv-cat/Spider_XHS) 签名 HTTP 发送接口，不增加浏览器发送、第三方依赖或数据库字段。
@@ -603,8 +613,8 @@ Figma 文件已创建：`https://www.figma.com/design/GGrd4r3M88ajst3oT2Y8tI`。
 - `data/video_generation/cache_videos`：图片转视频和在线素材缓存，不在原始资产旁写派生文件。
 - `data/video_generation/models`：按需下载的Whisper模型；默认模型为 `large-v3`，发布包不预装。
 - `data/video_generation/tasks/<job-id>/attempt-N`：单次生成脚本、音频、字幕、中间视频和最终视频。
-- `runtime/models/VoxCPM2`：便携交付中的VoxCPM2模型；来自环境 ZIP，不随程序更新删除。源码开发环境仍使用 `data/voice_models/VoxCPM2`。
-- `runtime/components/voxcpm2`：便携交付中的音色克隆推理组件、后续断点下载文件和当前组件指针；来自环境 ZIP，不进入业务数据备份。源码开发环境直接使用当前虚拟环境中的 `voxcpm` 和 `packaging/voxcpm_runtime.py`，不要求额外安装独立组件。
+- `runtime/models/VoxCPM2`：便携交付中的VoxCPM2模型；来自可选 Voice ZIP，不随程序更新删除。源码开发环境仍使用 `data/voice_models/VoxCPM2`。
+- `runtime/components/voxcpm2`：便携交付中的音色克隆推理组件、后续断点下载文件和当前组件指针；来自可选 Voice ZIP，不进入业务数据备份。源码开发环境直接使用当前虚拟环境中的 `voxcpm` 和 `packaging/voxcpm_runtime.py`，不要求额外安装独立组件。
 - `data/platform_accounts/<平台>/<账号ID>/user-profile` 与 `creator-profile`：分别保存用户端及创作者端登录会话；数据库和API只返回账号业务信息，不返回Cookie内容或本机路径。
 - `data/social_publish/qrcode`：扫码登录二维码；`data/social_publish/tasks/<task-id>` 保存当次失败截图和诊断文件。
 
@@ -618,9 +628,9 @@ VoxCPM2组件采用轻量混合构建：`packaging/voxcpm_runtime.py` 在临时�
 
 2026-07-20已完成VoxCPM2组件 `1.0.2` 的真实验证：Nuitka只编译5个C文件，组件中的原生入口为 `r/ai_customer_voxcpm_native.cp311-win_amd64.pyd`（256,512字节），组件不含 `voxcpm_runtime.py`；第三方运行环境约4.94GB。使用现有4.62GB VoxCPM2模型和真实参考录音完成一次GPU克隆推理，生成48kHz、单声道、16位、1.12秒的有效WAV。第一次加载和合成约106.5秒，后续同一工作进程继续复用模型。
 
-开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。`script/build_voxcpm_component.ps1` 单独生成组件，`script/publish_voxcpm_component.ps1` 仍可用于以后更新组件；新的 Environment ZIP 会直接预置当前已构建组件和模型，因此普通客户首次使用不再点击下载依赖。
+开发机首次安装VoxCPM2执行 `script/install_voxcpm.ps1`。脚本优先读取 `output/voxcpm_downloads` 中的CUDA 12.8 PyTorch和Torchaudio wheel，只安装官方推理链路并在最后恢复项目固定的FastAPI版本；不安装或运行VoxCPM自带Gradio WebUI。当前验证环境为RTX 5060 Laptop 8GB：模型载入约占5.1GB显存，48kHz真实克隆音频已经生成成功。`script/build_voxcpm_component.ps1` 单独生成组件，`script/publish_voxcpm_component.ps1` 仍可用于以后更新组件；可选 Voice ZIP 预置已构建组件和模型，Core 首装不包含语音；需要克隆配音时再安装 Voice。
 
-版本 `1.2.0` 的 `dist/releases/AI_Customer_1.2.0_20260711_190154` 仅是旧架构历史产物，不再用于新客户交付或远程更新。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；新架构把对应组件和模型统一放入 Environment ZIP。
+版本 `1.2.0` 的 `dist/releases/AI_Customer_1.2.0_20260711_190154` 仅是旧架构历史产物，不再用于新客户交付或远程更新。先前发布包已完成一次VoxCPM2克隆配音和1080×1920 H.264/AAC本地成片验收；当前交付把对应组件和模型放入可选 Voice ZIP。
 
 背景音乐只能从用户内容资产选择，支持 `mp3 / wav / m4a / aac / flac / ogg`。本地素材路径在进入MoviePy前限制到托管资产目录；成品预览也只能读取业务库中已经登记且位于视频运行目录内的文件。环境检查会返回视频依赖、FFmpeg、字体、磁盘和Whisper模型状态；缺少供应商配置或网络失败会显示真实原因，不会静默切换到其它供应商。
 
@@ -650,7 +660,7 @@ Windows 设备身份保存在 `%PROGRAMDATA%\AI_Customer\device_identity.bin`：
 
 客户端通过 `POST /ai-customer/license/activate` 首次激活，通过 `POST /ai-customer/license/renew` 为已有设备续租。FastAPI 启动顺序固定为“初始化数据库 → 提取机器设备码并自动校验授权 → 启动统一任务队列 → 启动定时调度器”，因此每次应用启动都会先向 Sealos 确认授权；联网时服务端停用、过期、撤销和设备超限结果立即生效并清除旧租约。服务端返回 72 小时 Ed25519 签名租约，本地后端使用内置的独立授权公钥验签；任务开始前仍会再次做本地验签和权益校验，租约签发超过 6 小时才尝试续租。仅当网络请求失败且租约属于当前机器、签名正确且未过期时才允许离线继续运行，过期租约或从其它机器复制来的租约不能使用。该设计不使用心跳、WebSocket 或同时在线状态，也不采集 CPU、主板等物理硬件序列号；设备边界由 Windows DPAPI 机器身份确定。
 
-稳定启动器检查更新时使用与后端相同的 DPAPI 设备码，不再从可复制的 SQLite 数据库信任设备身份；Program ZIP、Environment ZIP、业务备份和程序更新均不包含 `%PROGRAMDATA%` 中的身份文件。旧版本升级不自动换绑：管理员需要先在授权管理页面撤销旧设备码，新版首次启动后再使用保留的授权码校验；如果名额未释放，页面会显示设备数量超过限制。
+稳定启动器检查更新时使用与后端相同的 DPAPI 设备码，不再从可复制的 SQLite 数据库信任设备身份；Core ZIP、Program ZIP、Voice ZIP、业务备份和程序更新均不包含 `%PROGRAMDATA%` 中的身份文件。旧版本升级不自动换绑：管理员需要先在授权管理页面撤销旧设备码，新版首次启动后再使用保留的授权码校验；如果名额未释放，页面会显示设备数量超过限制。
 
 本地只提供产品级 `GET /api/license`、`PUT /api/license`、`POST /api/license/check`。左侧边栏底部提供独立“账号中心”和“系统设置”入口，系统设置内管理授权、环境与数据保护；入口及页面内授权卡片都显示整份产品授权状态，创建拓客、引流、内容生成和发布任务时仍分别校验对应权益，统一运行队列在真正执行 `lead / traffic / content` 任务前再次校验。授权到期后，已有数据的查看、导出、备份、取消和清理仍可用，只阻止创建或启动新的受控任务。
 
@@ -661,7 +671,8 @@ Windows 设备身份保存在 `%PROGRAMDATA%\AI_Customer\device_identity.bin`：
 
 Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象存储保存不可变 ZIP，使用 `AI_Customer-Release` 保存主程序版本状态，使用 `AI_Customer-ComponentRelease` 保存可选组件版本状态；管理端可生成限时上传地址、登记签名清单、查看版本并修改启用状态。主程序更新支持强制更新和灰度比例；客户端启动时自动检查，但普通版本必须由用户确认后才下载，强制版本显示说明后直接进入更新。独立更新窗口展示版本、大小、更新说明、实时下载量以及下载、校验、解压、安装阶段的0-100%进度，完成后自动启动工作台。音色克隆组件只向已有active设备且授权包含`content`权益的客户端下发，不做自动安装。客户端会验证Ed25519签名、ZIP大小和SHA-256，组件还会限制产品名、组件名、平台、架构和最低主程序版本，不暴露对象存储密钥。网络不可用、未授权或校验失败时不会改变已安装版本；普通更新在用户确认后失败会明确提示并继续使用当前版本，强制更新失败则停止启动。发布脚本在Windows下使用扩展长路径读取发布文件，超过传统`MAX_PATH`的运行库也能归档。Sealos 当前接口已核对会返回 `mandatory` 和 `notes`；本轮源码回归为 426 项后端测试通过、8 项联网测试跳过，前端 21 项测试与生产构建通过。详细请求格式见 `docs/deployment/sealos接口文档.md`。
 
-发布方使用 `script/publish_release.ps1`，不需要进入 Sealos 控制台手工上传。脚本默认从 `deliverables/` 选择最新的 `AI_Customer_Program_<版本>.zip`，校验 ZIP 内清单、文件白名单、大小和 SHA-256 后，直接签名并上传这一个客户程序 ZIP，不再从中间发布目录重复压缩。无参数运行只做本地校验、签名和验签；`-Upload` 上传并登记但保持禁用；`-Enable` 自动上传、登记并按默认 10% 灰度启用；需要指定文件时使用 `-ProgramZip <完整路径>`。同版本对象已存在时，脚本会查询发布登记：若版本、大小和 SHA-256 一致则报告“已发布”且不重复上传；不一致则拒绝覆盖并要求递增版本号。签名记录写入唯一的 `output/release_publish_<版本>_<时间>/`，真正对外交付的 ZIP 始终只在 `deliverables/<版本>/`。
+发布方使用 `script/publish_release.ps1` 明确选包、签名、上传及登记；支持独立调整已登记版本的启停、灰度、强制更新和说明，以及上传后登记失败的恢复。操作步骤和分包边界见“本地打包与更新”，不按修改时间自动选择最新文件。
+
 
 音色克隆组件的发布命令与主程序一致：先运行 `script/build_voxcpm_component.ps1 -Version 1.0.0`，再运行 `script/publish_voxcpm_component.ps1`。无参数只准备本地签名产物，`-Upload` 上传登记但保持禁用，`-Enable` 才允许客户端安装。组件版本独立于主程序版本；已存在但内容不同的版本禁止覆盖，必须递增组件版本。
 
@@ -677,7 +688,7 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ## 数据库结构与数据保护
 
-当前项目按用户确认不保留旧测试数据：业务数据库直接使用 `backend/app/database.py` 的结构基线 15，以 SQLite `PRAGMA user_version` 校验版本。首次建库的表、索引和版本号在同一事务中建立，失败会回滚；已有当前版本库只校验版本，不重复建表。不支持旧版本或无版本但已有表的数据库，不实现迁移、字段回填或旧路由兼容；版本不一致时明确停止，测试库由本轮验收重新创建。
+当前项目按用户确认不保留旧测试数据：业务数据库直接使用 `backend/app/database.py` 的结构基线 16，以 SQLite `PRAGMA user_version` 校验版本。首次建库的表、索引和版本号在同一事务中建立，失败会回滚；已有当前版本库只校验版本，不重复建表。不支持旧版本或无版本但已有表的数据库，不实现迁移、字段回填或旧路由兼容；版本不一致时明确停止，测试库由本轮验收重新创建。
 
 业务库连接启用 SQLite WAL（Write-Ahead Logging，预写式日志）、`busy_timeout=30s`、外键检查和 `synchronous=NORMAL`，支持页面读取与后台写入。公开创建入口的业务对象、草稿提交确认（有草稿时）和对应运行入队复用同一事务；账号分析、评论采集和定时私信等会阻塞后续操作的派生创建也同事务。可复用的内部 AI 准备记录和引流编排仍通过现有业务关联恢复，不宣称所有内部派生操作都原子。
 
@@ -700,48 +711,83 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 - 内容资产智能镜头匹配：每项视频/图片资产只调用一次 TwelveLabs Marengo/Pegasus 完成向量化和内容描述，把结果持久化到本地业务库；后续视频生成按文案分段在本地计算相似度并选择镜头，避免每次生成重复调用收费接口。实施时需要补充资产分析状态、向量/描述字段、失败重试、增量索引和费用提示。下次评审“当前项目还有什么值得优化或修改的功能”时应主动提出此项。
 
-## 本地打包
+## 本地打包与更新
 
-### 打包执行约束
+### 执行约束
 
-- 除非用户明确要求“打包”“生成安装包”“生成发布包”或“发布远程更新”，日常功能修改、缺陷修复、测试和文档更新完成后不得运行 `script/build_package.ps1`、`script/build_voxcpm_component.ps1`、`script/publish_release.ps1` 或 `script/publish_voxcpm_component.ps1`，也不得仅为了验证代码而生成 EXE、发布目录或签名 ZIP。
-- 普通代码修改只执行与改动范围相称的源码测试、类型检查或生产前端构建；生产前端构建不等于 Windows 安装包构建。
-- 只有用户明确要求打包时才递增发布版本并执行完整打包链路；用户只要求修改代码时，不因修改完成而自动生成新版本安装包。
-- 用户只需要主程序且已有匹配环境包时，使用 `script/build_package.ps1 -ProgramOnly`。该模式仍执行完整源码测试并重新构建主程序与稳定启动器，但只生成 Program ZIP，不复制或压缩MyCrawler、浏览器、VoxCPM2和模型等环境依赖；Program ZIP仍声明所需环境版本，不能脱离对应Environment ZIP单独运行。
+日常功能优化只执行源码测试、类型检查和前端生产构建，不自动生成 Windows EXE、安装包、签名或上传发布。只有用户明确要求打包／发布才执行对应脚本；正式构建前修改 `backend/app/version.py` 的产品版本，已有 `deliverables/<版本>/` 拒绝覆盖。本次只修改机制，版本仍为 `1.2.15`，没有新交付物。
 
-首次进行 Nuitka 构建前，后端与 MyCrawler 两个隔离环境都必须安装同一版本的编译器：
+### 交付边界
+
+| 产物 | 用途 | 内容 |
+| --- | --- | --- |
+| `AI_Customer_Core_<程序版本>.zip` | 一个 ZIP 完成首装 | 完整程序、CloakBrowser、已编译 MyCrawler 和基础环境清单 |
+| `AI_Customer_Program_<程序版本>.zip` | 日常签名更新 | 入口 `AI_Customer.exe`、完整 `runtime/application/`（包括 DLL/PYD/native 依赖）、前端和程序清单 |
+| `AI_Customer_Voice_<组件版本>.zip` | 按需安装语音 | 现有 VoxCPM2 推理组件、PyTorch/CUDA 与模型；仅 `-IncludeVoice` 生成 |
+
+客户首次只需解压 Core 并双击根目录 `AI_Customer.exe`，无需合并 Environment ZIP。语音包需解压到同一安装目录后重启；Core 默认不含语音运行时或模型，现有在线语音安装入口只下载运行时，不会补齐模型。Program 不包含业务 `data/`、基础环境、独立语音组件或模型。程序直接运行依赖随 Program 一起更新，避免私信协议新增原生依赖后被旧环境漏掉。
+
+`deliverables/<程序版本>/` 是唯一交付目录，默认保存 Core、Program、SHA256.txt、README.txt；可额外包含 Voice。`output/` 仅保存构建、组装、签名及测试中间产物。开发机继续使用项目虚拟环境、node_modules 和 MyCrawler 源码环境，不改成便携目录。
+
+首个新 Core 基础环境版本为 `1.1.0`，内置更新器版本为 `1.1.0`，当前数据库结构为 **16**。历史双包及旧更新器不满足新清单基线，需要重新交付 Core，不能把本次 Program 发给旧入口就声称其可自行升级。后续基础环境不变时只更新 Program；基础环境版本不匹配时明确要求新的 Core。数据库结构不匹配在替换前拒绝，本轮不迁移或清空旧库，也不改现有账号和测试数据。
+
+### 构建与来源检查
+
+构建脚本先执行完整源码测试和前端构建，再用 Nuitka 编译业务程序与单文件入口。完整 `standalone` 输出随程序交付；两个私信 Spider 的 JSON/JavaScript 资源与 curl_cffi 原生库必须存在。刚编译的业务 EXE 使用 `--smoke-test` 在唯一临时目录导入原生库和两个私信模块、建立空库并检查健康函数，不启动任务调度、登录浏览器、真实私信接收或授权网络请求。自检通过后才组装。
+
+程序清单记录 `source_revision`、`source_dirty`、`built_at`、`schema_version`、`environment_version`、`updater_version`；发布时复验清单、文件白名单和全部大小／SHA-256。提交号和脏状态用于辨认产物，不能把旧 ZIP 当作当前源码版本。MyCrawler 和 VoxCPM2 仍复用独立组件清单及关键文件哈希，多个有效组件候选时必须明确指定路径。缺少本地依赖、组件或资源时停止，不增加替代构建方案。
+
+以下命令以未来 `1.3.0` 为例，需先把产品版本改为该值；本轮没有执行：
 
 ```powershell
-# 安装后端测试与 Nuitka 打包依赖。
-backend\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
+# 首装构建：生成 Core + Program，使用基础环境 1.1.0，不装载语音组件。
+.\script\build_package.ps1 -Version 1.3.0
 
-# 只给 MyCrawler 的虚拟环境补充编译器，不修改它的业务依赖声明。
-uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
+# 日常更新：只编译和打包完整程序，不复制浏览器、采集器及语音模型。
+.\script\build_package.ps1 -Version 1.3.0 -ProgramOnly
 
-# 单独构建并验证 MyCrawler 组件，不重新编译主程序或 VoxCPM2。
-.\script\build_mycrawler_component.ps1 -Version 1.0.0
+# 确实需要语音时，在完整交付中额外生成独立 Voice ZIP。
+.\script\build_package.ps1 -Version 1.3.0 -IncludeVoice
 ```
 
-### 唯一交付目录
+### 应用内更新流程
 
-`deliverables/<程序版本>/` 是唯一可以发给客户或上传的目录，只包含四项：`AI_Customer_Program_<程序版本>.zip`、`AI_Customer_Environment_<环境版本>.zip`、`SHA256.txt` 和 `README.txt`。`dist/releases/` 和 `output/` 中的历史文件都不是新架构交付物。`output/` 仍是被 Git 忽略的 Nuitka、组装、签名和测试中间工作区；脚本不自动删除历史文件，维护人员需要清理时必须逐个确认明确目录。
+“系统设置 → 检查更新”打开共用更新弹窗。`POST /api/system/check-update` 在线查询签名更新；`POST /api/system/prepare-update` 后台下载、校验并准备；`GET /api/system/update-status` 提供进度；用户确认后 `POST /api/system/install-update` 才触发安全重启。检查无更新、授权拒绝、网络失败或关闭弹窗均不退出原应用。普通启动不联网等待更新服务；已下载的更新可在下次启动确认安装。
 
-当前产品版本唯一地定义在 `backend/app/version.py`，本轮为 `1.2.15`；前端 `package.json` 和 `package-lock.json` 不再重复保存产品版本，页面显示值只读取后端 `/api/health`。`-Version` 省略时自动读取后端版本，显式传入不同值时构建会停止，避免 EXE、页面与发布清单不一致。本轮修复打包版 MyCrawler 连接 CloakBrowser 的 CDP（Chrome DevTools Protocol，Chrome 开发者工具协议）预启动识别，继续使用 Environment `1.0.3`。只有明确要求正式打包时才执行：
+检查和下载无需断开抖音／小红书接收连接。安装前停止调度并拒绝未结束的业务任务、发送、认证同步和浏览器会话；只在启动安装进程成功后让 Uvicorn 正常退出。私信接收由既有生命周期关闭，安装等待旧后台和实际持有入口 EXE 的进程退出。退出应用时取消未完成下载并等待线程收尾，不留下无人管理的下载任务。更新状态接口不返回临时下载地址、授权码或签名原文。
+
+共享引擎 `backend/app/services/desktop_update.py` 同时供业务后台及薄入口 `packaging/ai_customer_bootstrap.py` 使用。准备记录只保存可重新验签的清单和签名；安装再次复验 ZIP 和解压文件，按白名单替换程序，包含所有直接运行依赖和稳定入口。新入口由 staging 中的 EXE 接管，避免覆盖仍在运行的根目录入口。独立更新锁防止并行操作，路径、重复文件、链接和解压体积检查限制写入范围。
+
+事务将旧程序保存至 `updates/rollback/`，新版健康检查必须同时匹配产品、打包模式、目标版本和新进程 ID（Process Identifier，进程编号）。健康确认后才提交并清理回滚；启动失败先停止新版、恢复旧程序并重新启动。断电留下未提交事务时由备份入口接管恢复。程序回滚不操作 `data/` 或迁移数据库；数据库结构改变必须另行设计数据处置，不能依靠程序回滚保证结构兼容。
+
+本次流程参考 [WinSparkle 的检查、下载、安装与退出回调](https://github.com/vslavik/winsparkle/blob/master/include/winsparkle.h) 的分阶段组织，完整依赖交付参考 [Nuitka standalone 文档](https://nuitka.net/user-documentation/user-manual.html)。实际实现复用现有签名、原地替换和事务机制，没有引入新更新框架、二进制差分或额外安装器依赖。
+
+### 发布操作
+
+`publish_release.ps1` 必须通过 `-ZipPath` 指定 Program ZIP，或 `-Version` 选取该交付目录下唯一 Program ZIP；不再按修改时间选包。只指定包时本地校验／签名；`-Upload` 上传并登记为禁用；`-Enable` 上传、登记并默认 100% 启用，也可显式 `-RolloutPercent 10` 灰度。程序清单的 `updater_version` 与远端签名要求 `min_updater_version` 核对，签名服务协议字段保持现有格式。
 
 ```powershell
-# 复用 Environment 1.0.3，只生成用于远程更新的程序 ZIP。
-.\script\build_package.ps1 -Version 1.2.15 -EnvironmentVersion 1.0.3 -ProgramOnly
+# 明确上传哪个版本，默认仅登记，不启用客户端更新。
+.\script\publish_release.ps1 -Version 1.3.0 -Upload
+
+# 已发布版本单独调整灰度和说明；无需 ZIP 或签名私钥。
+.\script\publish_release.ps1 -Action set-state -Version 1.3.0 -Enabled:$true -RolloutPercent 100 -Mandatory:$false -Notes '修复与优化说明'
+
+# 发现线上问题时停用新下载；该操作不撤回已经安装的版本。
+.\script\publish_release.ps1 -Action set-state -Version 1.3.0 -Enabled:$false
+
+# 查询并核对远端当前状态，无需 ZIP 或签名私钥。
+.\script\publish_release.ps1 -Action status -Version 1.3.0
+
+# 上传成功但登记失败：复用保存的签名清单，只验签并恢复登记，不重复上传。
+.\script\publish_release.ps1 -Version 1.3.0 -ResumeManifest 'output/已保存发布目录/update-manifest.json' -PublicKeyPath '更新验签公钥.pem' -Upload
 ```
 
-脚本先执行前端测试与生产构建、完整后端测试，再使用 Nuitka 4.1.3 编译主程序和稳定启动器；MyCrawler 由 `build_mycrawler_component.ps1` 独立构建。组件清单记录源码 Git 提交、源码是否有未提交修改及关键产物 SHA-256（Secure Hash Algorithm 256-bit，256位安全散列算法），组装和发布时复验文件哈希。完整交付只在同类组件恰好有一个有效候选时自动选择；存在多个候选会停止，必须通过 `-MyCrawlerComponentPath` 和 `-VoxComponentPath` 明确指定，旧的无来源或无哈希组件需要重新构建。VoxCPM2/PyTorch/CUDA 不参与 MyCrawler 或主程序的 Nuitka 编译，继续复用现有独立推理组件。两个桌面 EXE 均嵌入 `packaging/ai-customer-icon.ico`，稳定启动器的更新进度窗口也复用该图标。打包版后端使用 Windows 图形界面模式，不显示命令行窗口；应用日志和 Uvicorn 访问日志统一写入 `data/logs/app.log`，用户通过页面“安全退出”正常停止服务。缺少 Nuitka、MyCrawler 组件、应用图标或构建资源时直接停止，不会联网补装或改用其它方案。同一程序版本的 `deliverables/<版本>/` 已存在时拒绝覆盖，必须提升版本号。
+恢复时使用脚本实际输出的清单路径，重新验证其签名与所选 ZIP 的版本、schema、环境、更新器、大小和哈希一致。同版本远端对象与包哈希不一致则拒绝覆盖；一致时仍可修改放量、启停、强制更新和说明，修改后回读核对。签名和发布记录保存于唯一 `output/release_publish_<版本>_<时间>/`，正式私钥不进入交付包。
 
-程序 ZIP 保存经常变化并允许远程更新的文件：最外层稳定入口 `AI_Customer.exe`、`runtime/application/AI_Customer_App.exe`、`runtime/application/app/`、`runtime/frontend_dist/`、说明和发布清单。环境 ZIP 保存体积大且较少变化的依赖：主程序 Nuitka standalone 运行库、Playwright、CloakBrowser 浏览器、Nuitka 版 `runtime/MyCrawler/MyCrawler.exe` 及其运行库、VoxCPM2/PyTorch/CUDA 推理组件和模型。新环境包不再携带 MyCrawler 便携 Python、`.py` 源码或原始 site-packages；MyCrawler 上游 `LICENSE` 仍随组件保留。
+### 历史交付记录（旧双包机制，仅供追溯）
 
-`MyCrawler/cache/` 是采集器源码模块，Nuitka 必须把它编译进 `MyCrawler.exe`，但环境 ZIP 中不再出现对应 `.py` 文件。`wordcloud/stopwords` 是启动时必需的第三方静态资源，组件构建和环境清单都会验证它存在。`MyCrawler/database/sqlite_tables.db` 属于运行数据，仍由首次采集任务执行 `MyCrawler.exe --init_db sqlite` 初始化；组件构建会真实初始化并检查 schema，随后删除测试数据库，`*.db`、`*.sqlite`、`*.sqlite3` 及其派生文件继续被组装规则排除，不进入环境包。
-
-开发环境不改成便携结构：后端继续使用 `backend/.venv`，前端继续使用 `frontend/node_modules`，MyCrawler 继续使用 `MyCrawler/.venv`，本地运行仍从源码目录启动。根目录 `runtime/` 只属于客户解压后的便携版本，不要求开发者手工维护。
-
-客户首次使用时先解压 Program ZIP，再把 Environment ZIP 解压到同一目录并合并 `runtime/`，最后只双击最外层 `AI_Customer.exe`。业务库、备份、引流图片、内容资产、视频结果和浏览器登录状态统一保存在同目录的 `data/`；程序更新只覆盖程序清单声明的文件，不覆盖 `data/`，也不覆盖环境依赖。环境版本不匹配或文件缺失时，稳定入口会明确提示重新解压指定环境包。
+以下是已交付旧产物及当时验证，不代表当前源码已生成新 Core 或更新器 1.1.0：
 
 2026-07-17 已实际生成 `deliverables/1.2.3/`：Program ZIP 为 136,712,791 字节（SHA-256 `f6e5a075fc8b36d2a479cf0a6ed04bf73206187c374f0df321ba78c170880e64`），Environment ZIP 为 7,865,802,695 字节（SHA-256 `f9c41cb48d3bf515923d2b66f8a5a490e701f5055a322aa915a5087e2b772be3`）。Program ZIP 已通过完整白名单、大小和文件哈希验证；Environment ZIP 包含 39,781 个文件，环境版本和 9 个必需路径均通过清单验证。构建前回归为 15 项前端测试和 399 项后端测试通过、8 项联网测试跳过。VoxCPM2 深层头文件会超过传统 Windows 长路径限制，因此组装脚本使用 `output/stage_<时间>/p|e|a` 短中间目录，最终 ZIP 内目录结构不受影响。
 
@@ -772,16 +818,6 @@ uv pip install --python MyCrawler\.venv\Scripts\python.exe Nuitka==4.1.3
 2026-08-07 已生成独立 Nuitka MyCrawler `1.0.2` 组件：共 1,236 个文件、487,288,606 字节，`MyCrawler.exe` SHA-256 为 `585f93b49daf08a015361d7a49764091067ed559b9cbb551ae20a30dd6baf598`。组件包含创作者主页网络异常重试补丁，SQLite 初始化自检通过；随后复用打包版抖音拓客账号 Profile，以 CDP 端口 `9222` 真实采集 1 个创作者及 1 条视频，进程退出码为 0。验证后已关闭测试浏览器并删除组件测试数据库。本轮只生成组件，没有构建 Program ZIP 或 Environment ZIP，也没有重编译 VoxCPM2/PyTorch/CUDA。
 
 打包程序使用 Windows 单实例锁，同一时间只运行一个工作台后端。平台登录作为统一账号任务在后端浏览器队列中运行，不再启动带 `--internal-platform-login` 参数的第二个主程序；环境检查直接验证内置 CloakBrowser，环境安装入口只返回内置依赖状态，因此不会重复启动后端或自动打开多个项目标签页。
-
-稳定启动器已经实现授权身份读取、远端更新检查、用户确认、可视化进度、限时下载、Ed25519验签、大小/SHA-256校验和程序文件原地替换。下载包每次解压到全新的 `<版本>.extracting` 目录并完成发布清单校验，不再复用上次中断留下的半成品。安装前只把当前发布清单管理的程序文件保存到 `updates/rollback/`，并写入持久化更新事务；异常、断电或进程退出后，当前或下次稳定启动器会恢复旧程序、旧清单并删除新版本独有文件，成功更新则删除旧版本已经取消的程序文件。回滚不复制 `data/`、MyCrawler、CloakBrowser、Python 环境或模型。远程更新下载的就是 Program ZIP；它不会重新安装到 `%LOCALAPPDATA%`，也不会创建 `versions/` 或 `current-version.json`。正在运行的最外层 `AI_Customer.exe` 不参与远程覆盖，日常远程版本只更新 `AI_Customer_App.exe`、前端和程序资源；本次确认和进度功能本身位于稳定启动器，因此首次交付该能力必须重新手动发送包含新 `AI_Customer.exe` 的 Program ZIP，不能由旧启动器自我更新。签名更新清单同时声明环境版本，客户端只安装与当前 Environment ZIP 同版本的程序更新；依赖集合变化时应先手动交付新版 Environment ZIP，避免程序先更新后无法启动。发布方必须继续使用 `publish_release.ps1` 登记签名清单，不能只把 ZIP 手工放入对象存储。当前仅支持结构基线 15，不提供跨版本数据迁移；恢复时先检查备份清单和源库版本，版本不符的旧备份在覆盖前拒绝。
-
-“检查更新”位于左侧栏底部的“系统设置”页面，并显示后端 `GET /api/health` 返回的当前程序版本。点击后前端调用 `POST /api/system/check-update`；系统先确认所有业务任务均已空闲，再启动稳定入口等待当前 `AI_Customer_App.exe` 正常关闭，随后执行与启动时相同的授权校验、签名校验、更新确认和进度显示。没有新版本时会提示“当前已是最新版本”并重新打开应用；开发环境或直接缺少 `AI_Customer.exe` 时会明确拒绝，不使用替代更新逻辑。页面顶部“刷新”仅刷新当前工作台；任何父级请求失败都会显示失败数量和首个错误，失败时不会把同步时间误记为成功，后台自动同步仍保持静默。打包版只有在 `/api/health` 完成数据库、授权和队列启动后才打开浏览器；重复双击 `AI_Customer.exe` 只重新打开已经运行的打包工作台，不会误连同机的开发服务，也不并发执行第二次更新。侧边栏“安全退出”在开发版和打包版都显示，调用 `POST /api/system/exit` 后通过 Uvicorn lifespan 正常停止任务队列、调度器和浏览器会话，并让当前浏览器页面离开已停止的应用；浏览器允许脚本关闭时会同步关闭标签页，否则保留一个空白页。开发后端必须通过 `script/start_backend.ps1`、`script/start_all.ps1` 或 `python -m app.main` 启动，直接运行原始 Uvicorn CLI 无法取得安全退出所需的 Server 实例。打包运行日志保存在 `data/logs/app.log`，单文件 5 MB 并保留三个轮转文件。以上能力涉及稳定入口改动，现有 `1.2.6` 交付包不包含；下一次明确要求打包时必须使用新的程序版本，不能覆盖 `deliverables/1.2.6/`。
-
-公共 `GET /api/settings` 会屏蔽采集路径、采集库路径、授权服务地址和 AI API Key，只返回 `ai_api_key_configured`；提交空 API Key 表示保留原值。`PUT /api/settings` 使用显式白名单，不能写入任意内部设置。环境检查只返回“采集组件/采集存储正常或待处理”和业务质量，不返回绝对路径、原始表名或列名。授权端点集中在 `product_config.py` 并做轻量字符串隐藏，可降低直接 strings 扫描得到地址的概率，但这不是密码学安全边界。
-
-程序 ZIP 不包含 AI_Customer 的 Python/Vue 源文件，主程序、稳定启动器和 MyCrawler 由 Nuitka 编译为本机组件；VoxCPM自研调用入口以Nuitka原生 `.pyd` 进入独立推理组件。这会明显提高静态还原成本，但不能让本地客户端绝对不可逆向。PyTorch、CUDA、模型和其他第三方依赖不会为了形式上的“全量 Nuitka”重复编译。真正的授权与设备限制仍由远端服务执行，AI Key 也不通过 API 回传；环境 ZIP 仍包含第三方动态库和上游许可证，不应被视为绝对保密边界。
-
-打包脚本显式收集CloakBrowser、Playwright、OpenCV、QR编码库、发布引擎脚本和许可说明，并把开发环境已安装的CloakBrowser专用内核复制到应用目录。稳定启动器通过 `CLOAKBROWSER_BINARY_PATH` 指向该内核，客户无需另装Python或浏览器。环境检查验证CloakBrowser、二维码依赖和专用内核路径。
 
 ## 代码优化与验证（2026-10-03）
 

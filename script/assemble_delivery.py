@@ -6,13 +6,18 @@ import hashlib
 import json
 import re
 import shutil
+import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+# 组装和安装拒绝相同的危险文件名，避免发布后才发现无法解压。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+from app.release_paths import safe_release_path
+
 
 APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
-PROGRAM_APPLICATION_ENTRIES = {"AI_Customer_App.exe", "app", "frontend_dist"}
+UPDATER_VERSION = "1.1.0"
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 REVISION_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -75,15 +80,18 @@ def _valid_component_provenance(root: Path, info: dict[str, object], artifacts: 
     return True
 
 
-def _program_manifest(program_root: Path, version: str, environment_version: str, schema_version: int) -> dict[str, object]:
+def _program_manifest(
+    program_root: Path, version: str, environment_version: str, schema_version: int,
+    source_revision: str, source_dirty: bool,
+) -> dict[str, object]:
     files = []
-    # 正在运行的稳定入口随初始 ZIP 交付，但不进入远程覆盖白名单。
+    # 清单只拥有程序文件，Core 合并的浏览器和采集组件不会被日常更新覆盖。
     for path in sorted(program_root.rglob("*")):
-        if not path.is_file() or path.name in {"AI_Customer.exe", "release-manifest.json"}:
+        if not path.is_file() or path.name == "release-manifest.json":
             continue
         files.append(
             {
-                "path": path.relative_to(program_root).as_posix(),
+                "path": safe_release_path(path.relative_to(program_root).as_posix()),
                 "size": path.stat().st_size,
                 "sha256": _hash(path),
             }
@@ -94,6 +102,9 @@ def _program_manifest(program_root: Path, version: str, environment_version: str
         "version": version,
         "schema_version": schema_version,
         "environment_version": environment_version,
+        "updater_version": UPDATER_VERSION,
+        "source_revision": source_revision,
+        "source_dirty": source_dirty,
         "built_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "entrypoint": APPLICATION_ENTRYPOINT,
         "files": files,
@@ -104,7 +115,7 @@ def _zip_directory(source: Path, destination: Path) -> None:
     with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
         for path in sorted(source.rglob("*")):
             if path.is_file():
-                archive.write(path, path.relative_to(source).as_posix())
+                archive.write(path, safe_release_path(path.relative_to(source).as_posix()))
 
 
 def assemble(
@@ -116,65 +127,73 @@ def assemble(
     version: str,
     environment_version: str,
     schema_version: int,
+    source_revision: str,
+    source_dirty: bool,
     crawler_component_root: Path | None,
     cloakbrowser_root: Path | None,
     vox_component_root: Path | None,
     voice_models_root: Path | None,
     readme: Path,
     program_only: bool = False,
-) -> tuple[Path, Path | None]:
-    """Assemble the one frequently updated ZIP and the one reusable environment ZIP."""
+    include_voice: bool = False,
+) -> tuple[Path, Path | None, Path | None]:
+    """生成完整首装 Core、日常更新 Program 和按需安装的 Voice ZIP。"""
     if not VERSION_PATTERN.fullmatch(version) or not VERSION_PATTERN.fullmatch(environment_version) or schema_version < 0:
         raise RuntimeError("程序版本、环境版本或数据库版本无效")
+    if not REVISION_PATTERN.fullmatch(source_revision) or not isinstance(source_dirty, bool):
+        raise RuntimeError("必须记录有效的源码提交和工作区状态")
+    if program_only and include_voice:
+        raise RuntimeError("ProgramOnly 不包含可选语音组件")
     if delivery_root.exists():
         raise RuntimeError(f"交付目录已存在，请先提升版本号：{delivery_root}")
     # Short staging names keep deeply nested PyTorch headers below Windows MAX_PATH.
     program_root = staging_root / "p"
-    environment_root = staging_root / "e"
     artifact_root = staging_root / "a"
     program_runtime = program_root / "runtime"
-    environment_runtime = environment_root / "runtime"
-    for path in (program_root, environment_root, artifact_root):
+    for path in (program_root, artifact_root):
         path.mkdir(parents=True, exist_ok=False)
 
     shutil.copy2(stable_launcher, program_root / "AI_Customer.exe")
     shutil.copy2(readme, program_root / "README.txt")
     application_program = program_runtime / "application"
     application_program.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(packaged_app / "AI_Customer_App.exe", application_program / "AI_Customer_App.exe")
-    for name, destination in (("app", application_program / "app"), ("frontend_dist", program_runtime / "frontend_dist")):
-        source = packaged_app / name
-        if not source.is_dir():
-            raise RuntimeError(f"程序资源缺失：{source}")
-        _copy_tree(source, destination)
+    required_program_paths = ["AI_Customer_App.exe", "python311.dll", "playwright/driver/node.exe", "curl_cffi/_wrapper.pyd", "frontend_dist/index.html"]
+    missing = [relative for relative in required_program_paths if not (packaged_app / relative).is_file()]
+    if missing or not (packaged_app / "app").is_dir():
+        raise RuntimeError("完整程序运行时缺失：" + ", ".join(missing or ["app/"]))
+    # Nuitka standalone 的依赖必须随程序更新，不能与业务 EXE 分属两个版本。
+    for source in sorted(packaged_app.iterdir()):
+        target = program_runtime / "frontend_dist" if source.name == "frontend_dist" else application_program / source.name
+        if source.is_dir():
+            _copy_tree(source, target)
+        else:
+            if source.is_symlink():
+                raise RuntimeError(f"交付源文件不能包含符号链接：{source}")
+            shutil.copy2(source, target)
 
-    # Program-only deliveries reuse an existing matching environment ZIP.
+    _write_json(program_root / "release-manifest.json", _program_manifest(
+        program_root, version, environment_version, schema_version, source_revision, source_dirty,
+    ))
+    program_zip = artifact_root / f"AI_Customer_Program_{version}.zip"
+    _zip_directory(program_root, program_zip)
+    core_zip = None
+    voice_zip = None
+    checksums = f"{_hash(program_zip)}  {program_zip.name}\n"
+
+    # 日常更新只重建程序，不读取低频组件或语音模型。
     if program_only:
-        _write_json(program_root / "release-manifest.json", _program_manifest(program_root, version, environment_version, schema_version))
-        program_zip = artifact_root / f"AI_Customer_Program_{version}.zip"
-        _zip_directory(program_root, program_zip)
-        (artifact_root / "SHA256.txt").write_text(f"{_hash(program_zip)}  {program_zip.name}\n", encoding="ascii")
+        (artifact_root / "SHA256.txt").write_text(checksums, encoding="ascii")
         (artifact_root / "README.txt").write_text(
-            f"本目录仅包含程序 ZIP，运行时需要已安装 Environment {environment_version}。\n",
+            f"本目录为日常更新 Program ZIP，首次安装请使用 Core ZIP；要求基础环境 {environment_version}。\n",
             encoding="utf-8-sig",
         )
         delivery_root.parent.mkdir(parents=True, exist_ok=True)
         artifact_root.replace(delivery_root)
-        return delivery_root / program_zip.name, None
+        return delivery_root / program_zip.name, None, None
 
-    if any(path is None for path in (crawler_component_root, cloakbrowser_root, vox_component_root, voice_models_root)):
-        raise RuntimeError("生成环境 ZIP 时必须提供全部环境来源")
-
-    application_environment = environment_runtime / "application"
-    for source in sorted(packaged_app.iterdir()):
-        if source.name in PROGRAM_APPLICATION_ENTRIES:
-            continue
-        target = application_environment / source.name
-        if source.is_dir():
-            _copy_tree(source, target)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+    if crawler_component_root is None or cloakbrowser_root is None:
+        raise RuntimeError("生成 Core ZIP 时必须提供采集组件和浏览器")
+    environment_runtime = program_runtime
 
     crawler_info = json.loads((crawler_component_root / "component-info.json").read_text(encoding="utf-8-sig"))
     if (
@@ -194,6 +213,56 @@ def assemble(
     crawler_destination = environment_runtime / "MyCrawler"
     _copy_tree(crawler_component_root, crawler_destination, ignored_dirs=CRAWLER_IGNORED_DIRS, ignored_files=CRAWLER_IGNORED_FILES)
     _copy_tree(cloakbrowser_root, environment_runtime / "cloakbrowser_browser")
+
+    required_paths = [
+        "cloakbrowser_browser/chrome.exe",
+        "MyCrawler/MyCrawler.exe",
+        "MyCrawler/playwright/driver/node.exe",
+        "MyCrawler/wordcloud/stopwords",
+    ]
+    missing = [relative for relative in required_paths if not (environment_runtime / relative).is_file()]
+    if missing:
+        raise RuntimeError("基础环境缺少必需文件：" + ", ".join(missing))
+    _write_json(environment_runtime / "environment-manifest.json", {
+        "format": 1,
+        "product": "AI Customer Environment",
+        "version": environment_version,
+        "built_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "source_revision": source_revision,
+        "source_dirty": source_dirty,
+        "required_paths": required_paths,
+    })
+    core_zip = artifact_root / f"AI_Customer_Core_{version}.zip"
+    _zip_directory(program_root, core_zip)
+    checksums += f"{_hash(core_zip)}  {core_zip.name}\n"
+
+    if include_voice:
+        if vox_component_root is None or voice_models_root is None:
+            raise RuntimeError("IncludeVoice 必须提供语音组件和模型")
+        voice_root = staging_root / "v"
+        voice_runtime = voice_root / "runtime"
+        voice_runtime.mkdir(parents=True, exist_ok=False)
+        voice_version = _assemble_voice(vox_component_root, voice_models_root, voice_runtime)
+        (voice_root / "README_语音组件.txt").write_text(
+            "需要语音克隆时，将本 ZIP 解压到 Core 安装目录中并合并 runtime，然后重新启动软件。\n",
+            encoding="utf-8-sig",
+        )
+        voice_zip = artifact_root / f"AI_Customer_Voice_{voice_version}.zip"
+        _zip_directory(voice_root, voice_zip)
+        checksums += f"{_hash(voice_zip)}  {voice_zip.name}\n"
+
+    (artifact_root / "SHA256.txt").write_text(checksums, encoding="ascii")
+    (artifact_root / "README.txt").write_text(
+        "首次使用：解压 Core ZIP，双击 AI_Customer.exe。\n日常更新：通过软件安装 Program ZIP。\nVoice ZIP 为可选语音组件，不影响采集、筛选和私信。\n",
+        encoding="utf-8-sig",
+    )
+    delivery_root.parent.mkdir(parents=True, exist_ok=True)
+    artifact_root.replace(delivery_root)
+    return delivery_root / program_zip.name, delivery_root / core_zip.name, delivery_root / voice_zip.name if voice_zip else None
+
+
+def _assemble_voice(vox_component_root: Path, voice_models_root: Path, environment_runtime: Path) -> str:
+    """复用已有组件来源校验，只将运行时和模型放入可选语音包。"""
 
     component_info = json.loads((vox_component_root / "component-info.json").read_text(encoding="utf-8-sig"))
     component_version = str(component_info.get("version") or "")
@@ -230,12 +299,6 @@ def assemble(
     if not model_files:
         raise RuntimeError("VoxCPM2 模型目录为空，无法生成完整环境包")
     required_paths = [
-        "application/python311.dll",
-        "application/playwright/driver/node.exe",
-        "cloakbrowser_browser/chrome.exe",
-        "MyCrawler/MyCrawler.exe",
-        "MyCrawler/playwright/driver/node.exe",
-        "MyCrawler/wordcloud/stopwords",
         "components/voxcpm2/current.json",
         "components/voxcpm2/versions/" + component_version + "/VoxCPM_Runtime.exe",
         "components/voxcpm2/versions/" + component_version + "/" + native_module,
@@ -243,36 +306,8 @@ def assemble(
     ]
     missing = [relative for relative in required_paths if not (environment_runtime / relative).is_file()]
     if missing:
-        raise RuntimeError("环境包缺少必需文件：" + ", ".join(missing))
-    _write_json(
-        environment_runtime / "environment-manifest.json",
-        {
-            "format": 1,
-            "product": "AI Customer Environment",
-            "version": environment_version,
-            "built_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-            "required_paths": required_paths,
-        },
-    )
-    (environment_root / "README_环境包.txt").write_text(
-        "把本 ZIP 直接解压到程序 ZIP 解压后的目录中，确认 runtime 文件夹合并即可。\n",
-        encoding="utf-8-sig",
-    )
-    _write_json(program_root / "release-manifest.json", _program_manifest(program_root, version, environment_version, schema_version))
-
-    program_zip = artifact_root / f"AI_Customer_Program_{version}.zip"
-    environment_zip = artifact_root / f"AI_Customer_Environment_{environment_version}.zip"
-    _zip_directory(program_root, program_zip)
-    _zip_directory(environment_root, environment_zip)
-    checksums = f"{_hash(program_zip)}  {program_zip.name}\n{_hash(environment_zip)}  {environment_zip.name}\n"
-    (artifact_root / "SHA256.txt").write_text(checksums, encoding="ascii")
-    (artifact_root / "README.txt").write_text(
-        "1. 解压 Program ZIP。\n2. 把 Environment ZIP 解压到同一目录并合并 runtime。\n3. 双击 AI_Customer.exe。\n",
-        encoding="utf-8-sig",
-    )
-    delivery_root.parent.mkdir(parents=True, exist_ok=True)
-    artifact_root.replace(delivery_root)
-    return delivery_root / program_zip.name, delivery_root / environment_zip.name
+        raise RuntimeError("语音包缺少必需文件：" + ", ".join(missing))
+    return component_version
 
 
 def _arguments() -> argparse.Namespace:
@@ -295,14 +330,17 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--version", required=True)
     parser.add_argument("--environment-version", required=True)
     parser.add_argument("--schema-version", type=int, required=True)
+    parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--source-dirty", action="store_true")
     parser.add_argument("--program-only", action="store_true")
+    parser.add_argument("--include-voice", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = vars(_arguments())
-    program_zip, environment_zip = assemble(**{key.replace("-", "_"): value for key, value in args.items()})
-    print(json.dumps({"program_zip": str(program_zip), "environment_zip": str(environment_zip) if environment_zip else None}, ensure_ascii=False))
+    program_zip, core_zip, voice_zip = assemble(**args)
+    print(json.dumps({"program_zip": str(program_zip), "core_zip": str(core_zip) if core_zip else None, "voice_zip": str(voice_zip) if voice_zip else None}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

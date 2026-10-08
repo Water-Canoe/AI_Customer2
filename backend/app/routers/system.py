@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import subprocess
-from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from app import views
 from app.schemas import BackupCreateRequest, BackupRestoreRequest, ClearDataRequest, LicenseUpdate, SettingsUpdate
-from app.services import data_management, license_service, maintenance, workbench_status
+from app.services import data_management, license_service, maintenance, workbench_status, update_workbench
 from app.version import APP_VERSION
 
 
@@ -23,6 +21,7 @@ def health() -> dict[str, object]:
         "product": "ai-customer",
         "version": APP_VERSION,
         "packaged": os.getenv("AI_CUSTOMER_PACKAGED") == "1",
+        "process_id": os.getpid(),
     }
 
 
@@ -67,37 +66,42 @@ def env_check() -> dict[str, object]:
     return views.environment_check()
 
 
-def _start_manual_update_launcher() -> None:
-    if not getattr(sys, "frozen", False):
-        raise RuntimeError("检查更新仅支持打包版，请通过 AI_Customer.exe 启动软件")
-    install_root = Path(sys.executable).resolve().parent
-    launcher = install_root / "AI_Customer.exe"
-    if not launcher.is_file():
-        raise RuntimeError("程序目录缺少 AI_Customer.exe，无法检查更新")
-    subprocess.Popen(
-        [str(launcher), "--wait-for-pid", str(os.getpid())],
-        cwd=str(install_root),
-        close_fds=True,
-        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-    )
-
-
 @router.post("/system/check-update")
-def check_for_update(request: Request, background_tasks: BackgroundTasks) -> dict[str, object]:
-    server = getattr(request.app.state, "uvicorn_server", None)
-    if server is None:
-        raise HTTPException(status_code=400, detail="检查更新仅支持打包版，请通过 AI_Customer.exe 启动软件")
-    if getattr(request.app.state, "update_restart_requested", False):
-        raise HTTPException(status_code=409, detail="应用正在重启并检查更新")
+async def check_for_update() -> dict[str, object]:
     try:
-        data_management.ensure_idle("检查更新")
-        _start_manual_update_launcher()
+        return await update_workbench.check()
+    except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/system/update-status")
+def get_update_status() -> dict[str, object]:
+    try:
+        return update_workbench.status()
     except (ValueError, RuntimeError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    request.app.state.update_restart_requested = True
-    # 响应发出后让 Uvicorn 正常执行 lifespan 清理，再由稳定启动器检查更新。
+
+
+@router.post("/system/prepare-update")
+async def prepare_update() -> dict[str, object]:
+    try:
+        return await update_workbench.prepare()
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/system/install-update")
+def install_update(request: Request, background_tasks: BackgroundTasks) -> dict[str, object]:
+    server = getattr(request.app.state, "uvicorn_server", None)
+    if server is None:
+        raise HTTPException(status_code=400, detail="安装更新仅支持通过 AI_Customer.exe 启动的软件")
+    try:
+        result = update_workbench.install(os.getpid())
+    except (ValueError, RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # 仅安装确认成功后关闭后台，由新入口等待旧进程退出再替换程序。
     background_tasks.add_task(setattr, server, "should_exit", True)
-    return {"ok": True, "message": "应用正在重启并检查更新"}
+    return result
 
 
 @router.post("/system/exit")

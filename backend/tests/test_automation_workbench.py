@@ -185,6 +185,22 @@ def test_scheduler_start_only_catches_up_ten_minutes() -> None:
     assert automation_workbench._scheduler_scan_start(now) == datetime(2026, 7, 13, 8, 58, 30)
 
 
+def test_stopping_scheduler_does_not_create_tasks_after_authorization(tmp_path, monkeypatch) -> None:
+    import threading
+    from app.services import automation_workbench
+
+    prepare_project(tmp_path)
+    automation_workbench.create_plan(keyword_plan_payload())
+    stopped = threading.Event()
+    monkeypatch.setattr(automation_workbench, "_SCHEDULER_STOP", stopped)
+    monkeypatch.setattr(automation_workbench, "_SCHEDULER_THREAD", threading.current_thread())
+    monkeypatch.setattr(automation_workbench, "_ensure_plan_authorized", lambda _: stopped.set())
+    monkeypatch.setattr(automation_workbench, "create_run", lambda *_: pytest.fail("退出中的调度不得创建任务"))
+    assert automation_workbench.trigger_due_plans(datetime(2026, 7, 13, 8, 59, 50), datetime(2026, 7, 13, 9, 0, 5)) == []
+    automation_workbench.start_scheduler()
+    assert not stopped.is_set()
+
+
 def test_scheduler_keeps_scan_cursor_after_global_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import automation_workbench
 

@@ -28,7 +28,7 @@ from app.routers import (
     tasks,
     traffic,
 )
-from app.services import automation_workbench, data_management, job_handlers, job_queue, license_service, profile_manager, message_inbox as inbox_service
+from app.services import automation_workbench, data_management, job_handlers, job_queue, license_service, profile_manager, update_workbench, message_inbox as inbox_service
 from app.version import APP_VERSION
 
 
@@ -50,10 +50,13 @@ async def lifespan(_: FastAPI):
             with suppress(asyncio.CancelledError):
                 await inbox_startup
         finally:
-            automation_workbench.stop_scheduler()
-            job_queue.shutdown()
-            inbox_service.shutdown()
-            profile_manager.shutdown()
+            try:
+                automation_workbench.stop_scheduler()
+                await update_workbench.shutdown()
+            finally:
+                job_queue.shutdown()
+                inbox_service.shutdown()
+                profile_manager.shutdown()
 
 
 app = FastAPI(title="AI拓客工具", version=APP_VERSION, lifespan=lifespan)
@@ -61,9 +64,17 @@ app = FastAPI(title="AI拓客工具", version=APP_VERSION, lifespan=lifespan)
 
 @app.middleware("http")
 async def reject_requests_during_maintenance(request: Request, call_next):
-    if data_management.maintenance_active() and request.url.path != "/api/health":
-        return JSONResponse(status_code=503, content={"detail": "系统正在备份或维护数据，请稍后重试"})
-    return await call_next(request)
+    try:
+        tracked = update_workbench.enter_request(request.url.path)
+    except ValueError as exc:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+    try:
+        if data_management.maintenance_active() and request.url.path != "/api/health":
+            return JSONResponse(status_code=503, content={"detail": "系统正在备份或维护数据，请稍后重试"})
+        return await call_next(request)
+    finally:
+        if tracked:
+            update_workbench.leave_request()
 
 app.add_middleware(
     CORSMiddleware,

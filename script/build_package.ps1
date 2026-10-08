@@ -1,10 +1,11 @@
 param(
     [string]$Version = "",
-    [string]$EnvironmentVersion = "1.0.3",
+    [string]$EnvironmentVersion = "1.1.0",
     [string]$MyCrawlerComponentPath = "",
     [string]$VoxComponentPath = "",
     [string]$VoiceModelsPath = "",
-    [switch]$ProgramOnly
+    [switch]$ProgramOnly,
+    [switch]$IncludeVoice
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +21,7 @@ $AppIcon = Join-Path $ProjectRoot "packaging\ai-customer-icon.ico"
 $DeliveryAssembler = Join-Path $ProjectRoot "script\assemble_delivery.py"
 $Readme = Join-Path $ProjectRoot "packaging\PACKAGE_README.txt"
 $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
+if ($ProgramOnly -and $IncludeVoice) { throw "ProgramOnly and IncludeVoice cannot be combined." }
 
 # Validate local dependencies only; this script never installs missing packages implicitly.
 foreach ($RequiredFile in @($Python, $AppLauncher, $StableLauncher, $AppIcon, $DeliveryAssembler, $Readme)) {
@@ -80,11 +82,17 @@ if (-not $ProgramOnly) {
     ) {
         throw "A completed Nuitka MyCrawler component is required. Run script/build_mycrawler_component.ps1 first."
     }
-    $CloakBrowserPath = (& $Python -c "import cloakbrowser; print(cloakbrowser.ensure_binary())").Trim()
+    # 只定位已有浏览器，禁止在打包检查中隐式下载或触发后台更新。
+    $CloakBrowserPath = (& $Python -c "import os, cloakbrowser; print(os.getenv('CLOAKBROWSER_BINARY_PATH', '').strip() or cloakbrowser.binary_info()['binary_path'])").Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Cannot inspect the installed CloakBrowser binary." }
     if (-not (Test-Path -LiteralPath $CloakBrowserPath -PathType Leaf)) {
         throw "CloakBrowser is missing. Run backend/.venv/Scripts/python.exe -m cloakbrowser install first."
     }
     $CloakBrowserDir = Split-Path -Parent $CloakBrowserPath
+}
+
+# 默认首装只准备工作台基础环境；显式选择后才检查语音运行时和模型。
+if ($IncludeVoice) {
     if (-not $VoiceModelsPath) { $VoiceModelsPath = Join-Path $ProjectRoot "data\voice_models" }
     if (-not (Test-Path -LiteralPath (Join-Path $VoiceModelsPath "VoxCPM2") -PathType Container)) {
         throw "VoxCPM2 model files are missing: $VoiceModelsPath\VoxCPM2"
@@ -168,6 +176,13 @@ finally {
 }
 
 # Compile the complete Python application to native code; data files stay beside the standalone binary.
+$SourceRevision = (& git -C $ProjectRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or $SourceRevision -notmatch '^[0-9a-f]{40,64}$') {
+    throw "Cannot record the Git source revision. Build from the project Git checkout."
+}
+$SourceChanges = @(& git -C $ProjectRoot status --porcelain --untracked-files=normal)
+if ($LASTEXITCODE -ne 0) { throw "Cannot inspect the Git working-tree state." }
+$SourceDirty = $SourceChanges.Count -gt 0
 $PreviousPythonPath = $env:PYTHONPATH
 $env:PYTHONPATH = "$BackendDir;$ProjectRoot"
 try {
@@ -222,6 +237,20 @@ if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "playwright\driver\node
     throw "Playwright driver is missing from the Nuitka application runtime"
 }
 
+# 使用独立临时数据目录检查刚编译的 EXE，避免触及业务数据库或真实私信账号。
+$PreviousSmokeData = $env:AI_CUSTOMER_DATA_DIR
+$PreviousSmokeDb = $env:AI_CUSTOMER_DB
+try {
+    $env:AI_CUSTOMER_DATA_DIR = Join-Path $BuildRoot "smoke-data"
+    $env:AI_CUSTOMER_DB = Join-Path $env:AI_CUSTOMER_DATA_DIR "ai_customer.sqlite3"
+    & (Join-Path $PackagedApp "AI_Customer_App.exe") --smoke-test
+    if ($LASTEXITCODE -ne 0) { throw "Compiled application startup/dependency smoke test failed." }
+}
+finally {
+    $env:AI_CUSTOMER_DATA_DIR = $PreviousSmokeData
+    $env:AI_CUSTOMER_DB = $PreviousSmokeDb
+}
+
 # Compile the stable updater as a single native Windows executable.
 $PreviousPythonPath = $env:PYTHONPATH
 $env:PYTHONPATH = $BackendDir
@@ -235,7 +264,8 @@ try {
         --assume-yes-for-downloads `
         --python-flag=no_docstrings `
         --enable-plugin=tk-inter `
-        --include-data-files="$AppIcon=ai-customer-icon.ico" `
+        --include-module=app.services.desktop_update `
+        --include-data-files="$AppIcon=app/services/ai-customer-icon.ico" `
         $StableLauncher
 }
 finally {
@@ -243,7 +273,7 @@ finally {
 }
 if ($LASTEXITCODE -ne 0) { throw "Stable launcher Nuitka compilation failed" }
 
-# Assemble the two customer ZIPs: remotely updated program and one-time environment.
+# 组装单包首装 Core 与日常更新 Program；语音环境仅在明确选择后单独交付。
 $SchemaVersion = [int](& $Python -c "import sys; sys.path.insert(0, r'$BackendDir'); from app.migrations import latest_version; print(latest_version())")
 $AssemblyArguments = @(
     $DeliveryAssembler,
@@ -254,18 +284,23 @@ $AssemblyArguments = @(
     "--version", $Version,
     "--environment-version", $EnvironmentVersion,
     "--schema-version", $SchemaVersion,
+    "--source-revision", $SourceRevision,
     "--readme", $Readme
 )
+if ($SourceDirty) { $AssemblyArguments += "--source-dirty" }
 if ($ProgramOnly) {
     $AssemblyArguments += "--program-only"
 }
 else {
     $AssemblyArguments += @(
         "--crawler-component-root", $MyCrawlerComponentPath,
-        "--cloakbrowser-root", $CloakBrowserDir,
+        "--cloakbrowser-root", $CloakBrowserDir
+    )
+    if ($IncludeVoice) { $AssemblyArguments += @(
+        "--include-voice",
         "--vox-component-root", $VoxComponentPath,
         "--voice-models-root", $VoiceModelsPath
-    )
+    ) }
 }
 $AssemblyOutput = @(& $Python @AssemblyArguments)
 if ($LASTEXITCODE -ne 0) { throw "Portable delivery assembly failed" }
@@ -274,12 +309,13 @@ $Assembly = ($AssemblyOutput -join "") | ConvertFrom-Json
 if ($ProgramOnly) {
     Write-Host "Program-only delivery created:"
     Write-Host "  Program: $($Assembly.program_zip)"
-    Write-Host "Run it with the existing Environment $EnvironmentVersion files."
+    Write-Host "Install this update over an existing Core environment $EnvironmentVersion."
 }
 else {
-    Write-Host "Two-ZIP delivery created:"
+    Write-Host "Portable delivery created:"
+    Write-Host "  Core: $($Assembly.core_zip)"
     Write-Host "  Program: $($Assembly.program_zip)"
-    Write-Host "  Environment: $($Assembly.environment_zip)"
-    Write-Host "Customer steps: extract Program ZIP, merge Environment ZIP into it, then double-click AI_Customer.exe."
+    if ($Assembly.voice_zip) { Write-Host "  Optional voice: $($Assembly.voice_zip)" }
+    Write-Host "First install: extract the Core ZIP and double-click AI_Customer.exe."
     Write-Host "Remote publishing uses the Program ZIP only."
 }

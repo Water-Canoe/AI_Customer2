@@ -7,6 +7,8 @@ import logging
 import sys
 from pathlib import Path
 
+import pytest
+
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(WORKSPACE_ROOT))
@@ -19,6 +21,26 @@ def _launcher_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_smoke_test_uses_empty_database_without_starting_business_workers(tmp_path, monkeypatch) -> None:
+    launcher = _launcher_module()
+    monkeypatch.setenv("AI_CUSTOMER_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AI_CUSTOMER_DB", str(tmp_path / "empty.sqlite3"))
+    monkeypatch.delenv("AI_CUSTOMER_PACKAGED", raising=False)
+    from app import database
+    from app.services import automation_workbench, job_queue, message_inbox
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("自检不得启动业务、浏览器或真实账号连接")
+
+    monkeypatch.setattr(automation_workbench, "start_scheduler", forbidden)
+    monkeypatch.setattr(job_queue, "start", forbidden)
+    monkeypatch.setattr(message_inbox, "auto_connect_accounts", forbidden)
+    launcher.smoke_test()
+    assert database.schema_version()["current"] == database.schema_version()["latest"]
+    with pytest.raises(RuntimeError, match="空库"):
+        launcher.smoke_test()
 
 
 def test_launcher_waits_for_product_health_before_opening_browser(monkeypatch) -> None:

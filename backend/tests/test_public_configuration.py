@@ -62,14 +62,15 @@ def test_public_settings_mask_secrets_and_reject_internal_overrides(tmp_path: Pa
     assert response.json()["message"] == "应用和当前页面正在安全退出"
     del app.state.shutdown_requested
     server.should_exit = False
-    started: list[bool] = []
-    monkeypatch.setattr(system, "_start_manual_update_launcher", lambda: started.append(True))
+    async def checked_update():
+        return {"available": False, "reason": "当前已是最新版本"}
+
+    monkeypatch.setattr(system.update_workbench, "check", checked_update)
     response = client.post("/api/system/check-update")
     assert response.status_code == 200
-    assert started == [True]
-    assert server.should_exit is True
+    assert response.json()["available"] is False
+    assert server.should_exit is False
     del app.state.uvicorn_server
-    del app.state.update_restart_requested
 
     created: list[tuple[str, int]] = []
 

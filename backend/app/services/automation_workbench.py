@@ -33,6 +33,8 @@ def start_scheduler() -> None:
     global _SCHEDULER_THREAD
     with _SCHEDULER_LOCK:
         if _SCHEDULER_THREAD and _SCHEDULER_THREAD.is_alive():
+            # 安装被拒绝时恢复尚未退出的扫描线程，避免停止标记令其稍后退出。
+            _SCHEDULER_STOP.clear()
             return
         _SCHEDULER_STOP.clear()
         _SCHEDULER_THREAD = threading.Thread(target=_scheduler_loop, name="ai-customer-automation-scheduler", daemon=True)
@@ -84,6 +86,9 @@ def trigger_due_plans(start: datetime, end: datetime) -> list[dict[str, Any]]:
                 if start < scheduled_at <= end:
                     try:
                         _ensure_plan_authorized(str(row["plan_type"]))
+                        # 网络授权可能超过停止等待时间；退出中的扫描不能再创建触达任务。
+                        if threading.current_thread() is _SCHEDULER_THREAD and _SCHEDULER_STOP.is_set():
+                            return created
                         created.append(create_run(str(row["id"]), "scheduled", scheduled_at))
                     except ValueError as exc:
                         created.append(_record_scheduled_issue(row, scheduled_at, "skipped", str(exc)))

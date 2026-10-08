@@ -219,6 +219,12 @@ def active_accounts() -> list[str]:
         return sorted({account_id for account_id, listener in _listeners.items() if listener.state == 'syncing' or (listener.thread and listener.thread.is_alive())} | {account_id for locks in (_send_locks, _profile_locks) for account_id, lock in locks.items() if lock.locked()})
 
 
+def busy_accounts() -> list[str]:
+    """重启允许关闭接收连接，但不能打断认证同步、发送或资料写入。"""
+    with _runtime_lock:
+        return sorted({account_id for account_id, listener in _listeners.items() if listener.state == 'syncing'} | {account_id for locks in (_send_locks, _profile_locks) for account_id, lock in locks.items() if lock.locked()})
+
+
 def recover_pending_sends() -> None:
     """进程中断的发送结果未知，禁止把它们标为失败后自动重发。"""
     with database.connect() as conn:
