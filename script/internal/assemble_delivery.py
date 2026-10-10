@@ -14,11 +14,11 @@ from pathlib import Path, PurePosixPath
 # 组装和安装拒绝相同的危险文件名，避免发布后才发现无法解压。
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 from app.release_paths import safe_release_path
+from app.semver import RELEASE_VERSION_PATTERN as VERSION_PATTERN
 
 
 APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
 UPDATER_VERSION = "1.1.0"
-VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 REVISION_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CRAWLER_IGNORED_DIRS = {

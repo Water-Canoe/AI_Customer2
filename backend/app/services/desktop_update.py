@@ -24,10 +24,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from app import device_identity
+from app.semver import RELEASE_VERSION_PATTERN as VERSION_PATTERN, version_key
 from app.release_paths import safe_release_path as _safe_release_path
 
 
-VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MANIFEST_NAME = "release-manifest.json"
 APPLICATION_ENTRYPOINT = "runtime/application/AI_Customer_App.exe"
@@ -111,17 +111,10 @@ def _is_program_owned_path(relative_path: str) -> bool:
 
 
 def _is_newer_version(candidate: str, current: str) -> bool:
-    if not VERSION_PATTERN.fullmatch(candidate) or not VERSION_PATTERN.fullmatch(current):
-        raise RuntimeError("更新版本信息格式不正确")
-    candidate_core, _, candidate_suffix = candidate.partition("-")
-    current_core, _, current_suffix = current.partition("-")
-    candidate_numbers = tuple(int(part) for part in candidate_core.split("."))
-    current_numbers = tuple(int(part) for part in current_core.split("."))
-    if candidate_numbers != current_numbers:
-        return candidate_numbers > current_numbers
-    if not candidate_suffix or not current_suffix:
-        return bool(not candidate_suffix and current_suffix)
-    return candidate_suffix > current_suffix
+    try:
+        return version_key(candidate) > version_key(current)
+    except ValueError as error:
+        raise RuntimeError("更新版本信息格式不正确") from error
 
 
 def _read_update_identity(install_root: Path) -> tuple[str, str] | None:

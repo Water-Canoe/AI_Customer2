@@ -9,7 +9,7 @@
 )
 
 $ErrorActionPreference = "Stop"
-$SemVerPattern = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
+. (Join-Path $PSScriptRoot "internal\_version.ps1")
 
 # Resolve all paths from the repository root so the caller's location cannot change the build.
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -45,9 +45,8 @@ if (-not $Version) {
 elseif ($Version -ne $SourceVersion) {
     throw "Version must match backend/app/version.py ($SourceVersion)"
 }
-if ($Version -notmatch $SemVerPattern -or $EnvironmentVersion -notmatch $SemVerPattern) {
-    throw "Version and EnvironmentVersion must use semantic version format, for example 1.2.3"
-}
+Assert-SemVer $Version "Version"
+Assert-SemVer $EnvironmentVersion "EnvironmentVersion"
 $CloakBrowserDir = ""
 if (-not $ProgramOnly) {
     if (-not $MyCrawlerComponentPath) {

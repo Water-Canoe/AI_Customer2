@@ -28,15 +28,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$SemVerPattern = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$'
+. (Join-Path $PSScriptRoot "internal\_version.ps1")
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $RequestedState = @{}
 foreach ($Field in @("Enabled", "Mandatory", "RolloutPercent", "Notes")) {
     if ($PSBoundParameters.ContainsKey($Field)) { $RequestedState[$Field] = $PSBoundParameters[$Field] }
-}
-
-function Assert-SemVer([string]$Value, [string]$Label) {
-    if ($Value -notmatch $SemVerPattern) { throw "$Label must use semantic version format, for example 1.2.0" }
 }
 
 function Write-Utf8NoBom([string]$Path, [string]$Content) {

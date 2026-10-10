@@ -30,6 +30,7 @@ def prepare_publisher(tmp_path: Path) -> dict[str, Path]:
     )
     (script / "publish_release.ps1").write_text(publisher, encoding="utf-8-sig")
     shutil.copyfile(ROOT / "script" / "internal" / "release_signing.py", internal / "release_signing.py")
+    shutil.copyfile(ROOT / "script" / "internal" / "_version.ps1", internal / "_version.ps1")
     archive = project / "program.zip"
     archive.write_bytes(b"verified program fixture")
     metadata = {

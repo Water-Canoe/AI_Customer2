@@ -12,9 +12,9 @@ from pathlib import Path
 # 独立脚本与客户端安装器使用同一套Windows路径规则。
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 from app.release_paths import safe_release_path
+from app.semver import RELEASE_VERSION_PATTERN as VERSION_PATTERN
 
 
-VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 REVISION_PATTERN = re.compile(r"^[0-9a-f]{40,64}$")
 MAX_PROGRAM_SIZE = 8 * 1024 * 1024 * 1024

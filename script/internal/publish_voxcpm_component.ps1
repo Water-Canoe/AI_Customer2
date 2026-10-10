@@ -14,7 +14,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$SemVerPattern = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$'
+. (Join-Path $PSScriptRoot "_version.ps1")
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $Python = Join-Path $ProjectRoot "backend\.venv\Scripts\python.exe"
 $SigningTool = Join-Path $ProjectRoot "script\internal\release_signing.py"
@@ -24,10 +24,6 @@ if (-not $PublicKeyPath) { $PublicKeyPath = Join-Path $ProjectRoot "packaging\up
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Backend virtual environment not found: $Python" }
 if (-not (Test-Path -LiteralPath $SigningTool -PathType Leaf)) { throw "Release signing helper not found: $SigningTool" }
 if (-not (Test-Path -LiteralPath $PublicKeyPath -PathType Leaf)) { throw "Trusted signing public key not found: $PublicKeyPath" }
-
-function Assert-SemVer([string]$Value, [string]$Label) {
-    if ($Value -notmatch $SemVerPattern) { throw "$Label must use semantic version format, for example 1.0.0" }
-}
 
 function Write-Utf8NoBom([string]$Path, [string]$Content) {
     $Encoding = New-Object System.Text.UTF8Encoding($false)

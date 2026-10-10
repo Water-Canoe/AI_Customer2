@@ -3,6 +3,7 @@
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "_version.ps1")
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $CrawlerRoot = Join-Path $ProjectRoot "MyCrawler"
 $BackendDir = Join-Path $ProjectRoot "backend"
@@ -10,9 +11,7 @@ $Python = Join-Path $CrawlerRoot ".venv\Scripts\python.exe"
 $VerifierPython = Join-Path $BackendDir ".venv\Scripts\python.exe"
 $Entrypoint = Join-Path $ProjectRoot "packaging\mycrawler_launcher.py"
 
-if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
-    throw "Version must use semantic version format, for example 1.0.0"
-}
+Assert-SemVer $Version "Version"
 foreach ($RequiredFile in @($Python, $VerifierPython, $Entrypoint, (Join-Path $CrawlerRoot "LICENSE"))) {
     if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
         throw "Required MyCrawler build file is missing: $RequiredFile"

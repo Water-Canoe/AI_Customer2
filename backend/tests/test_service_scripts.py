@@ -205,6 +205,8 @@ def test_build_failure_restores_pythonpath_and_working_directory(tmp_path: Path)
     project = tmp_path / "project space's"
     (project / "frontend").mkdir(parents=True)
     (project / "script").mkdir()
+    (project / "script" / "internal").mkdir()
+    shutil.copyfile(ROOT / "script" / "internal" / "_version.ps1", project / "script" / "internal" / "_version.ps1")
     builder = project / "script" / "build_package.ps1"
     content = (ROOT / "script" / "build_package.ps1").read_text(encoding="utf-8-sig")
     content = content.replace('Join-Path $BackendDir ".venv\\Scripts\\python.exe"', "'Mock-Python'")

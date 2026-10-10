@@ -3,6 +3,7 @@
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "_version.ps1")
 
 # Resolve every path from the script directory for Windows PowerShell 5.1.
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -11,9 +12,7 @@ $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
 $NativeEntrypoint = Join-Path $ProjectRoot "packaging\voxcpm_runtime.py"
 $RuntimeLoader = Join-Path $ProjectRoot "packaging\voxcpm_loader.py"
 
-if ($Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
-    throw "Version must use semantic version format, for example 1.0.0"
-}
+Assert-SemVer $Version "Version"
 foreach ($RequiredFile in @($Python, $NativeEntrypoint, $RuntimeLoader)) {
     if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
         throw "Required VoxCPM2 build file is missing: $RequiredFile"
