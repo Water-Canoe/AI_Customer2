@@ -443,13 +443,16 @@ def test_update_archive_rejects_data_components_and_unsafe_paths(tmp_path, path)
 def test_health_requires_new_version_and_actual_child_pid(monkeypatch) -> None:
     module = _bootstrap_module()
     process = type("Process", (), {"pid": 123, "poll": lambda self: None})()
+    manifest = {"version": "1.1.2", "environment_version": "1.0.0", "schema_version": 16, "updater_version": "1.1.0"}
+    healthy = {"status": "ok", "product": "ai-customer", "packaged": True, "process_id": 123, **manifest}
     values = iter([
-        {"status": "ok", "product": "ai-customer", "packaged": True, "version": "1.1.2", "process_id": 99},
-        {"status": "ok", "product": "ai-customer", "packaged": True, "version": "1.1.1", "process_id": 123},
-        {"status": "ok", "product": "ai-customer", "packaged": True, "version": "1.1.2", "process_id": 123},
-    ])
+        {**healthy, field: value} for field, value in (
+            ("process_id", 99), ("version", "1.1.1"), ("environment_version", "2.0.0"),
+            ("schema_version", 17), ("updater_version", "1.0.0"), ("packaged", False), ("product", "other"),
+        )
+    ] + [healthy])
     monkeypatch.setattr(module.urllib.request, "urlopen", lambda *_args, **_kw: io.BytesIO(json.dumps(next(values)).encode()))
-    module._wait_for_application_health(process, "1.1.2")
+    module._wait_for_application_health(process, manifest)
     with pytest.raises(StopIteration):
         next(values)
 

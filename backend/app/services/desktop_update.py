@@ -532,7 +532,7 @@ def apply_release(
                 progress("正在安装程序更新", 95 + min(4, int(index * 4 / len(ordered_files))))
         _replace_file(release_root / MANIFEST_NAME, install_root / MANIFEST_NAME)
         process = _start_application(install_root)
-        _wait_for_application_health(process, version)
+        _wait_for_application_health(process, manifest)
         _write_transaction(install_root, "committed", sorted(old_paths), sorted(new_paths))
     except Exception as exc:
         if process is not None:
@@ -733,7 +733,7 @@ def _bootstrap_process_id() -> int:
     return int(os.environ.get("NUITKA_ONEFILE_PARENT") or os.getpid())
 
 
-def _wait_for_application_health(process: subprocess.Popen, version: str, timeout_seconds: float = 60.0) -> None:
+def _wait_for_application_health(process: subprocess.Popen, manifest: dict[str, Any], timeout_seconds: float = 60.0) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -746,7 +746,8 @@ def _wait_for_application_health(process: subprocess.Popen, version: str, timeou
                 continue
             if (
                 payload.get("status") == "ok" and payload.get("product") == "ai-customer"
-                and payload.get("packaged") is True and payload.get("version") == version
+                and payload.get("packaged") is True
+                and all(payload.get(key) == manifest[key] for key in ("version", "environment_version", "schema_version", "updater_version"))
                 and payload.get("process_id") == process.pid
             ):
                 return

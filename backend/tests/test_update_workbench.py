@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from types import SimpleNamespace
 
@@ -19,6 +20,13 @@ def update_project(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_CUSTOMER_PACKAGED", "1")
     monkeypatch.setenv("AI_CUSTOMER_INSTALL_ROOT", str(tmp_path))
     (tmp_path / "AI_Customer.exe").write_bytes(b"entry")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "browser.exe").write_bytes(b"fixture")
+    (tmp_path / "release-manifest.json").write_text(json.dumps({"environment_version": "1.1.0"}))
+    (runtime / "environment-manifest.json").write_text(json.dumps({
+        "format": 1, "product": "AI Customer Environment", "version": "1.1.0", "required_paths": ["browser.exe"],
+    }))
     database.init_db()
     monkeypatch.setattr(update_workbench, "_checked", {})
     monkeypatch.setattr(update_workbench, "_state", {"phase": "idle", "percent": 0, "message": ""})

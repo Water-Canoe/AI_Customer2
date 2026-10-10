@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from app import views
+from app import database, views
 from app.schemas import BackupCreateRequest, BackupRestoreRequest, ClearDataRequest, LicenseUpdate, SettingsUpdate
-from app.services import data_management, license_service, maintenance, workbench_status, update_workbench
+from app.services import data_management, desktop_update, license_service, maintenance, workbench_status, update_workbench
 from app.version import APP_VERSION
 
 
@@ -16,11 +17,17 @@ router = APIRouter(prefix="/api", tags=["system"])
 
 @router.get("/health")
 def health() -> dict[str, object]:
+    packaged = os.getenv("AI_CUSTOMER_PACKAGED") == "1"
+    # 报告实际安装环境和当前数据库，不能用源码常量冒充运行状态。
+    environment_version = desktop_update.validate_environment(Path(os.environ["AI_CUSTOMER_INSTALL_ROOT"])) if packaged else ""
     return {
         "status": "ok",
         "product": "ai-customer",
         "version": APP_VERSION,
-        "packaged": os.getenv("AI_CUSTOMER_PACKAGED") == "1",
+        "packaged": packaged,
+        "environment_version": environment_version,
+        "schema_version": database.schema_version()["current"],
+        "updater_version": desktop_update.UPDATER_VERSION,
         "process_id": os.getpid(),
     }
 
