@@ -69,6 +69,17 @@ def test_foreign_identity_blob_is_replaced(monkeypatch: pytest.MonkeyPatch, tmp_
     assert path.read_bytes().startswith(b"local:")
 
 
+def test_failed_flush_preserves_previous_protected_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "protected.bin"
+    path.write_bytes(b"previous protected record")
+    monkeypatch.setattr(device_identity, "_protect", lambda secret: b"protected:" + secret)
+    monkeypatch.setattr(device_identity.os, "fsync", lambda _: (_ for _ in ()).throw(OSError("flush failed")))
+    with pytest.raises(OSError, match="flush failed"):
+        device_identity._write_protected_secret(path, b"new record")
+    assert path.read_bytes() == b"previous protected record"
+    assert list(tmp_path.iterdir()) == [path]
+
+
 def test_machine_code_replaces_copied_code_and_clears_lease(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _prepare_database(tmp_path, monkeypatch)
     new_code = "AI-CUS-11111111-22222222-33333333-44444444"

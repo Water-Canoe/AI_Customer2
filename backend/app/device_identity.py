@@ -51,10 +51,13 @@ def _load_or_create_secret(path: Path) -> bytes:
 
 def _write_protected_secret(path: Path, secret: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    # 先写临时文件再原子替换，避免进程中断留下半个身份文件。
+    # 身份与授权时钟共用此入口；先刷入保护记录，再原子替换。
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     try:
-        temporary.write_bytes(_protect(secret))
+        with temporary.open("wb") as stream:
+            stream.write(_protect(secret))
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
         if temporary.exists():
