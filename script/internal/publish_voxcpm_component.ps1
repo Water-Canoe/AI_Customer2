@@ -43,7 +43,10 @@ function Find-SingleComponent([string]$RootPath) {
         [string]$Info.native_module_sha256 -match '^[0-9a-f]{64}$'
     })
     if ($Candidates.Count -eq 0) { throw "No completed VoxCPM2 component was found under $RootPath" }
-    if ($Candidates.Count -gt 1) { throw "Multiple VoxCPM2 components were found. Specify -ComponentPath explicitly." }
+    if ($Candidates.Count -gt 1) {
+        $Paths = ($Candidates | ForEach-Object { "  $($_.FullName)" }) -join "`n"
+        throw "Multiple VoxCPM2 components were found:`n$Paths`nChoose one directory and pass -ComponentPath '<chosen directory>'. No component was selected automatically."
+    }
     return $Candidates[0].FullName
 }
 

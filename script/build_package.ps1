@@ -23,18 +23,8 @@ $Readme = Join-Path $ProjectRoot "packaging\PACKAGE_README.txt"
 $Python = Join-Path $BackendDir ".venv\Scripts\python.exe"
 if ($ProgramOnly -and $IncludeVoice) { throw "ProgramOnly and IncludeVoice cannot be combined." }
 
-# Validate local dependencies only; this script never installs missing packages implicitly.
-foreach ($RequiredFile in @($Python, $AppLauncher, $StableLauncher, $AppIcon, $DeliveryAssembler, $Readme)) {
-    if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
-        throw "Required build file is missing: $RequiredFile"
-    }
-}
-& $Python -c "import nuitka"
-if ($LASTEXITCODE -ne 0) {
-    throw "Nuitka is missing from backend/.venv. Install backend/requirements-dev.txt first."
-}
-$Npm = (Get-Command npm.cmd -ErrorAction Stop).Source
-
+# 先核对版本与交付目录，避免完整编译后才发现不能覆盖发行文件。
+if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Required build file is missing: $Python" }
 # Keep one version source so the EXE and release manifest cannot disagree.
 $SourceVersionOutput = & $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from app.version import APP_VERSION; print(APP_VERSION)" $BackendDir
 if ($LASTEXITCODE -ne 0) { throw "Cannot read backend/app/version.py." }
@@ -47,6 +37,10 @@ elseif ($Version -ne $SourceVersion) {
 }
 Assert-SemVer $Version "Version"
 Assert-SemVer $EnvironmentVersion "EnvironmentVersion"
+$DeliveryRoot = Join-Path $ProjectRoot "deliverables\$Version"
+if (Test-Path -LiteralPath $DeliveryRoot) {
+    throw "Delivery output already exists: $DeliveryRoot. Update backend/app/version.py before building a new release; existing releases are never overwritten."
+}
 $CloakBrowserDir = ""
 if (-not $ProgramOnly) {
     if (-not $MyCrawlerComponentPath) {
@@ -64,7 +58,8 @@ if (-not $ProgramOnly) {
             (Test-Path -LiteralPath (Join-Path $_.FullName "MyCrawler.exe") -PathType Leaf)
         })
         if ($MyCrawlerCandidates.Count -gt 1) {
-            throw "Multiple valid MyCrawler components were found. Specify -MyCrawlerComponentPath explicitly."
+            $Paths = ($MyCrawlerCandidates | ForEach-Object { "  $($_.FullName)" }) -join "`n"
+            throw "Multiple valid MyCrawler components were found:`n$Paths`nChoose one directory and pass -MyCrawlerComponentPath '<chosen directory>' to script/build_package.ps1. No component was selected automatically."
         }
         if ($MyCrawlerCandidates.Count -eq 1) { $MyCrawlerComponentPath = $MyCrawlerCandidates[0].FullName }
     }
@@ -118,7 +113,8 @@ if ($IncludeVoice) {
             (Test-Path -LiteralPath (Join-Path $_.FullName "VoxCPM_Runtime.exe") -PathType Leaf)
         })
         if ($VoxCandidates.Count -gt 1) {
-            throw "Multiple valid VoxCPM2 components were found. Specify -VoxComponentPath explicitly."
+            $Paths = ($VoxCandidates | ForEach-Object { "  $($_.FullName)" }) -join "`n"
+            throw "Multiple valid VoxCPM2 components were found:`n$Paths`nChoose one directory and pass -VoxComponentPath '<chosen directory>' with -IncludeVoice. No component was selected automatically."
         }
         if ($VoxCandidates.Count -eq 1) { $VoxComponentPath = $VoxCandidates[0].FullName }
     }
@@ -145,14 +141,25 @@ if ($IncludeVoice) {
     }
 }
 
+# Validate local dependencies only; this script never installs missing packages implicitly.
+foreach ($RequiredFile in @($AppLauncher, $StableLauncher, $AppIcon, $DeliveryAssembler, $Readme)) {
+    if (-not (Test-Path -LiteralPath $RequiredFile -PathType Leaf)) {
+        throw "Required build file is missing: $RequiredFile"
+    }
+}
+& $Python -c "import nuitka"
+if ($LASTEXITCODE -ne 0) {
+    throw "Nuitka is missing from backend/.venv. Install backend/requirements-dev.txt first."
+}
+$Npm = (Get-Command npm.cmd -ErrorAction Stop).Source
+
 # Keep timestamped intermediate files; customers only receive deliverables/<version>.
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $BuildRoot = Join-Path $ProjectRoot "output\build_${Version}_$Stamp"
 $BuildDist = Join-Path $BuildRoot "dist"
 $StagingRoot = Join-Path $ProjectRoot "output\stage_$Stamp"
-$DeliveryRoot = Join-Path $ProjectRoot "deliverables\$Version"
-if ((Test-Path -LiteralPath $BuildRoot) -or (Test-Path -LiteralPath $DeliveryRoot)) {
-    throw "Build or delivery output already exists. Increase the product version before rebuilding."
+if (Test-Path -LiteralPath $BuildRoot) {
+    throw "Build output already exists: $BuildRoot. Wait until the existing build has finished before retrying."
 }
 New-Item -ItemType Directory -Path $BuildDist | Out-Null
 

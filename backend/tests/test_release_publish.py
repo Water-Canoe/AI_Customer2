@@ -121,6 +121,7 @@ def test_prepare_requires_explicit_artifact_and_records_source(tmp_path: Path) -
     env = prepare_publisher(tmp_path)
     result, calls = run_publish(env, {})
     assert result.returncode != 0
+    assert "Specify -Version" in result.stdout and "-ZipPath" in result.stdout
     assert not calls
     result, calls = run_publish(env, {"ZipPath": str(env["archive"]), "PrivateKeyPath": str(env["private"]), "PublicKeyPath": str(env["public"])})
     assert result.returncode == 0, result.stdout + result.stderr
@@ -148,6 +149,17 @@ def test_version_selects_only_its_single_artifact(tmp_path: Path) -> None:
     shutil.copyfile(env["archive"], delivery / "AI_Customer_Program_ambiguous.zip")
     result, calls = run_publish(env, args)
     assert result.returncode != 0 and "exactly one" in result.stdout
+    assert not calls
+
+
+def test_missing_delivery_and_status_version_fail_before_network(tmp_path: Path) -> None:
+    env = prepare_publisher(tmp_path)
+    result, calls = run_publish(env, {"Version": "1.2.99", "PublicKeyPath": str(env["public"])})
+    assert result.returncode != 0 and "No delivery directory" in result.stdout
+    assert str(env["project"] / "deliverables" / "1.2.99") in result.stdout
+    assert not calls
+    result, calls = run_publish(env, {"Action": "status"})
+    assert result.returncode != 0 and "Specify -Version for status" in result.stdout
     assert not calls
 
 

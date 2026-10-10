@@ -144,6 +144,12 @@ if ($Enable) {
     $RequestedState.Enabled = $true
     $RequestedState.RolloutPercent = $RolloutPercent
 }
+# 发布必须明确选择版本或文件；状态管理也必须明确版本。
+if ($Action -eq "publish" -and -not $Version -and -not $ZipPath) {
+    throw "Specify -Version (for example 1.3.0) or -ZipPath '<program ZIP>'. Run script/build_package.ps1 first if the package has not been built."
+}
+if ($Action -ne "publish" -and -not $Version) { throw "Specify -Version for $Action." }
+if ($Version) { Assert-SemVer $Version "Version" }
 $IsPrepareOnly = $Action -eq "publish" -and ([bool]$PrepareOnly -or (-not $Upload -and -not $Enable -and -not $ResumeManifest))
 
 if (-not $IsPrepareOnly) {
@@ -176,8 +182,11 @@ if ($LASTEXITCODE -ne 0) { throw "cryptography is missing from backend/.venv" }
 if (-not $ZipPath) {
     Assert-SemVer $Version "Version"
     $VersionDir = Join-Path $ProjectRoot "deliverables\$Version"
+    if (-not (Test-Path -LiteralPath $VersionDir -PathType Container)) {
+        throw "No delivery directory exists for Version $Version`: $VersionDir. Build this version first or pass -ZipPath explicitly."
+    }
     $Candidates = @(Get-ChildItem -LiteralPath $VersionDir -File -Filter "AI_Customer_Program_*.zip")
-    if ($Candidates.Count -ne 1) { throw "Specify ZipPath, or Version with exactly one completed program ZIP" }
+    if ($Candidates.Count -ne 1) { throw "Expected exactly one completed program ZIP in $VersionDir; found $($Candidates.Count). Pass -ZipPath explicitly." }
     $ZipPath = $Candidates[0].FullName
 }
 $ArchivePath = (Resolve-Path -LiteralPath $ZipPath).Path

@@ -201,7 +201,7 @@ if (-not $global:Launched) { throw 'Frontend was not launched.' }
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_build_failure_restores_pythonpath_and_working_directory(tmp_path: Path) -> None:
+def prepare_builder(tmp_path: Path) -> tuple[Path, Path]:
     project = tmp_path / "project space's"
     (project / "frontend").mkdir(parents=True)
     (project / "script").mkdir()
@@ -211,6 +211,11 @@ def test_build_failure_restores_pythonpath_and_working_directory(tmp_path: Path)
     content = (ROOT / "script" / "build_package.ps1").read_text(encoding="utf-8-sig")
     content = content.replace('Join-Path $BackendDir ".venv\\Scripts\\python.exe"', "'Mock-Python'")
     builder.write_text(content, encoding="utf-8-sig")
+    return project, builder
+
+
+def test_build_failure_restores_pythonpath_and_working_directory(tmp_path: Path) -> None:
+    _, builder = prepare_builder(tmp_path)
     body = r'''
 function Test-Path { param($Path, $LiteralPath, $PathType); return $PathType -eq 'Leaf' }
 function Get-Command { param($Name, $ErrorAction); return @{ Source = 'Mock-Npm' } }
@@ -228,3 +233,75 @@ if ($env:PYTHONPATH -ne 'original-python-path' -or (Get-Location).Path -ne $orig
 '''.replace("BUILD_SCRIPT", str(builder).replace("'", "''"))
     result = run_script_check(tmp_path, body)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_existing_delivery_fails_before_compiler_or_component_checks(tmp_path: Path) -> None:
+    project, builder = prepare_builder(tmp_path)
+    delivery = project / "deliverables" / "9.9.9"
+    delivery.mkdir(parents=True)
+    body = r'''
+function Test-Path {
+    param($LiteralPath, $PathType)
+    if ($LiteralPath -eq 'Mock-Python') { return $true }
+    Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+}
+function Mock-Python {
+    if ($args[0] -ne '-c' -or -not $args[1].Contains('print(APP_VERSION)')) { throw 'UNEXPECTED_COMPILER_CHECK' }
+    $global:LASTEXITCODE = 0
+    return '9.9.9'
+}
+try { & 'BUILD_SCRIPT'; throw 'UNEXPECTED_SUCCESS' }
+catch { if ($_.Exception.Message -notmatch 'Delivery output already exists') { throw }; Write-Output $_.Exception.Message }
+'''.replace("BUILD_SCRIPT", str(builder).replace("'", "''"))
+    result = run_script_check(tmp_path, body)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert str(delivery) in result.stdout
+    assert not (project / "output").exists()
+
+
+@pytest.mark.parametrize("component", ["mycrawler", "voxcpm2"])
+def test_ambiguous_components_list_candidates_before_compilation(tmp_path: Path, component: str) -> None:
+    project, builder = prepare_builder(tmp_path)
+    candidates = []
+    for kind in ("mycrawler", "voxcpm2"):
+        for index in range(2 if kind == component else 1):
+            directory = project / "dist" / "components" / f"{kind}-{index}"
+            directory.mkdir(parents=True)
+            entrypoint = "MyCrawler.exe" if kind == "mycrawler" else "VoxCPM_Runtime.exe"
+            (directory / entrypoint).write_bytes(b"fixture")
+            info = {"component": kind, "compiler": "nuitka", "entrypoint": entrypoint,
+                    "source_revision": "a" * 40, "source_dirty": False, "entrypoint_sha256": "b" * 64}
+            if kind == "voxcpm2":
+                (directory / "r").mkdir()
+                (directory / "r" / "ai_customer_voxcpm_native.pyd").write_bytes(b"fixture")
+                info.update(runtime_packager="pyinstaller", native_module="r/ai_customer_voxcpm_native.pyd",
+                            native_module_sha256="c" * 64)
+            (directory / "component-info.json").write_text(json.dumps(info))
+            if kind == component:
+                candidates.append(directory)
+    browser = project / "browser.exe"
+    browser.write_bytes(b"fixture")
+    (project / "data" / "voice_models" / "VoxCPM2").mkdir(parents=True)
+    body = r'''
+function Test-Path {
+    param($LiteralPath, $PathType)
+    if ($LiteralPath -eq 'Mock-Python') { return $true }
+    Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+}
+function Mock-Python {
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq '-c' -and $args[1].Contains('print(APP_VERSION)')) { return '9.9.9' }
+    if ($args[0] -eq '-c' -and $args[1].Contains('binary_info')) { return 'BROWSER_PATH' }
+    throw 'UNEXPECTED_COMPILER_CHECK'
+}
+try { & 'BUILD_SCRIPT' BUILD_FLAGS; throw 'UNEXPECTED_SUCCESS' }
+catch { if ($_.Exception.Message -notmatch 'Multiple valid') { throw }; Write-Output $_.Exception.Message }
+'''.replace("BUILD_SCRIPT", str(builder).replace("'", "''")).replace(
+        "BROWSER_PATH", str(browser).replace("'", "''")
+    ).replace("BUILD_FLAGS", "-IncludeVoice" if component == "voxcpm2" else "")
+    result = run_script_check(tmp_path, body)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert all(str(directory) in result.stdout for directory in candidates)
+    flag = "-MyCrawlerComponentPath" if component == "mycrawler" else "-VoxComponentPath"
+    assert flag in result.stdout
+    assert not (project / "output").exists()
