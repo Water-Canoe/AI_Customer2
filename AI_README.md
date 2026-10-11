@@ -1,5 +1,16 @@
 # AI获客系统
 
+## 通用 Sealos 后端接入（2026-10-11）
+
+- 新独立工程在 `D:\Dev\Projects\Web_Project\Mini_Backend`，模块划分为产品配置、授权、更新和轻量 JSON 数据；代码放入新 DevBox `my-mini-backend` 的 `/home/devbox/project`。沿用 Node.js 22、Express、MongoDB 和 MinIO，不将本地业务数据库或浏览器身份上传云端。
+- 授权、桌面入口更新器、语音组件更新及发行脚本共用 `product_config.py` 的产品地址，唯一根地址覆盖为 `MINI_BACKEND_URL`，默认 `https://puxaxxvlzefd.sealosbja.site`，产品前缀 `/api/v1/products/ai-customer`。删除旧授权/更新专用环境变量和 XOR 地址隐藏。
+- 租约须包含签名覆盖的 `productId=ai-customer`；公钥、设备码、权益和 72 小时离线/6 小时续租规则保持原有设计。首切换需联网重新签发，没有旧缓存离线兼容；续租后按本次请求权益重新判断。
+- 发行脚本移除 `ServerBaseUrl`、`SshKeyPath` 与从旧 DevBox 自动读取令牌的逻辑；操作者显式提供 `MINI_BACKEND_ADMIN_TOKEN`，状态操作不读取签名私钥。离线准备清单的对象目录同步改为新产品前缀，真实上传仍使用后端签发的独立对象路径。
+- 本地授权管理工具已改新产品地址；原先本地期限往返正确，无需再重写。新云端支持其 `Origin:null` 预检，并提供 `/admin` 共用管理页；管理令牌仍只保存在页面内存。
+- 新 DevBox 没有数据卷，用户选择新的独立 MongoDB，连接配置尚待提供。没有改用旧库、导入旧授权、启动正式服务或发布客户端。首次切换前需要建立新库授权、核对正式签名密钥和私有对象存储，完成真实联调，不能直接删除旧服务。
+- 共用后端 API 已就绪，但当前客户端尚未接入轻量 JSON 同步；新增 API 不代表业务数据已云端同步。规范见 [两项目统一契约](docs/AI_Customer_Blind_Watermark_统一规范.md) 和 [Sealos 接口](docs/deployment/sealos接口文档.md)。
+- 验证：完整后端 **792 项通过、8 项按既有条件跳过**；12 个 PowerShell 脚本通过语法解析，改动脚本保持 UTF-8 BOM；两份管理页内嵌 JavaScript 通过语法检查，管理页既有定向回归通过。新后端 Windows/Linux 各 11 项契约测试；真实服务器 Node 签名逻辑生成的隔离租约由两产品 Python 客户端验签成功。实际数据库事务、公网收发、首装/升级和浏览器体验未验收。
+
 ## 两项目统一方案落地（2026-10-10）
 
 - 双方更新时机仍有差异：本项目检查／下载期间保持业务运行；Blind_Watermark 本轮仍由退出后的启动器下载，未实现业务运行时后台下载。统一规范明确记录实际状态，不为流程形式一致扩大本轮代码修改。

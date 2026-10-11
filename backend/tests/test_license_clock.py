@@ -43,15 +43,41 @@ def licensing(tmp_path, monkeypatch):
         database.set_setting(conn, 'device_code', device)
         database.set_setting(conn, 'license_code', 'LIC-TEST')
 
-    def remote(issued=None):
+    def remote(issued=None, *, product_id='ai-customer', entitlements=None):
         issued = issued or clock.wall
-        text = json.dumps({'version': 1, 'licenseId': 'test', 'deviceId': device,
-                           'entitlements': ['lead', 'traffic', 'content'], 'issuedAt': issued.isoformat(),
-                           'expiresAt': (issued + timedelta(hours=72)).isoformat()}, separators=(',', ':'))
+        payload = {'version': 1, 'licenseId': 'test', 'deviceId': device,
+                   'entitlements': entitlements if entitlements is not None else ['lead', 'traffic', 'content'],
+                   'issuedAt': issued.isoformat(), 'expiresAt': (issued + timedelta(hours=72)).isoformat()}
+        if product_id is not None:
+            payload['productId'] = product_id
+        text = json.dumps(payload, separators=(',', ':'))
         return {'data': {'permission': True, 'leaseText': text,
                          'signature': base64.b64encode(key.sign(text.encode())).decode()}}
 
     return clock, remote, device
+
+
+@pytest.mark.parametrize('product_id', [None, 'blind-watermark'])
+def test_signed_lease_requires_current_product(licensing, product_id):
+    # 即使签名有效，也拒绝别的产品或缺少产品身份的租约。
+    _, remote, device = licensing
+    with pytest.raises(ValueError, match='当前产品'):
+        license_service._accept_remote(None, remote(product_id=product_id), device)
+    assert not license_service.license_overview()['authorized']
+
+
+@pytest.mark.parametrize('cached', [True, False])
+def test_renewal_cannot_grant_removed_entitlement(licensing, monkeypatch, cached):
+    # 续租返回 content 权益时，本次 lead 操作仍必须被拒绝。
+    clock, remote, device = licensing
+    if cached:
+        license_service._accept_remote(None, remote(), device)
+        clock.wall += timedelta(hours=7)
+        clock.tick += 7 * 3600
+    monkeypatch.setattr(license_service, '_request_license', lambda *_: remote(entitlements=['content']))
+    with pytest.raises(ValueError, match='未包含'):
+        license_service.ensure_authorized_for('lead')
+    assert license_service.ensure_authorized_for('content')['authorized']
 
 
 def test_normal_offline_lease_retains_72_hour_limit(licensing):

@@ -1,8 +1,20 @@
 # AI_Customer 与 Blind_Watermark 共性能力统一规范
 
-核对日期：2026-10-10。适用于本轮双方已确认的源码优化；不代表已经构建、发布或真实升级验收。
+核对日期：2026-10-11。适用于双方已确认的源码优化；不代表已经构建、发布或真实升级验收。
 
 本规范取代 2026-07-19 的旧方案。两项目各自保留仓库、业务模型和测试，不在运行时导入对方工程，不新建共享框架。双方直接用户请求已授权实施，并确认 Core 单包首装；当前测试数据可重建，但更新器不会因此自动清库。
+
+## 通用后端接入（2026-10-11）
+
+- 两项目共用 `MINI_BACKEND_URL`，默认 `https://puxaxxvlzefd.sealosbja.site`；授权、更新、入口更新器和发行脚本分别派生 `/api/v1/products/ai-customer`、`/api/v1/products/blind-watermark`，移除旧分散地址覆盖和 SSH 读取旧管理令牌。
+- 管理凭据统一为显式 `MINI_BACKEND_ADMIN_TOKEN`；产品签名密钥、授权码 pepper、实际设备码、权益、存储目录及数据集合仍隔离，不因接口统一而互认授权。
+- 租约保留 `version=1` 和原文 Ed25519 签名，增加必需 `productId`；客户端必须先验原文，再检查产品、设备、权益与时钟。首次切换需要联网重新签发，不兼容旧缓存，也不修改设备前缀。
+- 授权管理查询统一返回数组；`GET /admin/licenses?search=` 在数据库先筛选再取最多 200 条。本地 HTML 的 `Origin:null` 预检得到支持，Bearer 认证仍必需；到期时间在 UTC 与本地输入控件之间正确往返。
+- 云端实际验签更新清单；两项目各自签名 JSON 与 BW 的 `data.program` 外壳保持现有格式。更新签名私钥不上传后端，登记默认停用、灰度 0%，同版本不可换文件。
+- 新服务使用新的独立 MongoDB，配置待用户提供。尚未迁移旧授权记录、启用公网服务或发布客户端切换包；保留签名密钥不代表旧授权码自动存在于新库。
+- BW 根启动器的新地址仍需人工 Core 交付；AI Program 的入口替换能力保持原有设计。完成数据库、密钥、对象存储及实际更新联调前，不能移除旧服务。
+- BW 本轮修复了续租后指定权益已撤销却仍放行的问题；AI 已按指定权益检查，本轮补相同回归。新云端模块与完整接口以独立 `Mini_Backend/AI_README.md` 为准。
+- 本轮证据：AI_Customer 完整后端 792 项通过、8 项既有跳过；BW 对方报告完整后端 195 项通过；新云端 Windows/Linux 各 11 项契约测试。正式授权密钥匹配双方公钥，服务器 Node.js 原文签名生成的隔离租约由两个真实 Python 客户端验签成功；未在线激活或写库。
 
 ## 1. 技术栈与架构
 
@@ -72,7 +84,7 @@ Blind_Watermark 本轮仍在队列空闲后退出业务进程，由稳定启动�
 
 健康接口共同返回 status、product、packaged、程序版本、实际环境、实际结构、实际更新器及 process_id。开发环境的 environment_version 为空。安装器核对候选真实进程和清单要求全部匹配，不能只接受 HTTP 200 或代码中的版本常量。
 
-云端更新请求保留 licenseCode、deviceId、currentVersion、updaterVersion 等各自既有字段；Blind_Watermark 的 environmentVersion 请求也保留。授权响应的 leaseText、signature 及租约内 deviceId、issuedAt、expiresAt、entitlements 保持原格式，必须先验签原文。
+云端更新请求保留 licenseCode、deviceId、currentVersion、updaterVersion 等各自既有字段；Blind_Watermark 的 environmentVersion 请求也保留。授权响应的 leaseText、signature 及租约内 deviceId、issuedAt、expiresAt、entitlements 保持原格式，必须先验签原文；新通用后端租约增加必需 productId，不接受缺少产品身份的旧离线缓存。
 
 | 参数 | 格式／单位 |
 | --- | --- |

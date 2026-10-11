@@ -31,6 +31,10 @@ def prepare_publisher(tmp_path: Path) -> dict[str, Path]:
     (script / "publish_release.ps1").write_text(publisher, encoding="utf-8-sig")
     shutil.copyfile(ROOT / "script" / "internal" / "release_signing.py", internal / "release_signing.py")
     shutil.copyfile(ROOT / "script" / "internal" / "_version.ps1", internal / "_version.ps1")
+    app = project / "backend" / "app"
+    app.mkdir(parents=True)
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    shutil.copyfile(ROOT / "backend" / "app" / "product_config.py", app / "product_config.py")
     archive = project / "program.zip"
     archive.write_bytes(b"verified program fixture")
     metadata = {
@@ -109,7 +113,8 @@ if ($Failed) { exit 1 }
     result = subprocess.run(
         [str(POWERSHELL), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-        env={**os.environ, "PYTHONUTF8": "1", "AI_CUSTOMER_ADMIN_TOKEN": admin_token,
+        env={**os.environ, "PYTHONUTF8": "1", "MINI_BACKEND_ADMIN_TOKEN": admin_token,
+             "MINI_BACKEND_URL": "https://backend.invalid",
              "MOCK_STATE": str(env["state"]), "MOCK_ARGS": str(arguments), "MOCK_CALLS": str(calls_path),
              "MOCK_PUBLISHER": str(env["project"] / "script" / "publish_release.ps1"), "MOCK_FAILURE": failure},
     )
@@ -189,16 +194,16 @@ def test_status_can_disable_without_package_or_key_and_checks_readback(tmp_path:
     result, calls = run_publish(env, {"Action": "status", "Version": "1.2.99"})
     assert result.returncode == 0
     assert [call["method"] for call in calls] == ["GET"]
+    assert calls[0]["path"] == "/api/v1/products/ai-customer/update/admin/releases"
     result, _ = run_publish(env, {"Action": "set-state", "Version": "1.2.99", "Notes": "changed"}, failure="readback")
     assert result.returncode != 0 and "read-back differs" in result.stdout
 
 
-def test_invalid_archive_fails_before_ssh_or_remote_request(tmp_path: Path) -> None:
+def test_invalid_archive_fails_before_token_or_remote_request(tmp_path: Path) -> None:
     env = prepare_publisher(tmp_path)
     (env["project"] / "script" / "internal" / "verify_program_zip.py").write_text("raise SystemExit(1)\n")
     result, calls = run_publish(
-        env, {"ZipPath": str(env["archive"]), "PublicKeyPath": str(env["public"]), "Upload": True,
-              "SshKeyPath": str(tmp_path / "missing-ssh-key")}, admin_token="",
+        env, {"ZipPath": str(env["archive"]), "PublicKeyPath": str(env["public"]), "Upload": True}, admin_token="",
     )
     assert result.returncode != 0
     assert "Program ZIP verification failed" in result.stdout
@@ -251,3 +256,10 @@ def test_existing_version_refuses_different_package(tmp_path: Path) -> None:
     result, calls = run_publish(env, {"ZipPath": str(env["archive"]), "PublicKeyPath": str(env["public"]), "Enable": True})
     assert result.returncode != 0 and "differs" in result.stdout
     assert [call["method"] for call in calls] == ["GET"]
+
+
+def test_missing_shared_admin_token_stops_before_remote_request(tmp_path: Path) -> None:
+    env = prepare_publisher(tmp_path)
+    result, calls = run_publish(env, {"Action": "status", "Version": "1.2.99"}, admin_token="")
+    assert result.returncode != 0 and "MINI_BACKEND_ADMIN_TOKEN" in result.stdout
+    assert not calls

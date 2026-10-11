@@ -8,8 +8,6 @@ param(
     [string]$ResumeManifest = "",
     [string]$PrivateKeyPath = $env:AI_CUSTOMER_UPDATE_PRIVATE_KEY,
     [string]$PublicKeyPath = "",
-    [string]$SshKeyPath = "",
-    [string]$ServerBaseUrl = "https://tfwqsfaegbdj.sealosbja.site/ai-customer",
     [ValidateSet("stable", "beta")]
     [string]$Channel = "stable",
     [ValidateSet("windows")]
@@ -30,6 +28,7 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "internal\_version.ps1")
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$Python = Join-Path $ProjectRoot "backend\.venv\Scripts\python.exe"
 $RequestedState = @{}
 foreach ($Field in @("Enabled", "Mandatory", "RolloutPercent", "Notes")) {
     if ($PSBoundParameters.ContainsKey($Field)) { $RequestedState[$Field] = $PSBoundParameters[$Field] }
@@ -39,15 +38,10 @@ function Write-Utf8NoBom([string]$Path, [string]$Content) {
     [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-function Get-SealosAdminToken([string]$KeyPath) {
-    $Existing = [string]$env:AI_CUSTOMER_ADMIN_TOKEN
-    if ($Existing.Length -ge 32) { return $Existing }
-    if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) { throw "Sealos SSH key not found: $KeyPath" }
-    if (-not (Get-Command ssh.exe -ErrorAction SilentlyContinue)) { throw "ssh.exe is required to read the Sealos management token" }
-    $TokenLines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_ADMIN_TOKEN=//p' /home/devbox/project/.env")
-    if ($LASTEXITCODE -ne 0) { throw "Failed to read the management token through Sealos SSH" }
-    $Token = ($TokenLines -join "").Trim()
-    if ($Token.Length -lt 32) { throw "The management token is missing or too short" }
+function Get-AdminToken {
+    # 管理令牌由操作者明确提供，不通过 SSH 从另一个部署读取。
+    $Token = [string]$env:MINI_BACKEND_ADMIN_TOKEN
+    if ($Token.Length -lt 32) { throw "Set MINI_BACKEND_ADMIN_TOKEN to the new backend management token (at least 32 characters)." }
     return $Token
 }
 
@@ -153,12 +147,15 @@ if ($Version) { Assert-SemVer $Version "Version" }
 $IsPrepareOnly = $Action -eq "publish" -and ([bool]$PrepareOnly -or (-not $Upload -and -not $Enable -and -not $ResumeManifest))
 
 if (-not $IsPrepareOnly) {
+    # 从客户端配置读取产品地址，授权、更新及组件发布共用一个根地址。
+    if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) { throw "Backend virtual environment not found: $Python" }
+    $ServerBaseUrl = (& $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from app.product_config import license_endpoint; print(license_endpoint())" (Join-Path $ProjectRoot "backend"))
+    if ($LASTEXITCODE -ne 0 -or -not $ServerBaseUrl) { throw "Failed to resolve the shared backend address" }
     if (([Uri]$ServerBaseUrl).Scheme -ne "https") { throw "ServerBaseUrl must use HTTPS" }
-    if (-not $SshKeyPath) { $SshKeyPath = Join-Path $HOME ".ssh\sealos\bja.sealos.run_ns-0lgzvp7r_medician-ai-back" }
 }
 if ($Action -ne "publish") {
     Assert-SemVer $Version "Version"
-    $AdminToken = Get-SealosAdminToken $SshKeyPath
+    $AdminToken = Get-AdminToken
     $Registered = Find-Release @(Get-Releases)
     if (-not $Registered) { throw "No registered release matches the requested identity" }
     if ($Action -eq "set-state") {
@@ -169,7 +166,6 @@ if ($Action -ne "publish") {
     return
 }
 
-$Python = Join-Path $ProjectRoot "backend\.venv\Scripts\python.exe"
 $SigningTool = Join-Path $ProjectRoot "script\internal\release_signing.py"
 $ProgramZipVerifier = Join-Path $ProjectRoot "script\internal\verify_program_zip.py"
 foreach ($Tool in @($Python, $SigningTool, $ProgramZipVerifier)) {
@@ -238,7 +234,7 @@ $ResultOutput = Join-Path $PublishDir "publish-result.json"
 
 if (-not $IsPrepareOnly) {
     # 先完成本地包和清单验证，再接触远端管理服务。
-    $AdminToken = Get-SealosAdminToken $SshKeyPath
+    $AdminToken = Get-AdminToken
     $Releases = @(Get-Releases)
     $ExistingRelease = Find-Release $Releases
     if ($ExistingRelease) {
@@ -270,7 +266,7 @@ if (-not $IsPrepareOnly) {
         }
     }
 }
-else { $ObjectKey = "releases/$Version/AI_Customer_${Version}_${Platform}_${Arch}.zip" }
+else { $ObjectKey = "releases/ai-customer/program/$Version/AI_Customer_${Version}_${Platform}_${Arch}.zip" }
 
 if (-not $ResumeManifest) {
     if (-not $PrivateKeyPath) { $PrivateKeyPath = Join-Path $HOME ".ssh\sealos\ai_customer_update_signing_private.pem" }

@@ -4,8 +4,6 @@ param(
     [string]$ComponentPath = "",
     [string]$PrivateKeyPath = $env:AI_CUSTOMER_UPDATE_PRIVATE_KEY,
     [string]$PublicKeyPath = "",
-    [string]$SshKeyPath = "",
-    [string]$ServerBaseUrl = "https://tfwqsfaegbdj.sealosbja.site/ai-customer",
     [string]$MinAppVersion = "1.2.1",
     [string]$Notes = "",
     [switch]$Upload,
@@ -50,15 +48,10 @@ function Find-SingleComponent([string]$RootPath) {
     return $Candidates[0].FullName
 }
 
-function Get-SealosAdminToken([string]$KeyPath) {
-    if ([string]$env:AI_CUSTOMER_ADMIN_TOKEN -and $env:AI_CUSTOMER_ADMIN_TOKEN.Length -ge 32) {
-        return [string]$env:AI_CUSTOMER_ADMIN_TOKEN
-    }
-    if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf)) { throw "Sealos SSH key not found: $KeyPath" }
-    $Lines = @(& ssh.exe -i $KeyPath -p 2233 -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 devbox@bja.sealos.run "sed -n 's/^AI_CUSTOMER_ADMIN_TOKEN=//p' /home/devbox/project/.env")
-    if ($LASTEXITCODE -ne 0) { throw "Failed to read the Sealos update management token" }
-    $Token = ($Lines -join "").Trim()
-    if ($Token.Length -lt 32) { throw "The Sealos update management token is missing or too short" }
+function Get-AdminToken {
+    # 只使用新后端的明确管理凭据，不从旧 DevBox 自动读取。
+    $Token = [string]$env:MINI_BACKEND_ADMIN_TOKEN
+    if ($Token.Length -lt 32) { throw "Set MINI_BACKEND_ADMIN_TOKEN to the new backend management token (at least 32 characters)." }
     return $Token
 }
 
@@ -148,10 +141,12 @@ $PrivateKey = Resolve-Path -LiteralPath $PrivateKeyPath
 if ($PrivateKey.Path.StartsWith($ProjectRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Component signing private key must be stored outside the project repository"
 }
-if (-not $SshKeyPath) { $SshKeyPath = Join-Path $HOME ".ssh\sealos\bja.sealos.run_ns-0lgzvp7r_medician-ai-back" }
 if (-not $IsPrepareOnly) {
+    # 读取与授权客户端相同的产品地址，不单独维护更新 URL。
+    $ServerBaseUrl = (& $Python -c "import sys; sys.path.insert(0, sys.argv[1]); from app.product_config import license_endpoint; print(license_endpoint())" (Join-Path $ProjectRoot "backend"))
+    if ($LASTEXITCODE -ne 0 -or -not $ServerBaseUrl) { throw "Failed to resolve the shared backend address" }
     if (([Uri]$ServerBaseUrl).Scheme -ne "https") { throw "ServerBaseUrl must use HTTPS" }
-    $AdminToken = Get-SealosAdminToken $SshKeyPath
+    $AdminToken = Get-AdminToken
     if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) { throw "curl.exe is required for component upload" }
 }
 
@@ -168,7 +163,7 @@ New-ComponentArchive $Component.AccessPath $ArchivePath @($Component.Files)
 $Archive = Get-Item -LiteralPath $ArchivePath
 $ArchiveHash = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
-$ObjectKey = "components/voxcpm2/$Version/AI_Customer_VoxCPM2_${Version}_windows_x64.zip"
+$ObjectKey = "releases/ai-customer/voxcpm2/$Version/AI_Customer_VoxCPM2_${Version}_windows_x64.zip"
 $SkipUpload = $IsPrepareOnly
 $ExistingComponent = $null
 if (-not $IsPrepareOnly) {

@@ -238,6 +238,8 @@ def _verify_lease(lease_text: Any, signature_text: Any, device_code: str, *, onl
     payload = json.loads(lease_text)
     if not isinstance(payload, dict) or payload.get("version") != 1 or payload.get("deviceId") != device_code:
         raise ValueError("授权租约不适用于当前设备")
+    if payload.get("productId") != product_config.PRODUCT_ID:
+        raise ValueError("授权租约不适用于当前产品，请联网重新校验授权")
     entitlements = payload.get("entitlements")
     if not isinstance(entitlements, list) or not entitlements or any(item not in LICENSE_ENTITLEMENTS for item in entitlements):
         raise ValueError("授权租约权益无效")

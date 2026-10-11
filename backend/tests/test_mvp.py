@@ -6193,6 +6193,7 @@ def test_license_api_generates_readonly_device_code(tmp_path: Path, monkeypatch:
         now = datetime.now(timezone.utc)
         lease_text = json.dumps({
             "version": 1,
+            "productId": "ai-customer",
             "licenseId": "license-test",
             "deviceId": device_code,
             "entitlements": ["traffic"],

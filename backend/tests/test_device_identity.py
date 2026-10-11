@@ -31,6 +31,7 @@ def _signed_lease(device_code: str, monkeypatch: pytest.MonkeyPatch) -> tuple[st
     now = datetime.now(timezone.utc)
     lease_text = json.dumps({
         "version": 1,
+        "productId": "ai-customer",
         "licenseId": "license-test",
         "deviceId": device_code,
         "entitlements": ["lead", "traffic", "content"],
@@ -142,6 +143,7 @@ def test_expired_lease_is_rejected_while_offline(tmp_path: Path, monkeypatch: py
     now = datetime.now(timezone.utc)
     lease_text = json.dumps({
         "version": 1,
+        "productId": "ai-customer",
         "licenseId": "license-expired",
         "deviceId": device_code,
         "entitlements": ["lead"],

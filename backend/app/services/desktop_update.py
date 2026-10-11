@@ -23,7 +23,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from app import device_identity
+from app import device_identity, product_config
 from app.semver import RELEASE_VERSION_PATTERN as VERSION_PATTERN, version_key
 from app.release_paths import safe_release_path as _safe_release_path
 
@@ -37,7 +37,6 @@ PRODUCT_NAME = "AI Customer Desktop"
 UPDATER_VERSION = "1.1.0"
 PREPARED_UPDATE_NAME = "prepared-update.json"
 MAX_EXTRACTED_SIZE = 8 * 1024 * 1024 * 1024
-UPDATE_CHECK_ENDPOINT = "https://tfwqsfaegbdj.sealosbja.site/ai-customer/update/check"
 TRUSTED_PUBLIC_KEY_PEM = b"""-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEA2OKYXun9fsGm/ymzAdD7n9hhzusRKVvPS87myTqkdvg=
 -----END PUBLIC KEY-----
@@ -134,7 +133,7 @@ def _read_update_identity(install_root: Path) -> tuple[str, str] | None:
 
 def _request_update_offer(identity: tuple[str, str], current: str) -> dict[str, Any] | None:
     license_code, device_code = identity
-    endpoint = os.environ.get("AI_CUSTOMER_UPDATE_ENDPOINT", UPDATE_CHECK_ENDPOINT).strip()
+    endpoint = f"{product_config.license_endpoint()}/update/check"
     request_body = json.dumps(
         {
             "licenseCode": license_code,
