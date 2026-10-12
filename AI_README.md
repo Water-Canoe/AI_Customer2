@@ -1,5 +1,12 @@
 # AI获客系统
 
+## 通用后端复用现有数据库（2026-10-12）
+
+- 用户改为复用原有 Sealos MongoDB 实例；通用后端使用独立的 `mini_backend` 业务库。原服务库名、集合及数据未修改，没有使用新建 `my-mini-db`，没有导入旧授权。
+- 新 DevBox 8080 服务已启动，公网健康、两产品目录与管理认证通过。真实 MongoDB 下激活/续租、并发设备名额、撤销/恢复、租约签名、轻量数据写冲突和跨产品拒绝均通过，隔离自检记录已清理。
+- 后续可完整备份/恢复 `mini_backend`，保持记录 ID/绑定、索引和现有 pepper/签名密钥，再改服务端连接配置。公网地址不变时客户端无需因换库发版；数据结构或数据库类型变化需另行设计，不增加通用迁移框架。
+- 当前为 DevBox 常驻进程，未完成 Sealos 镜像发布、自动重启或真实客户端升级验收；数据库搬迁、对象包实际收发未验证。详细流程见独立 `Mini_Backend/AI_README.md` 与 [Sealos 接口](docs/deployment/sealos接口文档.md)。
+
 ## 通用 Sealos 后端接入（2026-10-11）
 
 - 新独立工程在 `D:\Dev\Projects\Web_Project\Mini_Backend`，模块划分为产品配置、授权、更新和轻量 JSON 数据；代码放入新 DevBox `my-mini-backend` 的 `/home/devbox/project`。沿用 Node.js 22、Express、MongoDB 和 MinIO，不将本地业务数据库或浏览器身份上传云端。
