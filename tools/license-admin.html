@@ -392,7 +392,8 @@
   async function revokeDevice(deviceId) {
     const item = selectedLicense()
     if (!item || !confirm(`确认撤销设备？\n\n${deviceId}\n\n撤销后将立即释放一个设备名额。`)) return
-    await request(`/admin/licenses/${item.licenseId}/devices/${encodeURIComponent(deviceId)}/revoke`, { method:'POST' })
+    // 新后端要求写请求携带 JSON 对象，即使设备操作没有额外参数。
+    await request(`/admin/licenses/${item.licenseId}/devices/${encodeURIComponent(deviceId)}/revoke`, { method:'POST', body:{} })
     writeLog(`设备已撤销：${deviceId}`); showToast('设备已撤销，名额已经释放')
     await refresh({ quiet:true }); await loadDevices()
   }
@@ -400,7 +401,7 @@
   async function restoreDevice(deviceId) {
     const item = selectedLicense()
     if (!item || !confirm(`确认恢复设备？\n\n${deviceId}\n\n恢复后将重新占用一个设备名额，客户端需要重新校验授权。`)) return
-    await request(`/admin/licenses/${item.licenseId}/devices/${encodeURIComponent(deviceId)}/restore`, { method:'POST' })
+    await request(`/admin/licenses/${item.licenseId}/devices/${encodeURIComponent(deviceId)}/restore`, { method:'POST', body:{} })
     writeLog(`设备已恢复：${deviceId}`); showToast('设备已恢复，请让客户端重新校验授权')
     await refresh({ quiet:true }); await loadDevices()
   }
