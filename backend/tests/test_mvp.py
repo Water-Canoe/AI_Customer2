@@ -5280,6 +5280,36 @@ def test_customer_intent_analysis_marks_non_customer(tmp_path: Path, monkeypatch
     assert len(lead_rows) == 1
 
 
+@pytest.mark.parametrize("target_type", ["competitor", "lead", "content"])
+def test_ai_analysis_request_limits_tokens_without_changing_prompts(monkeypatch: pytest.MonkeyPatch, target_type: str) -> None:
+    from io import BytesIO
+    from app.services import ai_service
+
+    payload = {"icp": {"product": "测试服务"}}
+    system_prompt, user_prompt = ai_service.build_ai_messages(target_type, payload)
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        # 拦截真实请求边界，核对参数而不消耗模型额度。
+        captured.update(json.loads(request.data))
+        return BytesIO(json.dumps({"choices": [{"message": {"content": '{"ok":true}'}}]}).encode("utf-8"))
+
+    monkeypatch.setattr(ai_service.urllib.request, "urlopen", fake_urlopen)
+    result = ai_service.call_openai_compatible("https://example.test", "test-key", "test-model", target_type, payload)
+
+    assert result == '{"ok":true}'
+    assert captured["thinking"] == {"type": "disabled"}
+    assert captured["max_tokens"] == 1024
+    assert captured["temperature"] == 0.2
+    assert captured["response_format"] == {"type": "json_object"}
+    assert captured["model"] == "test-model"
+    assert captured["messages"] == [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    assert not {"top_p", "top_k", "reasoning_effort"}.intersection(captured)
+
+
 def test_lead_ai_prompt_treats_competitor_comment_price_question_as_intent(tmp_path: Path) -> None:
     prepare_project(tmp_path)
     from app import database

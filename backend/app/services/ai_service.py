@@ -1045,7 +1045,11 @@ def call_openai_compatible(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        # 筛选只需结构化结论，显式关闭思考并限制输出消耗。
+        "thinking": {"type": "disabled"},
+        "max_tokens": 1024,
         "temperature": 0.2,
+        "response_format": {"type": "json_object"},
     }
     request = urllib.request.Request(
         endpoint,
