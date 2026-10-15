@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import threading
 from types import ModuleType
@@ -85,6 +86,19 @@ def test_xhs_uses_same_inbox_storage_status_and_platform_ownership(inbox, monkey
     assert len(message_inbox.list_messages(xhs_account, conversation['id'])['messages']) == 2
     with database.connect() as conn:
         assert conn.execute('SELECT follow_status FROM lead_user_accounts WHERE id=?', (lead,)).fetchone()[0] == '已回复'
+
+
+@pytest.mark.parametrize('original', ['', 'not-json'])
+def test_unparsed_message_preserves_original_in_local_history(inbox, original):
+    account, _ = inbox
+    account_id = account('异常内容测试')
+    event = _event('unparsed-content', '[文本消息暂无法解析，请在抖音查看]')
+    event['raw_content'] = {'unparsed_content': original}
+    message_inbox.record_received(account_id, event)
+    conversation = message_inbox.list_conversations(account_id)[0]
+    saved = message_inbox.list_messages(account_id, conversation['id'])['messages'][0]
+    assert saved['content'] == event['content']
+    assert json.loads(saved['raw_content']) == {'unparsed_content': original}
 
 
 def test_received_deduplication_pagination_and_account_isolation(inbox):

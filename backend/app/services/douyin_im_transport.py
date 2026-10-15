@@ -114,11 +114,16 @@ def _decode_message(frame_bytes: bytes, own_user_id: str) -> dict[str, Any] | No
     sender = _numeric_uid(message.sender)
     if sender not in {own_user_id, peer}:
         raise ValueError('私信发送者与会话参与者不一致')
-    raw_content = json.loads(message.content)
+    try:
+        raw_content = json.loads(message.content)
+    except json.JSONDecodeError:
+        # 正文格式异常只影响这一条消息；保留原文，不能中断后续接收。
+        raw_content = {'unparsed_content': message.content}
     if not isinstance(raw_content, dict):
-        raise ValueError('私信内容格式无法识别')
+        raw_content = {'unparsed_content': message.content}
     if message.message_type == 7:
-        content = str(raw_content.get('text') or '')
+        text = raw_content.get('text')
+        content = text if isinstance(text, str) and text else '[文本消息暂无法解析，请在抖音查看]'
     else:
         content = {5: '[表情]', 17: '[语音]', 27: '[图片]', 8: '[分享视频]'}.get(
             message.message_type, f'[消息类型 {message.message_type}]')

@@ -51,7 +51,8 @@ def test_sdk_tokens_are_account_scoped_and_failure_does_not_use_random_token(mon
         second.close()
 
 
-def _frame(*, sender: int = 22, conversation: str = '0:1:11:22', message_id: int = 99) -> bytes:
+def _frame(*, sender: int = 22, conversation: str = '0:1:11:22', message_id: int = 99,
+           message_type: int = 7, content: str = '{"text":"测试私信"}') -> bytes:
     # 构造已知协议帧验证账号隔离；不访问外网或真实账号。
     response = Response_pb2.Response()
     message = response.body.new_message_notify.message
@@ -59,8 +60,8 @@ def _frame(*, sender: int = 22, conversation: str = '0:1:11:22', message_id: int
     message.conversation_short_id = 44
     message.server_message_id = message_id
     message.sender = sender
-    message.message_type = 7
-    message.content = '{"text":"测试私信"}'
+    message.message_type = message_type
+    message.content = content
     frame = Live_pb2.PushFrame(payloadType='pb', payload=response.SerializeToString())
     return frame.SerializeToString()
 
@@ -78,6 +79,52 @@ def test_decode_preserves_real_id_and_account_direction():
         transport._decode_message(_frame(conversation='0:1:22:33'), '11')
     with pytest.raises(ValueError, match='标识'):
         transport._decode_message(_frame(message_id=0), '11')
+
+
+@pytest.mark.parametrize(('message_type', 'body', 'expected_raw', 'expected_content'), [
+    (7, 'not-json', {'unparsed_content': 'not-json'}, '[文本消息暂无法解析，请在抖音查看]'),
+    (7, '', {'unparsed_content': ''}, '[文本消息暂无法解析，请在抖音查看]'),
+    (7, 'null', {'unparsed_content': 'null'}, '[文本消息暂无法解析，请在抖音查看]'),
+    (7, '[]', {'unparsed_content': '[]'}, '[文本消息暂无法解析，请在抖音查看]'),
+    (7, '{"other":"未识别字段"}', {'other': '未识别字段'}, '[文本消息暂无法解析，请在抖音查看]'),
+    (27, '', {'unparsed_content': ''}, '[图片]'),
+    (999, 'opaque-body', {'unparsed_content': 'opaque-body'}, '[消息类型 999]'),
+])
+def test_unrecognised_message_content_keeps_original_and_visible_notice(message_type, body, expected_raw, expected_content):
+    event = transport._decode_message(_frame(message_type=message_type, content=body), '11')
+    assert event['content'] == expected_content
+    assert event['raw_content'] == expected_raw
+    assert event['platform_message_id'] == '99'
+    assert event['peer_user_id'] == '22'
+
+
+def test_bad_content_does_not_stop_the_next_message(monkeypatch):
+    stop = threading.Event()
+    states, events, sockets = [], [], []
+
+    class FakeSocket:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            sockets.append(self)
+
+        def run_forever(self, **kwargs):
+            self.kwargs['on_open'](self)
+            # 同一连接先收到异常正文，再收到正常客户回复。
+            self.kwargs['on_message'](self, _frame(message_id=98, content='not-json'))
+            self.kwargs['on_message'](self, _frame(message_id=99))
+            stop.set()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(transport.websocket, 'WebSocketApp', FakeSocket)
+    transport.receive_forever(
+        {'cookie_str': 'sessionid=offline-test', 'user_id': '11', 'device_id': '33'},
+        events.append, lambda state, error='': states.append(state), stop)
+    assert len(sockets) == 1
+    assert [event['platform_message_id'] for event in events] == ['98', '99']
+    assert events[-1]['content'] == '测试私信'
+    assert states == ['connecting', 'connected', 'stopped']
 
 
 def test_sending_requires_session_material_and_numeric_peer():
