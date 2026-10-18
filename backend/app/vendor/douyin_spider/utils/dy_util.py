@@ -114,12 +114,9 @@ def generate_msToken(randomlength=107):
 
 
 def generate_dynamic_msToken(ttwid=None, proxies=None, current_token=""):
-    """msToken"""
-    try:
-        from app.vendor.douyin_spider.utils.mstoken import get_mstoken
-        return get_mstoken(ttwid=ttwid, proxies=proxies, current_token=current_token) or ''
-    except Exception:
-        return ''
+    """获取动态令牌；保留网络异常，供发送准备阶段识别安全重试。"""
+    from app.vendor.douyin_spider.utils.mstoken import get_mstoken
+    return get_mstoken(ttwid=ttwid, proxies=proxies, current_token=current_token) or ''
 
 
 _pure_signer = None

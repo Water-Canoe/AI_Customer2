@@ -306,21 +306,19 @@ def get_mstoken(ttwid: str = None, proxies: dict = None, current_token: str = ""
     # 续期时把旧 token 挂在 query 上（实录 reqid=408/920/937 都是这么发的）
     if current_token:
         url += "&msToken=" + urllib.parse.quote(current_token, safe="")
-    try:
-        resp = requests.post(url, data=envelope.encode("utf-8"), headers=headers,
-                             verify=True, timeout=25, proxies=proxies)
-        if cookie_sink is not None:
-            try:
-                cookie_sink(resp.cookies.get_dict())
-            except Exception:
-                pass
-        token = resp.headers.get("x-ms-token", "")
-        if not token:
-            m = re.search(r"msToken=([^;]+)", resp.headers.get("set-cookie", ""))
-            token = m.group(1) if m else ""
-        return token
-    except Exception:
-        return ""
+    # 不吞掉网络异常；请求未携带私信正文，上层可据此安全重试。
+    resp = requests.post(url, data=envelope.encode("utf-8"), headers=headers,
+                         verify=True, timeout=25, proxies=proxies)
+    if cookie_sink is not None:
+        try:
+            cookie_sink(resp.cookies.get_dict())
+        except Exception:
+            pass
+    token = resp.headers.get("x-ms-token", "")
+    if not token:
+        m = re.search(r"msToken=([^;]+)", resp.headers.get("set-cookie", ""))
+        token = m.group(1) if m else ""
+    return token
 
 
 def refresh_common_mstoken(ttwid: str = None, current_token: str = "",

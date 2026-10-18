@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 import time
 import uuid
@@ -15,12 +16,13 @@ from app.services.im_transport import AuthCache, TransportSendUncertain, validat
 from app.vendor.douyin_spider.builder.auth import DouyinAuth
 from app.vendor.douyin_spider.builder.header import HeaderBuilder
 from app.vendor.douyin_spider.builder.params import Params
-from app.vendor.douyin_spider.dy_apis.douyin_api import DouyinAPI, MessageSendUncertain
+from app.vendor.douyin_spider.dy_apis.douyin_api import DouyinAPI, MessagePreparationError, MessageSendUncertain
 from app.vendor.douyin_spider.static import Live_pb2, Response_pb2
 
 
 _send_cache = AuthCache()
 _send_auths = _send_cache.values
+_logger = logging.getLogger(__name__)
 # 项目仅此服务使用 websocket-client；握手不能无限等待网络恢复。
 websocket.setdefaulttimeout(15)
 
@@ -305,43 +307,62 @@ def receive_forever(credentials: dict[str, Any], on_message: Callable[[dict], No
 def send_text(credentials: dict[str, Any], peer_user_id: str, text: str,
               conversation_id: str = '', conversation_short_id: int = 0,
               ticket: str = '', *, account_id: str) -> dict[str, Any]:
-    """在账号发送锁内调用；复用独立认证，结果未知时抛异常且不重发。"""
+    """在账号发送锁内调用；仅提交前的网络故障重试一次，结果未知不重发。"""
     peer_user_id = _numeric_uid(peer_user_id)
     text = str(text).strip()
     if not text:
         raise ValueError('私信内容不能为空')
     if len(text) > 2000:
         raise ValueError('私信文本不能超过2000字')
-    auth = _send_auth(account_id, credentials)
-    try:
-        own_uid = _numeric_uid(auth.get_uid())
-        if own_uid == peer_user_id:
-            raise ValueError('不能向当前账号自己发送私信')
-        if conversation_id:
-            if _conversation_peer(conversation_id, own_uid) != peer_user_id:
-                raise ValueError('私信会话与目标客户不一致')
-        if not conversation_id or not conversation_short_id or not ticket:
-            conversation_id, conversation_short_id, ticket = DouyinAPI.create_conversation(
-                auth, int(peer_user_id))
-            if _conversation_peer(str(conversation_id), own_uid) != peer_user_id:
-                raise ValueError('平台返回的私信会话与目标客户不一致')
-        client_message_id = str(uuid.uuid4())
-        result = {'conversation_id': conversation_id,
-                  'conversation_short_id': int(conversation_short_id),
-                  'ticket': ticket, 'client_message_id': client_message_id,
-                  'platform_message_id': ''}
+    auth = None
+    client_message_id = str(uuid.uuid4())
+    for attempt in range(2):
+        stage = 'account_auth'
         try:
+            auth = _send_auth(account_id, credentials)
+            stage = 'account_identity'
+            own_uid = _numeric_uid(auth.get_uid())
+            if own_uid == peer_user_id:
+                raise ValueError('不能向当前账号自己发送私信')
+            if conversation_id:
+                if _conversation_peer(conversation_id, own_uid) != peer_user_id:
+                    raise ValueError('私信会话与目标客户不一致')
+            stage = 'conversation'
+            if not conversation_id or not conversation_short_id or not ticket:
+                conversation_id, conversation_short_id, ticket = DouyinAPI.create_conversation(
+                    auth, int(peer_user_id))
+                if _conversation_peer(str(conversation_id), own_uid) != peer_user_id:
+                    raise ValueError('平台返回的私信会话与目标客户不一致')
+            result = {'conversation_id': conversation_id,
+                      'conversation_short_id': int(conversation_short_id),
+                      'ticket': ticket, 'client_message_id': client_message_id,
+                      'platform_message_id': ''}
+            stage = 'send_request'
             response = DouyinAPI._send_message_raw(
                 auth, conversation_id, int(conversation_short_id), ticket,
                 7, {'text': text}, client_message_id=client_message_id)
         except MessageSendUncertain:
+            _logger.warning('Douyin IM send uncertain: stage=send_request error_type=MessageSendUncertain retry=False')
             raise TransportSendUncertain({**result, 'status': 'uncertain'}) from None
+        except Exception as exc:
+            # 只有协议明确标记为提交前失败，才允许重试原始发送调用。
+            if stage == 'send_request' and not isinstance(exc, MessagePreparationError):
+                _logger.warning('Douyin IM send uncertain: stage=%s error_type=%s retry=False', stage, type(exc).__name__)
+                raise TransportSendUncertain({**result, 'status': 'uncertain'}) from None
+            failure = exc if isinstance(exc, MessagePreparationError) else MessagePreparationError(stage, exc)
+            retry = attempt == 0 and failure.retryable
+            # 不记录异常原文、凭据、客户标识或消息正文。
+            _logger.warning('Douyin IM preparation failed: stage=%s error_type=%s error_code=%s attempt=%d retry=%s',
+                            failure.stage, failure.error_type, failure.error_code, attempt + 1, retry)
+            if retry:
+                if auth is not None:
+                    auth.close()
+                continue
+            if isinstance(exc, ValueError):
+                raise
+            raise ValueError('私信认证或会话请求失败，请检查并同步当前账号认证') from None
         accepted = response.get('message') == 'OK'
         # 已知Response schema没有send回执ID，空值表示未知，不制造平台ID。
         return {**result, 'status': 'accepted' if accepted else 'failed',
                 'http_status': response.get('http_status'),
                 'error': '' if accepted else '平台拒绝了本次私信发送'}
-    except (ValueError, TransportSendUncertain):
-        raise
-    except Exception:
-        raise ValueError('私信认证或会话请求失败，请检查并同步当前账号认证') from None

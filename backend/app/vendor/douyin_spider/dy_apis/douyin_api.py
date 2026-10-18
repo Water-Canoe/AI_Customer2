@@ -14,6 +14,9 @@ import urllib
 
 import uuid
 
+from curl_cffi import CurlError
+from curl_cffi.const import CurlECode
+
 from app.vendor.douyin_spider.utils import http_client as requests
 
 
@@ -37,6 +40,24 @@ from app.vendor.douyin_spider.utils.dy_util import splice_url, generate_a_bogus,
 
 class MessageSendUncertain(RuntimeError):
     """最终发送请求已开始，但未能可靠解析平台是否接受；禁止自动重发。"""
+
+
+class MessagePreparationError(RuntimeError):
+    """明确发生于消息提交前的异常；只携带可安全记录的阶段和异常类型。"""
+
+    def __init__(self, stage, error):
+        super().__init__('私信发送准备失败')
+        self.stage = stage
+        self.error_type = type(error).__name__
+        self.error_code = int(error.code) if isinstance(error, CurlError) else None
+        self.retryable = isinstance(error, CurlError) and error.code in {
+            CurlECode.COULDNT_RESOLVE_PROXY, CurlECode.COULDNT_RESOLVE_HOST,
+            CurlECode.COULDNT_CONNECT, CurlECode.HTTP2, CurlECode.PARTIAL_FILE,
+            CurlECode.OPERATION_TIMEDOUT, CurlECode.SSL_CONNECT_ERROR,
+            CurlECode.GOT_NOTHING, CurlECode.SEND_ERROR, CurlECode.RECV_ERROR,
+            CurlECode.HTTP2_STREAM,
+        }
+
 
 def check_risk_response(resp):
     """抖音风控拒绝时返回 HTTP 200 + 空 body 或 HTML 挑战页，原因只在响应头里，
@@ -257,29 +278,34 @@ class DouyinAPI:
         identity-security and a_bogus parameters.
         """
         url = 'https://imapi.douyin.com/v1/message/send'
-        headers = HeaderBuilder().build(HeaderType.PROTOBUF)
-        headers.set_header('referer', 'https://www.douyin.com/')
-        headers.with_bd('/v1/message/send', auth)
-        identity_token, identity_device_id = DouyinAPI.get_identity_security_token(auth)
-        requestProto = ProtoBuilder.build_send_message_request(
-            auth, conversation_id, conversation_short_id, ticket,
-            content=content, message_type=message_type, ext=ext,
-            mentioned_users=mentioned_users, client_message_id=client_message_id,
-            identity_security_token=identity_token,
-            identity_security_device_id=identity_device_id,
-        )
-        # Browser order is msToken -> a_bogus -> verifyFp -> fp.  Only the
-        # first field participates in the a_bogus input for this endpoint.
-        params = {'msToken': auth.msToken}
-        params['a_bogus'] = generate_a_bogus(
-            splice_url(params), host='www.douyin.com'
-        )
-        params['verifyFp'] = auth.cookie['s_v_web_id']
-        params['fp'] = auth.cookie['s_v_web_id']
+        stage = 'send_signature'
+        try:
+            headers = HeaderBuilder().build(HeaderType.PROTOBUF)
+            headers.set_header('referer', 'https://www.douyin.com/')
+            headers.with_bd('/v1/message/send', auth)
+            stage = 'identity_token'
+            identity_token, identity_device_id = DouyinAPI.get_identity_security_token(auth)
+            stage = 'message_payload'
+            requestProto = ProtoBuilder.build_send_message_request(
+                auth, conversation_id, conversation_short_id, ticket,
+                content=content, message_type=message_type, ext=ext,
+                mentioned_users=mentioned_users, client_message_id=client_message_id,
+                identity_security_token=identity_token,
+                identity_security_device_id=identity_device_id,
+            )
+            # Browser order is msToken -> a_bogus -> verifyFp -> fp.
+            params = {'msToken': auth.msToken}
+            params['a_bogus'] = generate_a_bogus(splice_url(params), host='www.douyin.com')
+            params['verifyFp'] = auth.cookie['s_v_web_id']
+            params['fp'] = auth.cookie['s_v_web_id']
+            payload = requestProto.SerializeToString()
+        except Exception as exc:
+            raise MessagePreparationError(stage, exc) from None
+        # 此边界之后，请求可能已被平台处理，任何网络异常都不能自动重发。
         try:
             resp = requests.post(url, params=params, headers=headers.get(), verify=True, cookies=auth.cookie,
-                                 data=requestProto.SerializeToString())
-        except Exception as exc:
+                                 data=payload)
+        except Exception:
             # 网络异常可能发生在服务器已经接收之后，不能直接归为发送失败。
             raise MessageSendUncertain('发送结果待确认，请勿直接重发') from None
         if resp.status_code >= 500:

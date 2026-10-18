@@ -387,6 +387,11 @@ class DouyinAuth:
         if self.http is not None:
             self.http.close()
             self.http = None
+        # 下次创建 Session 时必须重新注入 Cookie，不能沿用旧连接的注入标记。
+        self._session_cookie_names.clear()
+        self._session_cookie_scopes.clear()
+        self._session_cookie_values.clear()
+        self._http_seeded = False
 
 
     def ticket_matches_session(self):
