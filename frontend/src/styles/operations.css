@@ -16,6 +16,9 @@
 .operations-row-main { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 7px; text-align: left; background: transparent; border: 0; }
 .operations-row-main strong { font-size: 15px; color: var(--app-text, #1d2939); }
 .operations-row-main span, .operations-row-main small { color: var(--app-muted, #667085); white-space: normal; overflow-wrap: anywhere; }
+/* 采集任务只展示紧凑摘要，完整名称与来源保留在悬停提示中。 */
+.acquisition-task-list .operations-row-main > strong { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acquisition-task-list .operations-row-main > span { display: -webkit-box; width: 100%; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .operations-summary, .operations-advanced, .operations-page details { padding: 14px 0; }
 .operations-page summary, .operations-create-form summary { cursor: pointer; color: var(--app-muted, #667085); font-weight: 600; }
 .operations-page .ai-row-list, .operations-page .task-list, .operations-page .message-table-wrap, .operations-page .traffic-side-scroll { max-height: none; overflow-y: visible; }

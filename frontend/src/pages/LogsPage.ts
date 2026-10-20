@@ -61,7 +61,8 @@ export default defineComponent({
       ]),
       h('div', { class: 'operations-list' }, (props.tasks as Dict[]).length ? (props.tasks as Dict[]).map(task => h('article', { class: 'operations-list-row' }, [
         h('button', { class: 'operations-row-main', onClick: () => openTask(String(task.id)) }, [
-          h('strong', task.name || task.id), h('span', `${platformName(task.platform)} · ${taskModeName(task.mode)} · ${task.keywords || task.creator_id || task.specified_id || ''}`),
+          h('strong', { title: String(task.name || task.id) }, task.name || task.id),
+          h('span', { title: String(task.keywords || task.creator_id || task.specified_id || '') }, `${platformName(task.platform)} · ${taskModeName(task.mode)} · ${task.keywords || task.creator_id || task.specified_id || ''}`),
           h('small', taskOutcomeSummary(task)),
         ]),
         h('span', { class: `status ${task.status}` }, taskStatusLabel(task.status)),
