@@ -63,7 +63,8 @@ def prepare_publisher(tmp_path: Path) -> dict[str, Path]:
     return {"project": project, "archive": archive, "private": private_key, "public": public_key, "state": state}
 
 
-def run_publish(env: dict[str, Path], args: dict[str, object], *, failure: str = "", admin_token: str = "offline-token-" + "x" * 32) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
+def run_publish(env: dict[str, Path], args: dict[str, object], *, failure: str = "", admin_token: str = "offline-token-" + "x" * 32,
+                service_url: str = "https://backend.invalid") -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
     tmp_path = env["project"].parent
     arguments = tmp_path / "arguments.json"
     arguments.write_text(json.dumps(args), encoding="utf-8")
@@ -74,7 +75,7 @@ $global:MockCalls = New-Object System.Collections.Generic.List[object]
 $global:MockRelease = Get-Content -LiteralPath $env:MOCK_STATE -Raw | ConvertFrom-Json
 function Invoke-RestMethod {
     param($Uri, $Method, $Headers, $ContentType, $Body, $TimeoutSec)
-    $global:MockCalls.Add(@{ method = $Method; path = ([Uri]$Uri).AbsolutePath; body = $Body; timeout = $TimeoutSec })
+    $global:MockCalls.Add(@{ method = $Method; url = $Uri; path = ([Uri]$Uri).AbsolutePath; body = $Body; timeout = $TimeoutSec })
     if ($Method -eq "GET") { return [pscustomobject]@{ code = 200; data = @($global:MockRelease | Where-Object { $null -ne $_ }) } }
     $Payload = $Body | ConvertFrom-Json
     if ($Uri.EndsWith("/upload-url")) {
@@ -114,12 +115,19 @@ if ($Failed) { exit 1 }
         [str(POWERSHELL), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         env={**os.environ, "PYTHONUTF8": "1", "MINI_BACKEND_ADMIN_TOKEN": admin_token,
-             "MINI_BACKEND_URL": "https://backend.invalid",
+             "MINI_BACKEND_URL": service_url,
              "MOCK_STATE": str(env["state"]), "MOCK_ARGS": str(arguments), "MOCK_CALLS": str(calls_path),
              "MOCK_PUBLISHER": str(env["project"] / "script" / "publish_release.ps1"), "MOCK_FAILURE": failure},
     )
     calls = json.loads(calls_path.read_text(encoding="utf-8-sig"))
     return result, calls
+
+
+def test_publisher_defaults_to_production_when_run_from_source(tmp_path: Path) -> None:
+    env = prepare_publisher(tmp_path)
+    result, calls = run_publish(env, {"Action": "status", "Version": "1.2.99"}, service_url="")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls[0]["url"] == "https://omgyspevxzji.sealosbja.site/api/v1/products/ai-customer/update/admin/releases"
 
 
 def test_prepare_requires_explicit_artifact_and_records_source(tmp_path: Path) -> None:

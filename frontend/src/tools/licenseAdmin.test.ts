@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const html = readFileSync(resolve(process.cwd(), '../tools/license-admin.html'), 'utf8')
+const productionBase = 'https://omgyspevxzji.sealosbja.site/api/v1/products/ai-customer'
 
 describe('本地授权管理员页面的设备操作契约', () => {
   beforeEach(() => {
@@ -46,7 +47,7 @@ describe('本地授权管理员页面的设备操作契约', () => {
     vi.stubGlobal('fetch', fetch)
     await page[action === 'revoke' ? 'revokeDevice' : 'restoreDevice'](deviceId)
 
-    const base = 'https://puxaxxvlzefd.sealosbja.site/api/v1/products/ai-customer'
+    const base = productionBase
     expect(fetch.mock.calls[0][0]).toBe(`${base}/admin/licenses/${license.licenseId}/devices/${deviceId}/${action}`)
     expect(fetch.mock.calls[0][1]).toMatchObject({
       method: 'POST', body: '{}',
@@ -57,4 +58,17 @@ describe('本地授权管理员页面的设备操作契约', () => {
     ])
     expect(document.getElementById('deviceTotal')?.textContent).toBe('共 1 台')
   })
+
+  it.each([productionBase, 'https://puxaxxvlzefd.sealosbja.site/api/v1/products/ai-customer'])(
+    '默认使用正式地址，允许切换到受信任环境 %s', base => {
+      const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]
+      const page = new Function(script + '\nreturn {normalizeApiBase};')()
+      const input = document.getElementById('apiBase') as HTMLInputElement
+      expect(input.value).toBe(productionBase)
+      input.value = base
+      expect(page.normalizeApiBase()).toBe(base)
+      input.value = 'https://untrusted.invalid/api/v1/products/ai-customer'
+      expect(() => page.normalizeApiBase()).toThrow('受信任')
+    },
+  )
 })

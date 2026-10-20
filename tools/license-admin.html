@@ -55,7 +55,7 @@
   <div class="dialog-head"><div><h2 id="connectionTitle">连接授权服务</h2><p>管理 Token 仅保存在当前页面内存，关闭或刷新页面后会清空。</p></div><button class="close-icon" id="closeConnectionBtn" type="button" aria-label="关闭">×</button></div>
   <div class="dialog-body">
     <div class="grid">
-      <label class="field"><span class="field-title">Sealos API Base</span><input id="apiBase" value="https://puxaxxvlzefd.sealosbja.site/api/v1/products/ai-customer" spellcheck="false"></label>
+      <label class="field"><span class="field-title">授权服务地址（默认正式环境）</span><input id="apiBase" value="https://omgyspevxzji.sealosbja.site/api/v1/products/ai-customer" spellcheck="false"></label>
       <label class="field"><span class="field-title">管理 Token</span><span class="input-with-button"><input id="adminToken" type="password" autocomplete="off" spellcheck="false"><button class="ghost" id="toggleTokenBtn" type="button">显示</button></span></label>
     </div>
     <div class="dialog-footer"><button class="ghost" id="healthBtn" type="button">检查服务</button><button class="primary" id="connectBtn" type="button">连接并加载</button></div>
@@ -111,7 +111,7 @@
 <script>
   const byId = id => document.getElementById(id)
   const state = { licenses: [], selectedId: '', devices: [], created: null }
-  const TRUSTED_API_HOSTS = new Set(['puxaxxvlzefd.sealosbja.site', '127.0.0.1', 'localhost'])
+  const TRUSTED_API_HOSTS = new Set(['omgyspevxzji.sealosbja.site', 'puxaxxvlzefd.sealosbja.site', '127.0.0.1', 'localhost'])
   const STATUS = { active:['正常','active'], expiring:['即将到期','soon'], soon:['即将到期','soon'], disabled:['已停用','disabled'], expired:['已过期','expired'], revoked:['已撤销','revoked'] }
   const FEATURES = { lead:'拓客', traffic:'引流', content:'内容' }
 

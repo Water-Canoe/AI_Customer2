@@ -20,14 +20,29 @@ if (-not (Test-Path $pythonPath)) {
 # Start FastAPI through the project runner so the page can request a graceful shutdown.
 $stdoutLog = Join-Path $LogDir "backend.out.log"
 $stderrLog = Join-Path $LogDir "backend.err.log"
-$backendProcess = Start-Process `
-    -FilePath $pythonPath `
-    -ArgumentList @("-m", "app.main") `
-    -WorkingDirectory $BackendDir `
-    -RedirectStandardOutput $stdoutLog `
-    -RedirectStandardError $stderrLog `
-    -WindowStyle Hidden `
-    -PassThru
+$originalServiceUrl = $env:MINI_BACKEND_URL
+try {
+    # 仅开发子进程继承旧地址；保留操作者显式指定的服务地址。
+    if ([string]::IsNullOrWhiteSpace($originalServiceUrl)) {
+        $developmentServiceUrl = (& $pythonPath -c "import sys; sys.path.insert(0, sys.argv[1]); from app.product_config import DEVELOPMENT_SERVICE_URL; print(DEVELOPMENT_SERVICE_URL)" $BackendDir)
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($developmentServiceUrl)) {
+            throw "Failed to resolve the development backend address"
+        }
+        $env:MINI_BACKEND_URL = $developmentServiceUrl
+    }
+    $backendProcess = Start-Process `
+        -FilePath $pythonPath `
+        -ArgumentList @("-m", "app.main") `
+        -WorkingDirectory $BackendDir `
+        -RedirectStandardOutput $stdoutLog `
+        -RedirectStandardError $stderrLog `
+        -WindowStyle Hidden `
+        -PassThru
+}
+finally {
+    # 启动失败也恢复父进程环境，避免后续发布更新误用开发地址。
+    $env:MINI_BACKEND_URL = $originalServiceUrl
+}
 
 Write-Host "Backend started. PID=$($backendProcess.Id), URL=http://127.0.0.1:$BackendPort"
 

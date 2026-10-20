@@ -201,6 +201,62 @@ if (-not $global:Launched) { throw 'Frontend was not launched.' }
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("override", [None, "https://custom-backend.invalid/"])
+@pytest.mark.parametrize("launch_fails", [False, True])
+def test_development_backend_url_is_child_scoped_and_restored_on_failure(tmp_path: Path, override, launch_fails):
+    project = tmp_path / "project space's"
+    internal = project / "script" / "internal"
+    internal.mkdir(parents=True)
+    app = project / "backend" / "app"
+    app.mkdir(parents=True)
+    shutil.copyfile(ROOT / "backend" / "app" / "product_config.py", app / "product_config.py")
+    shutil.copyfile(ROOT / "script" / "internal" / "_common.ps1", internal / "_common.ps1")
+    source = (ROOT / "script" / "internal" / "start_backend.ps1").read_text(encoding="utf-8-sig")
+    source = source.replace('Join-Path $BackendDir ".venv\\Scripts\\python.exe"',
+                            "'" + os.sys.executable.replace("'", "''") + "'")
+    starter = internal / "start_backend.ps1"
+    starter.write_text(source, encoding="utf-8-sig")
+    expected = override or "https://puxaxxvlzefd.sealosbja.site"
+    body = r'''
+$env:MINI_BACKEND_URL = PARENT_URL
+$global:Launched = $false
+function Get-NetTCPConnection {
+    param($LocalPort, $State, $ErrorAction)
+    if ($global:Launched) { return [pscustomobject]@{ OwningProcess = 333 } }
+}
+function Get-CimInstance {
+    param($ClassName, $Filter, $ErrorAction)
+    return @{ ProcessId = 333; ParentProcessId = 1; CommandLine = '"PROJECT\backend\python.exe" -m app.main' }
+}
+function Get-Process { param($Id, $ErrorAction); return @{ Id = 333 } }
+function Start-Process {
+    param($FilePath, $ArgumentList, $WorkingDirectory, $RedirectStandardOutput, $RedirectStandardError, $WindowStyle, [switch]$PassThru)
+    if (($ArgumentList -join ' ') -ne '-m app.main' -or $WindowStyle -ne 'Hidden') { throw 'Wrong backend arguments.' }
+    # 实际启动一个隔离 Python 子进程核对继承值，不启动服务或真实账号。
+    $childUrl = & $FilePath -c "import os; print(os.environ.get('MINI_BACKEND_URL', ''))"
+    if ($childUrl -ne 'EXPECTED_URL') { throw 'Wrong child backend URL.' }
+    if (LAUNCH_FAILS) { throw 'EXPECTED_LAUNCH_FAILURE' }
+    $global:Launched = $true
+    return @{ Id = 333 }
+}
+function Invoke-WebRequest {
+    param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
+    return @{ StatusCode = 200; Content = '{"status":"ok","product":"ai-customer","process_id":333}' }
+}
+try {
+    & 'START_SCRIPT'
+    if (LAUNCH_FAILS) { throw 'Expected launch failure was not raised.' }
+} catch {
+    if (-not LAUNCH_FAILS -or $_.Exception.Message -ne 'EXPECTED_LAUNCH_FAILURE') { throw }
+}
+if ($env:MINI_BACKEND_URL -ne PARENT_URL) { throw 'Development URL leaked into parent process.' }
+'''.replace("PARENT_URL", "'" + override + "'" if override else "$null")
+    body = body.replace("EXPECTED_URL", expected).replace("LAUNCH_FAILS", "$true" if launch_fails else "$false")
+    body = body.replace("PROJECT", str(project).replace("'", "''")).replace("START_SCRIPT", str(starter).replace("'", "''"))
+    result = run_script_check(tmp_path, body)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def prepare_builder(tmp_path: Path) -> tuple[Path, Path]:
     project = tmp_path / "project space's"
     (project / "frontend").mkdir(parents=True)

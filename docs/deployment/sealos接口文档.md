@@ -1,10 +1,12 @@
 # Sealos 后端接口
 
-新服务根地址：`https://puxaxxvlzefd.sealosbja.site`。2026-10-12 已复用原有 MongoDB 实例的独立 `mini_backend` 库并启动 DevBox 服务，公网健康与管理认证通过；未发布客户端更新或执行镜像发布。
+正式应用根地址：`https://omgyspevxzji.sealosbja.site`；开发 DevBox 根地址：`https://puxaxxvlzefd.sealosbja.site`。用户于 2026-10-20 提供发布后的应用地址，新应用 HTTPS、数据库健康、两产品路由及管理页面连通检查通过；真实授权、更新下载与安装尚未验收。
 
 AI_Customer 产品前缀为 `/api/v1/products/ai-customer`；Blind_Watermark 使用 `/api/v1/products/blind-watermark`。新 DevBox 代码在 `/home/devbox/project/src/`，本地源代码在独立 `Mini_Backend` 工程。旧 Sealos 服务保持运行且未被修改，当前没有旧授权或发布记录迁移。完整云端配置和模块说明见 [通用后端文档](../../../Mini_Backend/AI_README.md)。
 
-客户端与发行脚本仅用 `MINI_BACKEND_URL` 覆盖根地址，由产品配置派生路径。真实 MongoDB 授权/设备事务及轻量数据写冲突已验证；旧授权尚未导入，真实客户端切换和对象包收发未验收，旧地址不能提前移除。
+AI_Customer 客户端与发行脚本默认使用正式地址，仅用 `MINI_BACKEND_URL` 覆盖根地址，由产品配置派生路径。开发启动入口 `script/start_all.ps1` 向后端子进程传入开发地址，随后恢复父进程环境；显式非空覆盖优先。未经过开发脚本的 Python 运行使用正式默认值，发行脚本不会因同一终端此前启动开发服务而继承开发地址。
+
+本地授权管理页 `tools/license-admin.html` 默认管理正式服务，可手动填写受信任的开发地址。旧版程序内置的地址不会自行变更，需取得包含新地址的客户端更新；开发入口仍在使用旧 DevBox，因此本次不移除旧服务。此前 2026-10-12 的 MongoDB 授权/设备事务及轻量数据验证针对 DevBox 服务，不等同于新应用的真实客户端验收。
 
 后续换 MongoDB 实例：暂停本服务写入、完整备份/恢复 `mini_backend` 的数据和索引，保留记录 ID、绑定及现有 pepper/签名密钥，再改服务端 `MONGODB_URL` 与必要的 `DB_NAME`。公网后端地址不变时客户端无需因此更新。跨大版本、跨结构或更换数据库类型须单独设计；对象存储安装包不包含在 MongoDB 备份里。
 
