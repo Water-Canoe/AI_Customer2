@@ -123,6 +123,8 @@ def test_core_install_and_program_update_own_complete_application(tmp_path: Path
         manifest = json.loads(archive.read("release-manifest.json"))
     assert core_zip is not None
     assert voice_zip is None
+    # Windows 默认以压缩包名建立解压目录；安装名固定，版本由父目录区分。
+    assert core_zip == tmp_path / "deliverables" / "1.2.3" / "AI_Customer.zip"
     with zipfile.ZipFile(core_zip) as archive:
         core_names = set(archive.namelist())
         environment_manifest = json.loads(archive.read("runtime/environment-manifest.json"))
@@ -179,6 +181,7 @@ def test_core_install_and_program_update_own_complete_application(tmp_path: Path
         include_voice=True,
     )
     assert voice_zip is not None
+    assert voice_core_zip == tmp_path / "deliverables" / "1.2.4" / core_zip.name
     with zipfile.ZipFile(voice_zip) as archive:
         assert "runtime/components/voxcpm2/versions/1.0.0/" + native_module in archive.namelist()
         assert "runtime/models/VoxCPM2/model.bin" in archive.namelist()

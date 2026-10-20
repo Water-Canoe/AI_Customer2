@@ -1,5 +1,12 @@
 # AI获客系统
 
+## 固定安装目录名称（2026-10-21）
+
+- 后续首装 Core 文件固定为 `deliverables/<程序版本>/AI_Customer.zip`，默认解压目录为 `AI_Customer`，不携带版本号。开发机继续由上一级 `<程序版本>` 隔离各次交付，不生成额外的解压版副本。
+- Program 更新包继续使用 `AI_Customer_Program_<程序版本>.zip`，供签名发布和安装校验；安装器仍按当前启动目录原地替换清单所属程序文件，不新建或重命名安装目录，版本由程序清单判断。数据库、账号数据、浏览器和独立组件的保留边界不变。
+- 首装说明和交付目录 README 同步使用固定名称。本次仅修改组装规则、说明及回归，不重新编译、打包或上传，不修改已有 `1.2.16/1.2.17` 交付物及用户已解压的目录；下次明确打包时生效。
+- 验证：组装、原地更新和发布定向回归 59 项通过；覆盖不同交付版本共用固定首装名、程序文件替换、数据保留和发布契约。仅使用小型测试夹具，未执行真实发行构建或安装。
+
 ## 发布状态字段大小写修复（2026-10-21）
 
 - 真实发布 `1.2.17` 时，ZIP 上传与版本登记成功，但启用请求被服务端以“没有需要修改的发布状态”拒绝。有序字典按 PowerShell 参数名覆盖后，把 `enabled/mandatory/rolloutPercent/notes` 改成了大写开头，服务端无法识别。
@@ -832,17 +839,17 @@ Sealos 已部署 `/ai-customer/update/*` 远程更新接口：使用私有对象
 
 ### 执行约束
 
-日常功能优化只执行源码测试、类型检查和前端生产构建，不自动生成 Windows EXE、安装包、签名或上传发布。只有用户明确要求打包／发布才执行对应脚本；正式构建前修改 `backend/app/version.py` 的产品版本，已有 `deliverables/<版本>/` 拒绝覆盖。本次只修改机制，版本仍为 `1.2.15`，没有新交付物。
+日常功能优化只执行源码测试、类型检查和前端生产构建，不自动生成 Windows EXE、安装包、签名或上传发布。只有用户明确要求打包／发布才执行对应脚本；正式构建前修改 `backend/app/version.py` 的产品版本，已有 `deliverables/<版本>/` 拒绝覆盖。实际版本以源码版本文件及对应交付清单为准，不由安装目录名称判断。
 
 ### 交付边界
 
 | 产物 | 用途 | 内容 |
 | --- | --- | --- |
-| `AI_Customer_Core_<程序版本>.zip` | 一个 ZIP 完成首装 | 完整程序、CloakBrowser、已编译 MyCrawler 和基础环境清单 |
+| `AI_Customer.zip` | 一个 ZIP 完成首装，默认解压目录为 `AI_Customer` | 完整程序、CloakBrowser、已编译 MyCrawler 和基础环境清单 |
 | `AI_Customer_Program_<程序版本>.zip` | 日常签名更新 | 入口 `AI_Customer.exe`、完整 `runtime/application/`（包括 DLL/PYD/native 依赖）、前端和程序清单 |
 | `AI_Customer_Voice_<组件版本>.zip` | 按需安装语音 | 现有 VoxCPM2 推理组件、PyTorch/CUDA 与模型；仅 `-IncludeVoice` 生成 |
 
-客户首次只需解压 Core 并双击根目录 `AI_Customer.exe`，无需合并 Environment ZIP。语音包需解压到同一安装目录后重启；Core 默认不含语音运行时或模型，现有在线语音安装入口只下载运行时，不会补齐模型。Program 不包含业务 `data/`、基础环境、独立语音组件或模型。程序直接运行依赖随 Program 一起更新，避免私信协议新增原生依赖后被旧环境漏掉。
+客户首次将 `AI_Customer.zip` 解压为固定的 `AI_Customer` 目录并双击其中的 `AI_Customer.exe`，无需合并 Environment ZIP，安装目录名不随更新改变。语音包需解压到同一安装目录后重启；Core 默认不含语音运行时或模型，现有在线语音安装入口只下载运行时，不会补齐模型。Program 不包含业务 `data/`、基础环境、独立语音组件或模型。程序直接运行依赖随 Program 一起更新，避免私信协议新增原生依赖后被旧环境漏掉。
 
 `deliverables/<程序版本>/` 是唯一交付目录，默认保存 Core、Program、SHA256.txt、README.txt；可额外包含 Voice。`output/` 仅保存构建、组装、签名及测试中间产物。开发机继续使用项目虚拟环境、node_modules 和 MyCrawler 源码环境，不改成便携目录。
 

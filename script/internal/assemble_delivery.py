@@ -184,7 +184,7 @@ def assemble(
     if program_only:
         (artifact_root / "SHA256.txt").write_text(checksums, encoding="ascii")
         (artifact_root / "README.txt").write_text(
-            f"本目录为日常更新 Program ZIP，首次安装请使用 Core ZIP；要求基础环境 {environment_version}。\n",
+            f"本目录为日常更新 Program ZIP，首次安装请使用 AI_Customer.zip；要求基础环境 {environment_version}。\n",
             encoding="utf-8-sig",
         )
         delivery_root.parent.mkdir(parents=True, exist_ok=True)
@@ -232,7 +232,8 @@ def assemble(
         "source_dirty": source_dirty,
         "required_paths": required_paths,
     })
-    core_zip = artifact_root / f"AI_Customer_Core_{version}.zip"
+    # 默认解压目录沿用 ZIP 名称；版本只放在上一级交付目录和清单中。
+    core_zip = artifact_root / "AI_Customer.zip"
     _zip_directory(program_root, core_zip)
     checksums += f"{_hash(core_zip)}  {core_zip.name}\n"
 
@@ -253,7 +254,7 @@ def assemble(
 
     (artifact_root / "SHA256.txt").write_text(checksums, encoding="ascii")
     (artifact_root / "README.txt").write_text(
-        "首次使用：解压 Core ZIP，双击 AI_Customer.exe。\n日常更新：通过软件安装 Program ZIP。\nVoice ZIP 为可选语音组件，不影响采集、筛选和私信。\n",
+        "首次使用：将 AI_Customer.zip 解压到 AI_Customer 目录，双击其中的 AI_Customer.exe。\n日常更新：通过软件安装 Program ZIP，安装目录名称保持不变。\nVoice ZIP 为可选语音组件，不影响采集、筛选和私信。\n",
         encoding="utf-8-sig",
     )
     delivery_root.parent.mkdir(parents=True, exist_ok=True)
