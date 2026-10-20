@@ -92,9 +92,11 @@ function Set-ReleaseState([object]$Registered) {
         rolloutPercent = [int]$Registered.rolloutPercent
         notes = [string]$Registered.notes
     }
-    foreach ($Field in $RequestedState.Keys) {
+    # 始终用协议字段名赋值，避免有序字典把 JSON 键名改成参数的大写形式。
+    foreach ($Field in @("enabled", "mandatory", "rolloutPercent", "notes")) {
+        if (-not $RequestedState.ContainsKey($Field)) { continue }
         $Value = $RequestedState[$Field]
-        if ($Field -in @("Enabled", "Mandatory")) { $Value = [bool]$Value }
+        if ($Field -in @("enabled", "mandatory")) { $Value = [bool]$Value }
         $State[$Field] = $Value
     }
     if ($State.enabled -and -not $State.mandatory -and $State.rolloutPercent -eq 0) {

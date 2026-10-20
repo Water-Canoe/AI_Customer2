@@ -64,7 +64,8 @@ def prepare_publisher(tmp_path: Path) -> dict[str, Path]:
 
 
 def run_publish(env: dict[str, Path], args: dict[str, object], *, failure: str = "", admin_token: str = "offline-token-" + "x" * 32,
-                service_url: str = "https://backend.invalid") -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
+                service_url: str = "https://backend.invalid", powershell: str | None = POWERSHELL
+                ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
     tmp_path = env["project"].parent
     arguments = tmp_path / "arguments.json"
     arguments.write_text(json.dumps(args), encoding="utf-8")
@@ -112,7 +113,7 @@ if ($Failed) { exit 1 }
 ''', encoding="utf-8")
     calls_path = tmp_path / "calls.json"
     result = subprocess.run(
-        [str(POWERSHELL), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
+        [str(powershell), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         env={**os.environ, "PYTHONUTF8": "1", "MINI_BACKEND_ADMIN_TOKEN": admin_token,
              "MINI_BACKEND_URL": service_url,
@@ -121,6 +122,26 @@ if ($Failed) { exit 1 }
     )
     calls = json.loads(calls_path.read_text(encoding="utf-8-sig"))
     return result, calls
+
+
+@pytest.mark.parametrize("powershell", [POWERSHELL, shutil.which("pwsh.exe")], ids=["windows-powershell", "pwsh"])
+@pytest.mark.parametrize("action", ["publish", "set-state"])
+def test_distribution_serializes_canonical_field_names(tmp_path: Path, powershell: str | None, action: str) -> None:
+    if not powershell:
+        pytest.skip("PowerShell executable is unavailable")
+    env = prepare_publisher(tmp_path)
+    args = {"Action": action, "Version": "1.2.99", "Mandatory": False, "RolloutPercent": 75, "Notes": "updated"}
+    if action == "publish":
+        args.update({"ZipPath": str(env["archive"]), "PublicKeyPath": str(env["public"]), "Enable": True})
+    else:
+        args["Enabled"] = True
+    result, calls = run_publish(env, args, powershell=powershell)
+    assert result.returncode == 0, result.stdout + result.stderr
+    # 检查真正发出的 JSON；PowerShell 属性匹配会忽略大小写，无法代表服务端行为。
+    payload = json.loads(str(next(call["body"] for call in calls if call["method"] == "PUT")))
+    assert set(payload) == {"version", "channel", "platform", "arch", "enabled", "mandatory", "rolloutPercent", "notes"}
+    assert payload["enabled"] is True and payload["mandatory"] is False
+    assert payload["rolloutPercent"] == 75 and payload["notes"] == "updated"
 
 
 def test_publisher_defaults_to_production_when_run_from_source(tmp_path: Path) -> None:
