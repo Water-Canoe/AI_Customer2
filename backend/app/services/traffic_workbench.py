@@ -20,7 +20,7 @@ from app.services import account_center, browser_queue, traffic_resources
 TRAFFIC_LAST_VIDEO_URL_KEY = "traffic_last_douyin_video_url"
 KUAISHOU_RECO_URL = "https://www.kuaishou.com/new-reco"
 WARMUP_VIDEO_SKIP_COUNT = 3
-ACTION_RESPONSE_TIMEOUT_MS = 4_000
+ACTION_RESPONSE_TIMEOUT_MS = 8_000
 VIDEO_CHANGE_TIMEOUT_MS = 1_600
 KEYWORD_SOURCE_MODES = {"search_keyword", "collected_keyword"}
 ACTION_FILTER_TERMS = {
@@ -1497,19 +1497,28 @@ def _read_active_video(page: Any, video_cache: dict[str, Any] | None = None) -> 
     data = page.evaluate(
         """
         () => {
-          const active = document.querySelector('[data-e2e="feed-active-video"]')
-            || document.querySelector('[data-e2e-vid]')
-            || document.querySelector('video')?.closest('[data-e2e-vid]')
-            || document.querySelector('video')?.parentElement;
+          const exposed = el => {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            if (rect.width <= 0 || rect.height <= 0 || style.display === 'none' || style.visibility === 'hidden') return false;
+            const hit = document.elementFromPoint(
+              Math.min(innerWidth - 1, Math.max(0, rect.left + rect.width / 2)),
+              Math.min(innerHeight - 1, Math.max(0, rect.top + rect.height / 2)));
+            return hit && (el === hit || el.contains(hit));
+          };
+          const pathId = new URL(location.href).searchParams.get('modal_id')
+            || location.pathname.match(/\\/(?:video|note)\\/([^/?#]+)/)?.[1] || '';
+          const detail = pathId ? document.querySelector(`[class*="video_${pathId}"]`) : null;
+          const active = [detail, ...document.querySelectorAll('[data-e2e="feed-active-video"], [data-e2e-vid]')].filter(Boolean).find(exposed)
+            || Array.from(document.querySelectorAll('video')).find(exposed)?.parentElement;
           const normalize = value => (value || '').replace(/\\s+/g, ' ').trim();
           const root = active || document;
-          const pathId = location.pathname.match(/\\/(?:video|note)\\/([^/?#]+)/)?.[1] || '';
           const desc = root.querySelector?.('[data-e2e="video-desc"], [data-e2e="detail-video-desc"], .title, h1')?.textContent || active?.textContent || document.title || '';
           const author = root.querySelector?.('[data-e2e="feed-video-nickname"], .account-name, [data-e2e="user-info"]')?.textContent || '';
           const like = root.querySelector?.('[data-e2e="video-player-digg"]')?.textContent || document.querySelector('[data-e2e="video-player-digg"]')?.textContent || '';
           const comment = root.querySelector?.('[data-e2e="feed-comment-icon"]')?.textContent || document.querySelector('[data-e2e="feed-comment-icon"]')?.textContent || '';
           return {
-            video_id: active?.getAttribute('data-e2e-vid') || pathId,
+            video_id: active?.getAttribute('data-e2e-vid') || active?.querySelector('[data-e2e-vid]')?.getAttribute('data-e2e-vid') || pathId,
             video_url: location.href,
             author_id: '',
             author_name: normalize(author).replace(/^@/, ''),
@@ -1760,7 +1769,7 @@ def _current_video_flags(page: Any, video_id: str) -> dict[str, bool]:
             videoId => {
               const active = document.querySelector('[data-e2e="feed-active-video"]');
               const detail = videoId ? document.querySelector(`[class*="video_${videoId}"]`) : null;
-              const root = active || detail || document.body || document;
+              const root = detail || active || document.body || document;
               const text = (root.innerText || document.body?.innerText || '').replace(/\\s+/g, ' ');
               const href = location.href;
               const hasAdCta = /广告|了解详情|立即购买|去购买|领取优惠|查看详情/.test(text);
@@ -1914,7 +1923,9 @@ def _kuaishou_action_endpoint(action: str) -> str:
 
 def _kuaishou_response_after_click(page: Any, endpoint: str, click: Any) -> dict[str, Any] | None:
     try:
-        with page.expect_response(lambda response: endpoint in str(getattr(response, "url", "")), timeout=ACTION_RESPONSE_TIMEOUT_MS) as response_info:
+        with page.expect_response(lambda response: endpoint in str(getattr(response, "url", ""))
+                                  and str(getattr(getattr(response, "request", None), "method", "POST")).upper() == "POST",
+                                  timeout=ACTION_RESPONSE_TIMEOUT_MS) as response_info:
             if click() is False:
                 raise RuntimeError("action control unavailable")
         payload = _response_json(response_info.value)
@@ -2092,9 +2103,10 @@ def _execute_click_action(run_id: str, page: Any, video: dict[str, Any], action:
     if _dedup_exists(video, action, ""):
         _append_log(run_id, "warning", action, f"这个视频已经执行过{label}，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    payload = _click_and_confirm_action_response(page, video, action, [selector], allow_like_shortcut=action == "like")
+    diagnostic: dict[str, Any] = {}
+    payload = _click_and_confirm_action_response(page, video, action, [selector], diagnostic=diagnostic)
     if payload is None:
-        _append_log(run_id, "warning", action, f"没有收到抖音服务端确认，已跳过{label}记录。", "前端按钮变化不能证明账号已真实落账", "系统不会把未确认动作写为成功；如果频繁出现，请降低频率或检查账号风控。", {"selector": selector, "video_id": video["video_id"]})
+        _log_unconfirmed_action(run_id, action, label, video, diagnostic, {"selector": selector})
         return False
     _append_log(run_id, "success", action, f"{label}已执行。", "已收到抖音服务端成功响应", "可以在操作记录中查看本视频结果。", {"video_id": video["video_id"], "response": _compact_payload(payload)})
     _insert_dedup(video, action, "", "done")
@@ -2105,9 +2117,10 @@ def _execute_follow(run_id: str, page: Any, video: dict[str, Any]) -> bool:
     if _dedup_exists(video, "follow", ""):
         _append_log(run_id, "warning", "follow", "这个作者已经关注过或处理过，本次跳过。", "防重复命中", "系统已自动跳过，不需要处理。", {"video_id": video["video_id"]})
         return False
-    payload = _click_and_confirm_action_response(page, video, "follow", _follow_selectors())
+    diagnostic: dict[str, Any] = {}
+    payload = _click_and_confirm_action_response(page, video, "follow", _follow_selectors(), diagnostic=diagnostic)
     if payload is None:
-        _append_log(run_id, "warning", "follow", "没有收到抖音服务端关注确认，已跳过关注。", "当前视频可能是广告、直播、已关注作者、账号受限或页面没有关注按钮", "系统不会把未确认关注写为成功；如果计划包含其它动作，会继续处理其它动作。", {"video_id": video["video_id"]})
+        _log_unconfirmed_action(run_id, "follow", "关注作者", video, diagnostic)
         return False
     _append_log(run_id, "success", "follow", "已关注作者。", "已收到抖音服务端成功响应", "可以在操作记录中查看本次关注。", {"video_id": video["video_id"], "response": _compact_payload(payload)})
     _insert_dedup(video, "follow", "", "done")
@@ -2147,9 +2160,10 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
             else:
                 _append_log(run_id, "warning", "comment", "评论图片文件不存在，已取消本次评论。", "图片路径无效", "请到引流设置检查图片路径。", {"image_path": image_path})
                 return False
-        payload = _publish_comment_and_confirm(page, text)
+        diagnostic: dict[str, Any] = {}
+        payload = _publish_comment_and_confirm(page, text, diagnostic=diagnostic)
         if payload is None:
-            _append_log(run_id, "warning", "comment", "评论没有确认发送成功，已跳过记录。", "没有捕获到评论发布成功响应", "系统不会把未确认评论写为成功；如果频繁出现，请检查账号限制或安全验证。", {"video_id": video["video_id"], "text": text, "image_path": image_path})
+            _log_unconfirmed_action(run_id, "comment", "评论", video, diagnostic, {"text": text, "image_path": image_path})
             return False
         _append_log(run_id, "success", "comment", "评论已发送。", "评论发布接口已返回成功", "可以在操作记录中查看实际文案和图片。", {"video_id": video["video_id"], "text": text, "image_path": image_path, "response": _compact_payload(payload)})
         _insert_dedup(video, "comment", content_hash, "done")
@@ -2158,28 +2172,76 @@ def _execute_comment(run_id: str, page: Any, video: dict[str, Any], text: str, i
         _close_comment_panel(page)
 
 
-def _click_and_confirm_action_response(page: Any, video: dict[str, Any], action: str, selectors: list[str], allow_like_shortcut: bool = False) -> dict[str, Any] | None:
-    video_id = str(video.get("video_id") or "")
+def _log_unconfirmed_action(run_id: str, action: str, label: str, video: dict[str, Any], diagnostic: dict[str, Any], details: dict[str, Any] | None = None) -> None:
+    reasons = {
+        "control_unavailable": "没有找到可操作的按钮",
+        "click_error": "按钮点击未完成",
+        "response_timeout": "等待对应接口响应超时",
+        "response_error": "响应监听发生异常",
+        "http_error": f"接口返回 HTTP {diagnostic.get('http_status')}",
+        "invalid_response": "接口响应不是可识别的 JSON 数据",
+        "platform_rejected": f"平台返回失败：{diagnostic.get('status_msg') or diagnostic.get('status_code', '未知状态')}",
+        "missing_comment": "接口响应没有已发布评论的标识或内容",
+    }
+    reason = reasons.get(str(diagnostic.get("failure")), "没有取得服务端成功确认")
+    _append_log(run_id, "warning", action, f"{label}未确认：{reason}。", reason,
+                "未确认的动作不会记录为成功或自动重复提交；请根据技术详情核实实际结果。",
+                {"video_id": video.get("video_id"), **(details or {}), "confirmation": diagnostic})
+
+
+def _response_after_action(page: Any, predicate: Any, action: Any, timeout: int, diagnostic: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    diagnostic = diagnostic if diagnostic is not None else {}
+    stage = "response"
     try:
-        with page.expect_response(lambda response: _is_action_response(response, action, video), timeout=ACTION_RESPONSE_TIMEOUT_MS) as response_info:
-            clicked = _click_current_control(page, video_id, action, selectors, require_confirm=False)
-            if not clicked and allow_like_shortcut:
-                page.keyboard.press("z")
-                clicked = True
-            if not clicked:
+        with page.expect_response(predicate, timeout=timeout) as response_info:
+            stage = "click"
+            if not action():
+                diagnostic["failure"] = "control_unavailable"
                 raise RuntimeError("action control unavailable")
-        payload = _response_json(response_info.value)
-        payload["_confirm_url"] = _response_path(response_info.value)
-        return payload if _payload_status_ok(payload) else None
-    except Exception:
+            stage = "response"
+        response = response_info.value
+        # 只保留路径和状态，不把 Cookie、签名或完整请求参数写入日志。
+        diagnostic["endpoint"] = urlparse(str(getattr(response, "url", ""))).path
+        status = getattr(response, "status", 200)
+        diagnostic["http_status"] = status
+        if not 200 <= status < 300:
+            diagnostic["failure"] = "http_error"
+            return None
+        payload = _response_json(response)
+        if not payload:
+            diagnostic["failure"] = "invalid_response"
+            return None
+        if not _payload_status_ok(payload):
+            diagnostic.update(failure="platform_rejected", status_code=payload.get("status_code", payload.get("status", payload.get("result"))),
+                              status_msg=str(payload.get("status_msg") or payload.get("message") or "")[:200])
+            return None
+        return payload
+    except Exception as exc:
+        failure = "click_error" if stage == "click" else "response_error"
+        if stage == "response" and "timeout" in type(exc).__name__.lower():
+            failure = "response_timeout"
+        diagnostic.setdefault("failure", failure)
+        diagnostic["error_type"] = type(exc).__name__
         return None
 
 
+def _click_and_confirm_action_response(page: Any, video: dict[str, Any], action: str, selectors: list[str], *, diagnostic: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    video_id = str(video.get("video_id") or "")
+    return _response_after_action(
+        page, lambda response: _is_action_response(response, action, video),
+        lambda: _click_current_control(page, video_id, action, selectors, require_confirm=False),
+        ACTION_RESPONSE_TIMEOUT_MS, diagnostic,
+    )
+
+
 def _is_action_response(response: Any, action: str, video: dict[str, Any] | None = None) -> bool:
+    if str(getattr(getattr(response, "request", None), "method", "POST")).upper() != "POST":
+        return False
     url = str(getattr(response, "url", "")).lower()
-    raw = f"{url}\n{_request_post_data(response)}".lower()
+    params = _response_params(response)
     target = str((video or {}).get("author_id" if action == "follow" else "video_id") or "")
-    if action != "follow" and target and target not in raw:
+    id_keys = ("user_id", "sec_user_id") if action == "follow" else ("aweme_id", "item_id")
+    if target and not any(target in params.get(key, []) for key in id_keys):
         return False
     if action == "like":
         return "digg" in url and ("aweme" in url or "commit" in url) and _is_positive_action_request(response)
@@ -2192,7 +2254,10 @@ def _is_action_response(response: Any, action: str, video: dict[str, Any] | None
 
 def _is_positive_action_request(response: Any) -> bool:
     params = _response_params(response)
-    negative_keys = {"type", "action_type", "digg_type", "collect_type", "follow_type", "action", "is_cancel", "to_status"}
+    # is_cancel=0 表示不取消，与 type=0 的取消语义正好相反。
+    if any(str(value).strip().lower() in {"1", "true"} for key in ("is_cancel", "cancel") for value in params.get(key, [])):
+        return False
+    negative_keys = {"type", "action_type", "digg_type", "collect_type", "follow_type", "action", "to_status"}
     for key in negative_keys:
         for value in params.get(key, []):
             normalized = str(value).strip().lower()
@@ -2216,8 +2281,17 @@ def _response_params(response: Any) -> dict[str, list[str]]:
     params = {key: list(value) for key, value in parse_qs(parsed.query).items()}
     post_data = _request_post_data(response)
     if post_data:
-        for key, value in parse_qs(post_data).items():
-            params.setdefault(key, []).extend(value)
+        try:
+            body = json.loads(post_data)
+        except (ValueError, TypeError):
+            body = None
+        if isinstance(body, dict):
+            for key, value in body.items():
+                values = value if isinstance(value, list) else [value]
+                params.setdefault(key, []).extend(str(item) for item in values if item is not None)
+        else:
+            for key, value in parse_qs(post_data).items():
+                params.setdefault(key, []).extend(value)
     return params
 
 
@@ -2247,7 +2321,9 @@ def _response_json(response: Any) -> dict[str, Any]:
 
 def _payload_status_ok(payload: dict[str, Any]) -> bool:
     status = payload.get("status_code", payload.get("status"))
-    return status in (0, "0") or payload.get("result") in (1, "1", True)
+    if status is not None:
+        return not isinstance(status, bool) and status in (0, "0")
+    return payload.get("result") in (1, "1", True)
 
 
 def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2314,7 +2390,7 @@ def _force_set_comment_text(page: Any, text: str) -> None:
 def _click_current_control(page: Any, video_id: str, action: str, extra_selectors: list[str] | None = None, require_confirm: bool = True) -> bool:
     before = _current_control_snapshot(page, video_id, action) if require_confirm and action != "comment" else {}
     handle = page.evaluate_handle(
-        """
+        r"""
         ({ videoId, action, extraSelectors }) => {
           const actionSelectors = {
             like: ['[data-e2e="feed-like-icon"]', '[data-e2e="video-player-digg"]'],
@@ -2325,7 +2401,7 @@ def _click_current_control(page: Any, video_id: str, action: str, extra_selector
           const selectors = [...(actionSelectors[action] || []), ...(extraSelectors || [])];
           const active = document.querySelector('[data-e2e="feed-active-video"]');
           const detail = videoId ? document.querySelector(`[class*="video_${videoId}"]`) : null;
-          const scopedRoots = [active, detail].filter(Boolean);
+          const scopedRoots = [detail, active].filter(Boolean);
           const roots = scopedRoots.length ? scopedRoots : [document];
           const visible = el => {
             const rect = el.getBoundingClientRect();
@@ -2336,14 +2412,25 @@ def _click_current_control(page: Any, video_id: str, action: str, extra_selector
           };
           const clickable = el => {
             const chain = [el, el.closest('button'), el.closest('[role="button"]'), el.parentElement, el.parentElement?.parentElement].filter(Boolean);
-            return chain.find(visible);
+            // 尺寸可见的后台视频仍可能被详情弹层覆盖，需核对实际接收点击的元素。
+            return chain.find(target => {
+              if (!visible(target)) return false;
+              const rect = target.getBoundingClientRect();
+              const hit = document.elementFromPoint(
+                Math.min(innerWidth - 1, Math.max(0, rect.left + rect.width / 2)),
+                Math.min(innerHeight - 1, Math.max(0, rect.top + rect.height / 2)));
+              return hit && (el === hit || el.contains(hit)
+                || (target === hit && target !== document.body && target !== document.documentElement));
+            });
           };
           for (const root of roots) {
             for (const selector of selectors) {
               for (const el of Array.from(root.querySelectorAll(selector))) {
                 if (action === 'follow') {
+                  const text = (el.innerText || el.textContent || '').trim();
                   const isIcon = Boolean(el.closest('[data-e2e="feed-follow-icon"]') || el.matches('[data-e2e="feed-follow-icon"]'));
-                  if (!isIcon && !/关注/.test(el.innerText || el.textContent || '')) continue;
+                  if (/已关注|互相关注|取消关注/.test(text)) continue;
+                  if (!isIcon && !/^(?:\+\s*)?关注(?:作者)?$/.test(text)) continue;
                 }
                 const target = clickable(el);
                 if (target) {
@@ -2389,7 +2476,7 @@ def _current_control_snapshot(page: Any, video_id: str, action: str) -> dict[str
               }[action] || [];
               const active = document.querySelector('[data-e2e="feed-active-video"]');
               const detail = videoId ? document.querySelector(`[class*="video_${videoId}"]`) : null;
-              const scopedRoots = [active, detail].filter(Boolean);
+              const scopedRoots = [detail, active].filter(Boolean);
               const roots = scopedRoots.length ? scopedRoots : [document];
               for (const root of roots) {
                 for (const selector of selectors) {
@@ -2519,27 +2606,27 @@ def _comment_image_ready(page: Any) -> bool:
         return False
 
 
-def _publish_comment_and_confirm(page: Any, text: str = "") -> dict[str, Any] | None:
+def _publish_comment_and_confirm(page: Any, text: str = "", *, diagnostic: dict[str, Any] | None = None) -> dict[str, Any] | None:
     send_point = _comment_send_button_point(page)
     submit = (lambda: _click_comment_send_button(page, send_point)) if send_point else (lambda: _press_comment_submit_key(page, "Control+Enter"))
     # 每条评论只提交一次，避免响应较慢时再按回车造成重复评论。
-    payload = _comment_publish_response(page, submit, 2_500)
+    payload = _comment_publish_response(page, submit, ACTION_RESPONSE_TIMEOUT_MS, diagnostic)
     if payload is None:
         return None
     if not _payload_status_ok(payload) or not _comment_publish_has_result(payload, text):
+        if diagnostic is not None:
+            diagnostic["failure"] = "missing_comment"
         return None
     return payload
 
 
-def _comment_publish_response(page: Any, action: Any, timeout: int) -> dict[str, Any] | None:
-    try:
-        with page.expect_response(lambda response: "aweme/v1/web/comment/publish" in response.url, timeout=timeout) as response_info:
-            if not action():
-                raise RuntimeError("comment submit control unavailable")
-        payload = _response_json(response_info.value)
-        return payload
-    except Exception:
-        return None
+def _comment_publish_response(page: Any, action: Any, timeout: int, diagnostic: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    return _response_after_action(
+        page,
+        lambda response: "aweme/v1/web/comment/publish" in response.url
+        and str(getattr(getattr(response, "request", None), "method", "POST")).upper() == "POST",
+        action, timeout, diagnostic,
+    )
 
 
 def _press_comment_submit_key(page: Any, key: str) -> bool:
@@ -2574,7 +2661,10 @@ def _comment_send_button_point(page: Any) -> dict[str, float] | None:
               if (!visible(target) || disabled(target)) continue;
               target.scrollIntoView({block: 'center', inline: 'center'});
               const rect = target.getBoundingClientRect();
-              return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+              const point = {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+              const hit = document.elementFromPoint(point.x, point.y);
+              if (!hit || (target !== hit && !target.contains(hit))) continue;
+              return point;
             }
           }
           return null;

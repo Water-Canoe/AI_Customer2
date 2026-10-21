@@ -1686,7 +1686,7 @@ def test_traffic_action_response_requires_positive_targeted_request() -> None:
         Response("https://www.douyin.com/aweme/v1/web/commit/follow/user/?user_id=another-author&type=1"),
         "follow",
         video,
-    ) is True
+    ) is False
 
 
 def test_traffic_follow_uses_avatar_plus_icon_selector(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2213,7 +2213,7 @@ def test_traffic_random_feed_jingxuan_clicks_page_video_not_project_video(tmp_pa
                 return True
             if "loginPrompt" in script:
                 return {"url": self.url, "title": "抖音", "loginPrompt": False, "verifyPrompt": False, "activeVideoId": "page-video"}
-            if "querySelectorAll" in script:
+            if "querySelectorAll" in script and "video_id:" not in script:
                 return [{"href": "https://www.douyin.com/video/page-video", "text": "精选页视频", "visible": True}]
             return {
                 "video_id": "",
