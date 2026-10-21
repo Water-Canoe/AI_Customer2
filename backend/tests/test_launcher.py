@@ -39,6 +39,10 @@ def test_smoke_test_uses_empty_database_without_starting_business_workers(tmp_pa
     monkeypatch.setattr(message_inbox, "auto_connect_accounts", forbidden)
     launcher.smoke_test()
     assert database.schema_version()["current"] == database.schema_version()["latest"]
+    result = json.loads((tmp_path / "smoke-result.json").read_text(encoding="utf-8"))
+    assert result["traffic_confirmation"] == "passed"
+    from app.version import APP_VERSION
+    assert result["version"] == APP_VERSION
     with pytest.raises(RuntimeError, match="空库"):
         launcher.smoke_test()
 

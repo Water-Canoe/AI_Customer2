@@ -190,12 +190,29 @@ def smoke_test() -> None:
     for name in ("curl_cffi._wrapper", "app.services.douyin_im_transport", "app.services.xhs_im_transport"):
         importlib.import_module(name)
     from app import database
+    from app.product_config import license_endpoint
     from app.routers.system import health
+    from app.services import traffic_workbench
+    from types import SimpleNamespace
 
     database.init_db()
     schema = database.schema_version()
-    if schema["current"] != schema["latest"] or health()["status"] != "ok":
+    health_state = health()
+    if schema["current"] != schema["latest"] or health_state["status"] != "ok":
         raise RuntimeError("空库或健康接口自检失败")
+    # 编译后也检查本次引流修复，避免只验证源码而遗漏发行行为。
+    probe = SimpleNamespace(
+        url="https://www.douyin.com/aweme/v1/web/commit/item/digg/",
+        request=SimpleNamespace(method="POST", post_data='{"aweme_id":"123","type":1,"is_cancel":0}'),
+    )
+    if not traffic_workbench._is_action_response(probe, "like", {"video_id": "123"}):
+        raise RuntimeError("编译后引流响应匹配自检失败")
+    if traffic_workbench._payload_status_ok({"status_code": False}):
+        raise RuntimeError("编译后引流状态校验自检失败")
+    (data_dir / "smoke-result.json").write_text(json.dumps({
+        "version": health_state["version"], "schema_version": schema["current"],
+        "service_url": license_endpoint(), "traffic_confirmation": "passed",
+    }), encoding="utf-8")
 
 
 def main() -> None:
