@@ -375,6 +375,7 @@ const routeListeners = computed(() => {
   }
   if (activeView.value === 'ai') {
     return {
+      'find-customers': findCustomers,
       'create-job': createAiJob,
       'create-batch-jobs': createBatchAiJobs,
       'delete-non-competitors': deleteAiWorkbenchNonCompetitors,

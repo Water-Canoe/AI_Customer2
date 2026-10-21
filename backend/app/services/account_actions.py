@@ -596,6 +596,31 @@ def create_account_find_customer_task(account_id: int, *, conn: Any | None = Non
         )
 
 
+def create_all_find_customer_tasks(*, conn: Any | None = None) -> dict[str, Any]:
+    """全部竞品按平台复用找客户规则；不受列表分页、来源关系或关键词上限影响。"""
+    list_fields = ("task_ids", "tasks", "accounts", "skipped")
+    count_fields = ("created", "account_count", "reuse_content_count", "detail_content_count",
+                    "creator_account_count", "recent_comment_skip_count", "skip_content_count", "supplement_content_count")
+    result: dict[str, Any] = {"ok": True, **{key: [] for key in list_fields}, **{key: 0 for key in count_fields}}
+    with database.connect() if conn is None else nullcontext(conn) as conn:
+        rows = conn.execute(
+            """SELECT id, platform, platform_user_id, sec_uid, nickname, profile_url,
+                      competitor_status, content_total_count
+               FROM user_accounts WHERE competitor_status = '竞品'
+               ORDER BY platform, updated_at DESC, id DESC"""
+        ).fetchall()
+        platforms: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            platforms.setdefault(str(row["platform"]), []).append(row)
+        for platform, accounts in platforms.items():
+            batch = _build_find_customer_task(platform, accounts, "全部竞品", f"一键找客户：{platform}，竞品账号 {len(accounts)} 个", conn=conn)
+            for key in list_fields:
+                result[key].extend(batch[key])
+            for key in count_fields:
+                result[key] += batch[key]
+    return result
+
+
 def create_keyword_find_customer_task(
     platform: str,
     keyword: str,

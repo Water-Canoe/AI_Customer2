@@ -65,3 +65,17 @@ def create_account_find_customer_task(account_id: int, run_now: bool = True) -> 
         if run_now and result["task_ids"]:
             result["runtime_job"] = job_queue.enqueue_crawl_batch(result["task_ids"], conn=conn)
     return result
+
+
+@router.post("/accounts/find-customers/batch")
+def create_all_find_customer_tasks(run_now: bool = True) -> dict[str, object]:
+    require_license()
+    # 各平台任务和单个批次队列共同提交；任一平台或入队失败则整体回滚。
+    with database.connect() as conn:
+        try:
+            result = account_actions.create_all_find_customer_tasks(conn=conn)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if run_now and result["task_ids"]:
+            result["runtime_job"] = job_queue.enqueue_crawl_batch(result["task_ids"], conn=conn)
+    return result

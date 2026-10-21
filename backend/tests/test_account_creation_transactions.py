@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import database
 from app.routers import lead_accounts, overview
-from app.services import account_center, crawler_adapter, job_queue
+from app.services import account_center, bulk_actions, crawler_adapter, job_queue
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def account_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     return {"account_id": account_ids[0], "lead_id": lead_ids[0]}
 
 
-CASES = ["profile", "profiles", "analysis", "find", "intent", "intents", "keyword_analysis", "keyword_find"]
+CASES = ["profile", "profiles", "analysis", "find", "intent", "intents", "keyword_analysis", "keyword_find", "all_find"]
 
 
 def create_from_route(case: str, project: dict[str, object], *, run_now: bool = True) -> dict[str, object]:
@@ -64,6 +64,8 @@ def create_from_route(case: str, project: dict[str, object], *, run_now: bool = 
         return lead_accounts.create_account_analysis_task(account_id, run_now=run_now)
     if case == "find":
         return lead_accounts.create_account_find_customer_task(account_id, run_now=run_now)
+    if case == "all_find":
+        return lead_accounts.create_all_find_customer_tasks(run_now=run_now)
     if case == "intent":
         return overview.analyze_overview_customer_intent(lead_id, run_now=run_now)
     if case == "intents":
@@ -97,7 +99,7 @@ def test_runtime_insert_failure_rolls_back_business_and_queue(account_project, m
         assert conn is not None
         assert conn.execute("SELECT COUNT(*) FROM runtime_jobs").fetchone()[0] == 1
         expected_table = "analysis_jobs" if case in {"intent", "intents"} else "crawl_jobs"
-        minimum = 2 if case in {"profiles", "find", "intents", "keyword_find"} else 1
+        minimum = 2 if case in {"profiles", "find", "intents", "keyword_find", "all_find"} else 1
         assert conn.execute(f"SELECT COUNT(*) FROM {expected_table}").fetchone()[0] >= minimum
         raise RuntimeError("测试：运行队列插入后失败")
 
@@ -136,7 +138,7 @@ def test_run_now_false_only_prepares_business(account_project, monkeypatch, case
     assert "runtime_job" not in result
 
 
-@pytest.mark.parametrize("case", ["profiles", "find"])
+@pytest.mark.parametrize("case", ["profiles", "find", "all_find"])
 def test_later_crawl_insert_failure_rolls_back_earlier_batch_items(account_project, monkeypatch, case: str) -> None:
     original_create = crawler_adapter.create_task
     created_ids: list[str] = []
@@ -153,6 +155,32 @@ def test_later_crawl_insert_failure_rolls_back_earlier_batch_items(account_proje
         create_from_route(case, account_project)
     assert created_ids == ["0001", "0002"]
     assert counts() == (0, 0, 0, "1")
+
+
+def test_all_competitors_include_multiple_platforms_more_than_100_and_skip_active_tasks(account_project) -> None:
+    # 不要求账号具有关键词来源，也不能沿用关键词接口的 100 个账号上限。
+    execution = account_center.create_account("xhs", "小红书采集", "operations", ["acquisition"], ["acquisition"])
+    account_center.set_account_state(execution["id"], "ready", checked=True)
+    account_center.set_all_feature_status(execution["id"], "ready")
+    with database.connect() as conn:
+        for index in range(103):
+            conn.execute("INSERT INTO user_accounts(platform,platform_user_id,nickname,competitor_status) VALUES('dy',?,?,'竞品')", (f"extra-{index}", f"额外竞品{index}"))
+        conn.execute("INSERT INTO user_accounts(platform,platform_user_id,nickname,competitor_status) VALUES('xhs','xhs-extra','小红书竞品','竞品')")
+        conn.execute("INSERT INTO user_accounts(platform,platform_user_id,nickname,competitor_status) VALUES('dy','excluded','非竞品','非竞品')")
+        expected_ids = {row[0] for row in conn.execute("SELECT id FROM user_accounts WHERE competitor_status='竞品'")}
+    preview = bulk_actions.preview_bulk_action({"action": "find_customers", "target_type": "competitor", "filters": {"keyword": "不匹配", "page": 999}})
+    assert preview["eligible_count"] == len(expected_ids) == 106
+    assert counts()[:3] == (0, 0, 0)
+    result = lead_accounts.create_all_find_customer_tasks()
+    assert {account["account_id"] for account in result["accounts"]} == expected_ids
+    assert result["account_count"] == 106
+    tasks = [crawler_adapter.get_task(task_id) for task_id in result["task_ids"]]
+    assert {task["platform"] for task in tasks} == {"dy", "xhs"}
+    assert all(task["collect_comments"] and task["collect_sub_comments"] for task in tasks)
+    assert result["runtime_job"]["payload"]["task_ids"] == result["task_ids"]
+    repeated = lead_accounts.create_all_find_customer_tasks()
+    assert repeated["created"] == 0 and len(repeated["skipped"]) == 106
+    assert "runtime_job" not in repeated
 
 
 def test_runtime_failure_preserves_existing_stale_job_and_rolls_back_new_jobs(account_project, monkeypatch) -> None:

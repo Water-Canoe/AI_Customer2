@@ -16,7 +16,7 @@ export default defineComponent({
     workbench: { type: Object, default: () => ({}) },
     query: { type: Object, default: () => ({ tab: 'competitors', keyword: '', status: '', result: '', page: 1, page_size: 10 }) }
   },
-  emits: ['create-job', 'create-batch-jobs', 'delete-non-competitors', 'delete-non-customers', 'retry-job', 'retry-jobs', 'query-change'],
+  emits: ['create-job', 'create-batch-jobs', 'find-customers', 'delete-non-competitors', 'delete-non-customers', 'retry-job', 'retry-jobs', 'query-change'],
   setup(props, { emit }) {
     const route = useRoute()
     const router = useRouter()
@@ -172,7 +172,8 @@ export default defineComponent({
         renderSummary(summary.value),
         ]),
         renderTabs(activeTab.value, selectTab),
-        renderToolbar(activeTab.value, filters, applyFilters, runBatch, retryBatch, deleteNonCompetitors, deleteNonCustomers),
+        renderToolbar(activeTab.value, filters, applyFilters, runBatch, retryBatch, deleteNonCompetitors, deleteNonCustomers,
+          () => emit('find-customers', { kind: 'all_competitors' })),
         renderRows({
           tab: activeTab.value,
           rows: rows.value,
@@ -232,7 +233,8 @@ function renderToolbar(
   runBatch: () => void,
   retryBatch: () => void,
   deleteNonCompetitors: () => void,
-  deleteNonCustomers: () => void
+  deleteNonCustomers: () => void,
+  findCustomers: () => void
 ) {
   const statusOptions = tab === 'history'
     ? ['succeeded', 'failed']
@@ -263,6 +265,10 @@ function renderToolbar(
       ...resultOptions.map(result => h('option', { value: result }, result))
     ]) : null,
     h('button', { class: 'filter-button', type: 'button', onClick: applyFilters }, '搜索'),
+    ['competitors', 'leads'].includes(tab) ? h('button', { class: 'secondary-action', type: 'button', title: '为全部已判定为竞品的账号找客户，不受搜索、筛选和分页限制', onClick: findCustomers }, [
+      h(Search, { class: 'inline-icon' }),
+      '一键找客户'
+    ]) : null,
     ['competitors', 'leads'].includes(tab) ? h('button', { class: 'primary-action', type: 'button', title: '分析当前类型的全部未分析对象，不受筛选和分页限制', onClick: runBatch }, [
       h(MagicStick, { class: 'inline-icon' }),
       '一键分析'

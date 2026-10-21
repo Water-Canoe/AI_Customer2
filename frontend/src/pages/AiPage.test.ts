@@ -34,6 +34,13 @@ describe('AI筛选查询上下文', () => {
     expect((wrapper.findAll('select')[0].element as HTMLSelectElement).value).toBe('失败')
     wrapper.unmount()
   })
+  it.each(['competitors', 'leads'])('finds customers from all competitors on the %s tab without forwarding list filters', async tab => {
+    const wrapper = mount(AiPage, { props: { workbench: { items: [], total: 250 }, query: { tab, keyword: '仅当前搜索', status: '失败', result: '非客户', page: 4, page_size: 10 } } })
+    await wrapper.findAll('.ai-toolbar button').find(button => button.text() === '一键找客户')!.trigger('click')
+    expect(wrapper.emitted('find-customers')).toEqual([[{ kind: 'all_competitors' }]])
+    expect(wrapper.emitted('query-change')).toBeUndefined()
+    wrapper.unmount()
+  })
   it('continues a competitor to comment collection and a target customer to its follow-up detail', async () => {
     const wrapper = mount(AiPage, { props: { workbench: { items: [{ id: 9, target_type: 'competitor', result_label: '竞品', platform: 'dy', profile_url: 'https://example.com/competitor' }] }, query: { tab: 'competitors', keyword: '', page: 1, page_size: 10 } } })
     await wrapper.findAll('button').find(button => button.text() === '采集评论')!.trigger('click')

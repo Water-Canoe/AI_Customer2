@@ -275,7 +275,10 @@ export function useOverviewWorkbench(options: OverviewWorkbenchOptions) {
   async function findCustomers(target: Dict) {
     try {
       let data: Dict
-      if (target.kind === 'keyword') {
+      if (target.kind === 'all_competitors') {
+        await confirmBulkPreview({ action: 'find_customers', target_type: 'competitor' }, '一键找客户预览')
+        data = (await api.post('/accounts/find-customers/batch')).data
+      } else if (target.kind === 'keyword') {
         const { platform, keyword } = keywordScope(target)
         if (!platform || !keyword) {
           ElMessage.error('当前关键词缺少平台或关键词信息，无法找客户')
@@ -303,6 +306,7 @@ export function useOverviewWorkbench(options: OverviewWorkbenchOptions) {
       await refresh(options.refreshTasks, options.refreshAi)
       if (data.task_ids?.length) await options.openTaskLogs(data.task_ids[0])
     } catch (error: any) {
+      if (error === 'cancel' || error === 'close') return
       ElMessage.error(error?.response?.data?.detail || '找客户任务创建失败')
     }
   }

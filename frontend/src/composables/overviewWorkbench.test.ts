@@ -17,12 +17,13 @@ const mocks = vi.hoisted(() => ({
   openTaskLogs: vi.fn(),
   writeText: vi.fn(),
   confirm: vi.fn(),
+  preview: vi.fn(),
 }))
 
 vi.mock('../shared/api', () => ({
   api: { get: mocks.get, post: mocks.post, patch: mocks.patch, delete: mocks.remove },
 }))
-vi.mock('../shared/bulkPreview', () => ({ confirmBulkPreview: vi.fn() }))
+vi.mock('../shared/bulkPreview', () => ({ confirmBulkPreview: mocks.preview }))
 vi.mock('element-plus', () => ({
   ElMessage: { success: mocks.success, error: mocks.error, info: vi.fn(), warning: vi.fn() },
   ElMessageBox: { confirm: mocks.confirm },
@@ -32,6 +33,26 @@ vi.mock('element-plus', () => ({
 describe('useOverviewWorkbench', () => {
   beforeEach(() => vi.clearAllMocks())
   afterEach(() => vi.unstubAllGlobals())
+
+  it('previews the full competitor scope and reuses the existing find-customer task refresh flow', async () => {
+    mocks.post.mockResolvedValue({ data: { created: 2, task_ids: ['task-1', 'task-2'], creator_account_count: 125 } })
+    mocks.get.mockResolvedValue({ data: [] })
+    const overview = useOverviewWorkbench({ settings: ref({}), refreshTasks: mocks.refreshTasks, refreshAi: mocks.refreshAi, refreshTable: mocks.refreshTable, openTaskLogs: mocks.openTaskLogs })
+    await overview.findCustomers({ kind: 'all_competitors' })
+    expect(mocks.preview).toHaveBeenCalledWith({ action: 'find_customers', target_type: 'competitor' }, '一键找客户预览')
+    expect(mocks.post).toHaveBeenCalledWith('/accounts/find-customers/batch')
+    expect(mocks.refreshTasks).toHaveBeenCalledOnce()
+    expect(mocks.refreshAi).toHaveBeenCalledOnce()
+    expect(mocks.openTaskLogs).toHaveBeenCalledWith('task-1')
+  })
+
+  it.each(['cancel', 'close'])('does not create tasks or show an error when the find-customer preview is %s', async reason => {
+    mocks.preview.mockRejectedValueOnce(reason)
+    const overview = useOverviewWorkbench({ settings: ref({}), refreshTasks: mocks.refreshTasks, refreshAi: mocks.refreshAi, refreshTable: mocks.refreshTable, openTaskLogs: mocks.openTaskLogs })
+    await overview.findCustomers({ kind: 'all_competitors' })
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(mocks.error).not.toHaveBeenCalled()
+  })
 
   it('creates an account analysis task and opens its logs', async () => {
     mocks.post.mockResolvedValue({ data: { id: 'task-1' } })

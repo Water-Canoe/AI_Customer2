@@ -352,6 +352,7 @@ class BulkActionPreview(BaseModel):
         "retry_failed_ai",
         "keyword_analyze",
         "keyword_find_customers",
+        "find_customers",
     ]
     target_type: Literal["competitor", "lead", "ai_job", "keyword"]
     target_ids: list[int | str] = Field(default_factory=list)

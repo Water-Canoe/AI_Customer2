@@ -23,6 +23,8 @@ def preview_bulk_action(payload: Any) -> dict[str, Any]:
         return _preview_keyword_analyze(filters)
     if action == "keyword_find_customers":
         return _preview_keyword_find_customers(filters)
+    if action == "find_customers":
+        return _preview_find_customers()
     return _empty_preview("未知批量动作", ["当前动作没有预览规则，后端不会执行任何预览副作用。"])
 
 
@@ -130,6 +132,21 @@ def _preview_keyword_analyze(filters: dict[str, Any]) -> dict[str, Any]:
         "warnings": warnings,
         "sample_rows": _sample_rows(eligible, "nickname", "competitor_status"),
         "confirm_text": f"预计对关键词下 {len(eligible)} 个未分析账号发起一键竞品分析。",
+    }
+
+
+def _preview_find_customers() -> dict[str, Any]:
+    """全量竞品预览与执行采用同一判定，不把搜索条件或分页带入范围。"""
+    with database.connect() as conn:
+        rows = database.rows_to_dicts(conn.execute(
+            "SELECT id, nickname, competitor_status FROM user_accounts WHERE competitor_status = '竞品' ORDER BY id DESC"
+        ).fetchall())
+    return {
+        "action": "find_customers", "eligible_count": len(rows), "skipped_count": 0,
+        "affected_counts": {"accounts": len(rows)}, "tombstone_counts": {},
+        "warnings": ["执行时会跳过缺少主页标识或已有找客户任务的账号，并沿用已采内容复用和评论重采间隔规则。"],
+        "sample_rows": _sample_rows(rows, "nickname", "competitor_status"),
+        "confirm_text": f"将为全部平台的 {len(rows)} 个已判定竞品账号找客户，不受当前搜索、筛选和分页限制。",
     }
 
 
