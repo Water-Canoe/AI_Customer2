@@ -255,8 +255,10 @@ $PreviousSmokeDb = $env:AI_CUSTOMER_DB
 try {
     $env:AI_CUSTOMER_DATA_DIR = Join-Path $BuildRoot "smoke-data"
     $env:AI_CUSTOMER_DB = Join-Path $env:AI_CUSTOMER_DATA_DIR "ai_customer.sqlite3"
-    & (Join-Path $PackagedApp "AI_Customer_App.exe") --smoke-test
-    if ($LASTEXITCODE -ne 0) { throw "Compiled application startup/dependency smoke test failed." }
+    # GUI 程序需要显式等待退出，不能沿用上一条命令的退出码。
+    $SmokeProcess = Start-Process -FilePath (Join-Path $PackagedApp "AI_Customer_App.exe") `
+        -ArgumentList "--smoke-test" -WindowStyle Hidden -Wait -PassThru
+    if ($SmokeProcess.ExitCode -ne 0) { throw "Compiled application startup/dependency smoke test failed." }
 }
 finally {
     $env:AI_CUSTOMER_DATA_DIR = $PreviousSmokeData

@@ -291,6 +291,41 @@ if ($env:PYTHONPATH -ne 'original-python-path' -or (Get-Location).Path -ne $orig
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("exit_code", [0, 9])
+def test_compiled_smoke_waits_and_uses_its_own_exit_code(tmp_path: Path, exit_code: int) -> None:
+    """隔离执行自检段，防止 GUI 尚未退出就放行或沿用旧退出码。"""
+    content = (ROOT / "script" / "build_package.ps1").read_text(encoding="utf-8-sig")
+    smoke = content[content.index("$PreviousSmokeData = $env:AI_CUSTOMER_DATA_DIR"):content.index("# Compile the stable updater")]
+    smoke_file = tmp_path / "smoke.ps1"
+    smoke_file.write_text(smoke, encoding="utf-8-sig")
+    body = r'''
+$BuildRoot = 'D:\isolated\build'
+$PackagedApp = 'D:\isolated\app'
+$env:AI_CUSTOMER_DATA_DIR = 'original-data'
+$env:AI_CUSTOMER_DB = 'original-db'
+$global:LASTEXITCODE = 77
+$global:SmokeCalls = 0
+function Start-Process {
+    param($FilePath, $ArgumentList, $WindowStyle, [switch]$Wait, [switch]$PassThru)
+    if (-not $Wait -or -not $PassThru -or $WindowStyle -ne 'Hidden') { throw 'Missing GUI process wait.' }
+    if ($FilePath -ne 'D:\isolated\app\AI_Customer_App.exe' -or $ArgumentList -ne '--smoke-test') { throw 'Wrong self-test process.' }
+    $global:SmokeCalls++
+    return [pscustomobject]@{ ExitCode = EXIT_CODE }
+}
+$failed = $false
+try { . 'SMOKE_SCRIPT' }
+catch {
+    if ($_.Exception.Message -ne 'Compiled application startup/dependency smoke test failed.') { throw }
+    $failed = $true
+}
+if ($failed -ne (EXIT_CODE -ne 0)) { throw 'Wrong self-test exit-code decision.' }
+if ($global:SmokeCalls -ne 1) { throw 'Self-test was not called exactly once.' }
+if ($env:AI_CUSTOMER_DATA_DIR -ne 'original-data' -or $env:AI_CUSTOMER_DB -ne 'original-db') { throw 'Self-test leaked its database environment.' }
+'''.replace("EXIT_CODE", str(exit_code)).replace("SMOKE_SCRIPT", str(smoke_file).replace("'", "''"))
+    result = run_script_check(tmp_path, body)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_existing_delivery_fails_before_compiler_or_component_checks(tmp_path: Path) -> None:
     project, builder = prepare_builder(tmp_path)
     delivery = project / "deliverables" / "9.9.9"
