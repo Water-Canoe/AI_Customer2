@@ -6,7 +6,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from app.services.im_session import _session_path, _cookie_map, load_credentials, save_credentials, session_status
+from app.services.im_session import _session_path, load_credentials, save_credentials, session_status
 
 
 def _objects(value: Any):
@@ -38,27 +38,27 @@ def _normalize_private_key(value: str) -> str:
     return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()).decode()
 
 
-def credentials_from_snapshot(cookies: list[dict[str, Any]], snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    """从同一个用户会话提取已存在材料，不生成票据或混用另一次登录的密钥。"""
+def credentials_from_snapshot(cookies: list[dict[str, Any]], snapshot: dict[str, Any]) -> dict[str, Any]:
+    """只提取当前 Profile 的网页保护票据与 SDK 密钥，不混用登录场景或旧快照。"""
     values = {str(item["name"]): str(item["value"]) for item in cookies}
     result: dict[str, Any] = {"cookie_str": "; ".join(f"{key}={value}" for key, value in values.items())}
     if not values.get("sessionid"):
         raise ValueError("当前 Profile 未包含抖音用户登录会话，请先在账号中心完成用户登录")
-    previous = previous or {}
-    old_cookies = _cookie_map(str(previous.get("cookie_str") or ""))
-    if old_cookies.get("sessionid") == values["sessionid"]:
-        result.update({key: previous[key] for key in ("ticket", "ts_sign", "client_cert", "private_key") if previous.get(key)})
     sign_id = values.get("bd_ticket_guard_ts_sign_id", "")
     tickets: dict[str, dict[str, str]] = {}
     keys: set[str] = set()
-    # localStorage 的 value 和 IndexedDB 中的嵌套对象都由 Playwright 导出。
+    # 同一 Profile 的 login 和 web_protect 票据可以并存，必须按 SDK 存储键区分场景。
     origins = [origin for origin in snapshot.get("origins", []) if origin.get("origin") == "https://www.douyin.com"]
-    for item in _objects(origins):
+    entries = [entry for origin in origins for entry in origin.get("localStorage", [])]
+    protect_values = [entry.get("value") for entry in entries if entry.get("name") == "security-sdk/s_sdk_sign_data_key/web_protect"]
+    key_values = [entry.get("value") for entry in entries if entry.get("name") == "security-sdk/s_sdk_crypt_sdk"]
+    for item in _objects(protect_values):
         if item.get("ticket") and item.get("ts_sign"):
             ts_sign = str(item["ts_sign"])
             if not sign_id or ts_sign.startswith(sign_id):
                 tickets[ts_sign] = {field: str(item[field]) for field in ("ticket", "ts_sign", "client_cert") if item.get(field)}
-        private = item.get("ec_privateKey") or item.get("private_key")
+    for item in _objects(key_values):
+        private = item.get("ec_privateKey")
         if isinstance(private, str):
             normalized = _normalize_private_key(private)
             if normalized:
@@ -81,12 +81,8 @@ def credentials_from_snapshot(cookies: list[dict[str, Any]], snapshot: dict[str,
 
 async def capture_context(account_id: str, context: Any) -> dict[str, Any]:
     """登录或明确同步时导出一次；日常私信不打开浏览器。"""
-    try:
-        previous = load_credentials(account_id)
-    except ValueError:
-        previous = None
     cookies = await context.cookies("https://www.douyin.com/")
     snapshot = await context.storage_state(indexed_db=True)
-    credentials = credentials_from_snapshot(cookies, snapshot, previous)
+    credentials = credentials_from_snapshot(cookies, snapshot)
     save_credentials(account_id, credentials)
     return session_status(account_id)

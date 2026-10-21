@@ -21,8 +21,8 @@ def _key() -> str:
 def _snapshot(key: str, sign: str = 'sign-1.signature') -> dict:
     # 模拟上游明确使用的 data 双层 JSON，而非真实账号凭据。
     return {'origins': [{'origin': 'https://www.douyin.com', 'localStorage': [
-        {'name': 'protect', 'value': json.dumps({'data': json.dumps({'ticket': 'test-ticket', 'ts_sign': sign})})},
-        {'name': 'keys', 'value': json.dumps({'data': json.dumps({'ec_privateKey': key})})},
+        {'name': 'security-sdk/s_sdk_sign_data_key/web_protect', 'value': json.dumps({'data': json.dumps({'ticket': 'test-ticket', 'ts_sign': sign})})},
+        {'name': 'security-sdk/s_sdk_crypt_sdk', 'value': json.dumps({'data': json.dumps({'ec_privateKey': key})})},
     ]}]}
 
 
@@ -32,8 +32,7 @@ def test_snapshot_extracts_matching_credentials_without_reusing_another_login():
     captured = session.credentials_from_snapshot(cookies, _snapshot(key))
     assert captured['ticket'] == 'test-ticket'
     assert captured['private_key'] == key
-    previous = {**captured, 'cookie_str': 'sessionid=old-login'}
-    result = session.credentials_from_snapshot(cookies, {'origins': []}, previous)
+    result = session.credentials_from_snapshot(cookies, {'origins': []})
     assert 'private_key' not in result and 'ticket' not in result
     mismatched = session.credentials_from_snapshot(cookies, _snapshot(key, 'other.signature'))
     assert 'ticket' not in mismatched and 'private_key' not in mismatched
@@ -44,9 +43,32 @@ def test_snapshot_extracts_matching_credentials_without_reusing_another_login():
 
 def test_ambiguous_private_keys_do_not_enable_sending():
     snapshot = _snapshot(_key())
-    snapshot['origins'][0]['localStorage'].append({'name': 'old-keys', 'value': json.dumps({'ec_privateKey': _key()})})
+    snapshot['origins'][0]['localStorage'][1]['value'] = json.dumps([{'ec_privateKey': _key()}, {'ec_privateKey': _key()}])
     result = session.credentials_from_snapshot([{'name': 'sessionid', 'value': 'login'}], snapshot)
     assert 'ticket' in result and 'private_key' not in result
+
+
+def test_snapshot_separates_web_protect_ticket_from_login_and_account_records():
+    # 新登录会同时留下不同场景的票据；私信只使用 web_protect，不猜选最新时间。
+    key = _key()
+    snapshot = _snapshot(key)
+    login_record = {'ticket': 'login-ticket', 'ts_sign': 'login-sign.signature', 'create_time': 9999999999}
+    snapshot['origins'][0]['localStorage'].extend([
+        {'name': 'security-sdk/s_sdk_sign_data_key/login', 'value': json.dumps({'data': json.dumps(login_record)})},
+        {'name': 'user_info_passport_new', 'value': json.dumps({'ticket_guard': login_record})},
+        {'name': 'unrelated-cache', 'value': json.dumps({'ec_privateKey': _key()})},
+    ])
+    result = session.credentials_from_snapshot([{'name': 'sessionid', 'value': 'login'}], snapshot)
+    assert result['ticket'] == 'test-ticket'
+    assert result['ts_sign'] == 'sign-1.signature'
+    assert result['private_key'] == key
+
+
+def test_login_ticket_alone_does_not_enable_private_message_sending():
+    snapshot = _snapshot(_key())
+    snapshot['origins'][0]['localStorage'][0]['name'] = 'security-sdk/s_sdk_sign_data_key/login'
+    result = session.credentials_from_snapshot([{'name': 'sessionid', 'value': 'login'}], snapshot)
+    assert 'ticket' not in result and 'ts_sign' not in result
 
 
 def test_capture_protects_credentials_and_status_does_not_expose_them(tmp_path, monkeypatch):
