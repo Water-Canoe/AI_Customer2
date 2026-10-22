@@ -26,6 +26,7 @@ script/logs/
 
 # Frontend dependencies and build output
 frontend/node_modules/
+backend/douyin-sdk/node_modules/
 frontend/dist/
 frontend/.vite/
 *.tsbuildinfo

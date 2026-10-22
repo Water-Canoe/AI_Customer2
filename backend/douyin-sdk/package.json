@@ -1,0 +1,9 @@
+{
+  "name": "ai-customer-douyin-sdk-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI_Customer 的抖音私信 SDK 子进程桥接",
+  "engines": { "node": ">=22.5.0" },
+  "dependencies": { "douyin-im": "1.1.0" }
+}

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from '../shared/api'
 import type { Dict, PlatformAccount } from '../shared/types'
 import { createAutoSyncController } from '../composables/autoSync'
-import { MessageInboxControls, type InboxPlatform, type ConnectionStatus } from '../components/MessageInboxControls'
+import { MessageInboxControls, type InboxPlatform, type ConnectionStatus, type SdkLoginStatus } from '../components/MessageInboxControls'
 import { platformName } from '../shared/format'
 import { renderCustomerDetail } from '../components/CustomerDetail'
 import '../styles/operations.css'
@@ -14,7 +14,7 @@ type Conversation = {
   id: number; account_id: string; peer_user_id: string; nickname: string; avatar: string; last_message: string;
   last_message_at: string | null; unread_count: number; lead_id: number | null;
 }
-type Message = { id: number; direction: 'incoming' | 'outgoing'; content: string; message_type: string | number; status: string; error?: string; created_at: string }
+type Message = { id: number; direction: 'incoming' | 'outgoing'; content: string; message_type: string | number; status: string; error?: string; sent_at: string; created_at: string }
 const emptyStatus = (): ConnectionStatus => ({ state: 'disconnected', receive_ready: false, send_ready: false, error: '', history_scope: 'local' })
 
 export default defineComponent({
@@ -40,6 +40,7 @@ export default defineComponent({
     const appliedSearch = ref('')
     const error = ref('')
     const actionBusy = ref(false)
+    const historyBusy = ref(false)
     const sending = ref(false)
     const deletingConversations = ref(new Set<number>())
     const loadingEarlier = ref(false)
@@ -151,7 +152,8 @@ export default defineComponent({
       if (current(token) && followBottom && transcript.value) transcript.value.scrollTop = transcript.value.scrollHeight
       const count = selected.value?.unread_count || 0
       if (count > 0) {
-        await api.post(`/message-inbox/conversations/${conversation}/read`, null, { params: { account_id: account, up_to_id: messages.value[messages.value.length - 1]?.id } })
+        // 历史补入后的本地编号可能更大，已读边界取已展示消息的最大编号。
+        await api.post(`/message-inbox/conversations/${conversation}/read`, null, { params: { account_id: account, up_to_id: messages.value.length ? Math.max(...messages.value.map(item => item.id)) : undefined } })
         if (current(token)) {
           if (selected.value) selected.value.unread_count = 0
         }
@@ -208,19 +210,43 @@ export default defineComponent({
       } catch (cause: any) { if (current(token)) ElMessage.error(apiError(cause, '更早消息加载失败')) }
       finally { loadingEarlier.value = false }
     }
-    async function accountAction(action: 'connect' | 'disconnect' | 'sync-auth') {
+    async function accountAction(action: 'connect' | 'disconnect' | 'sync-auth' | 'sdk-login' | 'sdk-login/cancel' | 'sync-history') {
+      if (action === 'sync-history') { await syncHistory(); return }
       if (!accountId.value || actionBusy.value) return
       actionBusy.value = true
-      const token = revision
+      let token = ++revision
       const account = accountId.value
       try {
-        await api.post(accountPath(account) + '/' + action)
+        const { data } = await api.post(accountPath(account) + '/' + action)
         if (current(token)) {
+          // 让操作前启动的状态轮询失效，避免迟到结果覆盖新的二维码。
+          token = ++revision
+          if (action.startsWith('sdk-login')) status.value = { ...status.value, sdk_login: data as SdkLoginStatus }
           if (action === 'sync-auth') ElMessage.success('已更新私信认证状态')
           await refresh.trigger('route')
         }
       } catch (cause: any) { if (current(token)) ElMessage.error(apiError(cause, '私信操作失败')) }
       finally { actionBusy.value = false }
+    }
+    async function syncHistory(conversation?: number) {
+      if (platform.value !== 'dy' || !accountId.value || historyBusy.value) return
+      let token = revision
+      const account = accountId.value
+      historyBusy.value = true
+      try {
+        // 平台历史只由用户显式请求，三秒轮询仍只刷新本地记录。
+        const { data } = conversation
+          ? await api.post<{ imported: number; total: number }>(`/message-inbox/conversations/${conversation}/sync-history`, null, { params: { account_id: account } })
+          : await api.post<{ imported: number; total: number }>(accountPath(account) + '/sync-history')
+        if (!current(token)) return
+        token = ++revision
+        // 补入历史会改变第一页及分页边界，重新读取后才能继续向前翻页。
+        messages.value = []
+        hasMore.value = false
+        ElMessage.success(`历史同步完成：拉取 ${data.total} 条，新增 ${data.imported} 条`)
+        await refresh.trigger('route')
+      } catch (cause: any) { if (current(token)) ElMessage.error(apiError(cause, '平台历史同步失败')) }
+      finally { historyBusy.value = false }
     }
     async function send() {
       const text = draft.value.trim()
@@ -271,7 +297,7 @@ export default defineComponent({
     return () => h('div', { class: 'workspace-page operations-page message-inbox-page' }, [
       h(MessageInboxControls, {
         platform: platform.value, accountId: accountId.value, accounts: accounts.value,
-        status: status.value, error: error.value, busy: actionBusy.value,
+        status: status.value, error: error.value, busy: actionBusy.value, historyBusy: historyBusy.value,
         onPlatformChange: (value: InboxPlatform) => { changePlatform(value); navigate('') },
         onAccountChange: (value: string) => navigate(value), onAction: accountAction,
         onManage: () => router.push({ path: '/accounts', query: { feature: 'message', platform: platform.value, return_to: route.fullPath } }),
@@ -296,12 +322,14 @@ export default defineComponent({
           }, deletingConversations.value.has(item.id) ? '删除中' : '删除')])) : h('p', { class: 'inbox-empty' }, accountId.value ? '暂无本地会话，可从客户详情打开会话。' : `请先配置${platformName(platform.value)}私信账号。`)),
         ]),
         h('div', { class: 'inbox-chat' }, selected.value ? [
-          h('header', { class: 'inbox-chat-header' }, [avatar(selected.value), h('strong', { title: selected.value.nickname || selected.value.peer_user_id }, selected.value.nickname || selected.value.peer_user_id), h('span', { class: 'note' }, `${platformName(platform.value)}私信`)]),
+          h('header', { class: 'inbox-chat-header' }, [avatar(selected.value), h('strong', { title: selected.value.nickname || selected.value.peer_user_id }, selected.value.nickname || selected.value.peer_user_id), h('span', { class: 'note' }, `${platformName(platform.value)}私信`),
+            platform.value === 'dy' ? h('button', { class: 'inbox-history-action', disabled: !status.value.receive_ready || actionBusy.value || historyBusy.value || ['syncing', 'logging_in'].includes(status.value.state) || ['starting', 'qrcode', 'verification'].includes(status.value.sdk_login?.state || ''), onClick: () => syncHistory(conversationId.value) }, historyBusy.value ? '同步历史中…' : '同步此会话历史') : null,
+          ]),
           h('div', { class: 'inbox-transcript', ref: transcript, role: 'log', 'aria-label': '聊天记录' }, [
             hasMore.value ? h('button', { class: 'inbox-earlier secondary-action', disabled: loadingEarlier.value, onClick: earlier }, loadingEarlier.value ? '加载中…' : '加载更早记录') : null,
             ...messages.value.map(item => h('article', { key: item.id, class: ['inbox-message', `is-${item.direction}`] }, [
               h('div', { class: 'inbox-message-content' }, item.content || '暂不支持展示此消息内容'),
-              h('div', { class: 'inbox-message-meta' }, [h('time', item.created_at), item.direction === 'outgoing' ? h('span', { class: `inbox-delivery is-${item.status}`, title: item.error || '' }, deliveryLabel(item.status)) : null]),
+              h('div', { class: 'inbox-message-meta' }, [h('time', item.sent_at || item.created_at), item.direction === 'outgoing' ? h('span', { class: `inbox-delivery is-${item.status}`, title: item.error || '' }, deliveryLabel(item.status)) : null]),
               item.error ? h('small', { class: 'operations-error' }, item.error) : null,
             ])),
             !messages.value.length ? h('p', { class: 'inbox-empty' }, '暂无本地聊天记录。') : null,
@@ -335,5 +363,6 @@ export default defineComponent({
 })
 
 function apiError(error: any, fallback: string) { return typeof error?.response?.data?.detail === 'string' ? error.response.data.detail : fallback }
-function mergeMessages(previous: Message[], incoming: Message[]) { return [...new Map([...previous, ...incoming].map(item => [item.id, item])).values()].sort((left, right) => left.id - right.id) }
+// 按平台发送时间合并历史；时间相同时用本地编号保持稳定顺序。
+function mergeMessages(previous: Message[], incoming: Message[]) { return [...new Map([...previous, ...incoming].map(item => [item.id, item])).values()].sort((left, right) => (Date.parse(left.sent_at || left.created_at) || 0) - (Date.parse(right.sent_at || right.created_at) || 0) || left.id - right.id) }
 function deliveryLabel(status: string) { return ({ sending: '发送中', accepted: '已提交', failed: '发送失败', uncertain: '结果待确认', received: '已接收' } as Record<string, string>)[status] || '结果待确认' }

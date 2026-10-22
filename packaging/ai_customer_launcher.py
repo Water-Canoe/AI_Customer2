@@ -182,12 +182,13 @@ def smoke_test() -> None:
         raise RuntimeError("自检只允许使用临时目录内尚不存在的空库")
     binary_dir = Path(sys.argv[0]).resolve().parent
     if is_packaged():
-        for relative in ("playwright/driver/node.exe", "frontend_dist/index.html"):
+        for relative in ("playwright/driver/node.exe", "frontend_dist/index.html",
+                         "douyin-sdk/bridge.mjs", "douyin-sdk/node_modules/douyin-im/package.json"):
             if not (binary_dir / relative).is_file():
                 raise RuntimeError(f"编译产物缺少资源：{relative}")
     data_dir.mkdir(parents=True, exist_ok=True)
     # 直接导入两个协议及原生库，避免运行时首次点击发送才发现漏打包。
-    for name in ("curl_cffi._wrapper", "app.services.douyin_im_transport", "app.services.xhs_im_transport"):
+    for name in ("curl_cffi._wrapper", "app.services.douyin_sdk_transport", "app.services.xhs_im_transport"):
         importlib.import_module(name)
     from app import database
     from app.product_config import license_endpoint

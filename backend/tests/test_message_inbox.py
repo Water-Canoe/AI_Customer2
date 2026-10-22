@@ -22,11 +22,12 @@ def inbox(tmp_path, monkeypatch):
     session = ModuleType('app.services.im_session')
     session.session_status = lambda account_id: {'receive_ready': True, 'send_ready': True, 'error': '', 'synced_at': ''}
     session.load_credentials = lambda account_id: {'cookie_str': 'private-test-credential'}
-    transport = ModuleType('app.services.douyin_im_transport')
+    session.shutdown = lambda: None
+    transport = ModuleType('app.services.douyin_sdk_transport')
     transport.send_text = lambda *args, **kwargs: {'status': 'accepted'}
     transport.close_send_auth = lambda account_id: None
     transport.TransportSendUncertain = type('TransportSendUncertain', (RuntimeError,), {})
-    for name, module in [('im_session', session), ('douyin_im_transport', transport)]:
+    for name, module in [('im_session', session), ('douyin_sdk_session', session), ('douyin_sdk_transport', transport)]:
         monkeypatch.setitem(sys.modules, f'app.services.{name}', module)
         monkeypatch.setattr(services, name, module, raising=False)
 
@@ -376,7 +377,6 @@ def test_sync_auth_releases_sender_off_event_loop(inbox, monkeypatch):
 
 def test_startup_switch_connects_all_ready_supported_accounts(inbox, monkeypatch):
     from app import views
-    from app import services
 
     account, transport = inbox
     first, second = account('抖音客服'), account('小红书客服', 'xhs')
@@ -389,20 +389,22 @@ def test_startup_switch_connects_all_ready_supported_accounts(inbox, monkeypatch
     released = []
     monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', lambda: {})
     monkeypatch.setattr(message_inbox, '_transport_for_platform', lambda platform: transport)
-    dy_capture, xhs_capture = object(), object()
-    dy_session = ModuleType('app.services.douyin_im_session')
-    dy_session.capture_context = dy_capture
-    monkeypatch.setitem(sys.modules, 'app.services.douyin_im_session', dy_session)
-    monkeypatch.setattr(services, 'douyin_im_session', dy_session, raising=False)
+    xhs_capture = object()
     monkeypatch.setattr(message_inbox.im_session, 'capture_xhs_context', xhs_capture, raising=False)
 
     async def sync(account_id, capture):
-        assert capture is (dy_capture if account_id == first else xhs_capture)
+        assert capture is xhs_capture
+        calls.append(account_id)
+        return {'receive_ready': True}
+
+    def restore(account_id):
+        assert account_id == first
         calls.append(account_id)
         return {'receive_ready': True}
 
     transport.receive_forever = lambda credentials, on_message, on_state, stop: (on_state('connected'), stop.wait(5))
     transport.close_send_auth = released.append
+    transport.restore_session = restore
     monkeypatch.setattr(message_inbox.im_session, 'sync_account', sync, raising=False)
     assert views.get_settings()['message_inbox_auto_connect'] is False
     asyncio.run(message_inbox.auto_connect_accounts())
@@ -685,17 +687,12 @@ def test_unlicensed_connection_does_not_start_receiver(inbox, monkeypatch):
 @pytest.fixture
 def login_runtime(inbox, monkeypatch):
     """模拟外部登录和协议，实际运行本地暂停、认证切换与接收线程。"""
-    from app import services
     from app.services import platform_login
 
     account, transport = inbox
     material, invalidated, synced, received, callbacks = {}, [], [], {}, {}
     monkeypatch.setattr(message_inbox, '_transport_for_platform', lambda platform: transport)
     monkeypatch.setattr(message_inbox.im_session, 'capture_xhs_context', object(), raising=False)
-    dy_session = ModuleType('app.services.douyin_im_session')
-    dy_session.capture_context = object()
-    monkeypatch.setitem(sys.modules, 'app.services.douyin_im_session', dy_session)
-    monkeypatch.setattr(services, 'douyin_im_session', dy_session, raising=False)
 
     def credentials(account_id):
         cookie = material.get(account_id, 'old')
@@ -708,6 +705,9 @@ def login_runtime(inbox, monkeypatch):
         material[account_id] = ''
 
     async def sync(account_id, capture):
+        return restore(account_id)
+
+    def restore(account_id):
         synced.append(account_id)
         material[account_id] = 'new'
         return {'receive_ready': True, 'send_ready': True}
@@ -735,6 +735,7 @@ def login_runtime(inbox, monkeypatch):
     })
     monkeypatch.setattr(platform_login, 'login_account', login)
     transport.receive_forever = receive
+    transport.restore_session = restore
     with database.connect() as conn:
         database.set_setting(conn, 'message_hourly_limit', '100')
         database.set_setting(conn, 'message_daily_limit', '100')
@@ -809,7 +810,7 @@ def test_login_drains_sender_and_resumes_only_its_account(login_runtime, monkeyp
         finish_send.set()
         assert logging_in.wait(2)
         assert not original_first.thread.is_alive()
-        assert runtime.invalidated == [first]
+        assert runtime.invalidated == []
         for operation in (lambda: message_inbox.connect_account(first), lambda: message_inbox.disconnect_account(first)):
             with pytest.raises(ValueError, match='登录'):
                 operation()
@@ -838,7 +839,8 @@ def test_login_syncs_without_enabling_previously_disconnected_receiver(login_run
     runtime = login_runtime
     account_id = runtime.account('未连接账号', platform)
     assert content_publish.run_account_login(account_id, 'user')['success']
-    assert runtime.synced == runtime.invalidated == [account_id]
+    assert runtime.synced == [account_id]
+    assert runtime.invalidated == ([account_id] if platform == 'xhs' else [])
     state = message_inbox.status(account_id)
     assert state['state'] == 'disconnected' and state['send_ready']
     assert message_inbox._listeners[account_id].thread is None
@@ -849,7 +851,7 @@ def test_login_failure_releases_pause_without_reusing_old_credentials(login_runt
     from app.services import content_publish, platform_login
 
     runtime = login_runtime
-    account_id = runtime.account('异常登录')
+    account_id = runtime.account('异常登录', 'xhs')
     receiver = runtime.connect(account_id)
     cancelled = []
 
@@ -874,7 +876,7 @@ def test_login_failure_releases_pause_without_reusing_old_credentials(login_runt
     assert 'private-cookie-secret' not in state['error']
     login_status = account_center.get_account(account_id)['login_status']['user']['status']
     assert login_status == ('ready' if failure in {'sync', 'incomplete'} else 'expired' if failure == 'cancel' else 'error')
-    conversation = message_inbox.create_conversation(account_id, peer_user_id='123456')
+    conversation = message_inbox.create_conversation(account_id, peer_user_id='65abcdef1234567890abcdef')
     with pytest.raises(ValueError):
         message_inbox.send_message(account_id, conversation['id'], '不得沿用旧认证')
     assert message_inbox.list_messages(account_id, conversation['id'])['messages'] == []
@@ -988,6 +990,176 @@ def test_disabled_account_login_does_not_enable_private_messages(login_runtime):
     account_id = runtime.account('停用待登录')
     account_center.update_account(account_id, {'enabled': False})
     assert content_publish.run_account_login(account_id, 'user')['success']
-    assert runtime.invalidated == [account_id] and runtime.synced == []
+    assert runtime.invalidated == runtime.synced == []
     assert message_inbox.status(account_id)['state'] == 'disconnected'
     assert not message_inbox.status(account_id)['send_ready']
+
+
+def _history(message_id, content='旧消息', *, sent_at='2026-10-22T10:00:00+00:00', **values):
+    """历史事件与推送共用字段，额外保留平台时间和客户端去重标识。"""
+    return {**_event(message_id, content), 'history': True, 'sent_at': sent_at, **values}
+
+
+def test_imported_history_sorts_pages_and_never_restores_hidden_or_unread(inbox):
+    account, _ = inbox
+    account_id = account('历史翻页')
+    message_inbox.record_received(account_id, {**_event('live', '最新消息'), 'sent_at': '2026-10-22T20:00:00+08:00'})
+    conversation = message_inbox.list_conversations(account_id)[0]
+    live = message_inbox.list_messages(account_id, conversation['id'])['messages'][0]
+    message_inbox.hide_conversation(account_id, conversation['id'])
+    # 比实时消息晚入库的旧历史仍按真实时间排列，时区不同也能比较。
+    for event in [_history('oldest', '最早', sent_at='2026-10-22T09:00:00Z', direction='outgoing'),
+                  _history('old', '较早'), _history('middle', '中间', sent_at='2026-10-22T11:00:00Z')]:
+        assert message_inbox.record_history(account_id, event)
+    assert message_inbox.list_conversations(account_id) == []
+    newest = message_inbox.list_messages(account_id, conversation['id'], limit=2)
+    assert [item['content'] for item in newest['messages']] == ['中间', '最新消息']
+    older = message_inbox.list_messages(account_id, conversation['id'], before_id=newest['messages'][0]['id'], limit=2)
+    assert [item['content'] for item in older['messages']] == ['最早', '较早']
+    assert newest['has_more'] and not older['has_more'] and newest['history_scope'] == 'platform'
+    message_inbox.mark_read(account_id, conversation['id'], live['id'])
+    with database.connect() as conn:
+        saved = conn.execute('SELECT * FROM im_conversations WHERE id=?', (conversation['id'],)).fetchone()
+        assert saved['last_message'] == '最新消息' and saved['last_message_id'] == live['id']
+        assert saved['unread_count'] == 0
+        outgoing = conn.execute("SELECT * FROM im_messages WHERE platform_message_id='oldest'").fetchone()
+        assert outgoing['direction'] == 'outgoing' and outgoing['status'] == 'accepted'
+        assert json.loads(outgoing['raw_content'])[message_inbox.HISTORY_MARKER] is True
+
+
+def test_historical_reply_does_not_change_customer_follow_status(inbox):
+    account, _ = inbox
+    account_id = account('历史客户状态')
+    with database.connect() as conn:
+        user = conn.execute("INSERT INTO user_accounts(platform,platform_user_id) VALUES('dy','123456')").lastrowid
+        lead = conn.execute("INSERT INTO lead_user_accounts(account_id,follow_status) VALUES(?,'已私信')", (user,)).lastrowid
+    message_inbox.record_history(account_id, _history('old-reply'))
+    with database.connect() as conn:
+        assert conn.execute('SELECT follow_status FROM lead_user_accounts WHERE id=?', (lead,)).fetchone()[0] == '已私信'
+        assert conn.execute('SELECT COUNT(*) FROM lead_status_events').fetchone()[0] == 0
+    message_inbox.record_received(account_id, _event('new-reply'))
+    with database.connect() as conn:
+        assert conn.execute('SELECT follow_status FROM lead_user_accounts WHERE id=?', (lead,)).fetchone()[0] == '已回复'
+
+
+def test_history_reconciles_outgoing_client_id_per_account_without_resending(inbox):
+    account, transport = inbox
+    first, second = account('历史客服一'), account('历史客服二')
+    sent = []
+
+    def send(*args, **kwargs):
+        sent.append(kwargs['account_id'])
+        return {'status': 'uncertain', 'client_message_id': 'same-client-id'}
+
+    transport.send_text = send
+    conversations = [message_inbox.create_conversation(item, peer_user_id='123456') for item in (first, second)]
+    originals = [message_inbox.send_message(item, conversation['id'], '已提交的内容') for item, conversation in zip((first, second), conversations)]
+    for account_id, conversation, original in zip((first, second), conversations, originals):
+        event = _history('same-server-id', '已提交的内容', direction='outgoing', client_message_id='same-client-id')
+        assert not message_inbox.record_history(account_id, event)
+        assert not message_inbox.record_history(account_id, event)
+        messages = message_inbox.list_messages(account_id, conversation['id'])['messages']
+        assert len(messages) == 1 and messages[0]['id'] == original['id']
+        assert messages[0]['status'] == 'accepted' and messages[0]['platform_message_id'] == 'same-server-id'
+    assert sent == [first, second]
+
+
+def test_history_sync_checks_ownership_license_platform_and_account_lock(inbox, monkeypatch):
+    account, transport = inbox
+    first, second, xhs = account('历史同步一'), account('历史同步二'), account('小红书历史', 'xhs')
+    conversation = message_inbox.create_conversation(first, peer_user_id='123456')
+    calls = []
+
+    def sync(account_id, peer):
+        assert message_inbox._send_locks[account_id].locked()
+        calls.append((account_id, peer))
+        return [_history('remote-history')]
+
+    transport.sync_history = sync
+    assert message_inbox.sync_history(first, conversation['id']) == {'imported': 1, 'total': 1}
+    assert message_inbox.sync_history(first) == {'imported': 0, 'total': 1}
+    assert calls == [(first, '123456'), (first, '')]
+    with pytest.raises(ValueError, match='会话不存在'):
+        message_inbox.sync_history(second, conversation['id'])
+    with pytest.raises(ValueError, match='仅抖音'):
+        message_inbox.sync_history(xhs)
+
+    def reject():
+        raise ValueError('授权无效')
+
+    monkeypatch.setattr(message_inbox.license_service, 'ensure_authorized', reject)
+    with pytest.raises(ValueError, match='授权无效'):
+        message_inbox.sync_history(first)
+    assert len(calls) == 2 and not message_inbox._send_locks[first].locked()
+
+
+def test_history_cursor_is_account_scoped_and_same_time_uses_id(inbox):
+    account, _ = inbox
+    first, second = account('相同时间一'), account('相同时间二')
+    for message_id in ['a', 'b', 'c']:
+        message_inbox.record_history(first, _history(message_id))
+    message_inbox.record_history(second, _history('a'))
+    conversation = message_inbox.list_conversations(first)[0]
+    other = message_inbox.list_conversations(second)[0]
+    latest = message_inbox.list_messages(first, conversation['id'], limit=1)['messages'][0]
+    assert latest['platform_message_id'] == 'c'
+    assert message_inbox.list_messages(first, conversation['id'], before_id=latest['id'], limit=1)['messages'][0]['platform_message_id'] == 'b'
+    with pytest.raises(ValueError, match='分页游标'):
+        message_inbox.list_messages(second, other['id'], before_id=latest['id'])
+
+
+@pytest.mark.parametrize('values', [{'sent_at': ''}, {'sent_at': 'invalid'}, {'time_source': 'received'}])
+def test_history_requires_real_platform_time_before_saving(inbox, values):
+    account, _ = inbox
+    account_id = account('平台历史时间')
+    with pytest.raises(ValueError, match='平台发送时间'):
+        message_inbox.record_history(account_id, _history('no-time', **values))
+    assert message_inbox.list_conversations(account_id) == []
+
+
+def test_receiver_routes_sdk_catchup_without_marking_it_unread(inbox):
+    account, transport = inbox
+    account_id = account('重连补拉')
+    received = threading.Event()
+
+    def receive(credentials, on_message, on_state, stop):
+        on_state('connected')
+        on_message(_history('catchup'))
+        on_message({**_event('live-after-catchup'), 'sent_at': '2026-10-22T12:00:00Z'})
+        received.set()
+        stop.wait(5)
+
+    transport.receive_forever = receive
+    message_inbox.connect_account(account_id)
+    assert received.wait(2)
+    conversation = message_inbox.list_conversations(account_id)[0]
+    assert conversation['unread_count'] == 1
+    assert len(message_inbox.list_messages(account_id, conversation['id'])['messages']) == 2
+
+
+def test_dy_restores_sdk_off_loop_without_browser_auth(inbox, monkeypatch):
+    account, transport = inbox
+    account_id = account('恢复独立 SDK')
+    loop_thread = threading.get_ident()
+
+    def restore(selected):
+        assert selected == account_id and threading.get_ident() != loop_thread
+        return {'receive_ready': True, 'send_ready': True, 'sdk_uid': '987654'}
+
+    async def no_browser(*args):
+        raise AssertionError('SDK 恢复不能打开旧浏览器认证')
+
+    transport.restore_session = restore
+    monkeypatch.setattr(message_inbox.im_session, 'sync_account', no_browser, raising=False)
+    assert asyncio.run(message_inbox.sync_account(account_id))['sdk_uid'] == '987654'
+
+
+def test_browser_login_without_sdk_session_stays_successful(login_runtime, monkeypatch):
+    from app.services import content_publish
+
+    runtime = login_runtime
+    account_id = runtime.account('仅网页登录')
+    runtime.material[account_id] = ''
+    assert content_publish.run_account_login(account_id, 'user')['success']
+    assert runtime.invalidated == runtime.synced == []
+    assert message_inbox.status(account_id)['state'] == 'disconnected'

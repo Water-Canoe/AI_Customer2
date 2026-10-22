@@ -152,6 +152,11 @@ if ($LASTEXITCODE -ne 0) {
     throw "Nuitka is missing from backend/.venv. Install backend/requirements-dev.txt first."
 }
 $Npm = (Get-Command npm.cmd -ErrorAction Stop).Source
+# 新私信依赖必须已按锁文件安装，构建过程不隐式下载或切换版本。
+$DouyinSdkDir = Join-Path $BackendDir "douyin-sdk"
+if (-not (Test-Path -LiteralPath (Join-Path $DouyinSdkDir "node_modules\douyin-im\package.json") -PathType Leaf)) {
+    throw "Douyin SDK is missing. Run npm.cmd ci --ignore-scripts --prefix backend/douyin-sdk first."
+}
 
 # Keep timestamped intermediate files; customers only receive deliverables/<version>.
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -215,6 +220,7 @@ try {
         --nofollow-import-to=safetensors `
         --nofollow-import-to=voxcpm `
         --include-data-dir="$FrontendDir\dist=frontend_dist" `
+        --include-data-dir="$DouyinSdkDir=douyin-sdk" `
         --include-data-dir="$BackendDir\app\video_engine\resource=app/video_engine/resource" `
         --include-data-dir="$BackendDir\app\video_engine\services\data=app/video_engine/services/data" `
         --include-data-files="$BackendDir\app\video_engine\config.default.toml=app/video_engine/config.default.toml" `
@@ -247,6 +253,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "AI_Customer_App.exe") 
 }
 if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "playwright\driver\node.exe") -PathType Leaf)) {
     throw "Playwright driver is missing from the Nuitka application runtime"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $PackagedApp "douyin-sdk\node_modules\douyin-im\package.json") -PathType Leaf)) {
+    throw "Douyin SDK is missing from the Nuitka application runtime"
 }
 
 # 使用独立临时数据目录检查刚编译的 EXE，避免触及业务数据库或真实私信账号。

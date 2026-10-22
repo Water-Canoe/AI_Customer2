@@ -34,6 +34,9 @@ _license_watchdog_stop = threading.Event()
 LICENSE_CHECK_INTERVAL = 30.0
 _CONVERSATION_FIELDS = 'id,account_id,peer_user_id,nickname,avatar,lead_id,platform_conversation_id,last_message,last_message_at,unread_count'
 HIDDEN_CONVERSATION_PREFIX = 'message_inbox_hidden:'
+HISTORY_MARKER = '_ai_customer_history'
+# 历史补入的自增 ID 较大，必须按平台时间和 ID 一起排序及翻页。
+_MESSAGE_ORDER = 'COALESCE(julianday(sent_at),julianday(created_at),0)'
 
 
 def _account(account_id: str, *, ready: bool = False) -> dict[str, Any]:
@@ -47,10 +50,26 @@ def _account(account_id: str, *, ready: bool = False) -> dict[str, Any]:
 def _transport_for_platform(platform: str):
     """服务层选择两个真实协议实现，共用模块不反向依赖平台模块。"""
     if platform == 'dy':
-        from app.services import douyin_im_transport
-        return douyin_im_transport
+        from app.services import douyin_sdk_transport
+        return douyin_sdk_transport
     from app.services import xhs_im_transport
     return xhs_im_transport
+
+
+def _session_status(account_id: str) -> dict[str, Any]:
+    """SDK 认证与原浏览器认证独立，小红书继续使用原存储。"""
+    if _account(account_id)['platform'] == 'dy':
+        from app.services import douyin_sdk_session
+        return douyin_sdk_session.session_status(account_id)
+    return im_session.session_status(account_id)
+
+
+def _load_credentials(account_id: str) -> dict[str, Any]:
+    """平台分派只发生在服务入口，不混用两套账号凭据。"""
+    if _account(account_id)['platform'] == 'dy':
+        from app.services import douyin_sdk_session
+        return douyin_sdk_session.load_credentials(account_id)
+    return im_session.load_credentials(account_id)
 
 
 async def sync_account(account_id: str) -> dict[str, Any]:
@@ -63,11 +82,10 @@ async def sync_account(account_id: str) -> dict[str, Any]:
         _listeners[account_id] = listener
     try:
         if account['platform'] == 'dy':
-            from app.services import douyin_im_session
-            capture = douyin_im_session.capture_context
+            from app.services import douyin_sdk_transport
+            result = await asyncio.to_thread(douyin_sdk_transport.restore_session, account_id)
         else:
-            capture = im_session.capture_xhs_context
-        result = await im_session.sync_account(account_id, capture)
+            result = await im_session.sync_account(account_id, im_session.capture_xhs_context)
         # 等待当前发送认证释放期间仍保持同步状态，不阻塞事件循环。
         await asyncio.to_thread(release_send_session, account_id)
         return result
@@ -115,14 +133,15 @@ async def auto_connect_accounts() -> None:
 
 def status(account_id: str) -> dict[str, Any]:
     account = _account(account_id)
-    session = im_session.session_status(account_id)
+    history_scope = 'platform' if account['platform'] == 'dy' else 'local'
+    session = _session_status(account_id)
     if not account['enabled'] or account['feature_status']['message']['status'] != 'ready':
         session = {**session, 'receive_ready': False, 'send_ready': False, 'error': '账号未登录或已停用，请到账号中心检查'}
     with _runtime_lock:
         listener = _listeners.get(account_id)
         if account_id in _login_sessions:
             return {**session, 'state': 'logging_in', 'receive_ready': False, 'send_ready': False,
-                    'error': '', 'profile_error': '', 'history_scope': 'local'}
+                    'error': '', 'profile_error': '', 'history_scope': history_scope}
         if listener and listener.state == 'syncing':
             session = {**session, 'receive_ready': False, 'send_ready': False, 'error': ''}
         return {
@@ -130,7 +149,7 @@ def status(account_id: str) -> dict[str, Any]:
             'state': listener.state if listener else 'disconnected',
             'error': (listener.error if listener else '') or session.get('error', ''),
             'profile_error': _profile_errors.get(account_id, ''),
-            'history_scope': 'local',
+            'history_scope': history_scope,
         }
 
 
@@ -183,7 +202,7 @@ def connect_account(account_id: str) -> dict[str, Any]:
             raise ValueError('正在同步该账号的私信认证，请等待完成后连接')
         if existing and existing.thread and existing.thread.is_alive():
             return status(account_id)
-        credentials = im_session.load_credentials(account_id)
+        credentials = _load_credentials(account_id)
         listener = _Listener()
         _listeners[account_id] = listener
         # 显式重新连接时允许重试上次失败的资料查询。
@@ -199,7 +218,10 @@ def connect_account(account_id: str) -> dict[str, Any]:
 
         def on_message(event: dict[str, Any]) -> None:
             if not listener.stop.is_set():
-                record_received(account_id, event)
+                if event.get('history'):
+                    record_history(account_id, event)
+                else:
+                    record_received(account_id, event)
 
         def run() -> None:
             try:
@@ -251,12 +273,12 @@ def disconnect_account(account_id: str) -> dict[str, Any]:
 
 def release_send_session(account_id: str) -> None:
     """等待当前发送结束再释放认证；断开、认证同步和账号维护共用。"""
-    from app.services import douyin_im_transport, xhs_im_transport
+    from app.services import douyin_sdk_transport, xhs_im_transport
 
     with _runtime_lock:
         lock = _send_locks.setdefault(account_id, threading.Lock())
     with lock:
-        douyin_im_transport.close_send_auth(account_id)
+        douyin_sdk_transport.close_send_auth(account_id)
         xhs_im_transport.close_send_auth(account_id)
 
 
@@ -296,12 +318,19 @@ def account_login_session(account_id: str, login_kind: str, cancel_check=None):
             pass
         if cancel_check and cancel_check():
             raise ValueError('用户取消登录')
-        # 新登录不能继续使用旧认证；只清除此账号的认证快照。
-        im_session.invalidate_credentials(account_id)
+        # 抖音 SDK 登录独立于浏览器 Profile，保留旧 DPAPI 快照以便代码回滚。
+        if account['platform'] != 'dy':
+            im_session.invalidate_credentials(account_id)
         yield
         if cancel_check and cancel_check():
             raise ValueError('用户取消登录')
         if not account['enabled']:
+            return
+        if account['platform'] == 'dy' and not _session_status(account_id).get('receive_ready'):
+            # 网页登录成功不代表 SDK 已扫码，不能把网页登录改判为失败。
+            with _runtime_lock:
+                current = _listeners.setdefault(account_id, _Listener())
+                current.state, current.error = 'disconnected', ''
             return
         try:
             result = asyncio.run(sync_account(account_id))
@@ -353,6 +382,9 @@ def _send_slot(account_id: str, cancel_check=None):
 
 def shutdown() -> None:
     """应用退出时关闭监听和发送认证；历史记录已经逐条写入数据库。"""
+    from app.services import douyin_sdk_session
+
+    douyin_sdk_session.shutdown()
     with _runtime_lock:
         _license_watchdog_stop.set()
         watchdog = _license_watchdog
@@ -437,7 +469,7 @@ def list_conversations(account_id: str, query: str = '') -> list[dict[str, Any]]
             f'''SELECT {_CONVERSATION_FIELDS} FROM im_conversations WHERE account_id=?
                 AND NOT EXISTS(SELECT 1 FROM settings WHERE key=? || im_conversations.id)
                 AND (?='' OR instr(nickname,?)>0 OR instr(last_message,?)>0 OR instr(peer_user_id,?)>0)
-                ORDER BY last_message_id DESC,id DESC''',
+                ORDER BY COALESCE(julianday(last_message_at),0) DESC,last_message_id DESC,id DESC''',
             (account_id, f'{HIDDEN_CONVERSATION_PREFIX}{account_id}:', query, query, query, query),
         ).fetchall())
 
@@ -466,7 +498,7 @@ def refresh_conversation_profiles(account_id: str) -> None:
             peers = [peer for peer in peers if (account_id, peer) not in _profile_checked]
         if not peers:
             return
-        credentials = im_session.load_credentials(account_id)
+        credentials = _load_credentials(account_id)
         transport = _transport_for_platform(_account(account_id)['platform'])
         for peer in peers:
             with _runtime_lock:
@@ -486,16 +518,21 @@ def refresh_conversation_profiles(account_id: str) -> None:
 
 
 def list_messages(account_id: str, conversation_id: int, *, before_id: int = 0, limit: int = 50) -> dict[str, Any]:
-    _account(account_id)
+    account = _account(account_id)
     if not 1 <= limit <= 100 or before_id < 0:
         raise ValueError('消息分页参数无效')
     with database.connect() as conn:
         _conversation(conn, account_id, conversation_id)
+        anchor = conn.execute(f'SELECT {_MESSAGE_ORDER} AS message_time FROM im_messages WHERE id=? AND account_id=? AND conversation_id=?', (before_id, account_id, conversation_id)).fetchone() if before_id else None
+        if before_id and not anchor:
+            raise ValueError('消息分页游标不属于当前会话')
         rows = database.rows_to_dicts(conn.execute(
-            '''SELECT * FROM im_messages WHERE account_id=? AND conversation_id=? AND (?=0 OR id<?)
-               ORDER BY id DESC LIMIT ?''', (account_id, conversation_id, before_id, before_id, limit + 1),
+            f'''SELECT * FROM im_messages WHERE account_id=? AND conversation_id=?
+                AND (?=0 OR ({_MESSAGE_ORDER},id)<(?,?))
+                ORDER BY {_MESSAGE_ORDER} DESC,id DESC LIMIT ?''',
+            (account_id, conversation_id, before_id, anchor['message_time'] if anchor else 0, before_id, limit + 1),
         ).fetchall())
-    return {'messages': list(reversed(rows[:limit])), 'has_more': len(rows) > limit, 'history_scope': 'local'}
+    return {'messages': list(reversed(rows[:limit])), 'has_more': len(rows) > limit, 'history_scope': 'platform' if account['platform'] == 'dy' else 'local'}
 
 
 def mark_read(account_id: str, conversation_id: int, up_to_id: int) -> dict[str, Any]:
@@ -504,26 +541,70 @@ def mark_read(account_id: str, conversation_id: int, up_to_id: int) -> dict[str,
     with database.connect() as conn:
         _conversation(conn, account_id, conversation_id)
         # 只确认本次已展示的消息，读取与确认之间到达的新消息仍保持未读。
-        conn.execute("UPDATE im_conversations SET unread_count=(SELECT COUNT(*) FROM im_messages WHERE conversation_id=? AND direction='incoming' AND id>?) WHERE id=? AND account_id=?", (conversation_id, up_to_id, conversation_id, account_id))
+        conn.execute("UPDATE im_conversations SET unread_count=(SELECT COUNT(*) FROM im_messages WHERE conversation_id=? AND direction='incoming' AND id>? AND COALESCE(json_extract(raw_content,?),0)=0) WHERE id=? AND account_id=?", (conversation_id, up_to_id, f'$.{HISTORY_MARKER}', conversation_id, account_id))
     return {'ok': True}
 
 
+def _refresh_last_message(conn: Any, conversation_id: int) -> None:
+    """补入旧消息时仍保留会话真正最新的摘要。"""
+    latest = conn.execute(f'SELECT id,content,sent_at FROM im_messages WHERE conversation_id=? ORDER BY {_MESSAGE_ORDER} DESC,id DESC LIMIT 1', (conversation_id,)).fetchone()
+    if latest:
+        conn.execute('UPDATE im_conversations SET last_message=?,last_message_at=?,last_message_id=? WHERE id=?', (latest['content'][:500], latest['sent_at'], latest['id'], conversation_id))
+
+
 def record_received(account_id: str, event: dict[str, Any]) -> None:
-    """逐条持久化推送，以平台消息 ID 去重；本地历史不补造远程旧消息。"""
+    """实时推送保持未读与客户跟进逻辑，平台消息 ID 用于去重。"""
+    _record_message(account_id, event, historical=False)
+
+
+def record_history(account_id: str, event: dict[str, Any]) -> bool:
+    """历史仅补齐本地记录，不触发未读、会话恢复或客户状态变更。"""
+    if _account(account_id)['platform'] != 'dy':
+        raise ValueError('当前仅抖音支持平台历史同步')
+    return _record_message(account_id, event, historical=True)
+
+
+def _record_message(account_id: str, event: dict[str, Any], *, historical: bool) -> bool:
+    """共用账号归属与消息去重，历史另外对齐本系统已发消息。"""
     account = _account(account_id, ready=True)
     peer = str(event.get('peer_user_id') or '')
     message_id = str(event.get('platform_message_id') or '')
     im_transport.validate_peer(account['platform'], peer)
     if not message_id or not event.get('conversation_id'):
         raise ValueError('私信推送缺少消息或会话标识')
-    if event.get('direction') == 'outgoing':
+    direction = str(event.get('direction') or 'incoming')
+    if direction not in {'incoming', 'outgoing'}:
+        raise ValueError('私信消息方向无效')
+    if direction == 'outgoing' and not historical:
         # 本地发出的消息由发送入口保存，跳过本人推送避免重复气泡。
-        return
+        return False
+    sent_at = str(event.get('sent_at') or '')
+    if historical:
+        if event.get('time_source') == 'received':
+            raise ValueError('历史消息缺少有效的平台发送时间')
+        try:
+            datetime.fromisoformat(sent_at.replace('Z', '+00:00'))
+        except ValueError:
+            raise ValueError('历史消息缺少有效的平台发送时间') from None
+    elif not sent_at:
+        sent_at = datetime.now().astimezone().isoformat(timespec='seconds')
+    raw_content = dict(event.get('raw_content') or {})
+    if historical:
+        raw_content[HISTORY_MARKER] = True
+    client_message_id = str(event.get('client_message_id') or raw_content.get('client_message_id') or '')
     with database.connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         existing = conn.execute('SELECT 1 FROM im_messages WHERE account_id=? AND platform_message_id=?', (account_id, message_id)).fetchone()
         if existing:
-            return
+            return False
+        if historical and direction == 'outgoing' and client_message_id:
+            local = conn.execute("SELECT m.id,m.conversation_id,c.peer_user_id FROM im_messages m JOIN im_conversations c ON c.id=m.conversation_id WHERE m.account_id=? AND m.client_message_id=? AND m.direction='outgoing'", (account_id, client_message_id)).fetchone()
+            if local:
+                if local['peer_user_id'] != peer:
+                    raise ValueError('历史消息客户端标识与会话不一致')
+                conn.execute("UPDATE im_messages SET platform_message_id=?,raw_content=?,sent_at=?,status='accepted',error='' WHERE id=?", (message_id, json.dumps(raw_content, ensure_ascii=False), sent_at, local['id']))
+                _refresh_last_message(conn, local['conversation_id'])
+                return False
         lead = conn.execute('SELECT lead.id,ua.nickname,ua.avatar FROM lead_user_accounts lead JOIN user_accounts ua ON ua.id=lead.account_id WHERE ua.platform=? AND ua.platform_user_id=?', (account['platform'], peer)).fetchone()
         conn.execute(
             '''INSERT INTO im_conversations(account_id,peer_user_id,nickname,avatar,lead_id,platform_conversation_id,conversation_short_id)
@@ -535,15 +616,18 @@ def record_received(account_id: str, event: dict[str, Any]) -> None:
             (account_id, peer, lead['nickname'] if lead else str(event.get('nickname') or ''), lead['avatar'] if lead else str(event.get('avatar') or ''), lead['id'] if lead else None, str(event['conversation_id']), int(event.get('conversation_short_id') or 0)),
         )
         conversation_id = int(conn.execute('SELECT id FROM im_conversations WHERE account_id=? AND peer_user_id=?', (account_id, peer)).fetchone()['id'])
-        # 仅去重后真实新增的消息恢复列表，重放旧推送不会打扰用户。
-        conn.execute('DELETE FROM settings WHERE key=?', (f'{HIDDEN_CONVERSATION_PREFIX}{account_id}:{conversation_id}',))
+        # 仅实时新消息恢复列表，历史同步和旧推送都不能打扰用户。
+        if not historical:
+            conn.execute('DELETE FROM settings WHERE key=?', (f'{HIDDEN_CONVERSATION_PREFIX}{account_id}:{conversation_id}',))
         content = str(event.get('content') or '')
-        sent_at = str(event.get('sent_at') or datetime.now().astimezone().isoformat(timespec='seconds'))
-        cursor = conn.execute(
-            "INSERT INTO im_messages(account_id,conversation_id,platform_message_id,direction,content,message_type,raw_content,status,sent_at) VALUES(?,?,?,'incoming',?,?,?,'received',?)",
-            (account_id, conversation_id, message_id, content, str(event.get('message_type') or 'text'), json.dumps(event.get('raw_content') or {}, ensure_ascii=False), sent_at),
+        conn.execute(
+            "INSERT INTO im_messages(account_id,conversation_id,platform_message_id,client_message_id,direction,content,message_type,raw_content,status,sent_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (account_id, conversation_id, message_id, client_message_id, direction, content, str(event.get('message_type') or 'text'), json.dumps(raw_content, ensure_ascii=False), 'accepted' if direction == 'outgoing' else 'received', sent_at),
         )
-        conn.execute('UPDATE im_conversations SET last_message=?,last_message_at=?,last_message_id=?,unread_count=unread_count+1 WHERE id=?', (content[:500], sent_at, cursor.lastrowid, conversation_id))
+        _refresh_last_message(conn, conversation_id)
+        if historical:
+            return True
+        conn.execute('UPDATE im_conversations SET unread_count=unread_count+1 WHERE id=?', (conversation_id,))
         linked_lead = conn.execute('SELECT lead_id FROM im_conversations WHERE id=?', (conversation_id,)).fetchone()['lead_id']
         if linked_lead is not None:
             # 收到消息只推进等待回复状态，保留筛选结论及成交/非客户等人工判断。
@@ -551,6 +635,34 @@ def record_received(account_id: str, event: dict[str, Any]) -> None:
             if row and not row['hidden'] and row['follow_status'] in {'已私信', '未回复'}:
                 conn.execute("UPDATE lead_user_accounts SET follow_status='已回复',manual_follow_status=1,updated_at=datetime('now','localtime') WHERE id=?", (linked_lead,))
                 conn.execute("INSERT INTO lead_status_events(lead_account_id,from_status,to_status,note) VALUES(?,?,'已回复','私信收件箱收到客户新消息')", (linked_lead, row['follow_status']))
+        return True
+
+
+def sync_history(account_id: str, conversation_id: int | None = None) -> dict[str, int]:
+    """显式拉取平台历史；与发送、登录互斥，不影响其它账号连接。"""
+    with _send_slot(account_id):
+        license_service.ensure_authorized()
+        account = _account(account_id, ready=True)
+        if account['platform'] != 'dy':
+            raise ValueError('当前仅抖音支持平台历史同步')
+        with _runtime_lock:
+            listener = _listeners.get(account_id)
+            if listener and listener.state == 'syncing':
+                raise ValueError('正在同步该账号的私信认证，请等待完成后同步历史')
+        session = _session_status(account_id)
+        if not session.get('receive_ready'):
+            raise ValueError(session.get('error') or '请先完成抖音 SDK 扫码登录')
+        peer = ''
+        if conversation_id is not None:
+            with database.connect() as conn:
+                peer = str(_conversation(conn, account_id, conversation_id)['peer_user_id'])
+        events = _transport_for_platform('dy').sync_history(account_id, peer)
+        imported = 0
+        for event in events:
+            if peer and str(event.get('peer_user_id') or '') != peer:
+                raise ValueError('平台历史消息与所选会话不一致')
+            imported += record_history(account_id, event)
+        return {'imported': imported, 'total': len(events)}
 
 
 def send_to_customer(account_id: str, lead_id: int, text: str, *, reserve_attempt: bool = True, cancel_check=None) -> dict[str, Any]:
@@ -572,10 +684,10 @@ def send_message(account_id: str, conversation_id: int, text: str, *, reserve_at
         # 排队后重新检查账号并读取认证，不能沿用等待前的登录材料。
         account = _account(account_id, ready=True)
         transport = _transport_for_platform(account['platform'])
-        session = im_session.session_status(account_id)
+        session = _session_status(account_id)
         if not session.get('send_ready'):
             raise ValueError(session.get('error') or '私信发送认证未就绪，请到账号中心同步认证')
-        credentials = im_session.load_credentials(account_id)
+        credentials = _load_credentials(account_id)
         with database.connect() as conn:
             conversation = _conversation(conn, account_id, conversation_id)
         attempt_id = message_attempts.reserve_message_attempt(conversation['lead_id'], 'inbox', str(conversation_id), allow_repeat=True) if reserve_attempt else None
@@ -583,7 +695,7 @@ def send_message(account_id: str, conversation_id: int, text: str, *, reserve_at
         with database.connect() as conn:
             cursor = conn.execute("INSERT INTO im_messages(account_id,conversation_id,direction,content,status,sent_at) VALUES(?,?,'outgoing',?,'sending',?)", (account_id, conversation_id, text, sent_at))
             local_id = int(cursor.lastrowid)
-            conn.execute('UPDATE im_conversations SET last_message=?,last_message_at=?,last_message_id=? WHERE id=?', (text[:500], sent_at, local_id, conversation_id))
+            _refresh_last_message(conn, conversation_id)
         try:
             result = transport.send_text(credentials, conversation['peer_user_id'], text, conversation_id=conversation['platform_conversation_id'], conversation_short_id=conversation['conversation_short_id'], ticket=protected_settings.unprotect(conversation['ticket']), account_id=account_id)
         except transport.TransportSendUncertain as exc:

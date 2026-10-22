@@ -55,6 +55,33 @@ async def sync_auth(account_id: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post('/accounts/{account_id}/sdk-login')
+def sdk_login(account_id: str):
+    from app.services import douyin_sdk_session
+
+    require_license()
+    return _call(douyin_sdk_session.start_login, account_id, message_inbox.account_login_session)
+
+
+@router.post('/accounts/{account_id}/sdk-login/cancel')
+def cancel_sdk_login(account_id: str):
+    from app.services import douyin_sdk_session
+
+    return _call(douyin_sdk_session.cancel_login, account_id)
+
+
+@router.post('/accounts/{account_id}/sync-history')
+def sync_account_history(account_id: str):
+    require_license()
+    return _call(message_inbox.sync_history, account_id)
+
+
+@router.post('/conversations/{conversation_id}/sync-history')
+def sync_conversation_history(conversation_id: int, account_id: str = Query(min_length=1)):
+    require_license()
+    return _call(message_inbox.sync_history, account_id, conversation_id)
+
+
 @router.get('/conversations')
 def conversations(background_tasks: BackgroundTasks, account_id: str = Query(min_length=1), query: str = ''):
     rows = _call(message_inbox.list_conversations, account_id, query)

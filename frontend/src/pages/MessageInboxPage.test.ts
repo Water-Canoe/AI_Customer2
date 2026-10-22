@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MessageInboxPage from './MessageInboxPage'
 import { ListPagination } from '../components/ui/ListPagination'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn(), warning: vi.fn(), error: vi.fn() }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() }))
 vi.mock('../shared/api', () => ({ api: { get: mocks.get, post: mocks.post, delete: mocks.delete } }))
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   return {
-    ElMessage: { success: vi.fn(), warning: mocks.warning, error: mocks.error },
+    ElMessage: { success: mocks.success, warning: mocks.warning, error: mocks.error },
     ElPagination: { render: () => null },
     ElDrawer: defineComponent({ props: { modelValue: Boolean }, setup: (props, { slots }) => () => props.modelValue ? h('div', slots.default?.()) : null }),
   }
@@ -100,16 +100,148 @@ describe('私信收件箱', () => {
 
   it('loads authorized accounts and local records without connecting or sending automatically', async () => {
     await open()
-    expect(wrapper!.text()).toContain('尚未同步接入前的全部历史')
+    expect(wrapper!.text()).toContain('点击“同步平台历史”拉取抖音允许访问的历史记录')
     expect(wrapper!.text()).toContain('当前消息')
     expect(mocks.get).toHaveBeenCalledWith('/accounts', { params: { feature: 'message', platform: 'dy' } })
     expect(mocks.post).not.toHaveBeenCalled()
     await wrapper!.findAll('button').find(item => item.text() === '连接接收')!.trigger('click')
     await flushPromises()
     expect(mocks.post).toHaveBeenCalledWith('/message-inbox/accounts/account-a/connect')
-    await wrapper!.findAll('button').find(item => item.text() === '同步登录认证')!.trigger('click')
+    await wrapper!.findAll('button').find(item => item.text() === '恢复私信认证')!.trigger('click')
     await flushPromises()
     expect(mocks.post).toHaveBeenCalledWith('/message-inbox/accounts/account-a/sync-auth')
+  })
+
+  it('starts SDK QR login only on request and can cancel without touching the draft', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    let login = { state: 'idle', image_base64: '', verification_url: '', error: '' }
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, sdk_login: login } } : normal(url, options))
+    mocks.post.mockImplementation(async (url: string) => {
+      login = url.endsWith('/cancel')
+        ? { state: 'cancelled', image_base64: '', verification_url: '', error: '' }
+        : { state: 'qrcode', image_base64: 'cXJjb2Rl', verification_url: '', error: '' }
+      return { data: login }
+    })
+    await open()
+    await wrapper!.get('textarea').setValue('扫码前的草稿')
+    expect(wrapper!.find('.inbox-sdk-qrcode').exists()).toBe(false)
+    await wrapper!.findAll('button').find(item => item.text() === '扫码登录私信')!.trigger('click')
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalledWith('/message-inbox/accounts/account-a/sdk-login')
+    expect(wrapper!.get('.inbox-sdk-qrcode').attributes('src')).toBe('data:image/png;base64,cXJjb2Rl')
+    expect(wrapper!.findAll('button').find(item => item.text() === '恢复私信认证')!.attributes()).toHaveProperty('disabled')
+    expect(wrapper!.findAll('button').find(item => item.text() === '同步此会话历史')!.attributes()).toHaveProperty('disabled')
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+    await wrapper!.findAll('button').find(item => item.text() === '取消扫码登录')!.trigger('click')
+    await flushPromises()
+    expect(mocks.post).toHaveBeenLastCalledWith('/message-inbox/accounts/account-a/sdk-login/cancel')
+    expect(wrapper!.find('.inbox-sdk-qrcode').exists()).toBe(false)
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('扫码前的草稿')
+  })
+
+  it('shows a safe verification URL and clears an old QR immediately on account switch', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status') && url.includes('account-a')
+      ? { data: { ...status, sdk_login: { state: 'verification', image_base64: 'b2xk', verification_url: 'http://127.0.0.1:8787/verify', error: '' } } }
+      : normal(url, options))
+    const router = await open()
+    expect(wrapper!.get('.inbox-sdk-login a').attributes('href')).toBe('http://127.0.0.1:8787/verify')
+    await router.replace('/message-inbox?account_id=account-b&conversation=2')
+    await flushPromises()
+    expect(wrapper!.find('.inbox-sdk-login').exists()).toBe(false)
+    expect(wrapper!.get('.inbox-chat-header').text()).toContain('会话2')
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('rejects a late QR response after changing accounts', async () => {
+    let finish!: (value: any) => void
+    mocks.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const router = await open()
+    await wrapper!.findAll('button').find(item => item.text() === '扫码登录私信')!.trigger('click')
+    await router.replace('/message-inbox?account_id=account-b&conversation=2')
+    finish({ data: { state: 'qrcode', image_base64: 'b2xk', verification_url: '', error: '' } })
+    await flushPromises()
+    expect(wrapper!.find('.inbox-sdk-qrcode').exists()).toBe(false)
+    expect(wrapper!.get('.inbox-chat-header').text()).toContain('会话2')
+  })
+
+  it('keeps SDK and platform-history controls out of the XHS flow', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url === '/accounts'
+      ? { data: [account('xhs-account', 'xhs')] } : normal(url, options))
+    await open('/message-inbox?platform=xhs&account_id=xhs-account&conversation=1')
+    const labels = wrapper!.findAll('button').map(item => item.text())
+    expect(labels).toContain('同步登录认证')
+    expect(labels).not.toContain('扫码登录私信')
+    expect(labels).not.toContain('同步平台历史')
+    expect(labels).not.toContain('同步此会话历史')
+    await wrapper!.findAll('button').find(item => item.text() === '同步登录认证')!.trigger('click')
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalledWith('/message-inbox/accounts/xhs-account/sync-auth')
+  })
+
+  it('syncs history explicitly and orders imported records by send time with matching earlier-page cursor', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    let synced = false
+    mocks.get.mockImplementation(async (url: string, options: any) => {
+      if (url.endsWith('/messages') && synced) return { data: {
+        messages: options.params.before_id
+          ? [{ ...message(90, '最早历史'), sent_at: '2026-10-01T10:00:00+08:00' }]
+          : [{ ...message(10, '新消息'), sent_at: '2026-10-23T12:00:00+08:00' }, { ...message(80, '补入历史'), sent_at: '2026-10-10T11:00:00+08:00' }],
+        has_more: !options.params.before_id,
+      } }
+      return normal(url, options)
+    })
+    mocks.post.mockImplementation(async () => { synced = true; return { data: { imported: 2, total: 3 } } })
+    await open()
+    await wrapper!.get('textarea').setValue('保留历史同步前的草稿')
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(mocks.post).not.toHaveBeenCalled()
+    await wrapper!.findAll('button').find(item => item.text() === '同步平台历史')!.trigger('click')
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalledWith('/message-inbox/accounts/account-a/sync-history')
+    expect(mocks.success).toHaveBeenCalledWith('历史同步完成：拉取 3 条，新增 2 条')
+    expect(wrapper!.findAll('.inbox-message-content').map(item => item.text())).toEqual(['补入历史', '新消息'])
+    expect(wrapper!.findAll('.inbox-message-meta time').map(item => item.text())).toEqual(['2026-10-10T11:00:00+08:00', '2026-10-23T12:00:00+08:00'])
+    await wrapper!.findAll('button').find(item => item.text() === '加载更早记录')!.trigger('click')
+    await flushPromises()
+    expect(mocks.get).toHaveBeenCalledWith('/message-inbox/conversations/1/messages', { params: { account_id: 'account-a', before_id: 80, limit: 50 } })
+    expect(wrapper!.findAll('.inbox-message-content').map(item => item.text())).toEqual(['最早历史', '补入历史', '新消息'])
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('保留历史同步前的草稿')
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+  })
+
+  it('syncs only the selected conversation and ignores a late result after account switch', async () => {
+    let finish!: (value: any) => void
+    mocks.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const router = await open()
+    await wrapper!.findAll('button').find(item => item.text() === '同步此会话历史')!.trigger('click')
+    expect(mocks.post).toHaveBeenCalledWith('/message-inbox/conversations/1/sync-history', null, { params: { account_id: 'account-a' } })
+    await router.replace('/message-inbox?account_id=account-b&conversation=2')
+    await flushPromises()
+    await wrapper!.get('textarea').setValue('新账号草稿')
+    finish({ data: { imported: 10, total: 10 } })
+    await flushPromises()
+    expect(mocks.success).not.toHaveBeenCalled()
+    expect(wrapper!.get('.inbox-chat-header').text()).toContain('会话2')
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('新账号草稿')
+  })
+
+  it('marks the largest displayed local ID read when chronological order differs', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => {
+      if (url === '/message-inbox/conversations') return { data: [{ ...conversation(1), unread_count: 1 }] }
+      if (url.endsWith('/messages')) return { data: { messages: [
+        { ...message(90, '历史'), sent_at: '2026-10-01T10:00:00+08:00' },
+        { ...message(10, '最新'), sent_at: '2026-10-23T10:00:00+08:00' },
+      ], has_more: false } }
+      return normal(url, options)
+    })
+    await open()
+    expect(mocks.post).toHaveBeenCalledWith('/message-inbox/conversations/1/read', null, { params: { account_id: 'account-a', up_to_id: 90 } })
+    expect(wrapper!.findAll('.inbox-message-content').map(item => item.text())).toEqual(['历史', '最新'])
   })
 
   it.each([
@@ -122,7 +254,7 @@ describe('私信收件箱', () => {
       : normal(url, options))
     await open()
     expect(wrapper!.text()).toContain(label)
-    for (const label of ['同步登录认证', '连接接收', '发送']) {
+    for (const label of ['恢复私信认证', '扫码登录私信', '连接接收', '发送']) {
       expect(wrapper!.findAll('button').find(button => button.text() === label)!.attributes()).toHaveProperty('disabled')
     }
     mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
