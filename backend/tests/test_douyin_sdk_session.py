@@ -21,6 +21,7 @@ def sdk_session(tmp_path, monkeypatch):
     transport = ModuleType('app.services.douyin_sdk_transport')
     transport.session_status = lambda account_id: {'saved': True, 'uid': '12345', 'state': 'offline'}
     transport.login = lambda account_id, event, stop, **kwargs: {'sdk_uid': '12345'}
+    transport.cancel_verification = lambda account_id: False
     import app.services as services
     monkeypatch.setitem(sys.modules, 'app.services.douyin_sdk_transport', transport)
     monkeypatch.setattr(services, 'douyin_sdk_transport', transport, raising=False)
@@ -108,3 +109,40 @@ def test_marker_from_another_business_account_is_rejected(sdk_session):
     status = session.session_status(account_id)
     assert not status['receive_ready'] and '不匹配' in status['error']
     assert 'sdk_uid' not in status and 'account_id' not in status
+
+
+def test_online_renewal_challenge_is_exposed_without_replacing_saved_identity(sdk_session):
+    account_id, transport = sdk_session
+    session.start_login(account_id, _guard)
+    _wait(account_id)
+    original = session._marker_path(account_id).read_bytes()
+    verification = {'url': 'http://127.0.0.1:8787/test-verification', 'operation': 'token-beat', 'error': ''}
+    transport.session_status = lambda _: {'saved': True, 'uid': '12345', 'verification': verification}
+    status = session.session_status(account_id)
+    assert status['send_ready'] and status['sdk_login']['state'] == 'verification'
+    assert status['sdk_login']['verification_url'] == verification['url']
+    assert status['sdk_login']['operation'] == 'token-beat'
+    verification.update(url='', error='安全验证未完成')
+    status = session.session_status(account_id)
+    assert status['sdk_login']['state'] == 'error'
+    assert status['sdk_login']['verification_url'] == '' and status['send_ready']
+    calls = []
+    transport.cancel_verification = lambda selected: calls.append(selected) or verification.clear() or True
+    session.cancel_login(account_id)
+    assert calls == [account_id]
+    assert session.session_status(account_id)['sdk_login']['state'] == 'online'
+    assert session._marker_path(account_id).read_bytes() == original
+
+
+def test_restored_online_session_does_not_replay_an_old_scan_error_after_verification(sdk_session):
+    account_id, transport = sdk_session
+    session.start_login(account_id, _guard)
+    _wait(account_id)
+    session._logins[account_id].state = 'error'
+    session._logins[account_id].error = '历史扫码错误'
+    verification = {'url': 'http://127.0.0.1:8787/test-verification', 'operation': 'token-beat'}
+    transport.session_status = lambda _: {'saved': True, 'uid': '12345', 'state': 'connected', 'verification': verification}
+    assert session.session_status(account_id)['sdk_login']['state'] == 'verification'
+    verification.clear()
+    result = session.session_status(account_id)['sdk_login']
+    assert result['state'] == 'online' and result['error'] == '' and result['verification_url'] == ''

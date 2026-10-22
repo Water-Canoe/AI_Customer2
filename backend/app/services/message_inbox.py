@@ -155,6 +155,19 @@ def status(account_id: str) -> dict[str, Any]:
         }
 
 
+def mark_active(account_id: str) -> dict[str, bool]:
+    """只转发当前账号的真实界面操作，不因活动上报建立或恢复连接。"""
+    account = _account(account_id)
+    if (account['platform'] != 'dy' or not account['enabled']
+            or account['feature_status']['message']['status'] != 'ready'):
+        return {'reported': False}
+    with _runtime_lock:
+        listener = _listeners.get(account_id)
+        if account_id in _login_sessions or (listener and listener.state in {'syncing', 'disconnecting'}):
+            return {'reported': False}
+    return {'reported': _transport_for_platform('dy').mark_active(account_id)}
+
+
 def _check_receiver_authorization() -> None:
     """所有账号共用一次验权；失效后用已有停止事件关闭接收及重连。"""
     with _runtime_lock:

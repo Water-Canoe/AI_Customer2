@@ -15,6 +15,8 @@ sdk.configureLogger?.({ level: 'silent' });
 const client = sdk.createClient({ dataDir, autoLoad: false });
 let account;
 let loginTask;
+let pendingVerification;
+let cancelledVerification;
 let expectedUid = '';
 let allowQr = false;
 let closing = false;
@@ -28,6 +30,7 @@ const phaseLabels = {
   device_init: '初始化设备身份', get_qrcode: '获取登录二维码', qr_poll: '查询扫码确认状态',
   confirm_identity: '确认登录身份', online_init: '初始化配置和本地消息库',
   im_init: '初始化私信会话', websocket_connect: '建立实时私信连接', sdk_operation: '执行私信操作',
+  verification: '完成安全验证',
 };
 
 // 固定 douyin-im@1.1.0 的实例内部方法：在正式凭据写盘前拒绝与原绑定不同的扫码 UID。
@@ -53,7 +56,7 @@ function setState(value, error = '', diagnostics) {
 /** 错误只输出固定阶段和白名单结构字段；原始 message、响应正文和 URL 查询均不透传。 */
 function formatError(error, method = 'login') {
   const object = error && typeof error === 'object' ? error : {};
-  const phase = failurePhases.get(object) || (method === 'login' ? loginPhase : 'sdk_operation');
+  const phase = failurePhases.get(object) || (method === 'login' ? loginPhase : method === 'verification' ? 'verification' : 'sdk_operation');
   const diagnostics = { phase: phaseLabels[phase] ? phase : 'sdk_operation',
     error_type: /^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(object.name || '') ? object.name : 'Error' };
   const integer = value => typeof value === 'number' && Number.isSafeInteger(value);
@@ -212,11 +215,28 @@ client.on('system.login.qrcode', ({ account: current, qrcodeBase64, expireTime }
   void current.continueLogin().catch(loginError);
 });
 client.on('system.login.verification', async ({ verification }) => {
+  pendingVerification = verification;
   try {
+    // 先接住原验证任务的拒绝；openUrl 可能早于 open 完成失败，不能留下未处理的 Promise。
+    const opening = verification.open({ openBrowser: false });
+    void opening.catch(() => {});
     const url = await verification.openUrl({ openBrowser: false });
+    if (pendingVerification !== verification) return;
     event('verification', { url, methods: verification.methods, operation: verification.operation });
-    void verification.open({ openBrowser: false }).catch(loginError);
-  } catch (error) { loginError(error); }
+    await opening;
+  } catch (error) {
+    if (pendingVerification === verification && cancelledVerification !== verification) {
+      const formatted = formatError(error, 'verification');
+      event('verification_failed', { operation: verification.operation, error: formatted.message });
+    }
+  } finally {
+    if (cancelledVerification === verification) cancelledVerification = undefined;
+    if (pendingVerification === verification) {
+      pendingVerification = undefined;
+      // 验证页结束只清理链接；原认证请求是否续期成功仍由 SDK 原流程决定。
+      event('verification_finished', { operation: verification.operation });
+    }
+  }
 });
 client.on('system.online', ({ account: current }) => {
   if (expectedUid && String(current.uid) !== expectedUid) {
@@ -375,6 +395,18 @@ async function dispatch(method, params = {}) {
     return { closed: true };
   }
   if (method === 'login') return login(params);
+  if (method === 'cancel-verification') {
+    if (!pendingVerification) return { cancelled: false };
+    cancelledVerification = pendingVerification;
+    pendingVerification.cancel('用户取消安全验证');
+    return { cancelled: true };
+  }
+  if (method === 'activity') {
+    // 真实操作只通知已有在线实例；页面活动不能启动进程、恢复会话或触发扫码。
+    if (closing || !account?.online) return { reported: false };
+    account.markActive();
+    return { reported: true };
+  }
   await login({ expected_uid: params.expected_uid });
   if (method === 'send') {
     const uid = numericUid(params.peer_user_id);

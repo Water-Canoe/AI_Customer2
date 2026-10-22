@@ -76,6 +76,21 @@ def session_status(account_id: str) -> dict[str, Any]:
         saved = douyin_sdk_transport.session_status(account_id)
         if not saved.get('saved') or str(saved.get('uid') or '') != marker['sdk_uid']:
             raise ValueError('私信认证与绑定账号不一致或已失效，请重新扫码原抖音账号')
+        with _lock:
+            login = _logins.get(account_id)
+            scanning = bool(login and login.thread and login.thread.is_alive())
+        if not scanning and saved.get('state') in {'connected', 'reconnecting'}:
+            # 已恢复的当前连接优先于历史扫码结果，避免验证结束后重现旧错误。
+            result['sdk_login'] = {'state': 'online', 'image_base64': '', 'verification_url': '', 'error': ''}
+        verification = saved.get('verification') or {}
+        if verification.get('url') or verification.get('error'):
+            # 在线续期继续原验证请求，不能让用户重新扫码并销毁当前会话。
+            result['sdk_login'] = {
+                'state': 'verification' if verification.get('url') else 'error',
+                'image_base64': '', 'verification_url': str(verification.get('url') or ''),
+                'error': str(verification.get('error') or ''),
+                'operation': str(verification.get('operation') or ''),
+            }
         result.update(receive_ready=True, send_ready=True, synced_at=marker['synced_at'])
     except ValueError as exc:
         result['error'] = str(exc)
@@ -122,6 +137,9 @@ def start_login(account_id: str, login_session: Callable) -> dict[str, str]:
                                 login.state = 'verification'
                                 login.image_base64 = ''
                                 login.verification_url = str(value.get('url') or '')
+                            elif kind in {'verification_finished', 'verification_failed'}:
+                                login.verification_url = ''
+                                login.state = 'starting'
 
                     credentials = douyin_sdk_transport.login(
                         account_id, event, login.stop,
@@ -156,10 +174,16 @@ def start_login(account_id: str, login_session: Callable) -> dict[str, str]:
 
 def cancel_login(account_id: str) -> dict[str, str]:
     _account(account_id)
+    scanning = False
     with _lock:
         login = _logins.get(account_id)
         if login and login.thread and login.thread.is_alive():
+            scanning = True
             login.stop.set()
+    if not scanning:
+        from app.services import douyin_sdk_transport
+        # 没有扫码任务时只取消当前安全挑战，保留独立私信连接。
+        douyin_sdk_transport.cancel_verification(account_id)
     return login_status(account_id)
 
 

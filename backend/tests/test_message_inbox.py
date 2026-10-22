@@ -54,6 +54,51 @@ def _event(message_id, content='你好'):
     return {'platform_message_id': message_id, 'peer_user_id': '123456', 'conversation_id': '0:1:123456:987654', 'conversation_short_id': 22, 'content': content, 'raw_content': {'text': content}, 'direction': 'incoming'}
 
 
+def test_user_activity_stays_account_scoped_and_skips_unavailable_accounts(inbox, monkeypatch):
+    account, transport = inbox
+    first, second = account('活动账号一'), account('活动账号二')
+    xhs = account('小红书活动', 'xhs')
+    calls = []
+    transport.mark_active = lambda selected: calls.append(selected) or True
+    assert message_inbox.mark_active(first) == {'reported': True}
+    assert calls == [first]
+    with message_inbox._runtime_lock:
+        message_inbox._login_sessions[second] = (threading.get_ident(), threading.Event())
+    assert message_inbox.mark_active(second) == {'reported': False}
+    account_center.set_feature_status(first, 'message', 'expired')
+    assert message_inbox.mark_active(first) == {'reported': False}
+    assert message_inbox.mark_active(xhs) == {'reported': False}
+    assert calls == [first]
+    with pytest.raises(ValueError):
+        message_inbox.mark_active('missing-account')
+
+
+def test_activity_route_requires_license_and_does_not_treat_polling_as_activity(inbox, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.routers import message_inbox as routes
+
+    account, transport = inbox
+    account_id = account('活动路由')
+    calls = []
+    transport.mark_active = lambda selected: calls.append(selected) or True
+    client = TestClient(app)
+    path = f'/api/message-inbox/accounts/{account_id}'
+    assert client.get(path + '/status').status_code == 200
+    assert calls == []
+    monkeypatch.setattr(routes, 'require_license', lambda: None)
+    assert client.post(path + '/activity').json() == {'reported': True}
+    assert calls == [account_id]
+
+    def deny_license():
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail='测试授权失效')
+
+    monkeypatch.setattr(routes, 'require_license', deny_license)
+    assert client.post(path + '/activity').status_code == 403
+    assert calls == [account_id]
+
+
 def test_xhs_uses_same_inbox_storage_status_and_platform_ownership(inbox, monkeypatch):
     account, transport = inbox
     from app.services import message_workbench

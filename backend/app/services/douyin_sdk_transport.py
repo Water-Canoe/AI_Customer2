@@ -87,6 +87,7 @@ class _Bridge:
     def __init__(self, account_id: str):
         self.account_id = account_id
         self.state = 'disconnected'
+        self.verification: dict[str, Any] = {}
         self.events: queue.Queue[dict[str, Any]] = queue.Queue()
         self.login_events: queue.Queue[dict[str, Any]] = queue.Queue()
         self.pending: dict[str, queue.Queue] = {}
@@ -124,7 +125,13 @@ class _Bridge:
                         raise ValueError('SDK 进程返回了其它业务账号的事件')
                     if value['event'] == 'state':
                         self.state = str(value.get('data', {}).get('state') or 'error')
-                    if value['event'] in {'ready', 'qrcode', 'verification', 'state'}:
+                    if value['event'] == 'verification':
+                        self.verification = {**value.get('data', {}), 'error': ''}
+                    elif value['event'] == 'verification_failed':
+                        self.verification = {**value.get('data', {}), 'url': ''}
+                    elif value['event'] == 'verification_finished':
+                        self.verification = {**self.verification, 'url': ''} if self.verification.get('error') else {}
+                    if value['event'] in {'ready', 'qrcode', 'verification', 'verification_failed', 'verification_finished', 'state'}:
                         self.login_events.put(value)
                     self.events.put(value)
                 else:
@@ -136,6 +143,7 @@ class _Bridge:
             pass
         finally:
             self.state = 'disconnected'
+            self.verification = {}
             self.events.put({'event': 'closed', 'data': {}, 'account_id': self.account_id})
             with self.lock:
                 for pending in self.pending.values():
@@ -231,18 +239,38 @@ def close_send_auth(account_id: str) -> None:
         current.close()
 
 
+def mark_active(account_id: str) -> bool:
+    """向已有账号进程报告真实用户操作；未连接时不创建进程或恢复认证。"""
+    with _bridges_lock:
+        current = _bridges.get(account_id)
+    if current is None or current.closed or current.process.poll() is not None:
+        return False
+    return bool(current.request('activity', timeout=5).get('reported'))
+
+
+def cancel_verification(account_id: str) -> bool:
+    """只取消现有账号的安全验证页，不主动退出账号或覆盖已保存认证。"""
+    with _bridges_lock:
+        current = _bridges.get(account_id)
+    if current is None or current.closed or current.process.poll() is not None:
+        return False
+    return bool(current.request('cancel-verification', timeout=5).get('cancelled'))
+
+
 def session_status(account_id: str) -> dict[str, Any]:
     """只检查本地身份与已有进程，不创建进程、不发网络请求。"""
     try:
         uid, updated_at = _saved_identity(account_id)
         with _bridges_lock:
             current = _bridges.get(account_id)
-        state = current.state if current and not current.closed and current.process.poll() is None else 'disconnected'
+        running = current and not current.closed and current.process.poll() is None
+        state = current.state if running else 'disconnected'
         return {'saved': bool(uid), 'uid': uid, 'sdk_uid': uid, 'state': state, 'synced_at': updated_at,
+                'verification': dict(current.verification) if running else {},
                 'receive_ready': bool(uid), 'send_ready': bool(uid),
                 'error': '' if uid else '请先点击“扫码登录私信”，完成首次登录'}
     except ValueError as exc:
-        return {'saved': False, 'uid': '', 'sdk_uid': '', 'state': 'error', 'synced_at': '',
+        return {'saved': False, 'uid': '', 'sdk_uid': '', 'state': 'error', 'synced_at': '', 'verification': {},
                 'receive_ready': False, 'send_ready': False, 'error': str(exc)}
 
 
@@ -323,8 +351,6 @@ def receive_forever(credentials: dict[str, Any], on_message: Callable[[dict], No
                 on_message(_validate_message(data, uid))
             elif kind == 'state':
                 on_state(str(data.get('state') or 'error'), str(data.get('error') or ''))
-            elif kind == 'verification':
-                on_state('error', '抖音要求安全验证，请点击“扫码登录私信”完成验证')
             elif kind == 'closed':
                 if not stop_event.is_set():
                     raise ValueError('抖音 SDK 连接已停止，请重新连接')

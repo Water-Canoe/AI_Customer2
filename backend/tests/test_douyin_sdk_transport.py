@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,8 @@ function contact(account, peer, thread = info(peer).conversationId, short = info
       trace(account.root, { op: 'send', peer, text });
       if (text === 'uncertain') throw Object.assign(new Error('sessionid=DO-NOT-LEAK'), { name: 'ImProtoTransportError', cmd: 100, stage: 'decode' });
       if (text === 'reject') throw Object.assign(new Error('cookie=DO-NOT-LEAK'), { name: 'SendMessageError', response: { clientMessageId: 'rejected-client' } });
+      if (text === 'reconnect-fixture') account.fixtureReconnect();
+      if (text === 'receive-restored-fixture') account.fixtureIncoming('restored-live');
       return { statusCode: 0, serverMessageId: 'send-1', clientMessageId: 'client-send-1' };
     },
     async getHistory(options) {
@@ -99,6 +102,34 @@ export function createClient({ dataDir }) {
         }, 30);
       },
       async logout() { account.online = false; account.rejectLogin?.(new Error('cancelled')); client.emit('system.offline', { account }); },
+      markActive() {
+        trace(dataDir, { op: 'activity', uid: account.uid });
+        if (!existsSync(join(dataDir, 'verification-action'))) return;
+        const action = readFileSync(join(dataDir, 'verification-action'), 'utf8').trim();
+        if (action === 'start' && !account.fixtureChallenge) account.fixtureVerification();
+        if (action === 'complete') account.fixtureChallenge?.resolve();
+        if (action === 'fail') account.fixtureChallenge?.reject(new Error('private token=DO-NOT-LEAK cookie=DO-NOT-LEAK'));
+      },
+      fixtureVerification() {
+        let resolve, reject;
+        const opening = new Promise((done, fail) => { resolve = done; reject = fail; });
+        const verification = { operation: 'token-beat', methods: ['captcha'],
+          open: () => opening,
+          async openUrl() { return 'http://127.0.0.1:12345/?token=private-fixture-challenge'; },
+          cancel() { trace(dataDir, { op: 'cancel-verification' }); reject(new Error('cancel token=DO-NOT-LEAK')); },
+        };
+        account.fixtureChallenge = { resolve, reject };
+        client.emit('system.login.verification', { account, verification });
+      },
+      fixtureIncoming(id) {
+        setTimeout(() => client.emit('message', { threadId: '0:1:11:22', conversationShortId: '2200', senderUid: '22',
+          serverMessageId: id, rawContent: '{"text":"离线夹具消息"}', text: '离线夹具消息', messageType: 7,
+          createTime: '1720000001000', clientMessageId: `${id}-client` }), 30);
+      },
+      fixtureReconnect() {
+        client.emit('system.reconnecting', { account });
+        setTimeout(() => { client.emit('system.online', { account }); account.fixtureIncoming('reconnected-live'); }, 30);
+      },
       pickFriend: peer => account.contacts.get(peer), pickStranger: peer => account.strangers?.get(peer),
       applyConversationInfo(value) { const peer=value.conversationId.split(':').at(-1); account.contacts.set(peer, contact(account,peer,value.conversationId,value.conversationShortId)); },
       rememberStranger(value) { account.strangers ??= new Map(); account.strangers.set(value.uid,value); },
@@ -208,6 +239,135 @@ def test_status_has_no_process_or_network_and_restore_without_session_never_scan
     assert transport.session_status('business-a')['saved'] is False
     assert transport.restore_session('business-a')['receive_ready'] is False
     transport.close_send_auth('missing-or-xhs')
+
+
+def test_activity_only_reports_to_existing_online_account_and_never_creates_or_restores(sdk_runtime, monkeypatch):
+    """活动上报不能变成隐藏登录入口，也不能误报到其它业务账号。"""
+    with monkeypatch.context() as guard:
+        guard.setattr(transport, '_bridge', lambda *_: pytest.fail('活动通知不能创建或恢复 SDK'))
+        assert transport.mark_active('business-a') is False
+        assert transport.cancel_verification('business-a') is False
+        current = transport._Bridge('business-a')
+        transport._bridges['business-a'] = current
+        assert transport.mark_active('business-a') is False
+        assert transport.cancel_verification('business-a') is False
+        assert not (sdk_runtime / 'business-a' / 'douyin-im-sdk' / 'accounts').exists()
+    credentials = _login()
+    # 定时状态、资料、历史和普通收发不自动伪装成真实用户操作。
+    transport.session_status('business-a')
+    transport.sync_history('business-a', '22')
+    transport.get_user_profile(credentials, '22')
+    transport.send_text(credentials, '22', 'background-send', account_id='business-a')
+    trace_file = sdk_runtime / 'business-a' / 'douyin-im-sdk' / 'trace.jsonl'
+    assert not any(json.loads(line)['op'] == 'activity' for line in trace_file.read_text(encoding='utf-8').splitlines())
+    assert transport.mark_active('business-a') is True
+    assert transport.mark_active('business-b') is False
+    trace = [json.loads(line) for line in trace_file.read_text(encoding='utf-8').splitlines()]
+    assert [value for value in trace if value['op'] == 'activity'] == [{'op': 'activity', 'uid': '11'}]
+    current.close()
+    assert transport.mark_active('business-a') is False
+    assert transport._bridges['business-a'] is current
+    transport.close_send_auth('business-a')
+    assert transport.mark_active('business-a') is False
+    assert 'business-a' not in transport._bridges and 'business-b' not in transport._bridges
+
+
+@pytest.mark.parametrize('outcome', ['complete', 'cancel', 'fail'])
+def test_online_renewal_verification_finishes_without_stale_urls_or_destroying_receive(sdk_runtime, outcome):
+    """离线验证挑战模拟结果；真实桥接与接收线程须保留原账号连接并清理临时 URL。"""
+    credentials = _login()
+    current = transport._bridges['business-a']
+    action = sdk_runtime / 'business-a' / 'douyin-im-sdk' / 'verification-action'
+    action.write_text('start', encoding='utf-8')
+    states = []
+    stop = threading.Event()
+    listener = threading.Thread(target=transport.receive_forever,
+                                args=(credentials, lambda *_: None, lambda *value: states.append(value), stop))
+    listener.start()
+
+    def wait_for(predicate):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.01)
+        pytest.fail('验证状态未在预期时间内更新')
+
+    try:
+        assert transport.mark_active('business-a') is True
+        wait_for(lambda: bool(transport.session_status('business-a')['verification'].get('url')))
+        status = transport.session_status('business-a')
+        assert status['verification']['operation'] == 'token-beat'
+        assert status['verification']['methods'] == ['captcha']
+        assert status['state'] == 'connected'
+        if outcome == 'cancel':
+            assert transport.cancel_verification('business-a') is True
+        else:
+            action.write_text(outcome, encoding='utf-8')
+            assert transport.mark_active('business-a') is True
+        wait_for(lambda: not transport.session_status('business-a')['verification'].get('url'))
+        status = transport.session_status('business-a')
+        if outcome == 'fail':
+            assert status['verification']['error'] and status['verification']['operation'] == 'token-beat'
+            assert 'DO-NOT-LEAK' not in json.dumps(status['verification'])
+        else:
+            assert status['verification'] == {}
+        assert status['state'] == 'connected' and transport._bridges['business-a'] is current
+        assert listener.is_alive() and not any(value[0] == 'error' for value in states)
+        assert transport.cancel_verification('business-a') is False
+        assert transport.send_text(credentials, '22', 'after-verification', account_id='business-a')['status'] == 'accepted'
+    finally:
+        stop.set()
+        listener.join(timeout=5)
+    assert not listener.is_alive()
+
+
+def test_offline_bridge_reconnect_and_fresh_process_restore_preserve_send_receive_without_rescanning(sdk_runtime):
+    """网络仅由夹具触发事件；验证真实 Node/Python 重连分派、重启与已存身份恢复。"""
+    credentials = _login()
+    first_pid = transport._bridges['business-a'].process.pid
+    assert transport.send_text(credentials, '22', 'before-reconnect', account_id='business-a')['status'] == 'accepted'
+    assert transport.send_text(credentials, '22', 'reconnect-fixture', account_id='business-a')['status'] == 'accepted'
+    messages, states = [], []
+    stop = threading.Event()
+
+    def after_reconnect(event):
+        messages.append(event)
+        if event['platform_message_id'] == 'reconnected-live':
+            stop.set()
+
+    deadline = threading.Timer(5, stop.set)
+    deadline.start()
+    try:
+        transport.receive_forever(credentials, after_reconnect, lambda *value: states.append(value), stop)
+    finally:
+        deadline.cancel()
+    assert ('reconnecting', '私信连接中断，正在自动重连') in states
+    assert any(value['platform_message_id'] == 'reconnected-live' and not value['history'] for value in messages)
+    assert 'business-a' not in transport._bridges
+    # 同一持久化身份在全新 Node 进程恢复，无二维码、无新正式凭据提升。
+    assert transport.send_text(credentials, '22', 'after-restart', account_id='business-a')['status'] == 'accepted'
+    restored = transport._bridges['business-a']
+    assert restored.process.pid != first_pid
+    assert not any(value['event'] == 'qrcode' for value in list(restored.login_events.queue))
+    assert transport.send_text(credentials, '22', 'receive-restored-fixture', account_id='business-a')['status'] == 'accepted'
+    stop = threading.Event()
+    restored_messages = []
+
+    def after_restart(event):
+        restored_messages.append(event)
+        stop.set()
+
+    deadline = threading.Timer(5, stop.set)
+    deadline.start()
+    try:
+        transport.receive_forever(credentials, after_restart, lambda *_: None, stop)
+    finally:
+        deadline.cancel()
+    assert restored_messages[0]['platform_message_id'] == 'restored-live'
+    trace = [json.loads(line) for line in (sdk_runtime / 'business-a' / 'douyin-im-sdk' / 'trace.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert len([value for value in trace if value['op'] == 'promote']) == 1
+    assert not any(value['op'] == 'activity' for value in trace)
 
 
 def test_cancelling_pending_scan_stops_real_node_promptly(sdk_runtime):
@@ -367,3 +527,97 @@ def test_installed_sdk_starts_real_bridge_without_login_or_network(tmp_path):
     finally:
         process.stdin.close()
         process.wait(timeout=5)
+
+
+def test_installed_sdk_renewal_uses_real_activity_throttle_and_stops_with_account(tmp_path):
+    """虚拟时钟只替代时间；续期与退出实现直接导入锁定的真实 SDK，不访问网络。"""
+    library = transport._BRIDGE_ROOT / 'node_modules' / 'douyin-im' / 'lib'
+    script = tmp_path / 'renewal-lifecycle.test.mjs'
+    source = r"""
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { PassportTokenBeat } from '__TOKEN_BEAT__';
+import { BaseAccount } from '__ACCOUNT__';
+
+// SDK 的每个用例使用独立虚拟时钟，时间推进不会发出真实平台请求。
+test('idle boot pauses after ten minutes and never renews without activity', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const scenes = [];
+  const renewal = new PassportTokenBeat(async scene => { scenes.push(scene); return { message: 'success' }; }, () => assert.fail('unexpected expiry'));
+  renewal.start();
+  assert.deepEqual(scenes, ['boot']);
+  t.mock.timers.tick(600_000);
+  t.mock.timers.tick(1_800_000);
+  assert.deepEqual(scenes, ['boot']);
+  renewal.stop();
+});
+
+test('actual activity resumes, is throttled for ten seconds, and permits only the next polling', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const scenes = [];
+  const renewal = new PassportTokenBeat(async scene => { scenes.push(scene); return { message: 'success' }; }, () => assert.fail('unexpected expiry'));
+  renewal.start();
+  t.mock.timers.tick(600_000);
+  renewal.activity();
+  assert.deepEqual(scenes, ['boot', 'active']);
+  for (let index = 0; index < 20; index++) renewal.activity();
+  t.mock.timers.tick(9_999);
+  renewal.activity();
+  // 同一节流窗口的活动不会设置下一次 polling，SDK 会自行暂停。
+  t.mock.timers.tick(590_001);
+  assert.deepEqual(scenes, ['boot', 'active']);
+  renewal.activity();
+  t.mock.timers.tick(10_000);
+  renewal.activity();
+  t.mock.timers.tick(590_000);
+  assert.deepEqual(scenes, ['boot', 'active', 'active', 'polling']);
+  t.mock.timers.tick(600_000);
+  assert.deepEqual(scenes, ['boot', 'active', 'active', 'polling']);
+  renewal.stop();
+});
+
+class OfflineAccount extends BaseAccount {
+  async beginLogin() { this.completeLogin(); }
+  cancelLogin() {}
+}
+
+test('public markActive allows reconnecting but logout aborts renewal and ignores late responses', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const account = new OfflineAccount();
+  const requests = [];
+  await account.login();
+  account.startSessionRenewal((scene, signal) => new Promise(resolve => requests.push({ scene, signal, resolve })));
+  account.setAccountState('reconnecting');
+  assert.equal(account.online, true);
+  account.markActive();
+  t.mock.timers.tick(600_000);
+  assert.deepEqual(requests.map(value => value.scene), ['boot', 'polling']);
+  await account.logout();
+  assert.equal(account.online, false);
+  assert.ok(requests.every(value => value.signal.aborted));
+  assert.throws(() => account.markActive(), /账号未上线/);
+  for (const value of requests) value.resolve({ message: 'error', data: { error_code: 401 } });
+  await Promise.resolve();
+  t.mock.timers.tick(1_800_000);
+  assert.equal(requests.length, 2);
+  assert.equal(account.state, 'offline');
+});
+
+test('an explicit expired response stops the real renewal controller', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  let requests = 0, expired = 0;
+  const renewal = new PassportTokenBeat(async () => { requests++; return { message: 'error', data: { error_code: 401 } }; }, () => expired++);
+  renewal.start();
+  await Promise.resolve();
+  assert.equal(expired, 1);
+  renewal.activity();
+  t.mock.timers.tick(1_800_000);
+  assert.equal(requests, 1);
+});
+"""
+    source = source.replace('__TOKEN_BEAT__', (library / 'desktop' / 'token-beat.js').as_uri())
+    source = source.replace('__ACCOUNT__', (library / 'base' / 'account.js').as_uri())
+    script.write_text(source, encoding='utf-8')
+    result = subprocess.run([str(transport._node_executable()), '--test', str(script)], capture_output=True,
+                            text=True, encoding='utf-8', timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr

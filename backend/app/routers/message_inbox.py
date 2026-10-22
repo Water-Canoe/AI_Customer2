@@ -35,6 +35,12 @@ def account_status(account_id: str):
     return _call(message_inbox.status, account_id)
 
 
+@router.post('/accounts/{account_id}/activity')
+def account_activity(account_id: str):
+    require_license()
+    return _call(message_inbox.mark_active, account_id)
+
+
 @router.post('/accounts/{account_id}/connect')
 def connect_account(account_id: str):
     require_license()

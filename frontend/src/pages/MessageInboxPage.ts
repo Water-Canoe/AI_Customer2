@@ -56,6 +56,7 @@ export default defineComponent({
     let revision = 0
     let customerKey = ''
     let activatedOnce = false
+    const lastActivity = new Map<string, number>()
 
     const refresh = createAutoSyncController({ interval: () => 3000, sync: async reason => {
       if (!active) return
@@ -99,6 +100,17 @@ export default defineComponent({
         : h('span', { class: 'inbox-avatar-placeholder' }, '头像'))
     }
     function accountPath(id = accountId.value) { return '/message-inbox/accounts/' + encodeURIComponent(id) }
+    function reportActivity(event: Event) {
+      const account = accountId.value
+      // 仅真实前台操作参与续期；轮询、收消息和程序触发事件不代表用户活动。
+      if (!event.isTrusted || !active || document.hidden || platform.value !== 'dy' || !account
+        || !status.value.receive_ready || !['connected', 'reconnecting'].includes(status.value.state)) return
+      const now = Date.now()
+      if (now - (lastActivity.get(account) ?? -Infinity) < 10000) return
+      lastActivity.set(account, now)
+      // 固定本次操作所属账号，异步通知失败也不阻塞编辑和发送。
+      void api.post(accountPath(account) + '/activity').catch(() => {})
+    }
     function setSelection(account: string, conversation: number) {
       if (account === accountId.value && conversation === conversationId.value) return
       revision += 1
@@ -294,7 +306,10 @@ export default defineComponent({
     onDeactivated(stop)
     onUnmounted(stop)
 
-    return () => h('div', { class: 'workspace-page operations-page message-inbox-page' }, [
+    return () => h('div', {
+      class: 'workspace-page operations-page message-inbox-page',
+      onPointerdownCapture: reportActivity, onKeydownCapture: reportActivity,
+    }, [
       h(MessageInboxControls, {
         platform: platform.value, accountId: accountId.value, accounts: accounts.value,
         status: status.value, error: error.value, busy: actionBusy.value, historyBusy: historyBusy.value,

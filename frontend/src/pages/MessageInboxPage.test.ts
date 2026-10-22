@@ -34,6 +34,15 @@ async function open(path = '/message-inbox?account_id=account-a&conversation=1')
   return router
 }
 
+function activityHandler(kind = 'onPointerdownCapture') {
+  // jsdom 的原生 isTrusted 不可改写，调用页面实际绑定的处理器模拟可信输入。
+  return wrapper!.findComponent(MessageInboxPage).vm.$.subTree.props![kind] as (event: Event) => void
+}
+
+function trustedActivity(kind = 'onPointerdownCapture') {
+  activityHandler(kind)({ isTrusted: true } as Event)
+}
+
 describe('私信收件箱', () => {
   it('filters accounts by platform and keeps chat drafts separate when switching', async () => {
     const normal = mocks.get.getMockImplementation()!
@@ -112,6 +121,99 @@ describe('私信收件箱', () => {
     expect(mocks.post).toHaveBeenCalledWith('/message-inbox/accounts/account-a/sync-auth')
   })
 
+  it('reports only trusted inbox interaction and throttles each account for ten seconds', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, state: 'connected' } } : normal(url, options))
+    await open()
+    await wrapper!.get('textarea').trigger('pointerdown')
+    await wrapper!.get('textarea').trigger('keydown', { key: 'a' })
+    await vi.advanceTimersByTimeAsync(12000)
+    expect(mocks.post).not.toHaveBeenCalled()
+    trustedActivity()
+    trustedActivity('onKeydownCapture')
+    expect(mocks.post).toHaveBeenCalledExactlyOnceWith('/message-inbox/accounts/account-a/activity')
+    await vi.advanceTimersByTimeAsync(9999)
+    trustedActivity()
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+    trustedActivity('onKeydownCapture')
+    expect(mocks.post).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['disconnected', true], ['connecting', true], ['expired', true], ['error', true], ['connected', false],
+  ])('does not report activity for state %s with receive_ready=%s', async (state, receive_ready) => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, state, receive_ready } } : normal(url, options))
+    await open()
+    trustedActivity()
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('never reports activity for XHS even when its receiver is connected', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url === '/accounts'
+      ? { data: [account('xhs-account', 'xhs')] }
+      : url.endsWith('/status') ? { data: { ...status, state: 'connected' } } : normal(url, options))
+    await open('/message-inbox?platform=xhs&account_id=xhs-account&conversation=1')
+    trustedActivity()
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('keeps activity requests and throttling bound to their account during reconnect and late responses', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, state: 'reconnecting' } } : normal(url, options))
+    let finish!: (value: any) => void
+    mocks.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const router = await open()
+    trustedActivity()
+    await router.replace('/message-inbox?account_id=account-b&conversation=2')
+    await flushPromises()
+    trustedActivity('onKeydownCapture')
+    expect(mocks.post.mock.calls.map(call => call[0])).toEqual([
+      '/message-inbox/accounts/account-a/activity', '/message-inbox/accounts/account-b/activity',
+    ])
+    finish({ data: { reported: true } })
+    await flushPromises()
+    trustedActivity()
+    await router.replace('/message-inbox?account_id=account-a&conversation=1')
+    await flushPromises()
+    trustedActivity()
+    expect(mocks.post).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores hidden, deactivated and unmounted interaction and does not block editing after reporting fails', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, state: 'connected' } } : normal(url, options))
+    const router = await open()
+    const handle = activityHandler()
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    handle({ isTrusted: true } as Event)
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    await router.push('/other')
+    await flushPromises()
+    handle({ isTrusted: true } as Event)
+    expect(mocks.post).not.toHaveBeenCalled()
+    await router.push('/message-inbox?account_id=account-a&conversation=1')
+    await flushPromises()
+    mocks.post.mockRejectedValueOnce(new Error('activity failed'))
+    trustedActivity()
+    await flushPromises()
+    await wrapper!.get('textarea').setValue('活动上报失败也能继续编辑')
+    expect((wrapper!.get('textarea').element as HTMLTextAreaElement).value).toBe('活动上报失败也能继续编辑')
+    expect(mocks.error).not.toHaveBeenCalled()
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+    wrapper!.unmount(); wrapper = undefined
+    await vi.advanceTimersByTimeAsync(10000)
+    handle({ isTrusted: true } as Event)
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+  })
+
   it('starts SDK QR login only on request and can cancel without touching the draft', async () => {
     const normal = mocks.get.getMockImplementation()!
     let login = { state: 'idle', image_base64: '', verification_url: '', error: '' }
@@ -153,6 +255,50 @@ describe('私信收件箱', () => {
     expect(wrapper!.find('.inbox-sdk-login').exists()).toBe(false)
     expect(wrapper!.get('.inbox-chat-header').text()).toContain('会话2')
     expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('shows and cancels the existing renewal challenge without starting QR login or changing connection state', async () => {
+    const normal = mocks.get.getMockImplementation()!
+    let login = { state: 'verification', operation: 'token-beat', image_base64: '', verification_url: 'http://127.0.0.1:8787/verify', error: '' }
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, state: 'connected', sdk_login: login } } : normal(url, options))
+    mocks.post.mockImplementation(async () => {
+      login = { ...login, state: 'cancelled', verification_url: '' }
+      return { data: login }
+    })
+    await open()
+    const challenge = wrapper!.get('[aria-label="抖音私信续期验证"]')
+    expect(challenge.text()).toContain('私信续期需要安全验证，请打开验证页面完成验证。')
+    expect(challenge.get('a').text()).toBe('打开续期验证页面')
+    expect(challenge.get('a').attributes('href')).toBe('http://127.0.0.1:8787/verify')
+    expect(wrapper!.find('.inbox-sdk-qrcode').exists()).toBe(false)
+    for (const label of ['恢复私信认证', '扫码登录私信']) {
+      expect(wrapper!.findAll('button').find(item => item.text() === label)!.attributes()).toHaveProperty('disabled')
+    }
+    expect(wrapper!.get('.inbox-connection-status').text()).toBe('接收已连接')
+    await challenge.findAll('button').find(item => item.text() === '取消续期验证')!.trigger('click')
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalledExactlyOnceWith('/message-inbox/accounts/account-a/sdk-login/cancel')
+    expect(wrapper!.find('.inbox-sdk-login').exists()).toBe(false)
+    expect(wrapper!.get('.inbox-connection-status').text()).toBe('接收已连接')
+    expect(wrapper!.text()).not.toContain('私信扫码登录成功')
+  })
+
+  it.each([
+    ['token-beat', '私信续期验证未完成。'],
+    [undefined, '私信扫码登录失败，请重新扫码。'],
+  ])('distinguishes %s verification failure from an initial login error', async (operation, text) => {
+    const normal = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
+      ? { data: { ...status, state: 'connected', sdk_login: { state: 'error', operation, image_base64: '', verification_url: '', error: '验证未完成，原连接状态已保留' } } } : normal(url, options))
+    await open()
+    const challenge = wrapper!.get('.inbox-sdk-login')
+    expect(challenge.text()).toContain(text)
+    expect(challenge.text()).toContain('验证未完成，原连接状态已保留')
+    expect(challenge.find('a').exists()).toBe(false)
+    expect(challenge.find('button').exists()).toBe(false)
+    expect(wrapper!.get('.inbox-connection-status').text()).toBe('接收已连接')
+    if (operation) expect(challenge.text()).not.toContain('请重新扫码')
   })
 
   it('rejects a late QR response after changing accounts', async () => {

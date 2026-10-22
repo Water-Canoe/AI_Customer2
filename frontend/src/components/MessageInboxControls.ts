@@ -2,7 +2,7 @@ import { defineComponent, h, type PropType } from 'vue'
 import type { PlatformAccount } from '../shared/types'
 
 export type InboxPlatform = 'dy' | 'xhs'
-export type SdkLoginStatus = { state: 'idle' | 'starting' | 'qrcode' | 'verification' | 'online' | 'error' | 'cancelled'; image_base64: string; verification_url: string; error: string }
+export type SdkLoginStatus = { state: 'idle' | 'starting' | 'qrcode' | 'verification' | 'online' | 'error' | 'cancelled'; image_base64: string; verification_url: string; error: string; operation?: string }
 export type ConnectionStatus = { state: string; receive_ready: boolean; send_ready: boolean; error: string; profile_error?: string; history_scope: 'local' | 'platform'; sdk_login?: SdkLoginStatus }
 
 // 两个平台共用账号卡片和连接操作，平台协议不进入页面控件。
@@ -20,6 +20,8 @@ export const MessageInboxControls = defineComponent({
   setup(props, { emit }) {
     return () => {
       const login = props.platform === 'dy' ? props.status.sdk_login : undefined
+      // 续期验证沿用当前挑战，不引导用户重新扫码或提前宣告续期成功。
+      const renewal = login?.operation === 'token-beat'
       const loggingIn = Boolean(login && ['starting', 'qrcode', 'verification'].includes(login.state))
       const authBusy = props.busy || loggingIn || ['syncing', 'logging_in'].includes(props.status.state)
       return h('section', { class: 'panel inbox-account-bar' }, [
@@ -42,13 +44,16 @@ export const MessageInboxControls = defineComponent({
         props.platform === 'dy' ? h('button', { disabled: !props.status.receive_ready || authBusy || props.historyBusy, onClick: () => emit('action', 'sync-history') }, props.historyBusy ? '同步历史中…' : '同步平台历史') : null,
         h('button', { onClick: () => emit('manage') }, '账号管理'),
       ]),
-      login && !['idle', 'cancelled'].includes(login.state) ? h('div', { class: 'inbox-sdk-login', 'aria-label': '抖音私信扫码登录' }, [
-        h('p', { class: 'note', role: 'status' }, ({ starting: '正在获取私信登录二维码…', qrcode: '请使用抖音 App 扫码并确认登录。', verification: '请打开验证页面完成登录验证。', online: '私信扫码登录成功。', error: '私信扫码登录失败，请重新扫码。' } as Record<string, string>)[login.state]),
+      login && !['idle', 'cancelled'].includes(login.state) ? h('div', { class: 'inbox-sdk-login', 'aria-label': renewal ? '抖音私信续期验证' : '抖音私信扫码登录' }, [
+        h('p', { class: 'note', role: 'status' }, renewal && login.state === 'verification'
+          ? '私信续期需要安全验证，请打开验证页面完成验证。'
+          : renewal && login.state === 'error' ? '私信续期验证未完成。'
+            : ({ starting: '正在获取私信登录二维码…', qrcode: '请使用抖音 App 扫码并确认登录。', verification: '请打开验证页面完成登录验证。', online: '私信扫码登录成功。', error: '私信扫码登录失败，请重新扫码。' } as Record<string, string>)[login.state]),
         ['qrcode', 'verification'].includes(login.state) && login.image_base64 ? h('img', { class: 'inbox-sdk-qrcode', src: 'data:image/png;base64,' + login.image_base64, alt: '抖音私信登录二维码' }) : null,
         // 验证地址仅允许网页协议，避免把异常认证数据当成可执行链接。
-        login.state === 'verification' && /^https?:\/\//i.test(login.verification_url) ? h('a', { href: login.verification_url, target: '_blank', rel: 'noopener noreferrer' }, '打开登录验证页面') : null,
+        login.state === 'verification' && /^https?:\/\//i.test(login.verification_url) ? h('a', { href: login.verification_url, target: '_blank', rel: 'noopener noreferrer' }, renewal ? '打开续期验证页面' : '打开登录验证页面') : null,
         login.error ? h('p', { class: 'operations-error', role: 'alert' }, login.error) : null,
-        loggingIn ? h('button', { disabled: props.busy, onClick: () => emit('action', 'sdk-login/cancel') }, '取消扫码登录') : null,
+        loggingIn ? h('button', { disabled: props.busy, onClick: () => emit('action', 'sdk-login/cancel') }, renewal ? '取消续期验证' : '取消扫码登录') : null,
       ]) : null,
       props.error || props.status.error ? h('p', { class: 'operations-error', role: 'alert' }, props.error || props.status.error) : null,
       props.status.profile_error ? h('p', { class: 'operations-error', role: 'alert' }, props.status.profile_error) : null,
