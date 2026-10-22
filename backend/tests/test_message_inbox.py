@@ -375,6 +375,18 @@ def test_sync_auth_releases_sender_off_event_loop(inbox, monkeypatch):
     assert released == [account_id]
 
 
+@pytest.mark.parametrize('ready', [True, False])
+def test_sdk_restore_keeps_healthy_process_and_closes_only_failed_restore(inbox, ready):
+    account, transport = inbox
+    account_id = account('私信会话恢复')
+    closed = []
+    transport.close_send_auth = closed.append
+    transport.restore_session = lambda selected: {'receive_ready': ready, 'send_ready': ready}
+    assert asyncio.run(message_inbox.sync_account(account_id))['receive_ready'] is ready
+    # 刚完成扫码的在线进程应留给接收线程，不能立刻关闭再走旧会话校验。
+    assert closed == ([] if ready else [account_id])
+
+
 def test_startup_switch_connects_all_ready_supported_accounts(inbox, monkeypatch):
     from app import views
 
@@ -412,7 +424,7 @@ def test_startup_switch_connects_all_ready_supported_accounts(inbox, monkeypatch
     assert views.update_settings({'message_inbox_auto_connect': True})['message_inbox_auto_connect'] is True
     asyncio.run(message_inbox.auto_connect_accounts())
     assert set(calls) == {first, second}
-    assert set(released) == {first, second}
+    assert set(released) == {second}
     assert message_inbox.active_accounts() == sorted([first, second])
     # 再执行也不能覆盖已有连接或重新同步正在使用的账号。
     asyncio.run(message_inbox.auto_connect_accounts())

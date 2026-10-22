@@ -59,19 +59,36 @@ export function createClient({ dataDir }) {
   client.createAccount = () => {
     const account = { root: dataDir, uid: '11', imUid: '11', nickname: '测试账号', online: false, contacts: new Map(),
       async login() {
-        if (!existsSync(join(dataDir, 'accounts', '11', 'account.json')) || existsSync(join(dataDir, 'force-scan'))) {
-          return new Promise((resolve, reject) => {
-            account.resolveLogin = resolve; account.rejectLogin = reject;
-            client.emit('system.login.qrcode', { account, qrcodeBase64: 'ZmFrZS1wbmc=', expireTime: 120 });
+        return new Promise((resolve, reject) => {
+          account.resolveLogin = resolve; account.rejectLogin = reject;
+          void account.beginLogin(1).catch(error => {
+            client.emit('system.login.error', { account, error }); reject(error);
           });
+        });
+      },
+      assertLoginGeneration() {},
+      async beginLogin() {
+        if (existsSync(join(dataDir, 'accounts', '11', 'account.json')) && !existsSync(join(dataDir, 'force-scan'))) {
+          if (existsSync(join(dataDir, 'restore-fault'))) throw new Error('Session恢复未通过校验：cookie=DO-NOT-LEAK');
+          account.online = true; client.emit('system.online', { account }); account.resolveLogin(); return;
         }
-        account.online = true; client.emit('system.online', { account });
+        await account.auth.beginLogin();
+      },
+      async seedThreadShortIds() {
+        if (!existsSync(join(dataDir, 'login-fault'))) return;
+        const kind = readFileSync(join(dataDir, 'login-fault'), 'utf8').trim();
+        if (kind === 'http') throw Object.assign(new Error('IM Cookie HTTP 503 /v2/message/get_by_user_init?token=DO-NOT-LEAK Cookie=DO-NOT-LEAK'),
+          { name: 'ImProtoTransportError', cmd: 203, stage: 'http', endpoint: '/v2/message/get_by_user_init?token=DO-NOT-LEAK' });
+        if (kind === 'network') throw Object.assign(new Error('request failed sessionid=DO-NOT-LEAK'),
+          { name: 'ImProtoTransportError', cmd: 203, stage: 'network', endpoint: '/v2/message/get_by_user_init?token=DO-NOT-LEAK', cause: { code: 'UND_ERR_CONNECT_TIMEOUT', message: 'Cookie=DO-NOT-LEAK' } });
+        if (kind === 'im') throw new Error('IM 初始化失败: status=500 Cookie=DO-NOT-LEAK; token=DO-NOT-LEAK');
+        throw new TypeError('Cannot read private cookie=DO-NOT-LEAK from token=DO-NOT-LEAK');
       },
       async continueLogin() {
         if (existsSync(join(dataDir, 'block-login'))) return new Promise(() => {});
         const uid = existsSync(join(dataDir, 'scan-uid')) ? readFileSync(join(dataDir, 'scan-uid'), 'utf8').trim() : '11';
-        try { client.store.promote('pending-fixture', uid); }
-        catch (error) { account.rejectLogin(error); throw error; }
+        try { client.store.promote('pending-fixture', uid); await account.seedThreadShortIds(); }
+        catch (error) { client.emit('system.login.error', { account, error }); account.rejectLogin(error); throw error; }
         account.uid = account.imUid = uid;
         account.online = true; client.emit('system.online', { account }); account.resolveLogin();
         setTimeout(() => {
@@ -86,6 +103,9 @@ export function createClient({ dataDir }) {
       applyConversationInfo(value) { const peer=value.conversationId.split(':').at(-1); account.contacts.set(peer, contact(account,peer,value.conversationId,value.conversationShortId)); },
       rememberStranger(value) { account.strangers ??= new Map(); account.strangers.set(value.uid,value); },
     };
+    account.auth = { async beginLogin() {
+      client.emit('system.login.qrcode', { account, qrcodeBase64: 'ZmFrZS1wbmc=', expireTime: 120 });
+    } };
     account.im = {
       async createPrivateConversation(ids) { trace(dataDir, { op: 'create', ids }); return { statusCode: 0, conversation: info(ids[1]) }; },
       async listThreads(options) { trace(dataDir, { op: 'threads', cursor: options.cursor }); return { statusCode: 0, hasMore: options.cursor==='0', cursor: 'threads-next', conversations: [info(options.cursor==='0'?'22':'33')] }; },
@@ -231,6 +251,95 @@ def test_wrong_scan_is_rejected_before_credentials_are_written_and_original_can_
     (folder / 'scan-uid').write_text('11', encoding='utf-8')
     restored = transport.login('business-a', lambda *_: None, threading.Event(), expected_uid='11')
     assert restored['sdk_uid'] == '11'
+
+
+def test_saved_session_restore_failure_does_not_block_explicit_rescan(sdk_runtime):
+    _login()
+    transport.close_send_auth('business-a')
+    folder = sdk_runtime / 'business-a' / 'douyin-im-sdk'
+    (folder / 'restore-fault').write_text('1', encoding='utf-8')
+    # 后台恢复失败只能报告错误，不能私自切换到扫码。
+    status = transport.restore_session('business-a')
+    assert status['receive_ready'] is False and '恢复已保存会话' in status['error']
+    current = transport._bridges['business-a']
+    assert not any(value['event'] == 'qrcode' for value in list(current.events.queue))
+    # 用户点击扫码必须执行新认证，不能再次困在恢复探针中。
+    events = []
+    credentials = transport.login('business-a', events.append, threading.Event())
+    assert credentials['sdk_uid'] == '11'
+    assert any(value.get('type') == 'qrcode' for value in events)
+
+
+def test_explicit_rescan_of_online_instance_performs_new_authentication(sdk_runtime):
+    _login()
+    current = transport._bridges['business-a']
+    events = []
+    credentials = transport.login('business-a', events.append, threading.Event(), expected_uid='11')
+    assert credentials['sdk_uid'] == '11' and transport._bridges['business-a'] is current
+    assert any(value.get('type') == 'qrcode' for value in events)
+    trace = [json.loads(line) for line in (sdk_runtime / 'business-a' / 'douyin-im-sdk' / 'trace.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert len([value for value in trace if value['op'] == 'promote']) == 2
+
+
+def test_saved_identity_guards_wrong_rescan_even_before_host_marker_exists(sdk_runtime):
+    _login()
+    transport.close_send_auth('business-a')
+    folder = sdk_runtime / 'business-a' / 'douyin-im-sdk'
+    original = (folder / 'accounts' / '11' / 'account.json').read_bytes()
+    (folder / 'scan-uid').write_text('99', encoding='utf-8')
+    with pytest.raises(ValueError, match='原绑定不一致'):
+        transport.login('business-a', lambda *_: None, threading.Event())
+    assert not (folder / 'accounts' / '99').exists()
+    assert (folder / 'accounts' / '11' / 'account.json').read_bytes() == original
+
+
+def _raw_login_fault(tmp_path, kind):
+    """直接读取真实 Node 的 RPC 错误，验证 Python 未消费的结构化诊断。"""
+    folder = tmp_path / 'diagnostic-business' / 'douyin-im-sdk'
+    folder.mkdir(parents=True)
+    (folder / 'login-fault').write_text(kind, encoding='utf-8')
+    process = subprocess.Popen(
+        [str(transport._node_executable()), str(transport._BRIDGE_ROOT / 'bridge.mjs'),
+         f'--data-dir={folder}', '--account-id=diagnostic-business'],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding='utf-8', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+    )
+    events = []
+    try:
+        assert json.loads(process.stdout.readline())['event'] == 'ready'
+        process.stdin.write(json.dumps({'id': 'login', 'account_id': 'diagnostic-business',
+                                       'method': 'login', 'params': {'interactive': True}}) + '\n')
+        process.stdin.flush()
+        while True:
+            value = json.loads(process.stdout.readline())
+            if value.get('id') == 'login':
+                return value['error'], events
+            events.append(value)
+    finally:
+        process.stdin.close()
+        process.wait(timeout=5)
+
+
+@pytest.mark.parametrize(('kind', 'error_type', 'detail'), [
+    ('http', 'ImProtoTransportError', {'http_status': 503, 'im_command': 203, 'transport_stage': 'http'}),
+    ('network', 'ImProtoTransportError', {'error_code': 'UND_ERR_CONNECT_TIMEOUT', 'im_command': 203, 'transport_stage': 'network'}),
+    ('im', 'Error', {'im_status': 500}),
+    ('javascript', 'TypeError', {}),
+])
+def test_real_node_login_diagnostics_expose_stage_and_codes_without_sensitive_messages(sdk_runtime, kind, error_type, detail):
+    error, events = _raw_login_fault(sdk_runtime, kind)
+    diagnostics = error['diagnostics']
+    assert diagnostics['phase'] == 'im_init' and diagnostics['error_type'] == error_type
+    assert all(diagnostics.get(key) == value for key, value in detail.items())
+    assert '初始化私信会话' in error['message'] and error_type in error['message']
+    if kind in {'http', 'network'}:
+        assert diagnostics['endpoint'] == '/v2/message/get_by_user_init'
+    failures = [value['data'] for value in events if value['event'] == 'state' and value['data'].get('state') == 'error']
+    # system.login.error、continueLogin 的拒绝和最终 RPC 使用同一个 formatter。
+    assert len(failures) >= 2
+    assert all(value['error'] == error['message'] and value['diagnostics'] == diagnostics for value in failures)
+    serialized = json.dumps({'rpc': error, 'states': failures}, ensure_ascii=False)
+    assert 'DO-NOT-LEAK' not in serialized and 'token=' not in serialized and 'cookie=' not in serialized.lower()
 
 
 def test_history_missing_or_mismatched_participants_is_rejected():

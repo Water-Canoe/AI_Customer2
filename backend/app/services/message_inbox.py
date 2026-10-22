@@ -73,7 +73,7 @@ def _load_credentials(account_id: str) -> dict[str, Any]:
 
 
 async def sync_account(account_id: str) -> dict[str, Any]:
-    """手动与启动同步共用账号互斥状态、Profile 导出和发送缓存释放。"""
+    """共用账号互斥；SDK 保留已上线进程，小红书仍更新浏览器认证缓存。"""
     with _runtime_lock:
         if account_id in active_accounts() and not _owns_login(account_id):
             raise ValueError('该账号正在同步认证或收发私信，请等待同步完成或先断开连接')
@@ -84,10 +84,12 @@ async def sync_account(account_id: str) -> dict[str, Any]:
         if account['platform'] == 'dy':
             from app.services import douyin_sdk_transport
             result = await asyncio.to_thread(douyin_sdk_transport.restore_session, account_id)
+            if not result.get('receive_ready'):
+                await asyncio.to_thread(release_send_session, account_id)
         else:
             result = await im_session.sync_account(account_id, im_session.capture_xhs_context)
-        # 等待当前发送认证释放期间仍保持同步状态，不阻塞事件循环。
-        await asyncio.to_thread(release_send_session, account_id)
+            # 小红书换入新认证后释放旧缓存，不阻塞事件循环。
+            await asyncio.to_thread(release_send_session, account_id)
         return result
     except Exception as exc:
         with _runtime_lock:

@@ -19,6 +19,16 @@ let expectedUid = '';
 let allowQr = false;
 let closing = false;
 let state = 'disconnected';
+let loginPhase = 'login_start';
+const bridgeErrors = new WeakSet();
+const failurePhases = new WeakMap();
+const instrumentedAccounts = new WeakSet();
+const phaseLabels = {
+  login_start: '启动私信登录', restore_session: '恢复已保存会话', session_probe: '校验已保存会话',
+  device_init: '初始化设备身份', get_qrcode: '获取登录二维码', qr_poll: '查询扫码确认状态',
+  confirm_identity: '确认登录身份', online_init: '初始化配置和本地消息库',
+  im_init: '初始化私信会话', websocket_connect: '建立实时私信连接', sdk_operation: '执行私信操作',
+};
 
 // 固定 douyin-im@1.1.0 的实例内部方法：在正式凭据写盘前拒绝与原绑定不同的扫码 UID。
 const originalPromote = client.store.promote;
@@ -31,9 +41,95 @@ client.store.promote = function (...values) {
 function output(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
 function event(type, data = {}) { output({ event: type, data, account_id: businessAccountId }); }
 function fail(message, code = 'operation_failed', result) {
-  return Object.assign(new Error(message), { bridgeCode: code, result });
+  const error = Object.assign(new Error(message), { bridgeCode: code, result });
+  bridgeErrors.add(error);
+  return error;
 }
-function setState(value, error = '') { state = value; event('state', { state: value, error }); }
+function setState(value, error = '', diagnostics) {
+  state = value;
+  event('state', { state: value, error, ...(diagnostics ? { diagnostics } : {}) });
+}
+
+/** 错误只输出固定阶段和白名单结构字段；原始 message、响应正文和 URL 查询均不透传。 */
+function formatError(error, method = 'login') {
+  const object = error && typeof error === 'object' ? error : {};
+  const phase = failurePhases.get(object) || (method === 'login' ? loginPhase : 'sdk_operation');
+  const diagnostics = { phase: phaseLabels[phase] ? phase : 'sdk_operation',
+    error_type: /^[A-Za-z_$][A-Za-z0-9_$]{0,79}$/.test(object.name || '') ? object.name : 'Error' };
+  const integer = value => typeof value === 'number' && Number.isSafeInteger(value);
+  const nested = Array.isArray(object.cause?.errors) ? object.cause.errors.slice(0, 3) : [];
+  const causes = [object, object.cause, object.cause?.cause, ...nested]
+    .filter(value => value && typeof value === 'object');
+  const code = causes.map(value => value.code).find(value => typeof value === 'string' && /^[A-Z][A-Z0-9_-]{0,63}$/.test(value));
+  if (code) diagnostics.error_code = code;
+  if (['network', 'http', 'decode'].includes(object.stage)) diagnostics.transport_stage = object.stage;
+  if (integer(object.cmd)) diagnostics.im_command = object.cmd;
+  const status = [object.status, object.statusCode, object.response?.status].find(integer);
+  if (status !== undefined) diagnostics.http_status = status;
+  if (integer(object.errorCode)) diagnostics.platform_code = object.errorCode;
+  // SDK 将两类数字状态写在固定前缀中；只提取数字，不复述后面的服务器说明。
+  const message = typeof object.message === 'string' ? object.message : '';
+  const imStatus = message.match(/^IM 初始化失败: status=(-?\d+)\b/);
+  if (imStatus) diagnostics.im_status = Number(imStatus[1]);
+  const nestedStatus = message.match(/\b(?:status|status_code|error_code|code)[=:]\s*(-?\d{1,10})\b/);
+  if (nestedStatus && !imStatus && diagnostics.platform_code === undefined) diagnostics.platform_code = Number(nestedStatus[1]);
+  const httpStatus = message.match(/^(?:IM Cookie HTTP|Desktop (?:device registration|device activation|application settings) HTTP) (\d{3})\b/);
+  if (httpStatus) diagnostics.http_status = Number(httpStatus[1]);
+  if (typeof object.endpoint === 'string') {
+    try {
+      const path = new URL(object.endpoint, 'https://invalid.example').pathname;
+      if (/^\/[A-Za-z0-9._/-]{1,180}$/.test(path)) diagnostics.endpoint = path;
+    } catch { /* 无效地址不进入诊断，避免输出上游 URL 原文。 */ }
+  }
+  const frames = String(object.stack || '').split('\n').slice(1).flatMap(line => {
+    const frame = line.replaceAll('\\', '/').match(/(?:node_modules\/douyin-im\/)(lib\/[A-Za-z0-9_./-]+\.js:\d+:\d+)/);
+    return frame ? [frame[1]] : [];
+  }).slice(0, 4);
+  if (frames.length) diagnostics.sdk_frames = frames;
+  const details = [diagnostics.error_type, diagnostics.error_code,
+    diagnostics.http_status !== undefined ? `HTTP ${diagnostics.http_status}` : '',
+    diagnostics.im_status !== undefined ? `IM ${diagnostics.im_status}` : '',
+    diagnostics.platform_code !== undefined ? `平台码 ${diagnostics.platform_code}` : ''].filter(Boolean).join('，');
+  const hint = phase === 'im_init' ? '请检查私信接口响应，勿重复扫码。'
+    : phase === 'websocket_connect' ? '请检查实时私信连接。'
+      : phase === 'restore_session' || phase === 'session_probe' ? '已保存登录材料；请先检查会话校验失败原因。'
+        : '请依据此阶段检查登录流程。';
+  const text = bridgeErrors.has(object) ? object.message
+    : `抖音私信在“${phaseLabels[diagnostics.phase]}”阶段失败（${details}）。${hint}`;
+  return { code: bridgeErrors.has(object) ? object.bridgeCode : 'sdk_operation_failed',
+    message: text, diagnostics, ...(object.result && bridgeErrors.has(object) ? { result: object.result } : {}) };
+}
+
+/** 固定 SDK 的实例方法仅增加阶段记录，保持原 this、参数和异常对象。 */
+function instrumentAccount(current) {
+  if (instrumentedAccounts.has(current)) return;
+  instrumentedAccounts.add(current);
+  const wrap = (target, name, phase) => {
+    if (typeof target?.[name] !== 'function') return;
+    const original = target[name];
+    target[name] = async function (...values) {
+      loginPhase = phase;
+      try { return await original.apply(this, values); }
+      catch (error) {
+        if (error && typeof error === 'object' && !failurePhases.has(error)) failurePhases.set(error, phase);
+        throw error;
+      }
+    };
+  };
+  wrap(current.auth, 'probeRestoredSession', 'session_probe');
+  wrap(current.auth?.config?.client, 'startDeviceLifecycle', 'device_init');
+  wrap(current.auth, 'createQrcode', 'get_qrcode');
+  wrap(current.auth, 'continueQrLogin', 'qr_poll');
+  wrap(current.auth, 'finishLogin', 'confirm_identity');
+  wrap(current, 'goOnline', 'online_init');
+  wrap(current, 'seedThreadShortIds', 'im_init');
+  wrap(current, 'startConnection', 'websocket_connect');
+}
+
+function loginError(error) {
+  const formatted = formatError(error);
+  setState('error', formatted.message, formatted.diagnostics);
+}
 function numericUid(value) {
   const uid = String(value ?? '');
   if (!/^[0-9]+$/.test(uid) || BigInt(uid) <= 0n) throw fail('请输入有效的抖音数字用户 ID');
@@ -111,15 +207,16 @@ async function savedUid() {
 
 client.on('system.login.qrcode', ({ account: current, qrcodeBase64, expireTime }) => {
   if (!allowQr) { void current.logout(); return; }
+  loginPhase = 'qr_poll';
   event('qrcode', { image_base64: qrcodeBase64, expire_time: expireTime });
-  void current.continueLogin().catch(() => setState('error', '扫码登录未完成，请重试'));
+  void current.continueLogin().catch(loginError);
 });
 client.on('system.login.verification', async ({ verification }) => {
   try {
     const url = await verification.openUrl({ openBrowser: false });
     event('verification', { url, methods: verification.methods, operation: verification.operation });
-    void verification.open({ openBrowser: false }).catch(() => setState('error', '抖音安全验证未完成'));
-  } catch { setState('error', '无法打开抖音安全验证页面'); }
+    void verification.open({ openBrowser: false }).catch(loginError);
+  } catch (error) { loginError(error); }
 });
 client.on('system.online', ({ account: current }) => {
   if (expectedUid && String(current.uid) !== expectedUid) {
@@ -131,7 +228,7 @@ client.on('system.online', ({ account: current }) => {
 });
 client.on('system.reconnecting', () => setState('reconnecting', '私信连接中断，正在自动重连'));
 client.on('system.offline', () => setState('disconnected'));
-client.on('system.login.error', () => setState('error', '抖音登录失败，请重新扫码或完成安全验证'));
+client.on('system.login.error', ({ error }) => loginError(error));
 client.on('system.handler.error', () => setState('error', '抖音消息处理失败，请重新连接'));
 client.on('message', message => {
   const value = normalizeMessage(message, false, message.stranger || message.friend);
@@ -146,27 +243,42 @@ client.on('notice.message.batch-update', notification => {
   }
 });
 
-/** 恢复与扫码共享生命周期；非交互恢复遇到过期登录会拒绝，不隐式生成二维码。 */
+/** 显式扫码开启新认证；非交互恢复遇到失效登录会拒绝，不隐式生成二维码。 */
 async function login(params = {}) {
   if (closing) throw fail('当前账号连接正在停止');
   if (params.expected_uid) expectedUid = numericUid(params.expected_uid);
-  if (account?.online) {
+  if (account?.online && params.interactive !== true) {
     if (expectedUid && String(account.uid) !== expectedUid) throw fail('账号身份不一致');
     return identity();
   }
   if (loginTask) return loginTask;
   allowQr = params.interactive === true;
+  if (allowQr && account?.online) await account.logout();
   const uid = await savedUid();
+  // 首次扫码曾落盘但宿主标记尚未写入时，仍锁定原正式身份，避免误扫码污染目录。
+  if (allowQr && !expectedUid && uid) expectedUid = uid;
   if (expectedUid && uid && expectedUid !== uid) throw fail('SDK 保存的账号与当前业务账号不一致');
   if (!uid && !allowQr) throw fail('请先点击“扫码登录私信”，完成首次登录', 'login_required');
   account ??= client.createAccount(uid ? { accountId: uid } : { login: { method: 'qr' } });
+  instrumentAccount(account);
+  loginPhase = allowQr ? 'login_start' : 'restore_session';
   setState('connecting');
+  // 固定 SDK 1.1.0 没有 force 参数；仅本次显式扫码临时绕开恢复入口，认证本身仍完整执行。
+  const originalBeginLogin = account.beginLogin;
+  if (allowQr) account.beginLogin = async function (generation) {
+    this.assertLoginGeneration(generation);
+    await this.auth.beginLogin();
+  };
   const task = account.login().then(() => {
     if (closing || !account.online || (expectedUid && String(account.uid) !== expectedUid)) throw fail('登录已取消或账号身份不一致');
     return identity();
   });
   loginTask = task;
-  try { return await task; } finally { if (loginTask === task) loginTask = undefined; }
+  try { return await task; }
+  finally {
+    account.beginLogin = originalBeginLogin;
+    if (loginTask === task) loginTask = undefined;
+  }
 }
 function identity() {
   return { account_id: businessAccountId, sdk: 'douyin-im', sdk_uid: String(account?.uid || ''),
@@ -305,7 +417,7 @@ input.on('line', line => {
   }
   void dispatch(request.method, request.params).then(
     result => { output({ id: request.id, result }); if (request.method === 'close') input.close(); },
-    error => output({ id: request.id, error: { code: error.bridgeCode || 'operation_failed', message: error.bridgeCode ? error.message : '抖音 SDK 操作失败，请检查网络或重新登录', ...(error.result ? { result: error.result } : {}) } }),
+    error => output({ id: request.id, error: formatError(error, request.method) }),
   );
 });
 input.on('close', () => {
