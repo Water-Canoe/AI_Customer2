@@ -45,6 +45,11 @@ def save_credentials(account_id: str, credentials: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def invalidate_credentials(account_id: str) -> None:
+    """重新登录前作废单账号旧认证，保留浏览器 Profile 和聊天数据。"""
+    _session_path(account_id).unlink(missing_ok=True)
+
+
 def session_status(account_id: str) -> dict[str, Any]:
     account = account_center.get_account(account_id, feature='message', require_ready=False)
     try:

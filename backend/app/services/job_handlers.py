@@ -75,6 +75,7 @@ def execute_job(job: dict[str, Any]) -> Any:
                 message_script=str(payload.get("message_script") or ""),
                 script_label=str(payload.get("script_label") or "AI话术"),
                 account_id=str(payload.get("account_id") or ""),
+                cancel_check=lambda: job_queue.cancel_requested(str(job['id'])),
             )
         )
     if kind == "automation_run":
@@ -274,7 +275,7 @@ def cancel_domain_job(job: dict[str, Any], reason: str = "用户取消", *, queu
             content_workbench.mark_video_job_cancelled(str(payload["video_job_id"]), reason)
         elif kind == "content_publish" and queued:
             content_publish.update_task_state(str(payload["publish_task_id"]), "cancelled", error=reason)
-        elif kind in {"account_login", "account_check"}:
+        elif kind in {"account_login", "account_check"} and (kind == "account_check" or not queued):
             account_center.set_login_status(
                 str(payload["account_id"]),
                 str(payload.get("login_kind") or "creator"),

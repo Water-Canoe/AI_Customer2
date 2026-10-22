@@ -410,13 +410,14 @@ async def auto_message_customer(
     message_script: str = "",
     script_label: str = "",
     account_id: str = "",
+    cancel_check=None,
 ) -> dict[str, Any]:
     detail = customer_detail(lead_id)
     customer = detail["customer"]
     if customer["platform"] not in {"dy", "xhs"}:
         raise ValueError("自动私信支持抖音和小红书客户")
     # 使用客户所在平台的私信账号，后续统一由收件箱分派协议。
-    account_id = account_center.resolve_account_id(customer["platform"], "message", account_id)
+    account_id = account_center.resolve_account_id(customer["platform"], "message", account_id, require_ready=False)
     from app.services import message_inbox
     with database.connect() as conn:
         fill_only = database.get_setting(conn, "auto_dm_fill_only", "false") == "true"
@@ -434,7 +435,7 @@ async def auto_message_customer(
     attempt_id: int | None = None
     try:
         attempt_id = reserve_message_attempt(lead_id, "single", f"lead:{lead_id}")
-        result = await asyncio.to_thread(message_inbox.send_to_customer, account_id, lead_id, selected_script, reserve_attempt=False)
+        result = await asyncio.to_thread(message_inbox.send_to_customer, account_id, lead_id, selected_script, reserve_attempt=False, cancel_check=cancel_check)
         if result["status"] != "accepted":
             finish_message_attempt(attempt_id, result["status"], str(result.get("error") or ""))
             attempt_id = None
@@ -464,7 +465,7 @@ async def run_auto_message_batch(batch_id: str) -> None:
         batch = conn.execute("SELECT * FROM message_batches WHERE id = ?", (batch_id,)).fetchone()
         if not batch or batch["status"] not in ACTIVE_BATCH_STATUSES:
             return
-        account_id = account_center.resolve_account_id(str(batch["platform"]), "message", str(batch["account_id"] or ""))
+        account_id = account_center.resolve_account_id(str(batch["platform"]), "message", str(batch["account_id"] or ""), require_ready=False)
         conn.execute(
             """
             UPDATE message_batches
@@ -539,7 +540,7 @@ async def _run_batch_item(item: dict[str, Any], batch: dict[str, Any]) -> None:
             _mark_batch_item(item["id"], "skipped", "只填内容不发送，未自动标记已私信")
             return
         attempt_id = reserve_message_attempt(int(item["lead_account_id"]), str(batch.get("source") or "batch"), str(batch["id"]))
-        result = await asyncio.to_thread(message_inbox.send_to_customer, str(batch["account_id"]), int(item["lead_account_id"]), str(item["script"]), reserve_attempt=False)
+        result = await asyncio.to_thread(message_inbox.send_to_customer, str(batch["account_id"]), int(item["lead_account_id"]), str(item["script"]), reserve_attempt=False, cancel_check=lambda: _message_batch_stop_requested(str(batch['id'])))
         if result["status"] != "accepted":
             finish_message_attempt(attempt_id, result["status"], str(result.get("error") or ""))
             attempt_id = None

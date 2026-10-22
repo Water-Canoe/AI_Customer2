@@ -2146,7 +2146,7 @@ def test_account_login_route_enqueues_generic_job(tmp_path: Path, monkeypatch: p
     assert response.status_code == 200
     assert calls == [(account["id"], "login", "user")]
     updated = account_center.get_account(str(account["id"]))
-    assert updated["login_status"]["user"]["status"] == "checking"
+    assert updated["login_status"]["user"]["status"] != "checking"
     assert updated["login_status"]["creator"]["status"] != "checking"
 
 

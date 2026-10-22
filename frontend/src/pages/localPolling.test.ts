@@ -160,4 +160,18 @@ describe('局部后台轮询', () => {
     expect(wrapper.find('.account-return').exists()).toBe(false)
     expect(wrapper.get('.global-settings-tabs').text()).not.toContain('平台账号')
   })
+
+  it('账号仍在线时也跟进排队登录任务后续产生的状态变化', async () => {
+    mocks.route.name = 'accounts'
+    let status = 'ready'
+    mocks.get.mockImplementation(async () => ({ data: [{ id: 'account', name: '在线账号', role: 'service', features: ['message'], default_features: [], login_status: { user: { available: true, status } } }] }))
+    wrapper = mount(GlobalSettingsPage)
+    await flushPromises()
+    expect(wrapper.text()).toContain('已登录')
+    status = 'checking'
+    await vi.advanceTimersByTimeAsync(3000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('检查中')
+    expect(mocks.get.mock.calls.filter(([url]) => url === '/accounts')).toHaveLength(2)
+  })
 })

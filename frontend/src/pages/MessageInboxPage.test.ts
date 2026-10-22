@@ -112,13 +112,16 @@ describe('私信收件箱', () => {
     expect(mocks.post).toHaveBeenCalledWith('/message-inbox/accounts/account-a/sync-auth')
   })
 
-  it('shows startup authentication sync and blocks conflicting actions until it finishes', async () => {
+  it.each([
+    ['syncing', '正在同步认证'],
+    ['logging_in', '登录中，私信已暂停'],
+  ])('shows %s and blocks conflicting actions until it finishes', async (state, label) => {
     const normal = mocks.get.getMockImplementation()!
     mocks.get.mockImplementation(async (url: string, options: any) => url.endsWith('/status')
-      ? { data: { ...status, state: 'syncing', receive_ready: false, send_ready: false } }
+      ? { data: { ...status, state, receive_ready: false, send_ready: false } }
       : normal(url, options))
     await open()
-    expect(wrapper!.text()).toContain('正在同步认证')
+    expect(wrapper!.text()).toContain(label)
     for (const label of ['同步登录认证', '连接接收', '发送']) {
       expect(wrapper!.findAll('button').find(button => button.text() === label)!.attributes()).toHaveProperty('disabled')
     }

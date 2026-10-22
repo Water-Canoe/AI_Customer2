@@ -4,7 +4,7 @@ import asyncio
 import json
 import sys
 import threading
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -46,6 +46,7 @@ def inbox(tmp_path, monkeypatch):
         message_inbox._profile_locks.clear()
         message_inbox._profile_checked.clear()
         message_inbox._profile_errors.clear()
+        message_inbox._login_sessions.clear()
 
 
 def _event(message_id, content='你好'):
@@ -679,3 +680,314 @@ def test_unlicensed_connection_does_not_start_receiver(inbox, monkeypatch):
     with pytest.raises(ValueError, match='授权已失效'):
         message_inbox.connect_account(account_id)
     assert calls == [] and account_id not in message_inbox._listeners
+
+
+@pytest.fixture
+def login_runtime(inbox, monkeypatch):
+    """模拟外部登录和协议，实际运行本地暂停、认证切换与接收线程。"""
+    from app import services
+    from app.services import platform_login
+
+    account, transport = inbox
+    material, invalidated, synced, received, callbacks = {}, [], [], {}, {}
+    monkeypatch.setattr(message_inbox, '_transport_for_platform', lambda platform: transport)
+    monkeypatch.setattr(message_inbox.im_session, 'capture_xhs_context', object(), raising=False)
+    dy_session = ModuleType('app.services.douyin_im_session')
+    dy_session.capture_context = object()
+    monkeypatch.setitem(sys.modules, 'app.services.douyin_im_session', dy_session)
+    monkeypatch.setattr(services, 'douyin_im_session', dy_session, raising=False)
+
+    def credentials(account_id):
+        cookie = material.get(account_id, 'old')
+        if not cookie:
+            raise ValueError('请先同步该账号的私信认证')
+        return {'account_id': account_id, 'cookie_str': cookie}
+
+    def invalidate(account_id):
+        invalidated.append(account_id)
+        material[account_id] = ''
+
+    async def sync(account_id, capture):
+        synced.append(account_id)
+        material[account_id] = 'new'
+        return {'receive_ready': True, 'send_ready': True}
+
+    def receive(credentials, on_message, on_state, stop):
+        account_id = credentials['account_id']
+        callbacks[account_id] = on_message
+        on_state('connected')
+        received.setdefault(account_id, threading.Event()).set()
+        stop.wait(20)
+
+    def connect(account_id):
+        message_inbox.connect_account(account_id)
+        assert received.setdefault(account_id, threading.Event()).wait(2)
+        return message_inbox._listeners[account_id]
+
+    async def login(*args, **kwargs):
+        return {'success': True}
+
+    monkeypatch.setattr(message_inbox.im_session, 'load_credentials', credentials)
+    monkeypatch.setattr(message_inbox.im_session, 'invalidate_credentials', invalidate, raising=False)
+    monkeypatch.setattr(message_inbox.im_session, 'sync_account', sync, raising=False)
+    monkeypatch.setattr(message_inbox.im_session, 'session_status', lambda account_id: {
+        'receive_ready': bool(material.get(account_id, 'old')), 'send_ready': bool(material.get(account_id, 'old')), 'error': '',
+    })
+    monkeypatch.setattr(platform_login, 'login_account', login)
+    transport.receive_forever = receive
+    with database.connect() as conn:
+        database.set_setting(conn, 'message_hourly_limit', '100')
+        database.set_setting(conn, 'message_daily_limit', '100')
+    return SimpleNamespace(account=account, transport=transport, material=material,
+                           invalidated=invalidated, synced=synced, connect=connect, callbacks=callbacks)
+
+
+def _background(action):
+    results, errors = [], []
+
+    def run():
+        try:
+            results.append(action())
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread, results, errors
+
+
+@pytest.mark.parametrize('inflight_status', ['accepted', 'uncertain'])
+def test_login_drains_sender_and_resumes_only_its_account(login_runtime, monkeypatch, inflight_status):
+    from app.services import content_publish, platform_login
+
+    runtime = login_runtime
+    first, second = runtime.account('登录账号'), runtime.account('继续接收账号')
+    original_first, original_second = runtime.connect(first), runtime.connect(second)
+    conversation = message_inbox.create_conversation(first, peer_user_id='123456')
+    other_conversation = message_inbox.create_conversation(second, peer_user_id='123456')
+    sending, finish_send, paused, logging_in, finish_login = [threading.Event() for _ in range(5)]
+    sent = []
+    original_release = message_inbox.release_send_session
+
+    def release(account_id):
+        paused.set()
+        original_release(account_id)
+
+    def send(credentials, peer, text, **kwargs):
+        sent.append((kwargs['account_id'], text, credentials['cookie_str']))
+        if text == '在途消息':
+            sending.set()
+            assert finish_send.wait(3)
+            return {'status': inflight_status}
+        return {'status': 'accepted'}
+
+    async def login(*args, **kwargs):
+        logging_in.set()
+        assert await asyncio.to_thread(finish_login.wait, 3)
+        return {'success': True}
+
+    monkeypatch.setattr(message_inbox, 'release_send_session', release)
+    monkeypatch.setattr(platform_login, 'login_account', login)
+    runtime.transport.send_text = send
+    flight = _background(lambda: message_inbox.send_message(first, conversation['id'], '在途消息'))
+    workers = [flight]
+    try:
+        assert sending.wait(2)
+        login_job = _background(lambda: content_publish.run_account_login(first, 'user'))
+        workers.append(login_job)
+        assert paused.wait(2)
+        assert message_inbox.status(first)['state'] == 'logging_in'
+        assert first in message_inbox.busy_accounts()
+        pending = _background(lambda: message_inbox.send_message(first, conversation['id'], '排队消息'))
+        workers.append(pending)
+        assert not logging_in.wait(0.05)
+        assert not pending[1] and len(sent) == 1
+        assert message_inbox.send_message(second, other_conversation['id'], '其他账号')['status'] == 'accepted'
+        runtime.callbacks[second](_event('other-during-login'))
+        assert message_inbox.status(second)['state'] == 'connected'
+        assert message_inbox._listeners[second] is original_second
+        finish_send.set()
+        assert logging_in.wait(2)
+        assert not original_first.thread.is_alive()
+        assert runtime.invalidated == [first]
+        for operation in (lambda: message_inbox.connect_account(first), lambda: message_inbox.disconnect_account(first)):
+            with pytest.raises(ValueError, match='登录'):
+                operation()
+        with pytest.raises(ValueError, match='同步|私信'):
+            asyncio.run(message_inbox.sync_account(first))
+    finally:
+        finish_send.set()
+        finish_login.set()
+        for thread, _, _ in workers:
+            thread.join(3)
+    assert all(not thread.is_alive() and not errors for thread, _, errors in workers), [errors for _, _, errors in workers]
+    assert flight[1][0]['status'] == inflight_status
+    assert pending[1][0]['status'] == 'accepted'
+    assert [item for item in sent if item[0] == first] == [(first, '在途消息', 'old'), (first, '排队消息', 'new')]
+    assert runtime.synced == [first]
+    assert message_inbox._listeners[first] is not original_first
+    assert message_inbox._listeners[second] is original_second and original_second.thread.is_alive()
+    assert message_inbox.status(first)['state'] == 'connected'
+    assert message_inbox._login_sessions == {}
+
+
+@pytest.mark.parametrize('platform', ['dy', 'xhs'])
+def test_login_syncs_without_enabling_previously_disconnected_receiver(login_runtime, platform):
+    from app.services import content_publish
+
+    runtime = login_runtime
+    account_id = runtime.account('未连接账号', platform)
+    assert content_publish.run_account_login(account_id, 'user')['success']
+    assert runtime.synced == runtime.invalidated == [account_id]
+    state = message_inbox.status(account_id)
+    assert state['state'] == 'disconnected' and state['send_ready']
+    assert message_inbox._listeners[account_id].thread is None
+
+
+@pytest.mark.parametrize('failure', ['login', 'cancel', 'sync', 'incomplete'])
+def test_login_failure_releases_pause_without_reusing_old_credentials(login_runtime, monkeypatch, failure):
+    from app.services import content_publish, platform_login
+
+    runtime = login_runtime
+    account_id = runtime.account('异常登录')
+    receiver = runtime.connect(account_id)
+    cancelled = []
+
+    async def login(*args, **kwargs):
+        if failure == 'cancel':
+            cancelled.append(True)
+        return {'success': failure not in {'login', 'cancel'}, 'message': '测试登录失败'}
+
+    async def sync(*args):
+        if failure == 'sync':
+            raise RuntimeError('private-cookie-secret')
+        return {'receive_ready': True, 'send_ready': False, 'error': '缺少发送认证'}
+
+    monkeypatch.setattr(platform_login, 'login_account', login)
+    monkeypatch.setattr(message_inbox.im_session, 'sync_account', sync)
+    with pytest.raises((ValueError, RuntimeError)):
+        content_publish.run_account_login(account_id, 'user', cancel_check=lambda: bool(cancelled))
+    assert not receiver.thread.is_alive() and message_inbox._login_sessions == {}
+    assert account_id not in message_inbox.busy_accounts()
+    state = message_inbox.status(account_id)
+    assert state['state'] == 'error' and not state['send_ready']
+    assert 'private-cookie-secret' not in state['error']
+    login_status = account_center.get_account(account_id)['login_status']['user']['status']
+    assert login_status == ('ready' if failure in {'sync', 'incomplete'} else 'expired' if failure == 'cancel' else 'error')
+    conversation = message_inbox.create_conversation(account_id, peer_user_id='123456')
+    with pytest.raises(ValueError):
+        message_inbox.send_message(account_id, conversation['id'], '不得沿用旧认证')
+    assert message_inbox.list_messages(account_id, conversation['id'])['messages'] == []
+
+
+def test_account_rename_and_queued_login_keep_current_connection(login_runtime, monkeypatch):
+    from fastapi import HTTPException
+    from app.routers import accounts
+    from app.schemas import PlatformAccountUpdate
+    from app.services import job_handlers, job_queue
+
+    runtime = login_runtime
+    account_id = runtime.account('原名称')
+    receiver = runtime.connect(account_id)
+    monkeypatch.setattr(accounts, 'require_license', lambda: None)
+    job_queue.configure_handlers(job_handlers)
+    updated = accounts.update_account(account_id, PlatformAccountUpdate(name='新名称', enabled=True, features=['message']))
+    assert updated['name'] == '新名称'
+    with pytest.raises(HTTPException) as error:
+        accounts.update_account(account_id, PlatformAccountUpdate(enabled=False))
+    assert error.value.status_code == 409
+    job = accounts.login_account(account_id, 'user')
+    assert job['status'] == 'queued'
+    assert account_center.get_account(account_id)['login_status']['user']['status'] == 'ready'
+    job_queue.request_cancel(job['id'])
+    assert account_center.get_account(account_id)['login_status']['user']['status'] == 'ready'
+    assert message_inbox._listeners[account_id] is receiver and receiver.thread.is_alive()
+    assert runtime.invalidated == runtime.synced == []
+
+
+@pytest.mark.parametrize('mode', ['single', 'batch'])
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_automatic_messages_wait_for_new_login_credentials(login_runtime, monkeypatch, mode, cancelled):
+    from app.services import content_publish, message_workbench, platform_login
+
+    runtime = login_runtime
+    account_id = runtime.account('自动私信账号')
+    with database.connect() as conn:
+        user = conn.execute("INSERT INTO user_accounts(platform,platform_user_id,nickname) VALUES('dy','123456','待发送客户')").lastrowid
+        lead = conn.execute("INSERT INTO lead_user_accounts(account_id,screening_status,follow_status,script) VALUES(?,'目标客户','未私信','自动话术')", (user,)).lastrowid
+        conn.execute("INSERT INTO lead_sources(lead_account_id,source_type,keyword) VALUES(?,'manual','自动测试')", (lead,))
+    batch = message_workbench.create_auto_message_batch('dy', '自动测试', 1, 0, 0, account_id=account_id) if mode == 'batch' else None
+    logging_in, finish_login = threading.Event(), threading.Event()
+    cancel_send = threading.Event()
+    sent = []
+
+    async def login(*args, **kwargs):
+        logging_in.set()
+        assert await asyncio.to_thread(finish_login.wait, 3)
+        return {'success': True}
+
+    def send(credentials, *args, **kwargs):
+        sent.append(credentials['cookie_str'])
+        return {'status': 'accepted'}
+
+    monkeypatch.setattr(platform_login, 'login_account', login)
+    runtime.transport.send_text = send
+    login_job = _background(lambda: content_publish.run_account_login(account_id, 'user'))
+    workers = [login_job]
+    try:
+        assert logging_in.wait(2)
+        operation = message_workbench.run_auto_message_batch(batch['id']) if batch else message_workbench.auto_message_customer(lead, account_id=account_id, cancel_check=cancel_send.is_set)
+        sender = _background(lambda: asyncio.run(operation))
+        workers.append(sender)
+        assert account_center.get_account(account_id)['login_status']['user']['status'] == 'checking'
+        sender[0].join(0.05)
+        assert sender[0].is_alive() and sent == []
+        if cancelled:
+            if batch:
+                message_workbench.cancel_auto_message_batch(batch['id'])
+            else:
+                cancel_send.set()
+            sender[0].join(2)
+            assert not sender[0].is_alive() and sent == []
+    finally:
+        finish_login.set()
+        for thread, _, _ in workers:
+            thread.join(3)
+    assert all(not thread.is_alive() for thread, _, _ in workers)
+    assert not login_job[2]
+    if cancelled and not batch:
+        assert len(sender[2]) == 1 and isinstance(sender[2][0], ValueError)
+    else:
+        assert not sender[2], sender[2]
+    assert sent == ([] if cancelled else ['new'])
+    if batch:
+        assert message_workbench.get_auto_message_batch(batch['id'])['status'] == ('cancelled' if cancelled else 'succeeded')
+    with database.connect() as conn:
+        assert conn.execute('SELECT follow_status FROM lead_user_accounts WHERE id=?', (lead,)).fetchone()[0] == ('未私信' if cancelled else '已私信')
+
+
+def test_creator_login_does_not_pause_independent_user_session(login_runtime, monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.publish_engine import service as engine
+    from app.services import content_publish
+
+    runtime = login_runtime
+    account_id = account_center.create_account('dy', '发布与私信', 'brand', ['message', 'publish'])['id']
+    account_center.set_login_status(account_id, 'user', 'ready')
+    receiver = runtime.connect(account_id)
+    monkeypatch.setattr(engine, 'login_account', AsyncMock(return_value={'success': True}))
+    assert content_publish.run_account_login(account_id, 'creator')['success']
+    assert message_inbox._listeners[account_id] is receiver and receiver.thread.is_alive()
+    assert runtime.invalidated == runtime.synced == []
+
+
+def test_disabled_account_login_does_not_enable_private_messages(login_runtime):
+    from app.services import content_publish
+
+    runtime = login_runtime
+    account_id = runtime.account('停用待登录')
+    account_center.update_account(account_id, {'enabled': False})
+    assert content_publish.run_account_login(account_id, 'user')['success']
+    assert runtime.invalidated == [account_id] and runtime.synced == []
+    assert message_inbox.status(account_id)['state'] == 'disconnected'
+    assert not message_inbox.status(account_id)['send_ready']

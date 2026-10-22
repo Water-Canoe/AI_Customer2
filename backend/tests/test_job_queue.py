@@ -101,7 +101,7 @@ def test_successful_account_login_keeps_browser_queue_until_manual_close(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepare_queue(tmp_path, monkeypatch)
-    from app.services import account_center, content_publish, job_queue, license_service, platform_login
+    from app.services import account_center, content_publish, job_queue, license_service, message_inbox, platform_login
 
     detected = threading.Event()
     session = {}
@@ -123,6 +123,8 @@ def test_successful_account_login_keeps_browser_queue_until_manual_close(
     monkeypatch.setattr(platform_login, "_is_logged_in", logged_in)
     monkeypatch.setattr(license_service, "ensure_authorized", lambda: {"authorized": True})
     monkeypatch.setattr(content_publish, "run_account_check", lambda *_args, **_kwargs: {"valid": True})
+    monkeypatch.setattr(message_inbox.im_session, "invalidate_credentials", lambda account_id: None)
+    monkeypatch.setattr(message_inbox, "sync_account", AsyncMock(return_value={"receive_ready": True, "send_ready": True}))
     account = account_center.create_account("dy", "手动关窗账号", "operations", ["message"], [])
     login_job = job_queue.enqueue_account_job(account["id"], "login", "user")
     job_queue.start()

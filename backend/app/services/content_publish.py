@@ -273,45 +273,47 @@ def task_media_paths(task: dict[str, Any]) -> list[Path]:
 
 def run_account_login(account_id: str, login_kind: str = "creator", cancel_check=None) -> dict[str, Any]:
     from app.publish_engine import service as engine
-    from app.services import account_center, platform_login
+    from app.services import account_center, message_inbox, platform_login
 
     account = account_center.require_login_kind(account_id, login_kind)
-    account_center.set_login_status(account_id, login_kind, "checking")
 
     def qrcode_callback(payload: dict[str, Any]) -> None:
         image_path = Path(str(payload.get("image_path") or ""))
         relative = image_path.resolve().relative_to(database.get_data_root().resolve()).as_posix() if image_path.is_file() else ""
         account_center.set_account_state(account_id, "checking", qrcode_relative_path=relative)
 
-    try:
-        if login_kind == "creator":
-            operation = engine.login_account(
-                account["platform"],
-                account_center.account_auth_path(account_id, "creator"),
-                qrcode_callback,
-                cancel_check=cancel_check,
+    # 同步认证失败不等于网页登录失败；账号登录状态只由登录过程更新。
+    with message_inbox.account_login_session(account_id, login_kind, cancel_check):
+        account_center.set_login_status(account_id, login_kind, "checking")
+        try:
+            if login_kind == "creator":
+                operation = engine.login_account(
+                    account["platform"],
+                    account_center.account_auth_path(account_id, "creator"),
+                    qrcode_callback,
+                    cancel_check=cancel_check,
+                )
+            else:
+                operation = platform_login.login_account(
+                    account["platform"],
+                    account_center.account_auth_path(account_id, "user"),
+                    cancel_check=cancel_check,
+                )
+            result = engine.run(operation)
+            if not bool(result.get("success")):
+                raise RuntimeError(str(result.get("message") or "扫码登录失败"))
+            account_center.set_login_status(account_id, login_kind, "ready", checked=True)
+            return {"account_id": account_id, "login_kind": login_kind, "success": True}
+        except Exception as exc:
+            cancelled = bool(cancel_check and cancel_check())
+            account_center.set_login_status(
+                account_id,
+                login_kind,
+                "expired" if cancelled else "error",
+                "用户取消" if cancelled else str(exc),
+                checked=True,
             )
-        else:
-            operation = platform_login.login_account(
-                account["platform"],
-                account_center.account_auth_path(account_id, "user"),
-                cancel_check=cancel_check,
-            )
-        result = engine.run(operation)
-        if not bool(result.get("success")):
-            raise RuntimeError(str(result.get("message") or "扫码登录失败"))
-        account_center.set_login_status(account_id, login_kind, "ready", checked=True)
-        return {"account_id": account_id, "login_kind": login_kind, "success": True}
-    except Exception as exc:
-        cancelled = bool(cancel_check and cancel_check())
-        account_center.set_login_status(
-            account_id,
-            login_kind,
-            "expired" if cancelled else "error",
-            "用户取消" if cancelled else str(exc),
-            checked=True,
-        )
-        raise
+            raise
 
 
 def run_account_check(account_id: str, login_kind: str = "creator", cancel_check=None) -> dict[str, Any]:

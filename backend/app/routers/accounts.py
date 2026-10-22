@@ -46,9 +46,13 @@ def create_account(payload: PlatformAccountCreate) -> dict[str, object]:
 @router.patch("/{account_id}", response_model=PlatformAccountResponse)
 def update_account(account_id: str, payload: PlatformAccountUpdate) -> dict[str, object]:
     require_license()
-    _ensure_im_idle(account_id)
     try:
-        return account_center.update_account(account_id, payload.model_dump(exclude_none=True))
+        values = payload.model_dump(exclude_none=True)
+        current = account_center.get_account(account_id)
+        # 单纯改名不替换会话；身份、启用状态或功能变动仍需账号空闲。
+        if any(value != current.get(key) for key, value in values.items() if key != 'name'):
+            _ensure_im_idle(account_id)
+        return account_center.update_account(account_id, values)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -68,9 +72,9 @@ def delete_account(account_id: str) -> dict[str, object]:
 @router.post("/{account_id}/login", response_model=RuntimeJobResponse)
 def login_account(account_id: str, login_kind: Literal["user", "creator"] = "user") -> dict[str, object]:
     require_license()
-    _ensure_im_idle(account_id)
     try:
-        account_center.set_login_status(account_id, login_kind, "checking")
+        # 入队不改变在线状态；任务真正执行时才暂停私信并标记登录中。
+        account_center.require_login_kind(account_id, login_kind)
         return job_queue.enqueue_account_job(account_id, "login", login_kind)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

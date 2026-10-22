@@ -50,7 +50,8 @@ export default defineComponent({
     const refresh = createAutoSyncController({
       interval: () => 3000,
       sync: async reason => {
-        if (accountMode.value && (reason === 'route' || accounts.value.some(account => ['user', 'creator'].some(kind => account.login_status?.[kind]?.status === 'checking')))) {
+        // 排队登录不会把在线账号标为 checking；可见账号页仍需跟进状态变化。
+        if (accountMode.value) {
           await loadAccounts(reason === 'route')
         }
       },

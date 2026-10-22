@@ -46,6 +46,26 @@ def test_xhs_sync_reuses_account_profile_and_protects_http_only_cookie(tmp_path,
         im_session.load_credentials(other['id'])
 
 
+def test_invalidating_one_account_preserves_other_credentials_profile_and_messages(tmp_path, monkeypatch):
+    monkeypatch.setenv('AI_CUSTOMER_DB', str(tmp_path / 'invalidate.sqlite3'))
+    monkeypatch.setenv('AI_CUSTOMER_DATA_DIR', str(tmp_path))
+    database.init_db()
+    first, second = [account_center.create_account('xhs', name, 'service', ['message'])['id'] for name in ('重新登录', '保持在线')]
+    for account_id in (first, second):
+        im_session.save_credentials(account_id, {'cookie_str': 'a1=test; web_session=' + account_id})
+    profile_marker = account_center.profile_path(first, 'message', require_ready=False) / 'profile-marker.txt'
+    profile_marker.write_text('keep', encoding='utf-8')
+    with database.connect() as conn:
+        conversation = conn.execute("INSERT INTO im_conversations(account_id,peer_user_id) VALUES(?,'65abcdef1234567890abcdef')", (first,)).lastrowid
+        conn.execute("INSERT INTO im_messages(account_id,conversation_id,direction,content,status) VALUES(?,?,'incoming','保留历史','received')", (first, conversation))
+    im_session.invalidate_credentials(first)
+    assert not im_session._session_path(first).exists()
+    assert im_session.load_credentials(second)['cookie_str'].endswith(second)
+    assert profile_marker.read_text(encoding='utf-8') == 'keep'
+    with database.connect() as conn:
+        assert conn.execute('SELECT content FROM im_messages WHERE account_id=?', (first,)).fetchone()[0] == '保留历史'
+
+
 def test_cancelled_sync_closes_browser_and_releases_queue(tmp_path, monkeypatch):
     from app.publish_engine import browser
     from app.services import browser_queue
